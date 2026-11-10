@@ -24,6 +24,8 @@ namespace Util::FlatFrameTiming
 		bool hasCpu = false;
 		bool hasGpu = false;
 		bool resolved = true;
+		float frameMs = 0.0f;
+		bool hasFrame = false;
 	};
 
 	/** @brief Associates delayed GPU queries with accepted game-produced Presents. */
@@ -48,6 +50,8 @@ namespace Util::FlatFrameTiming
 				return 0;
 			}
 			const double interval = startMs - lastPresentStartMs;
+			sample.hasFrame = lastPresentStartMs > 0.0 && IsValid(interval);
+			sample.frameMs = sample.hasFrame ? static_cast<float>(interval) : 0.0f;
 			if (lastPresentStartMs > 0.0 && !IsValid(interval))
 				Reset();
 			sample.presentId = ++presentId;

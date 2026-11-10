@@ -1,6 +1,7 @@
 #include "SettingsOverrideManager.h"
 
 #include "FeatureIssues.h"
+#include "Features/LightLimitFix/ShadowCullingPolicy.h"
 #include "SettingsMigrations.h"
 #include "Util.h"
 
@@ -12,11 +13,21 @@
 #include <regex>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 
 using namespace SKSE;
 
 namespace
 {
+	void MigrateShadowCullingOverride(json& layer, std::string_view feature)
+	{
+		if (feature.empty() || feature == "Global") {
+			if (auto lightLimitFix = layer.find("Light Limit Fix"); lightLimitFix != layer.end())
+				LightLimitFixDetail::ShadowCulling::MigrateLegacyOverride(*lightLimitFix);
+		} else if (feature == "LightLimitFix") {
+			LightLimitFixDetail::ShadowCulling::MigrateLegacyOverride(layer);
+		}
+	}
 	// Simple hash function for file contents
 	std::string ComputeContentHash(const std::string& content)
 	{
@@ -608,6 +619,7 @@ std::unique_ptr<SettingsOverrideManager::OverrideInfo> SettingsOverrideManager::
 		if (overrideInfo->overrideData.contains("_metadata")) {
 			overrideInfo->overrideData.erase("_metadata");
 		}
+		MigrateShadowCullingOverride(overrideInfo->overrideData, overrideInfo->featureName);
 
 		if (overrideInfo->isGlobal) {
 			if (SettingsMigrations::MigrateAdaptiveBalanceRootLayer(overrideInfo->overrideData, true))
@@ -622,6 +634,13 @@ std::unique_ptr<SettingsOverrideManager::OverrideInfo> SettingsOverrideManager::
 					std::string(SettingsMigrations::kAdaptiveBalanceFeatureName),
 					std::move(adaptiveBalancePatch));
 				logger::info("Routed legacy utility settings in {} to Adaptive Balance", filePath.string());
+			}
+		} else if (overrideInfo->featureName == SettingsMigrations::kVolumetricLightingFeatureName) {
+			auto patch = SettingsMigrations::ExtractAdaptiveBalanceGodrayFeaturePatch(overrideInfo->overrideData);
+			if (!patch.empty()) {
+				overrideInfo->routedFeatureData.emplace(
+					std::string(SettingsMigrations::kAdaptiveBalanceFeatureName), std::move(patch));
+				logger::info("Routed legacy Volumetric Lighting appearance settings in {} to Adaptive Balance", filePath.string());
 			}
 		} else if (overrideInfo->featureName == SettingsMigrations::kUnifiedWaterFeatureName) {
 			auto adaptiveBalancePatch = SettingsMigrations::ExtractAdaptiveBalanceWaterFeaturePatch(overrideInfo->overrideData);
@@ -1088,9 +1107,18 @@ bool SettingsOverrideManager::LoadUserOverride(const std::string& featureName, j
 	const auto readUserLayer = [&](const std::string& a_sourceFeature, json& o_userJson) {
 		std::string error;
 		const auto result = ReadUserSettingsLayer(GetUserOverridesDirectory() / (a_sourceFeature + ".user.json"), o_userJson, error);
+		if (result == Util::FileHelpers::JsonFileReadResult::Success) {
+			try {
+				MigrateShadowCullingOverride(o_userJson, a_sourceFeature);
+				return true;
+			} catch (const std::exception& exception) {
+				logger::warn("Cannot migrate user settings for {}: {}", a_sourceFeature, exception.what());
+				return false;
+			}
+		}
 		if (result == Util::FileHelpers::JsonFileReadResult::Error)
 			logger::warn("Cannot load user settings for {}: {}", a_sourceFeature, error);
-		return result == Util::FileHelpers::JsonFileReadResult::Success;
+		return false;
 	};
 	bool applied = false;
 	if (featureName == SettingsMigrations::kAdaptiveBalanceFeatureName) {
@@ -1136,6 +1164,27 @@ bool SettingsOverrideManager::LoadUserOverride(const std::string& featureName, j
 		}
 	}
 
+	if (featureName == SettingsMigrations::kAdaptiveBalanceFeatureName) {
+		const std::string source(SettingsMigrations::kVolumetricLightingFeatureName);
+		const bool hasProvider = std::ranges::any_of(overrides, [&](const OverrideInfo& info) {
+			return !info.isGlobal && info.featureName == source;
+		});
+		const bool hasEnabledProvider = std::ranges::any_of(overrides, [&](const OverrideInfo& info) {
+			return info.enabled && !info.isGlobal && info.featureName == source;
+		});
+		json legacyUser;
+		if ((!hasProvider || hasEnabledProvider) && readUserLayer(source, legacyUser)) {
+			const json original = legacyUser;
+			auto patch = SettingsMigrations::ExtractAdaptiveBalanceGodrayFeaturePatch(legacyUser);
+			if (!patch.empty()) {
+				pendingLegacyUtilityUserSources[source] = original;
+				MergeJson(pendingLegacyUtilityUserPatch, patch);
+				MergeJson(featureJson, patch);
+				applied = true;
+			}
+		}
+	}
+
 	json userJson;
 	if (!readUserLayer(featureName, userJson))
 		return applied;
@@ -1170,8 +1219,43 @@ bool SettingsOverrideManager::SaveUserOverride(const std::string& featureName, c
 	}
 
 	json userOverride = BuildUserOverride(currentSettings, overrideSettings);
+	if (featureName == SettingsMigrations::kVolumetricLightingFeatureName) {
+		json saved;
+		std::string error;
+		const auto path = GetUserOverridesDirectory() / (featureName + ".user.json");
+		const auto result = ReadUserSettingsLayer(path, saved, error);
+		if (result == Util::FileHelpers::JsonFileReadResult::Error) {
+			logger::warn("Cannot preserve legacy godray settings {}: {}", path.string(), error);
+			return false;
+		}
+		if (const auto expected = pendingLegacyUtilityUserSources.find(featureName);
+			expected != pendingLegacyUtilityUserSources.end() &&
+			(result != Util::FileHelpers::JsonFileReadResult::Success || saved != expected->second)) {
+			logger::warn("Legacy godray settings changed during migration; preserving {}", path.string());
+			return false;
+		}
+		if (result == Util::FileHelpers::JsonFileReadResult::Success) {
+			auto remaining = saved;
+			SettingsMigrations::ExtractAdaptiveBalanceGodrayFeaturePatch(remaining);
+			for (const auto& [key, value] : saved.items()) {
+				if (!remaining.contains(key))
+					userOverride[key] = value;
+			}
+		}
+	}
 	const bool isAdaptiveBalance = featureName == SettingsMigrations::kAdaptiveBalanceFeatureName;
 	if (isAdaptiveBalance) {
+		if (const auto source = pendingLegacyUtilityUserSources.find(std::string(SettingsMigrations::kVolumetricLightingFeatureName));
+			source != pendingLegacyUtilityUserSources.end()) {
+			const auto sourcePath = GetUserOverridesDirectory() / (source->first + ".user.json");
+			json savedSource;
+			std::string error;
+			const auto result = ReadUserSettingsLayer(sourcePath, savedSource, error);
+			if (result != Util::FileHelpers::JsonFileReadResult::Success || savedSource != source->second) {
+				logger::warn("Cannot save migrated godray settings; legacy source {} changed or is unavailable: {}", sourcePath.string(), error);
+				return false;
+			}
+		}
 		const auto path = GetUserOverridesDirectory() / (featureName + ".user.json");
 		try {
 			if (std::filesystem::exists(path)) {
@@ -1213,6 +1297,8 @@ bool SettingsOverrideManager::SaveUserOverride(const std::string& featureName, c
 			logger::warn("Failed to write user override file {}: {}", userFilePath.string(), writeError);
 			return false;
 		}
+		if (featureName == SettingsMigrations::kVolumetricLightingFeatureName && pendingLegacyUtilityUserSources.contains(featureName))
+			pendingLegacyUtilityUserSources[featureName] = userOverride;
 
 		// Store the current override hash so we can detect if overrides change later
 		json tracking = LoadAppliedOverridesTracking();
@@ -1247,7 +1333,10 @@ bool SettingsOverrideManager::RetireLegacyUtilityUserSource(const std::string& a
 			return false;
 		}
 		const auto original = current;
-		SettingsMigrations::RetireAdaptiveBalanceFeaturePatch(current);
+		if (a_name == SettingsMigrations::kVolumetricLightingFeatureName)
+			SettingsMigrations::ExtractAdaptiveBalanceGodrayFeaturePatch(current);
+		else
+			SettingsMigrations::RetireAdaptiveBalanceFeaturePatch(current);
 		if (current.empty())
 			return DeleteUserOverrideFile(a_name);
 		if (current == original)
@@ -1286,6 +1375,16 @@ bool SettingsOverrideManager::HasUserOverride(const std::string& featureName) co
 	if (std::filesystem::exists(userFilePath, ec))
 		return true;
 	if (featureName == SettingsMigrations::kAdaptiveBalanceFeatureName) {
+		{
+			const auto path = GetUserOverridesDirectory() / (std::string(SettingsMigrations::kVolumetricLightingFeatureName) + ".user.json");
+			json legacy;
+			std::string error;
+			const auto result = ReadUserSettingsLayer(path, legacy, error);
+			if (result == Util::FileHelpers::JsonFileReadResult::Error)
+				logger::warn("Cannot inspect legacy godray settings {}: {}", path.string(), error);
+			if (result == Util::FileHelpers::JsonFileReadResult::Success && !SettingsMigrations::ExtractAdaptiveBalanceGodrayFeaturePatch(legacy).empty())
+				return true;
+		}
 		for (const auto alias : SettingsMigrations::kLegacyUtilityFeatureNames) {
 			const auto path = GetUserOverridesDirectory() / (std::string(alias) + ".user.json");
 			try {
@@ -1309,8 +1408,13 @@ bool SettingsOverrideManager::DeleteUserOverride(const std::string& featureName)
 	if (featureName.empty()) {
 		return false;
 	}
+	// A renderer reset must preserve appearance until its destination is durable.
+	if (featureName == SettingsMigrations::kVolumetricLightingFeatureName)
+		return SaveUserOverride(featureName, json::object(), json::object());
 
 	if (featureName == SettingsMigrations::kAdaptiveBalanceFeatureName) {
+		if (!RetireLegacyUtilityUserSource(std::string(SettingsMigrations::kVolumetricLightingFeatureName)))
+			return false;
 		for (const auto alias : SettingsMigrations::kLegacyUtilityFeatureNames) {
 			if (!RetireLegacyUtilityUserSource(std::string(alias)))
 				return false;
@@ -1436,6 +1540,17 @@ void SettingsOverrideManager::CleanupStaleUserOverrides()
 			// Migrated utility choices remain global preferences after providers leave.
 			if (!hasProviderOverride && (IsLegacyUtilityFeature(featureName) || featureName == SettingsMigrations::kAdaptiveBalanceFeatureName))
 				continue;
+			if (!hasProviderOverride && featureName == SettingsMigrations::kVolumetricLightingFeatureName) {
+				json legacy;
+				std::string error;
+				const auto result = ReadUserSettingsLayer(entry.path(), legacy, error);
+				if (result == Util::FileHelpers::JsonFileReadResult::Error) {
+					logger::warn("Cannot inspect unmigrated godray settings {}: {}", entry.path().string(), error);
+					continue;
+				}
+				if (result == Util::FileHelpers::JsonFileReadResult::Success && !SettingsMigrations::ExtractAdaptiveBalanceGodrayFeaturePatch(legacy).empty())
+					continue;
+			}
 			if (!hasProviderOverride) {
 				// Override was removed, delete user file
 				logger::info("Cleaning up orphaned user override: {}", featureName);

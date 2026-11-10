@@ -14,6 +14,7 @@
 #include "Bloom.h"
 #include "Buffer.h"
 #include "LinearLighting.h"
+#include "Menu/AdaptiveBalancePresets.h"
 #include "SharedLighting.h"
 #include "WaterAppearance.h"
 
@@ -129,6 +130,7 @@ struct AdaptiveBrightness : Feature
 		float vlGammaOffset = 0.0f;
 
 		Bloom::Profile bloom;
+		Bloom::PresetSlots bloomPresets;
 		WaterAppearance::Profile water;
 		WaterWindSettings waterWind;
 		AdaptiveBalanceAppearanceSettings appearance;
@@ -168,8 +170,11 @@ struct AdaptiveBrightness : Feature
 	struct Settings
 	{
 		bool enabled = true;
+		bool bloomEnabled = true;
 		bool useAmbientEffectLighting = false;
-		float godrayFinalBrightness = AdaptiveBalanceGodray::kDefault;
+		float godrayFinalBrightness = AdaptiveBalanceGodray::kDefault;  // Legacy preset/API storage; no rendering effect.
+		float volumetricClarity = AdaptiveBalanceGodray::kClarityDefault;
+		AdaptiveBalanceGodray::Profiles godrays;
 		float moonReflectionStrength = kMoonReflectionStrengthDefault;
 		float dayStartHour = 9.0f;
 		float nightStartHour = 21.0f;
@@ -212,7 +217,7 @@ struct AdaptiveBrightness : Feature
 		AdaptiveBalanceAppearanceSettings appearance;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
-	static_assert(sizeof(PerFrameData) == 320);
+	static_assert(sizeof(PerFrameData) == 464);
 	static_assert(offsetof(PerFrameData, appearance) == 112);
 	static_assert(offsetof(PerFrameData, skySaturation) == 32);
 	static_assert(offsetof(PerFrameData, ambientMult) == 36);
@@ -285,6 +290,12 @@ struct AdaptiveBrightness : Feature
 		Locations
 	};
 
+	MenuUI::AdaptiveBalancePresets::State presetUI;
+	MenuUI::AdaptiveBalancePresets::State lastDrawnPresetUI;
+	MenuUI::AdaptiveBalancePresets::ExportFolder presetExportFolder;
+	std::vector<std::string> presetFiles;
+	std::string presetFileStatus;
+	bool presetFilesDirty = true;
 	std::string globalPresetName = kDefaultGlobalPresetName;
 	std::string globalPresetStatus;
 	std::string selectedLocationOverrideKey;
@@ -343,8 +354,10 @@ struct AdaptiveBrightness : Feature
 	/// Enables only Adaptive Balance adjustments; independent renderer features retain their state.
 	void SetEnabled(bool a_enabled);
 	bool IsRuntimeEnabled() const;
-	/** Return the global final godray multiplier, or neutral while Adaptive Balance is bypassed. */
-	float GetEffectiveGodrayFinalBrightness() const;
+	/** Return smooth volumetric haze suppression, or zero while Adaptive Balance is bypassed. */
+	float GetEffectiveVolumetricClarity() const;
+	/** Compose context and profile godray tuning, or return neutral while disabled. */
+	VolumetricLightingTuning::Profile GetEffectiveGodrayProfile(bool a_interior) const;
 	/** Resolves the exterior night specular multiplier; neutral indoors and while bypassed. */
 	float GetEffectiveMoonReflectionStrength() const;
 	/** Resolves shared lighting and refreshes its matching per-draw point-light requirement. */
@@ -401,11 +414,7 @@ struct AdaptiveBrightness : Feature
 		ContextProfileScope a_scope,
 		bool a_showAdvancedControls,
 		bool a_allowEdits);
-	void DrawContextProfilePresetControls(
-		ContextProfileScope a_scope,
-		const LocationOverrideTarget& a_target,
-		const LocationOverride* a_locationOverride,
-		bool a_allowEdits);
+	void DrawPresetShortcut(ContextProfileScope a_scope);
 	void DrawProfileSettings(
 		ProfileSettings& a_profile,
 		const char* a_sectionTitle = "Profile Values",
@@ -421,19 +430,20 @@ struct AdaptiveBrightness : Feature
 	void DrawLightingSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_globalLayer);
 	/// Draws whole-scene grading controls independent of detailed lighting adjustments.
 	void DrawColorSettings(ProfileSettings& a_profile);
+	void DrawGodraySettings();
 	void DrawBloomSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_globalLayer);
 	void DrawWaterSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_globalLayer);
 	void DrawWaterWindSettings(ProfileSettings& a_profile, bool a_globalLayer);
-	void DrawGlobalPresetControls();
+	void DrawPresets();
 	void DrawLocationOverrides(bool a_includePresetControls = true, bool a_showAdvancedControls = true, bool a_allowEdits = true);
-	void DrawLocationOverridePresetControls();
-	void DrawFullPresetControls();
 	void SaveCurrentLocationOverride(const LocationOverrideTarget& a_target);
 	void ClearLocationOverrideSelection();
 	void InvalidateProfileTabSync();
 	void ResetLocationOverrideEdit();
 	ProfileSettings* GetLocationOverrideEditProfile(LocationOverride& a_locationOverride);
 	bool ExportGlobalPreset();
+	/** Effective session export folder; the default uses the game's virtual Data path. */
+	std::filesystem::path GetPresetExportDirectory() const;
 	bool ImportGlobalPreset();
 	bool ExportLocationOverrides();
 	bool ImportLocationOverrides();

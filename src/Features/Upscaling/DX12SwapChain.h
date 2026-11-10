@@ -1,6 +1,7 @@
 #pragma once
 
 #include "NvidiaPipelinePolicy.h"
+#include "AntiLag2.h"
 
 #include <Windows.Foundation.h>
 #include <stdio.h>
@@ -152,6 +153,12 @@ public:
 
 	// Returns the current frame time (in seconds) for accurate FPS calculation when frame generation is active
 	float GetFrameTime() const;
+	/** Runs the optional AMD driver delay immediately before physical input polling. */
+	void UpdateAntiLag2BeforeInput();
+	/** Shares menu/API preferences with the input-thread owner. */
+	void RequestAntiLag2(bool a_enabled) { antiLag2.Request(a_enabled); }
+	/** Reports driver acknowledgement and failure state independently of latency measurements. */
+	[[nodiscard]] CSX::AntiLag2::Status GetAntiLag2Status() const { return antiLag2.GetStatus(); }
 
 	void CreateD3D12Device(IDXGIAdapter* a_adapter);
 	void CreateSwapChain(
@@ -190,12 +197,27 @@ public:
 	[[nodiscard]] CSX::NvidiaPipelinePolicy::ProxyLifecycleState GetLifecycleState() const noexcept;
 
 private:
+	CSX::AntiLag2::Session antiLag2;
+	void InitializeAntiLag2();
+	void ReportAntiLag2Failure();
+	struct AllocatorFenceWait
+	{
+		winrt::handle event;
+		UINT64 value = 0;
+	};
+	/** Waits at most one second for allocator reuse, retaining timed-out event registrations. */
+	HRESULT WaitForAllocator(UINT a_frameIndex) noexcept;
+	/** Releases completed registrations; false keeps the proxy generation quarantined. */
+	bool RetireAllocatorFenceWaits() noexcept;
 	void ResetResources() noexcept;
 	HRESULT PresentInternal(UINT syncInterval, UINT flags, const DXGI_PRESENT_PARAMETERS* presentParameters) noexcept;
 	HRESULT RefreshAfterResize(DXGI_FORMAT publicFormat) noexcept;
 	HRESULT RestoreFrameGenerationAfterFailedResize() noexcept;
 	static DXGI_FORMAT ResolveBackendFormat(DXGI_FORMAT publicFormat) noexcept;
+	static constexpr DWORD kFrameFenceTimeoutMs = 1000;
 	std::array<UINT64, 2> allocatorFenceValues{};
+	std::array<AllocatorFenceWait, 2> allocatorFenceWaits{};
 	CSX::NvidiaPipelinePolicy::ProxyLifecycleGate lifecycle;
+	bool frameFenceTimeoutLogged = false;
 	bool runtimeQuarantined = false;
 };

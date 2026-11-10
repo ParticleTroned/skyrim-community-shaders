@@ -1,13 +1,11 @@
-#ifdef MOTION_ADAPTIVE
-#	include "Upscaling/MotionSharpening.hlsli"
-#endif
+#include "Upscaling/MotionSharpening.hlsli"
 
 cbuffer LumaSharpenConfig : register(b0)
 {
 	float sharpness;
 	float limit;
-	float2 pad;
 #ifdef MOTION_ADAPTIVE
+	float2 pad;
 	uint4 outputRect;
 	uint4 motionRect;
 	float2 motionToOutputPixels;
@@ -17,6 +15,9 @@ cbuffer LumaSharpenConfig : register(b0)
 	float strengthCap;
 	float maximumGain;
 	float motionPad;
+#else
+	uint outputSplitX;
+	float pad;
 #endif
 };
 
@@ -29,12 +30,12 @@ RWTexture2D<float4> Dest : register(u0);
 static const float3 LUMA = float3(0.2126, 0.7152, 0.0722);
 static const float EPSILON = 1.0e-4;
 
-float3 LoadSourceClamped(int2 pixel, int2 maxPixel)
+float3 LoadSourceClamped(int2 pixel, int2 maxPixel, uint centerX)
 {
 #ifdef MOTION_ADAPTIVE
 	return Source.Load(int3(MotionSharpeningColorPixel(pixel, outputRect), 0)).rgb;
 #else
-	return Source.Load(int3(clamp(pixel, int2(0, 0), maxPixel), 0)).rgb;
+	return Source.Load(int3(FixedSharpeningColorPixel(clamp(pixel, int2(0, 0), maxPixel), centerX, outputSplitX), 0)).rgb;
 #endif
 }
 
@@ -55,10 +56,10 @@ float3 LoadSourceClamped(int2 pixel, int2 maxPixel)
 	int2 sp = int2(DTid.xy);
 	int2 maxPixel = int2(texDim) - int2(1, 1);
 	float4 center = Source.Load(int3(sp, 0));
-	float3 north = LoadSourceClamped(sp + int2(0, -1), maxPixel);
-	float3 south = LoadSourceClamped(sp + int2(0, 1), maxPixel);
-	float3 west = LoadSourceClamped(sp + int2(-1, 0), maxPixel);
-	float3 east = LoadSourceClamped(sp + int2(1, 0), maxPixel);
+	float3 north = LoadSourceClamped(sp + int2(0, -1), maxPixel, DTid.x);
+	float3 south = LoadSourceClamped(sp + int2(0, 1), maxPixel, DTid.x);
+	float3 west = LoadSourceClamped(sp + int2(-1, 0), maxPixel, DTid.x);
+	float3 east = LoadSourceClamped(sp + int2(1, 0), maxPixel, DTid.x);
 
 	float centerLuma = dot(center.rgb, LUMA);
 	float northLuma = dot(north, LUMA);

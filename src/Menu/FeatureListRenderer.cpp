@@ -1,4 +1,5 @@
 #include "FeatureListRenderer.h"
+#include "Menu/Layout.h"
 #include "Menu/MenuHeaderRenderer.h"
 #include "Menu/SettingsActions.h"
 #include "Menu/SettingsPage.h"
@@ -53,7 +54,7 @@ namespace
 	struct SidebarFontScope
 	{
 		MenuFonts::FontRoleGuard role{ Menu::FontRole::Subheading };
-		SidebarFontScope() { ImGui::PushFont(ImGui::GetFont(), ImGui::GetFontSize() * sidebarTextScale); }
+		SidebarFontScope() { ImGui::PushFont(ImGui::GetFont(), ImGui::GetStyle().FontSizeBase * sidebarTextScale); }
 		~SidebarFontScope() { ImGui::PopFont(); }
 	};
 
@@ -120,7 +121,7 @@ namespace
 		const float font = ImGui::GetFontSize();
 		const float width = SettingsActionButtonWidth(a_index, external, availableWidth);
 		constexpr std::array glyphs{ Util::ActionGlyph::SaveSettings, Util::ActionGlyph::LoadSettings, Util::ActionGlyph::RestoreDefaults };
-		ImGui::PushFont(ImGui::GetFont(), font * footerTextScale);
+		ImGui::PushFont(ImGui::GetFont(), ImGui::GetStyle().FontSizeBase * footerTextScale);
 		ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, { 1, .5f });
 		const SKSE::stl::scope_exit restoreAlign([] { ImGui::PopStyleVar(); ImGui::PopFont(); });
 		ImGui::PushID(static_cast<int>(a_index));
@@ -476,6 +477,7 @@ namespace
 	 */
 	std::optional<bool> sidebarVisibilityOverride;
 	bool sidebarVisible = true;
+	bool resetSidebarLayout = false;
 
 	bool ShouldShowLeftPanel()
 	{
@@ -579,7 +581,7 @@ namespace
 		const float titleStartY = ImGui::GetCursorPosY();
 		{
 			MenuFonts::FontRoleGuard titleGuard(Menu::FontRole::Title);
-			ImGui::PushFont(ImGui::GetFont(), ImGui::GetFontSize() * titleScale * featureTitleScale);
+			ImGui::PushFont(ImGui::GetFont(), ImGui::GetStyle().FontSizeBase * titleScale * featureTitleScale);
 			ImGui::PushTextWrapPos(wrapPosX);
 			const SKSE::stl::scope_exit restoreTitle([] { ImGui::PopTextWrapPos(); ImGui::PopFont(); });
 			ImGui::TextUnformatted(featureName.c_str());
@@ -591,7 +593,7 @@ namespace
 		// Draw description if provided (wrapped to content width)
 		if (!description.empty()) {
 			MenuFonts::FontRoleGuard subtextGuard(Menu::FontRole::Subtext);
-			ImGui::PushFont(ImGui::GetFont(), ImGui::GetFontSize() * featureDescriptionScale);
+			ImGui::PushFont(ImGui::GetFont(), ImGui::GetStyle().FontSizeBase * featureDescriptionScale);
 			const SKSE::stl::scope_exit restoreDescriptionFont([] { ImGui::PopFont(); });
 			const auto descColor = Util::Color::SecondaryText();
 			ImGui::PushStyleColor(ImGuiCol_Text, descColor);
@@ -644,6 +646,12 @@ bool FeatureListRenderer::IsSidebarVisible() { return sidebarVisible; }
 
 void FeatureListRenderer::ResetSidebarVisibility() { sidebarVisibilityOverride.reset(); }
 
+void FeatureListRenderer::ResetLayout()
+{
+	SetSidebarVisible(true);
+	resetSidebarLayout = true;
+}
+
 void FeatureListRenderer::RenderFeatureList(
 	float footerHeight,
 	size_t& selectedMenu,
@@ -666,6 +674,10 @@ void FeatureListRenderer::RenderFeatureList(
 	}
 
 	static std::string selectedMenuEntryId;
+	if (resetSidebarLayout) {
+		selectedMenuEntryId.clear();
+		selectedMenu = 0;
+	}
 	auto menuList = BuildMenuList(featureSearch, categoryExpansionStates, drawGeneralSettings, drawAdvancedSettings);
 	if (!selectedMenuEntryId.empty() && !TrySelectMenuEntryById(menuList, selectedMenuEntryId, selectedMenu))
 		selectedMenu = menuList.size();
@@ -680,8 +692,10 @@ void FeatureListRenderer::RenderFeatureList(
 	int numColumns = leftPanelVisible ? 2 : 1;
 	if (ImGui::BeginTable(leftPanelVisible ? "Menus Table" : "Menus Table Hidden", numColumns, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
 		if (leftPanelVisible) {
-			ImGui::TableSetupColumn("##ListOfMenus", 0, 2.4f);
-			ImGui::TableSetupColumn("##MenuConfig", 0, 7.6f);
+			ImGui::TableSetupColumn("##ListOfMenus", 0, MenuUI::Layout::DefaultSidebarRatio);
+			ImGui::TableSetupColumn("##MenuConfig", 0, 1.0f - MenuUI::Layout::DefaultSidebarRatio);
+			MenuUI::Layout::ConstrainSidebar(resetSidebarLayout);
+			resetSidebarLayout = false;
 			RenderLeftColumn(menuList, selectedMenu, featureSearch, categoryExpansionStates);
 		} else {
 			// When left panel is hidden, right column takes full width
@@ -979,7 +993,10 @@ void FeatureListRenderer::ListMenuVisitor::operator()(const BuiltInMenu& menu)
 	const auto maximum = ImGui::GetItemRectMax();
 	const float middle = (start.y + maximum.y) * .5f;
 	const float textLeft = start.x + font * 1.9f;
-	const auto color = menu.name == "Feature Issues" ? globals::menu->GetTheme().StatusPalette.Error : ImGui::GetStyleColorVec4(ImGuiCol_Text);
+	const auto& statusPalette = globals::menu->GetTheme().StatusPalette;
+	const auto color = menu.name == "Feature Issues" ?
+	                       (FeatureIssues::CountLoadFailures() ? statusPalette.Error : statusPalette.Warning) :
+	                       ImGui::GetStyleColorVec4(ImGuiCol_Text);
 	auto* draw = ImGui::GetWindowDrawList();
 	if (icon != icons.end())
 		Util::DrawActionGlyph(draw, icon->second, { start.x + font * .15f, middle - font * .75f }, { start.x + font * 1.65f, middle + font * .75f }, ImGui::GetColorU32(ImGuiCol_Text));
@@ -1039,6 +1056,8 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 		textColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
 	} else if (hasFailedMessage) {
 		textColor = feat->version.empty() ? themeSettings.StatusPalette.Disable : themeSettings.StatusPalette.Error;
+	} else if (!feat->conflictMessage.empty()) {
+		textColor = themeSettings.StatusPalette.Warning;
 	} else {
 		// No failed message but not loaded - check if INI file exists
 		if (!std::filesystem::exists(Util::PathHelpers::GetFeatureIniPath(feat->GetShortName()))) {
@@ -1108,11 +1127,12 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
 				const float available = ImGui::GetContentRegionAvail().x;
 				const float toggleSize = Util::Widgets::CheckboxSize();
 				ImFont* controlFont;
-				float controlFontSize, width;
+				float controlFontSize, controlFontBaseSize, width;
 				{
 					MenuFonts::FontRoleGuard subtextGuard(Menu::FontRole::Subtext);
 					controlFont = ImGui::GetFont();
 					controlFontSize = ImGui::GetFontSize() * featureDescriptionScale;
+					controlFontBaseSize = ImGui::GetStyle().FontSizeBase * featureDescriptionScale;
 					width = toggleSize + ImGui::GetStyle().ItemInnerSpacing.x + controlFont->CalcTextSizeA(controlFontSize, FLT_MAX, 0, "Enabled").x;
 				}
 				const bool stacked = available < width + font * 15;
@@ -1122,7 +1142,7 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
 				if (!stacked)
 					ImGui::SetCursorScreenPos({ start.x + available - width, start.y + std::max(0.0f, (titleHeight - toggleSize) * .5f) });
 				{
-					ImGui::PushFont(controlFont, controlFontSize);
+					ImGui::PushFont(controlFont, controlFontBaseSize);
 					const SKSE::stl::scope_exit restoreFont([] { ImGui::PopFont(); });
 					ProfilingRenderer::RenderEnabledControl();
 				}
@@ -1255,7 +1275,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	{
 		MenuFonts::FontRoleGuard subtextGuard(Menu::FontRole::Subtext);
 		statusFont = ImGui::GetFont();
-		statusFontSize = ImGui::GetFontSize() * featureDescriptionScale;
+		statusFontSize = ImGui::GetStyle().FontSizeBase * featureDescriptionScale;
 		ImGui::PushFont(statusFont, statusFontSize);
 		const SKSE::stl::scope_exit restoreMeasureFont([] { ImGui::PopFont(); });
 		statusWidth = ImGui::CalcTextSize(status.label.data(), status.label.data() + status.label.size()).x + font * .75f;
@@ -1275,7 +1295,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	{
 		ImGui::PushFont(statusFont, statusFontSize);
 		const SKSE::stl::scope_exit restoreStatusFont([] { ImGui::PopFont(); });
-		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, { ImGui::GetStyle().FramePadding.x, std::max(0.0f, (toggleSize - statusFontSize) * .5f) });
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, { ImGui::GetStyle().FramePadding.x, std::max(0.0f, (toggleSize - ImGui::GetFontSize()) * .5f) });
 		const SKSE::stl::scope_exit restoreTogglePadding([] { ImGui::PopStyleVar(); });
 		const auto statusStart = ImGui::GetCursorScreenPos();
 		ImGui::GetWindowDrawList()->AddCircleFilled({ statusStart.x + font * .25f, statusStart.y + ImGui::GetFrameHeight() * .5f }, font * .2f, ImGui::GetColorU32(color));
@@ -1328,7 +1348,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 	if (isDisabled) {
 		ImGui::TextColored(themeSettings.StatusPalette.Disable, "Feature settings are hidden because this feature is disabled until restart.");
 		ImGui::Spacing();
-		ImGui::TextWrapped("Clear its checkbox in Advanced > Startup, save settings and restart the game.");
+		ImGui::TextWrapped("Select its checkbox in Advanced > Startup, save settings and restart the game.");
 		if (feat->GetShortName() == "WetnessEffects" && globals::features::wetterness.loaded) {
 			ImGui::Spacing();
 			ImGui::TextColored(
@@ -1445,7 +1465,9 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 			if (FeatureIssues::IsObsoleteFeature(feat->GetShortName())) {
 				feat->DrawUnloadedUI();
 			} else if (hasFailedMessage) {
-				// Conflict/version failures are rendered below. Do not present them as pending restart.
+				// Load failures are rendered below, independently of restart state.
+			} else if (!feat->conflictMessage.empty()) {
+				feat->DrawUnloadedUI();
 			} else if (IsFeatureInstalled(feat->GetShortName())) {
 				ImGui::Text("This feature will be available after restart.");
 			} else {

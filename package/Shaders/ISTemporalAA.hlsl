@@ -3,6 +3,7 @@
 #include "Common/DummyVSTexCoord.hlsl"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Math.hlsli"
+#include "Common/ReverseZ.hlsli"
 #include "Common/VR.hlsli"
 
 namespace TAA
@@ -164,7 +165,7 @@ PS_OUTPUT main(PS_INPUT input)
 	[unroll] for (int sampleIdx = 0; sampleIdx < 9; sampleIdx++)
 	{
 		uvs[sampleIdx] = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(TAA::NeighborOffsets[sampleIdx] * TexelOffset.xy + uv);
-		depths[sampleIdx] = depthTex.Sample(depthSampler, uvs[sampleIdx]).x;
+		depths[sampleIdx] = FrameBuffer::ToStandardDepth(depthTex.Sample(depthSampler, uvs[sampleIdx]).x);
 		colors[sampleIdx] = SampleCurrentFrame(uvs[sampleIdx]);
 		lumas[sampleIdx] = TAA::Luma(colors[sampleIdx]);
 	}

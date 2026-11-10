@@ -119,6 +119,7 @@ jobs:
                     tests/shader_cache_packaging_test.py \
                     tests/shader_compile_identity_test.py \
                     tests/fomod_package_test.py \
+                    tests/release_worker_test.py \
                     tests/release_fomod_workflow_test.py; do
                     if [ -f "$test_file" ]; then
                       python "$test_file"
@@ -128,6 +129,11 @@ jobs:
                   if [ "$found" = false ]; then
                     echo "Target ref predates shader-cache packaging tests; skipping."
                   fi
+
+            - name: Test release worker task ownership
+              if: hashFiles('tests/release_worker_task_test.ps1') != ''
+              shell: pwsh
+              run: ./tests/release_worker_task_test.ps1
 
             - name: Build, validate, and package shader cache
               shell: pwsh

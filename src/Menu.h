@@ -4,6 +4,7 @@
 #include "Menu/ThemeManager.h"
 #include "Utils/Input.h"
 #include "Utils/Serialize.h"
+#include "Utils/VanityCamera.h"
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -202,6 +203,10 @@ public:
 	// Display size tracking for cross-session resolution change detection
 	float2 lastDisplaySize{};
 	bool resetLayout = false;
+	/** Queue menu-only recovery for the render thread, even while closed or locked. */
+	void RequestLayoutReset() { pendingLayoutReset.store(true); }
+	/** Whether recovery is waiting for the next overlay frame. */
+	bool IsLayoutResetPending() const { return pendingLayoutReset.load(); }
 
 	// Used for resetting input keys to solve alt-tab stuck issue
 	std::atomic<bool> focusChanged = false;
@@ -517,6 +522,13 @@ public:
 	void ProcessVROverlayInput();
 
 private:
+	/// Synchronizes idle-camera ownership after UI input and before any rendering early return.
+	void UpdateIdleCameraSuppression();
+	Util::VanityCameraSuppressionLease vanityCameraSuppression;
+	std::atomic<bool> pendingLayoutReset = false;
+	bool layoutResetKeyHeld = false;
+	bool resetMenuDocking = false;
+	void ApplyPendingLayoutReset();
 	Settings settings;
 	json settingsDirtyBaseline = json::object();
 	json savedThemeSnapshot;

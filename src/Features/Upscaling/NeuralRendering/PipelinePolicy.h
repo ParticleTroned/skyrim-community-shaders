@@ -387,6 +387,7 @@ namespace NeuralRendering
 		MenuContext,
 		GamePaused,
 		TemporalSourceStale,
+		CombatPause,
 	};
 
 	struct TemporalAdmissionInputs
@@ -395,6 +396,7 @@ namespace NeuralRendering
 		bool gamePaused = false;
 		bool pausedContinuityAllowed = false;
 		bool worldFrameStateAvailable = false;
+		bool combatPaused = false;
 		std::uint32_t currentFrame = 0;
 		std::uint32_t lastWorldRenderFrame = 0;
 		std::uint32_t lastCompletedWorldRenderFrame = 0;
@@ -410,6 +412,7 @@ namespace NeuralRendering
 		bool gamePaused = false;
 		bool pausedContinuityAllowed = false;
 		bool worldFrameStateAvailable = false;
+		bool combatPaused = false;
 		bool worldFrameStarted = false;
 		bool worldFrameCompleted = false;
 		bool retainedWorldFrame = false;
@@ -433,6 +436,7 @@ namespace NeuralRendering
 			.pausedContinuityAllowed =
 				a_inputs.pausedContinuityAllowed,
 			.worldFrameStateAvailable = a_inputs.worldFrameStateAvailable,
+			.combatPaused = a_inputs.combatPaused,
 			.worldFrameStarted =
 				a_inputs.worldFrameStateAvailable &&
 				a_inputs.lastWorldRenderFrame == a_inputs.currentFrame,
@@ -463,6 +467,8 @@ namespace NeuralRendering
 			result.blockReason = TemporalAdmissionBlockReason::MenuContext;
 		} else if (result.gamePaused && !result.pausedContinuityAllowed) {
 			result.blockReason = TemporalAdmissionBlockReason::GamePaused;
+		} else if (result.combatPaused) {
+			result.blockReason = TemporalAdmissionBlockReason::CombatPause;
 		} else if (!result.temporalSourceFresh) {
 			result.blockReason =
 				TemporalAdmissionBlockReason::TemporalSourceStale;
@@ -488,6 +494,8 @@ namespace NeuralRendering
 			return "game_paused";
 		case TemporalAdmissionBlockReason::TemporalSourceStale:
 			return "temporal_source_stale";
+		case TemporalAdmissionBlockReason::CombatPause:
+			return "combat_pause";
 		default:
 			return "unknown";
 		}

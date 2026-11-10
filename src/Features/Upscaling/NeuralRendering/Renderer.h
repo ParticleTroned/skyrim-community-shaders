@@ -1,11 +1,20 @@
 #pragma once
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "NativeMemoryPolicy.h"
+#endif
+#include "PeripheralCompressionPolicy.h"
+#include "Utils/DepthConvention.h"
+
 #include "../DLSSViewportCrop.h"
 #include "CaptureEvidence.h"
+#include "GuidedReconstructionPolicy.h"
 #include "MemoryConservationPolicy.h"
 #include "MemoryRetirementPolicy.h"
 #include "ModelResolutionPolicy.h"
+#include "ReconstructionTuning.h"
 #include "RoiDescriptor.h"
+#include "SceneCategorySelection.h"
 #include "StallRecoveryPolicy.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "LifetimeDiagnostics.h"
@@ -23,6 +32,7 @@
 #include <nlohmann/json_fwd.hpp>
 #include <optional>
 #include <string>
+#include <utility>
 #include <wrl/client.h>
 
 namespace NeuralRendering
@@ -137,17 +147,20 @@ namespace NeuralRendering
 
 	struct RendererSnapshot
 	{
+		RuntimeStatus runtimeStatus = RuntimeStatus::NotProbed;
+		std::optional<bool> runtimeNeedsUpdatedDriver;
 		std::string status = "idle";
 		std::string trust = "unknown";
 		std::string detail;
 		std::string runtimeFailureStage = "none";
 		std::string runtimePath;
 		std::string runtimeHash;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		ProviderIdentity runtimeIdentity;
+		NgxDriverRequirements runtimeDriverRequirements;
+		std::pair<std::string, std::string> runtimeInitializationRoute;
+#endif
 		std::string runtimeVersion;
-		std::string parameterCorePath;
-		std::string parameterCoreHash;
-		std::string parameterCoreTrust = "unknown";
-		std::string parameterCoreSource = "none";
 		RendererStage lastCompletedStage = RendererStage::None;
 		RendererStage failureStage = RendererStage::None;
 		std::int32_t lastResult = 0;
@@ -184,9 +197,7 @@ namespace NeuralRendering
 		std::uint64_t successes = 0;
 		std::uint64_t failures = 0;
 		std::uint64_t runtimeSuccessfulFrames = 0;
-		std::uint32_t runtimeProxyHits = 0;
 		bool featureUpscaling = false;
-		bool runtimeProxyInstalled = false;
 		bool failureLatched = false;
 		bool quarantined = false;
 		bool outputCommitted = false;
@@ -196,11 +207,22 @@ namespace NeuralRendering
 		bool useAutoMask = true;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		bool modelOutputSelected = false;
+		bool nativeControlMask = false;
+		PeripheralCompressionPlan peripheralCompression{};
+		GuidedReconstructionDecision guidedReconstruction{};
+		bool reconstructionPrepared = false;
+		GuidedReconstructionOverrideStatus reconstructionOverride{};
+		PeripheralCompressionOverrideStatus peripheralOverride{};
 		PackedCropLayout packedCropLayout{};
 		PrewarmPolicy prewarm{};
 		Runtime::LifecycleCounts nativeLifecycle{};
 		LifetimeFenceSnapshot prewarmSubmission{};
 		std::uint64_t prewarmReservedBytes = 0;
+		NativeStartupObservation nativeStartup{};
+		std::array<std::optional<NativeMemoryKey>, Runtime::kFeatureSlotCount> nativeMemoryKeys{};
+		std::array<std::optional<NativeMemoryPolicy::Estimate>, Runtime::kFeatureSlotCount> nativeMemoryEstimates{};
+		std::uint64_t nativeStartupReservedBytes = 0;
+		std::uint32_t nativeReadySlotMask = 0;
 		std::uint64_t shaderGenerationRequested = 0, shaderGenerationApplied = 0;
 #endif
 		RendererCounters counters{};
@@ -218,6 +240,18 @@ namespace NeuralRendering
 		Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> mask;
 		ComputeSubrect maskSupport{};
 		bool providerBlending = false;
+		std::optional<SceneCategorySelection> sceneCategories;
+	};
+
+	/** Optional shader ownership survives backend retirement between spatial planning and preparation. */
+	struct PeripheralCompressionShaders
+	{
+		Microsoft::WRL::ComPtr<ID3D11ComputeShader> prepare, reconstruct;
+		Microsoft::WRL::ComPtr<ID3D11Buffer> constants;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		ReconstructionPreparation experimentalPreparation{};
+#endif
+		bool faceDetailProtection = false;
 	};
 
 	struct RendererApplyArgs
@@ -237,6 +271,8 @@ namespace NeuralRendering
 		std::shared_ptr<const CharacterPreparationEvidence> characterEvidence;
 		ID3D11Resource* depthGuide = nullptr;
 		ID3D11ShaderResourceView* depthGuideSRV = nullptr;
+		Depth::Convention depthConvention = Depth::Convention::Standard;
+		std::uint64_t depthGeneration = 0;
 		ID3D11Resource* motionVectors = nullptr;
 		ID3D11Resource* colorOutput = nullptr;
 		/** Optional private UAV of colorOutput for fused reduced-resolution reconstruction and selection. */
@@ -244,9 +280,23 @@ namespace NeuralRendering
 		// R8_UNORM provider-mask transport. Actor blending converts selection to protection.
 		Microsoft::WRL::ComPtr<ID3D11Resource> controlMask;
 		Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> actorSelection;
+		std::optional<SceneCategorySelection> sceneCategorySelection;
 		bool providerBlending = false;
 		ComputeSubrect actorSelectionSupport{};
 		std::uint32_t modelResolutionPercent = 100;
+		bool guidedReconstructionEnabled = false;
+		std::uint32_t guidedConfidenceRejectionPercent = 0;
+		std::uint32_t peripheralCompressionPercent = 0;
+		PeripheralMask peripheralMask{};
+		PeripheralCompressionPlan peripheralCompression{};
+		PeripheralCompressionShaders peripheralShaders{};
+		std::uint32_t faceDetailProtectionPercent = 0;
+		FaceDetailRegions faceDetailRegions{};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		ReconstructionTuning reconstructionTuning{};
+		GuidedReconstructionOverride reconstructionOverride = GuidedReconstructionOverride::Auto;
+		PeripheralCompressionOverride peripheralOverride = PeripheralCompressionOverride::Auto;
+#endif
 		bool pressureResolutionEnabled = false;
 		bool parallelEyes = false;
 		/** Keep model preparation resident while moving actors alternate atlas and single ROI. */
@@ -279,8 +329,12 @@ namespace NeuralRendering
 		std::optional<RoiDescriptor> roi;
 		// Caller guarantees exact outer CSX mask compositing; not the private NGX mask ABI.
 		bool characterVisualIsolation = false;
+		/** Full-scene category strengths are selected in the original output grid. */
+		bool sceneCharacterStrengths = false;
 		bool featureUpscaling = false;
 		Tuning tuning{};
+		/** Input jitter in guide pixels, independent of optional frame-capture metadata. */
+		std::array<float, 2> jitterPixels{};
 		bool reset = false;
 		// Pair orchestration keeps separate eye submissions on one reset decision.
 		bool synchronizedHistoryReset = false;
@@ -292,10 +346,15 @@ namespace NeuralRendering
 	/** Per-call evidence captured at the exact NVIDIA evaluation boundary. */
 	struct RendererApplyOutcome
 	{
+		bool spatialHistoryReset = false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		bool reconstructionHistoryReset = false;
+#endif
 		std::uint32_t evaluationAttemptedFeatureSlotMask = 0;
 		std::uint32_t evaluationSucceededFeatureSlotMask = 0;
 		std::uint32_t selectedOutputFeatureSlotMask = 0;
 		bool memoryPressureBypass = false;
+		bool startupDeferred = false;
 
 		/** True only after every requested private output in the transaction is ready for publication. */
 		[[nodiscard]] bool WasOutputSelected(std::uint32_t featureSlot) const noexcept
@@ -351,7 +410,7 @@ namespace NeuralRendering
 		/** Services retained resources or a latched transient stall; otherwise performs no sampling. */
 		void ServiceBackendMaintenance(bool a_requested);
 		/** Service one optional stage at the completed boundary; false leaves the request unconsumed. */
-		[[nodiscard]] bool ServicePrewarm(const PrewarmKey* request, const char* deferReason,
+		[[nodiscard]] bool ServicePrewarm(const PrewarmRequest* request, const char* deferReason,
 			std::uint64_t opportunity);
 		/** Cheap disabled-path gate; pending unused ownership still needs maintenance. */
 		[[nodiscard]] bool HasPrewarmWork() const noexcept;
@@ -359,6 +418,7 @@ namespace NeuralRendering
 		/** Request coalesced shader-only invalidation at the completed-frame maintenance boundary. */
 		void ResetShaderCache();
 
+		/** Observe output and runtime admission under the shared renderer lifecycle lock. */
 		[[nodiscard]] RendererSnapshot GetSnapshot() const;
 		/** Lock-free projection eligibility hint; frame-latched policy remains the authority for model quality. */
 		[[nodiscard]] std::uint32_t ModelResolutionCeiling() const noexcept;
@@ -367,6 +427,14 @@ namespace NeuralRendering
 		/** Queues recovery without GPU work; the caller must gate this on requested NR. */
 		bool NotifyDlssMemoryPressure();
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		/** Configure a nonpersistent, revision-checked peripheral comparison lease. */
+		bool ConfigurePeripheralOverride(PeripheralCompressionOverride, std::uint32_t frames, std::uint64_t expectedRevision);
+		/** Resolve the lease once per source frame and report history transitions. */
+		[[nodiscard]] std::pair<PeripheralCompressionOverride, bool> ResolvePeripheralOverride(std::uint32_t frame, std::uint64_t generation);
+		/** Start/cancel a bounded session-only comparison, rejecting stale restoration tokens. */
+		bool ConfigureReconstructionOverride(GuidedReconstructionOverride, std::uint32_t frames, std::uint64_t expectedRevision);
+		/** Resolve before source admission; the caller resets downstream history once when changed. */
+		[[nodiscard]] std::pair<GuidedReconstructionOverride, bool> ResolveReconstructionOverride(std::uint32_t frame, std::uint64_t generation);
 		/** Injects a logical backpressure timeout; recovery still requires real fence completion. */
 		bool SimulateTransientStall();
 		static constexpr std::uint32_t kMaximumMemorySimulationMilliseconds = 30000;

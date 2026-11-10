@@ -1,6 +1,8 @@
 #include "Features/FoveatedCommon.h"
 #include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
 #include "Features/Upscaling/NeuralRendering/ColorPolicy.h"
+#include "Features/Upscaling/NeuralRendering/CombatPausePolicy.h"
+#include "Features/Upscaling/NeuralRendering/GuidedReconstructionPolicy.h"
 #include "Features/Upscaling/NeuralRendering/MemoryConservationPolicy.h"
 #include "Features/Upscaling/NeuralRendering/MemoryRecoveryPolicy.h"
 #include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
@@ -24,6 +26,7 @@
 #include <vector>
 
 constexpr int ImGuiHoveredFlags_AllowWhenDisabled = 1;
+constexpr int ImGuiHoveredFlags_DelayNormal = 2;
 constexpr float kPeripheryTAACenterBlendFeatherMin = 0.0f;
 constexpr float kPeripheryTAACenterBlendFeatherMax = 0.25f;
 
@@ -100,13 +103,19 @@ namespace globals
 				bool neuralCharacterOtherActorsEnabled = NeuralRendering::CharacterPolicy::kDefaultOtherActors;
 				unsigned neuralRenderingMode = 0;
 				unsigned neuralRenderingModelResolutionPercent = 100;
+				bool neuralRenderingGuidedReconstruction = true;
+				unsigned neuralRenderingConfidenceRejectionPercent = 0;
+				NeuralRendering::ReconstructionTuning neuralReconstructionTuning{};
+				unsigned neuralRenderingPeripheralCompressionPercent = 100;
+				unsigned neuralRenderingFaceDetailProtectionPercent = 0;
+				bool neuralRenderingPauseInCombat = true;
 				bool neuralRenderingPressureResolutionEnabled = true;
 				bool neuralRenderingPrewarmEnabled = true;
 				float neuralRenderingSingleSubrectScale = 1.0f;
 				bool neuralRenderingAutoMask = true, neuralRenderingUICorrection = false;
 				bool neuralRenderingParallelEyes = true;
 				unsigned neuralRenderingCentralAreaPercent = 100, neuralRenderingCentralFeatherPixels = 64;
-				unsigned neuralRenderingPreset = 1, neuralRenderingStyle = 0;
+				unsigned neuralRenderingPreset = 1, neuralRenderingStyle = NeuralRendering::kDefaultStyle, neuralRenderingNetwork = 0;
 				float neuralRenderingIntensity = 1.0f, neuralRenderingLocalTone = 1.0f;
 				float neuralRenderingLocalStructure = 1.0f, neuralRenderingSkinStructure = 1.0f;
 				unsigned neuralCharacterCropMode = 1;
@@ -171,6 +180,8 @@ namespace globals
 			void DrawSelectionControls();
 			void DrawNeuralRenderingEnableControl();
 			void DrawNeuralRenderingMasterControl(bool a_showDiagnostics);
+			NeuralRendering::CombatPauseSnapshot combatPauseSnapshot;
+			auto GetNeuralCombatPauseSnapshot() const { return combatPauseSnapshot; }
 			bool ToggleNeuralRendering(std::string* a_error = nullptr);
 			void DrawNeuralRenderingCropControl(bool);
 			bool acceptConfiguration = true;
@@ -187,6 +198,12 @@ namespace globals
 				settings.neuralRenderingEnabled = config.at("neuralRenderingEnabled");
 				return true;
 			}
+			static constexpr const char* kOpenCompositeRenderScaleBlockWarning = "OpenComposite unavailable";
+			bool IsOpenCompositeUpscalingBlocked() const { return false; }
+			bool IsRenderDocUpscalingBlocked() const { return false; }
+			const char* GetRenderDocUpscalingBlockReason() const { return ""; }
+			bool IsVRStartupNativeFallbackRestartRequired() const { return false; }
+			bool IsVRStartupMainMenuRenderStateActive() const { return false; }
 			void RequestHistoryReset() { ++historyResets; }
 			void DrawNeuralRenderingFovWarning(bool) const {}
 			static bool IsNeuralRenderingEnabled(const Settings&) noexcept;
@@ -447,7 +464,7 @@ namespace Util
 			ImGui::Record(text);
 		}
 	}
-	void AddTooltip(const char* text) { ImGui::tooltips.emplace_back(ImGui::lastItem, text); }
+	void AddTooltip(const char* text, int = 0) { ImGui::tooltips.emplace_back(ImGui::lastItem, text); }
 	bool interior = true;
 	bool IsInterior() { return interior; }
 	class DisableGuard
@@ -527,20 +544,30 @@ namespace MenuUI
 namespace NeuralRendering
 {
 	bool runtimeInstalled = true;
+	DriverSupport installedDriver{ kMinimumNvidiaDriverRelease };
+	bool networkSelectionSupported = true;
 	TuningLimits runtimeTuningLimits;
 	Runtime& Runtime::Instance()
 	{
 		static Runtime instance;
 		return instance;
 	}
+	struct Runtime::Backend
+	{};
+	Runtime::Runtime() = default;
 	Runtime::~Runtime() = default;
-	TuningLimits Runtime::GetTuningLimits() const { return runtimeTuningLimits; }
+	TuningLimits Runtime::GetTuningLimits(std::uint32_t selection) const { return GetTuningLimitsForNetwork(runtimeTuningLimits, ResolveNetworkPreset(selection, networkSelectionSupported)); }
+	bool Runtime::SupportsNetworkSelection() const { return networkSelectionSupported; }
 	bool Runtime::IsInstalled() noexcept { return runtimeInstalled; }
+	const DriverSupport& Runtime::GetDriverSupport() noexcept { return installedDriver; }
 	struct Renderer
 	{
 		struct Snapshot
 		{
+			RuntimeStatus runtimeStatus = RuntimeStatus::NotProbed;
+			std::optional<bool> runtimeNeedsUpdatedDriver;
 			bool quarantined = false, failureLatched = false, parallelEyesDisabled = false;
+			bool outputCommitted = false;
 			bool pressureResolutionEnabled = false;
 			unsigned effectiveModelResolutionPercent = 100;
 			std::string detail;
@@ -618,8 +645,18 @@ nlohmann::json AssetsJson()
 	++assetReads;
 	return nlohmann::json::object();
 }
+struct Feature
+{
+	struct SettingsHeaderStatus
+	{
+		std::string_view label;
+		bool needsAttention;
+	};
+};
 struct NeuralRenderingFeature
 {
+	Feature::SettingsHeaderStatus GetSettingsHeaderStatus() const;
+	void DrawSettingsEnabledControl();
 	std::string_view GetSettingsFooterText() const;
 	void DrawSettings();
 	void DrawColourSettings(bool a_diagnosticsOnly = false);
@@ -635,14 +672,166 @@ int main()
 		}
 	};
 	{
+		auto& upscaling = globals::features::upscaling;
+		auto& renderer = NeuralRendering::Renderer::Instance();
+		const auto savedSettings = upscaling.settings;
+		NeuralRenderingFeature feature;
+		const auto expectHeader = [&](std::string_view label, bool attention = false) {
+			const auto status = feature.GetSettingsHeaderStatus();
+			require(status.label == label && status.needsAttention == attention, "NR header misrepresented observed runtime readiness");
+		};
+		const auto expectWithoutSnapshot = [&](std::string_view label, bool attention = false) {
+			const auto reads = renderer.snapshotReads;
+			expectHeader(label, attention);
+			require(renderer.snapshotReads == reads, "Inactive NR header unnecessarily acquired renderer state");
+		};
+		for (const bool vr : { false, true }) {
+			globals::game::isVR = vr;
+			upscaling.settings.neuralRenderingMode = static_cast<unsigned>(NeuralRendering::RenderingMode::FullResolution);
+			upscaling.settings.neuralRenderingEnabled = false;
+			expectWithoutSnapshot("Off");
+			upscaling.settings.neuralRenderingEnabled = true;
+			expectHeader("Not checked");
+			renderer.snapshot.runtimeStatus = NeuralRendering::RuntimeStatus::Ready;
+			expectHeader("DLL checked");
+			renderer.snapshot.runtimeStatus = NeuralRendering::RuntimeStatus::Initialized;
+			expectHeader("Initialized");
+			renderer.snapshot.outputCommitted = true;
+			expectHeader("Evaluated");
+			renderer.snapshot.memoryRecovery.phase = NeuralRendering::MemoryRecoveryPhase::Probation;
+			expectHeader("Evaluated");
+			for (const auto phase : { NeuralRendering::MemoryRecoveryPhase::Retiring, NeuralRendering::MemoryRecoveryPhase::Waiting,
+					 NeuralRendering::MemoryRecoveryPhase::Rebuilding }) {
+				renderer.snapshot.memoryRecovery.phase = phase;
+				expectHeader("Recovering", true);
+			}
+			renderer.snapshot.memoryRecovery = {};
+			upscaling.settings.neuralRenderingMode = static_cast<unsigned>(NeuralRendering::RenderingMode::ReducedResolution);
+			upscaling.method = Upscaling::UpscaleMethod::kTAA;
+			expectHeader("Waiting", true);
+			upscaling.method = Upscaling::UpscaleMethod::kDLSS;
+			upscaling.settings.neuralRenderingMode = static_cast<unsigned>(NeuralRendering::RenderingMode::FullResolution);
+			renderer.snapshot.quarantined = true;
+			expectHeader("Paused", true);
+			upscaling.settings.neuralRenderingEnabled = false;
+			expectWithoutSnapshot("Off");
+			upscaling.settings.neuralRenderingEnabled = true;
+			renderer.snapshot.quarantined = false;
+			renderer.snapshot.outputCommitted = false;
+			expectHeader("Initialized");
+			renderer.snapshot = {};
+			expectHeader("Not checked");
+			for (auto failure : { NeuralRendering::RuntimeStatus::InitializationFailed, NeuralRendering::RuntimeStatus::FeatureCreateFailed,
+					 NeuralRendering::RuntimeStatus::FeatureEvaluateFailed }) {
+				renderer.snapshot.runtimeStatus = failure;
+				expectHeader("Unavailable", true);
+				renderer.snapshot.failureLatched = true;
+				expectHeader("Paused", true);
+				renderer.snapshot.failureLatched = false;
+			}
+			renderer.snapshot.runtimeStatus = NeuralRendering::RuntimeStatus::VersionRejected;
+			expectHeader("Unsupported DLL", true);
+			renderer.snapshot.failureLatched = true;
+			renderer.snapshot.runtimeStatus = NeuralRendering::RuntimeStatus::InitializationFailed;
+			renderer.snapshot.runtimeNeedsUpdatedDriver = true;
+			expectHeader("Update driver", true);
+			renderer.snapshot.runtimeNeedsUpdatedDriver.reset();
+			expectHeader("Paused", true);
+			renderer.snapshot = {};
+			NeuralRendering::installedDriver = { 61656u };
+			expectWithoutSnapshot("Update driver", true);
+			NeuralRendering::installedDriver = { NeuralRendering::kMinimumNvidiaDriverRelease };
+			NeuralRendering::runtimeInstalled = false;
+			expectWithoutSnapshot("Missing DLL", true);
+			NeuralRendering::runtimeInstalled = true;
+			upscaling.fidelityFX.nvidia = false;
+			expectWithoutSnapshot("Unavailable", true);
+			upscaling.fidelityFX.nvidia = true;
+			renderer.snapshot.runtimeStatus = NeuralRendering::RuntimeStatus::NotProbed;
+		}
+		upscaling.settings = savedSettings;
+		globals::game::isVR = true;
+	}
+	{
+		Upscaling::Settings settings;
+		for (const auto [selection, divisions] : { std::pair{ 0, 1u }, std::pair{ 1, 2u }, std::pair{ 2, 4u } }) {
+			ImGui::Clear("Preparation footprint");
+			ImGui::comboEditValue = selection;
+			DrawNeuralReconstructionExperiments(settings);
+			require(settings.neuralReconstructionTuning.footprintSubdivisions == divisions && ImGui::treeDepth == 0,
+				"Footprint control selected the wrong variant or left its tree open");
+		}
+		ImGui::Clear("Shadow transfer protection");
+		ImGui::sliderEditValue = 0;
+		ImGui::itemDeactivatedAfterEdit = true;
+		DrawNeuralReconstructionExperiments(settings);
+		require(settings.neuralReconstructionTuning.shadowTransferPercent == 0, "Shadow transfer slider did not apply on release");
+		ImGui::Clear("Per-channel output clamping");
+		DrawNeuralReconstructionExperiments(settings);
+		ImGui::Clear("Anchor motion at depth sample");
+		DrawNeuralReconstructionExperiments(settings);
+		require(!settings.neuralReconstructionTuning.perChannelClamping && !settings.neuralReconstructionTuning.depthSampleMotion,
+			"Reconstruction comparison checkboxes did not apply");
+		ImGui::Clear("Restore production reconstruction");
+		DrawNeuralReconstructionExperiments(settings);
+		require(settings.neuralReconstructionTuning == NeuralRendering::ReconstructionTuning{}, "Production reconstruction did not restore");
+		ImGui::Clear();
+	}
+	{
 		Upscaling::Settings settings;
 		require(settings.neuralRenderingPressureResolutionEnabled, "Automatic pressure resolution defaults on");
+		require(settings.neuralRenderingGuidedReconstruction, "Guided reconstruction must default on");
+		ImGui::Clear("Improve low-resolution NR");
+		DrawNeuralRuntimeSettings(settings, true);
+		require(!settings.neuralRenderingGuidedReconstruction && settings.neuralRenderingModelResolutionPercent == 100,
+			"Guided toggle changed independent model scale");
+		ImGui::Clear("Improve low-resolution NR");
+		DrawNeuralRuntimeSettings(settings, true);
+		require(settings.neuralRenderingGuidedReconstruction, "Guided reconstruction could not be re-enabled");
+		require(settings.neuralRenderingPauseInCombat, "Combat pausing must default on");
+		ImGui::Clear("Pause NR during combat");
+		DrawNeuralRuntimeSettings(settings, true);
+		require(!settings.neuralRenderingPauseInCombat && settings.neuralRenderingModelResolutionPercent == 100, "Combat control must retain NR resolution");
+		require(settings.neuralRenderingPeripheralCompressionPercent == 100, "Peripheral compression must default to 100 percent");
+		require(settings.neuralRenderingFaceDetailProtectionPercent == 0, "Face detail protection must default off");
+		require(settings.neuralRenderingConfidenceRejectionPercent == 0, "Confidence rejection must default off");
+		settings.neuralRenderingMode = static_cast<unsigned>(NeuralRendering::RenderingMode::ReducedResolution);
+		for (bool released : { false, true }) {
+			ImGui::Clear("Face detail protection");
+			ImGui::sliderEditValue = 75;
+			ImGui::itemDeactivatedAfterEdit = released;
+			DrawNeuralModelResolutionSettings(settings);
+			require(settings.neuralRenderingFaceDetailProtectionPercent == (released ? 75u : 0u), "Face protection must apply on release");
+			require(settings.neuralRenderingPeripheralCompressionPercent == 100 && settings.neuralRenderingModelResolutionPercent == 100,
+				"Face protection must retain compression and NR resolution");
+		}
+		for (unsigned unavailable = 0; unavailable < 3; ++unavailable) {
+			settings.neuralRenderingMode = static_cast<unsigned>(unavailable == 0 ? NeuralRendering::RenderingMode::FullResolution : NeuralRendering::RenderingMode::ReducedResolution);
+			settings.neuralRenderingPeripheralCompressionPercent = unavailable == 1 ? 0u : 100u;
+			settings.neuralCharacterRenderingEnabled = unavailable == 2;
+			ImGui::Clear("Face detail protection");
+			ImGui::sliderEditValue = 100;
+			ImGui::itemDeactivatedAfterEdit = true;
+			DrawNeuralModelResolutionSettings(settings);
+			require(settings.neuralRenderingFaceDetailProtectionPercent == 75, "Unavailable face protection must retain its saved value");
+		}
+		settings.neuralCharacterRenderingEnabled = false;
+
+		for (int percent : { 20, 100, 0 }) {
+			ImGui::Clear("Peripheral compression");
+			ImGui::sliderEditValue = static_cast<float>(percent);
+			ImGui::itemDeactivatedAfterEdit = true;
+			DrawNeuralModelResolutionSettings(settings);
+			require(settings.neuralRenderingPeripheralCompressionPercent == unsigned(percent) && settings.neuralRenderingGuidedReconstruction && settings.neuralRenderingModelResolutionPercent == 100,
+				"Compression slider changed guided or NR scale settings");
+		}
+
 		ImGui::Clear("Lower NR resolution under memory pressure");
-		DrawNeuralModelResolutionSettings(settings);
+		DrawNeuralRuntimeSettings(settings, true);
 		require(!settings.neuralRenderingPressureResolutionEnabled && settings.neuralRenderingModelResolutionPercent == 100,
 			"Opting out of pressure reduction must retain the requested resolution");
 		ImGui::Clear("Lower NR resolution under memory pressure");
-		DrawNeuralModelResolutionSettings(settings);
+		DrawNeuralRuntimeSettings(settings, true);
 		require(settings.neuralRenderingPressureResolutionEnabled && settings.neuralRenderingModelResolutionPercent == 100, "Pressure toggle changed requested model resolution");
 		ImGui::Clear("NR Model Resolution");
 		ImGui::sliderEditValue = 75;
@@ -718,9 +907,19 @@ int main()
 		globals::game::isVR = true;
 		Upscaling::Settings supported{};
 		supported.neuralRenderingMode = 2;
-		supported.neuralRenderingPressureResolutionEnabled = false;
+		supported.neuralRenderingModelResolutionPercent = 90;
 		require(!NeuralRendering::PrewarmConfigurationBlocker(supported, true),
-			"Full-view C supports prewarm with fixed full model resolution and automatic masks");
+			"The default model resolution, compression and pressure settings support prewarm");
+		for (const auto percent : { 30u, 90u, 100u })
+			for (const auto compression : { 0u, 20u, 100u })
+				for (const bool pressure : { false, true }) {
+					auto settings = supported;
+					settings.neuralRenderingModelResolutionPercent = percent;
+					settings.neuralRenderingPeripheralCompressionPercent = compression;
+					settings.neuralRenderingPressureResolutionEnabled = pressure;
+					require(!NeuralRendering::PrewarmConfigurationBlocker(settings, true),
+						"Valid model policies must reach authoritative geometry projection");
+				}
 		require(NeuralRendering::PrewarmConfigurationBlocker(supported, false), "Flat NR must not prewarm");
 		const auto verifyBlocked = [&](const Upscaling::Settings& unsupported) {
 			require(NeuralRendering::PrewarmConfigurationBlocker(unsupported, true), "Unsupported configurations must defer prewarm");
@@ -735,14 +934,15 @@ int main()
 		for (const auto [member, value] : {
 				 std::pair{ &Upscaling::Settings::neuralRenderingMode, 0u },
 				 std::pair{ &Upscaling::Settings::neuralRenderingMode, 1u },
-				 std::pair{ &Upscaling::Settings::neuralRenderingModelResolutionPercent, 90u },
+				 std::pair{ &Upscaling::Settings::neuralRenderingModelResolutionPercent, 29u },
+				 std::pair{ &Upscaling::Settings::neuralRenderingModelResolutionPercent, 101u },
+				 std::pair{ &Upscaling::Settings::neuralRenderingPeripheralCompressionPercent, 101u },
 				 std::pair{ &Upscaling::Settings::neuralRenderingCentralAreaPercent, 75u } }) {
 			auto settings = supported;
 			settings.*member = value;
 			verifyBlocked(settings);
 		}
-		for (const auto member : { &Upscaling::Settings::neuralRenderingPressureResolutionEnabled,
-				 &Upscaling::Settings::neuralRenderingRenderscaleFov, &Upscaling::Settings::neuralCharacterRenderingEnabled,
+		for (const auto member : { &Upscaling::Settings::neuralRenderingRenderscaleFov, &Upscaling::Settings::neuralCharacterRenderingEnabled,
 				 &Upscaling::Settings::neuralCharacterSceneStrengthsEnabled, &Upscaling::Settings::neuralRenderingAutoMask,
 				 &Upscaling::Settings::neuralRenderingUICorrection }) {
 			auto settings = supported;
@@ -775,19 +975,48 @@ int main()
 				upscaling.settings.neuralRenderingPressureResolutionEnabled = false;
 				upscaling.settings.neuralRenderingParallelEyes = enabled;
 				upscaling.settings.neuralRenderingPrewarmEnabled = enabled;
-				for (const auto level : { spdlog::level::debug, spdlog::level::info, spdlog::level::debug }) {
+				upscaling.settings.neuralRenderingGuidedReconstruction = enabled;
+				upscaling.settings.neuralRenderingConfidenceRejectionPercent = 37;
+				for (const auto level : { spdlog::level::debug, spdlog::level::info, spdlog::level::warn, spdlog::level::err,
+						 spdlog::level::critical, spdlog::level::off, spdlog::level::trace, spdlog::level::debug }) {
 					visibilityState.level = level;
 					ImGui::Clear();
 					upscaling.DrawSelectionControls();
-					const bool visible = vr && level == spdlog::level::debug;
+					const bool debugControls = level == spdlog::level::debug || level == spdlog::level::trace;
+					const bool visible = vr && debugControls;
 					require(ImGui::Seen("Parallel Eyes") == visible && ImGui::Seen("Prewarm NR while loading") == visible,
 						"Execution settings are visible only in VR Debug controls");
 					require(upscaling.settings.neuralRenderingParallelEyes == enabled && upscaling.settings.neuralRenderingPrewarmEnabled == enabled,
 						"Returning to Info or changing runtime must preserve both saved execution preferences");
+					require(ImGui::Seen("Improve low-resolution NR") == debugControls && !ImGui::Seen("NR reconstruction filter"),
+						"Only the guided reconstruction toggle belongs in Debug/Trace");
+					require(upscaling.settings.neuralRenderingGuidedReconstruction == enabled,
+						"Info and logging-off redraws must preserve the guided reconstruction preference");
+					require(ImGui::Seen("NR confidence rejection") == debugControls &&
+								upscaling.settings.neuralRenderingConfidenceRejectionPercent == 37,
+						"Confidence rejection must be visible only in Debug/Trace without resetting its saved value");
+					if (debugControls)
+						require(ImGui::Disabled("NR confidence rejection") == !enabled,
+							"Confidence rejection availability must follow guided reconstruction");
+					const auto position = [](const char* label) { return std::find(ImGui::items.begin(), ImGui::items.end(), label); };
+					require(position("Face detail protection") == position("Peripheral compression") + 1 &&
+								position("Face detail protection") < position("Lower NR resolution under memory pressure") &&
+								position("Lower NR resolution under memory pressure") < position("Pause NR during combat"),
+						"Resolution and compression must precede the ordered bottom toggles");
+					if (debugControls)
+						require(position("Lower NR resolution under memory pressure") < position("Improve low-resolution NR") &&
+									position("Improve low-resolution NR") < position("Pause NR during combat"),
+							"Debug controls must retain pressure, guided and combat ordering");
 				}
 			}
 		}
 		globals::state = nullptr;
+		Upscaling::Settings hiddenSettings;
+		hiddenSettings.neuralRenderingConfidenceRejectionPercent = 37;
+		ImGui::Clear();
+		DrawNeuralModelResolutionSettings(hiddenSettings);
+		require(!ImGui::Seen("NR confidence rejection") && hiddenSettings.neuralRenderingConfidenceRejectionPercent == 37,
+			"Missing UI state must hide confidence rejection without changing its saved value");
 	}
 	globals::game::isVR = true;
 	ImGui::Clear();
@@ -849,7 +1078,7 @@ int main()
 			upscaling.settings.neuralCharacterArmorEnabled = true;
 			ImGui::Clear();
 			upscaling.DrawSelectionControls();
-			for (const char* label : { "After upscaling", "Before DLSS", "Preset",
+			for (const char* label : { "NR network", "After upscaling", "Before DLSS", "Preset",
 					 "Preset", "Intensity", "Local Tone", "Local Structure", "Skin Structure", "Style" })
 				require(ImGui::Seen(label), "The full interface exposes modes, shared image settings and actor selection");
 			require(ImGui::Seen("NR Model Resolution") && !ImGui::Seen("Limit NR to central area") &&
@@ -881,6 +1110,33 @@ int main()
 				"Shared slider edits must select Custom");
 		}
 	}
+	for (bool supported : { false, true }) {
+		NeuralRendering::networkSelectionSupported = supported;
+		for (unsigned network = 0; network <= 1; ++network) {
+			auto& upscaling = globals::features::upscaling;
+			upscaling.settings = {};
+			upscaling.settings.neuralRenderingEnabled = true;
+			upscaling.settings.neuralRenderingPreset = 3;
+			ImGui::comboEditValue = static_cast<int>(network);
+			ImGui::Clear("NR network");
+			upscaling.DrawSelectionControls();
+			require(ImGui::Disabled("NR network") == !supported &&
+						upscaling.settings.neuralRenderingNetwork == (supported ? network : 0u),
+				"Only supported DLLs may change the network through the UI");
+			require(upscaling.settings.neuralRenderingPreset == 3, "Network selection must not change the appearance preset");
+			require(std::find(ImGui::items.begin(), ImGui::items.end(), "NR network") <
+						std::find(ImGui::items.begin(), ImGui::items.end(), "After upscaling"),
+				"Network selection must precede the NR rendering-mode choices");
+			NeuralRendering::runtimeTuningLimits = NeuralRendering::GetTuningLimitsForVersion(310, supported ? 9 : 8);
+			upscaling.settings.neuralRenderingLocalStructure = 3.0f;
+			ImGui::Clear();
+			DrawNeuralRenderingSharedImageSettings(upscaling.settings);
+			require(upscaling.settings.neuralRenderingLocalStructure == (supported && network != NeuralRendering::kNetworkLegacy ? 1.0f : 2.0f),
+				"Legacy must recover the 310.8 structure range while default and newer retain the DLL range");
+		}
+	}
+	NeuralRendering::networkSelectionSupported = true;
+	NeuralRendering::runtimeTuningLimits = {};
 	for (bool vr : { false, true }) {
 		globals::game::isVR = vr;
 		for (unsigned minor : { 8u, 9u, 10u }) {
@@ -1086,7 +1342,7 @@ int main()
 	upscaling.settings.neuralRenderingEnabled = false;
 	drawMaster("Enabled");
 	require(ImGui::Disabled("Enabled") && !upscaling.settings.neuralRenderingEnabled &&
-				ImGui::Seen(NeuralRendering::Runtime::kMissingRuntimeNotice),
+				ImGui::Seen(NeuralRendering::Runtime::kMissingRuntimeNotice) && ImGui::Seen(NeuralRendering::Runtime::kUserRuntimeNotice),
 		"Missing runtime must disable NR and name the DLL and installation path");
 	upscaling.settings.neuralRenderingEnabled = true;
 	upscaling.settings.periphery_taa_enable = true;
@@ -1100,8 +1356,9 @@ int main()
 	upscaling.settings.periphery_taa_enable = false;
 	upscaling.settings.neuralRenderingEnabled = false;
 	drawMaster();
-	require(!ImGui::Disabled("Enabled") && !ImGui::Seen(NeuralRendering::Runtime::kMissingRuntimeNotice),
-		"Installed runtime must unlock the feature controls");
+	require(!ImGui::Disabled("Enabled") && !ImGui::Seen(NeuralRendering::Runtime::kMissingRuntimeNotice) &&
+				!ImGui::Seen(NeuralRendering::Runtime::kUserRuntimeNotice),
+		"Installed runtime must unlock the feature controls without installation notices");
 	const auto requirePreferences = [&](const Upscaling::Settings& expected) {
 		require(upscaling.settings.neuralRenderingFovOnly == expected.neuralRenderingFovOnly &&
 					upscaling.settings.neuralRenderingRenderscaleFov == expected.neuralRenderingRenderscaleFov &&
@@ -1776,7 +2033,7 @@ int main()
 				require(ImGui::Disabled("Enabled") && !ImGui::Disabled("After upscaling"),
 					"Pending incompatibility greys activation without preventing Full resolution selection");
 				if (pending == Upscaling::UpscaleMethod::kFSR)
-					require(ImGui::Seen(mode == ModeChoice::ReducedResolution ? "NR Before DLSS paused: FSR." : "NR paused: FSR."),
+					require(ImGui::Seen("NR Before DLSS is waiting: incompatible upscaling setting (FSR)."),
 						"The warning must name the pending incompatible setting, not the previous DLSS profile");
 			}
 		}
@@ -1936,7 +2193,7 @@ int main()
 		upscaling.renderScaleRequested = upscaling.renderScaleLatched = upscaling.renderScaleActive = false;
 		ImGui::Clear();
 		upscaling.DrawSelectionControls();
-		require(ImGui::Seen(std::string("NR Before DLSS paused: ") + reason + "."),
+		require(ImGui::Seen(std::string("NR Before DLSS is waiting: incompatible upscaling setting (") + reason + ")."),
 			"The NR panel must name the setting that pauses NR");
 		upscaling.stabilizerSyncActive = true;
 		for (const bool interior : { false, true }) {
@@ -1945,13 +2202,12 @@ int main()
 			profile = { method, quality, false };
 			ImGui::Clear();
 			upscaling.DrawSelectionControls();
-			require(ImGui::Seen(std::string("NR Before DLSS paused: VR FPS Stabilizer ") +
-								(interior ? "Interior" : "Exterior") + " profile, " + reason + "."),
-				"A matching active Stabilizer profile must be named with its incompatible setting");
+			require(ImGui::Seen(std::string("NR Before DLSS is waiting: incompatible upscaling setting (") + reason + ")."),
+				"A matching active Stabilizer profile must report its incompatible setting");
 			profile.qualityMode = quality + 1;
 			ImGui::Clear();
 			upscaling.DrawSelectionControls();
-			require(ImGui::Seen(std::string("NR Before DLSS paused: ") + reason + "."),
+			require(ImGui::Seen(std::string("NR Before DLSS is waiting: incompatible upscaling setting (") + reason + ")."),
 				"Manual settings must not be blamed on a different Stabilizer profile");
 		}
 		upscaling.stabilizerSyncActive = false;
@@ -1964,7 +2220,7 @@ int main()
 	ImGui::Clear();
 	upscaling.DrawSelectionControls();
 	require(!ImGui::Seen("Renderscale NR is waiting for scaling to become active.") &&
-				!ImGui::Seen("NR Before DLSS paused: Render Scale off."),
+				!ImGui::Seen("NR Before DLSS is waiting: incompatible upscaling setting (Render Scale off)."),
 		"Generic target wait stays out of the UI without blaming a compatible configured profile");
 	upscaling.runtimeMethod.reset();
 	upscaling.renderScaleActive = true;
@@ -2116,6 +2372,29 @@ int main()
 	require(!upscaling.ToggleNeuralRendering() && !upscaling.settings.neuralRenderingEnabled,
 		"Bindings cannot enable a missing provider");
 	NeuralRendering::runtimeInstalled = true;
+	NeuralRendering::installedDriver = { 61656u };
+	drawMaster("Enabled");
+	require(ImGui::Disabled("Enabled") && !upscaling.settings.neuralRenderingEnabled &&
+				ImGui::Seen(NeuralRendering::installedDriver.Message()) && ImGui::disableDepth == 0,
+		"Outdated driver disables activation and shows installed/required versions with update instructions");
+	std::string driverError;
+	require(!upscaling.ToggleNeuralRendering(&driverError) && driverError == NeuralRendering::installedDriver.Message(),
+		"Controller activation uses the same driver warning as the UI");
+	upscaling.settings.neuralRenderingEnabled = true;
+	upscaling.settings.periphery_taa_enable = true;
+	require(!upscaling.IsNeuralRenderingRequested() && !upscaling.IsNeuralRenderingRenderScaleRequired() &&
+				!Upscaling::ApplyNeuralRenderingFovConstraint(upscaling.settings) && upscaling.settings.periphery_taa_enable,
+		"Outdated NR preserves ordinary FOV/TAA preferences and does not request rendering or render scale");
+	drawMaster();
+	require(!ImGui::Disabled("Enabled") && upscaling.settings.neuralRenderingEnabled,
+		"Outdated driver retains the saved enabled preference and permits turning NR off");
+	require(upscaling.ToggleNeuralRendering() && !upscaling.settings.neuralRenderingEnabled,
+		"Controller can disable saved NR on an outdated driver");
+	NeuralRendering::installedDriver = {};
+	drawMaster();
+	require(!ImGui::Disabled("Enabled") && ImGui::Seen(NeuralRendering::installedDriver.Message()),
+		"Unknown detection shows the requirement and retains NGX compatibility checks");
+	NeuralRendering::installedDriver = { NeuralRendering::kMinimumNvidiaDriverRelease };
 	renderer.snapshot.quarantined = true;
 	require(!upscaling.ToggleNeuralRendering(), "Bindings cannot enable quarantined NR");
 	renderer.snapshot = {};
@@ -2131,4 +2410,15 @@ int main()
 		"Bindings can disable quarantined NR");
 	require(upscaling.settings.neuralRenderingMode == 2 && globals::menuInstance.dirtyChecks == dirtyChecks + 2,
 		"Bindings retain the chosen route and mark successful edits dirty");
+	upscaling.settings.neuralRenderingEnabled = true;
+	upscaling.settings.neuralRenderingPauseInCombat = true;
+	upscaling.combatPauseSnapshot.phase = NeuralRendering::CombatPausePhase::Cooldown;
+	upscaling.combatPauseSnapshot.remainingMs = 1500;
+	renderer.snapshot = {};
+	renderer.snapshot.failureLatched = true;
+	drawMaster();
+	require(ImGui::Seen("NR paused after an error. Use Reset Neural Rendering Runtime below to retry. Settings are kept.") &&
+				ImGui::Seen("Combat resume delay: %.1f seconds of active gameplay remaining.") &&
+				!ImGui::Seen("NR resumes in %.1f seconds without combat."),
+		"Combat cooldown must not promise recovery while a runtime error still blocks NR");
 }

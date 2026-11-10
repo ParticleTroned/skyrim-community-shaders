@@ -81,14 +81,11 @@ groupshared float3 g_scratchRadiance[8][8];
 	radiance3 = float3(rad0.y, rad1.y, rad2.y);
 #endif
 
-	outRadiance0[pixCoord + uint2(0, 0)] = radiance0;
-	outRadiance0[pixCoord + uint2(1, 0)] = radiance1;
-	outRadiance0[pixCoord + uint2(0, 1)] = radiance2;
-	outRadiance0[pixCoord + uint2(1, 1)] = radiance3;
-
 	// MIP 1
 	float3 rm1 = RadianceMIPFilter(radiance0, radiance1, radiance2, radiance3);
+#if !defined(HALF_RES) && !defined(QUARTER_RES)
 	outRadiance1[baseCoord] = rm1;
+#endif
 	g_scratchRadiance[groupThreadID.x][groupThreadID.y] = rm1;
 
 	GroupMemoryBarrierWithGroupSync();
@@ -102,7 +99,9 @@ groupshared float3 g_scratchRadiance[8][8];
 		float3 inBR = g_scratchRadiance[groupThreadID.x + 1][groupThreadID.y + 1];
 
 		float3 rm2 = RadianceMIPFilter(inTL, inTR, inBL, inBR);
+#if !defined(QUARTER_RES)
 		outRadiance2[baseCoord / 2] = rm2;
+#endif
 		g_scratchRadiance[groupThreadID.x][groupThreadID.y] = rm2;
 	}
 

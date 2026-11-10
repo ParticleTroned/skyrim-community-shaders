@@ -4,6 +4,7 @@
 #include "Utils/WinApi.h"
 
 #include <algorithm>
+#include <cfloat>
 #include <format>
 #include <imgui.h>
 #include <imgui_stdlib.h>
@@ -13,6 +14,7 @@
 #include "FeatureIssues.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/RenderDoc.h"
+#include "Features/ReverseZ.h"
 #include "Fonts.h"
 #include "Globals.h"
 #include "Menu.h"
@@ -20,6 +22,7 @@
 #include "State.h"
 #include "Util.h"
 #include "Utils/Format.h"
+#include "Utils/TracyZones.h"
 #include "Utils/UI.h"
 
 void AdvancedSettingsRenderer::RenderAdvancedSettings(
@@ -85,19 +88,31 @@ void AdvancedSettingsRenderer::RenderShaderCompileFlags()
 
 	Util::DrawSectionHeader("Compile Flags");
 
-	// Shader Defines input
-	auto shaderDefines = globals::state->GetShaderDefinesSnapshot()->canonicalText;
-	if (Util::Widgets::InputText("Shader Defines", &shaderDefines)) {
-		globals::state->SetDefines(shaderDefines);
+	// Keep drafts private until application; a hidden field abandons its draft.
+	static std::string shaderDefines;
+	static std::string appliedDefines;
+	static bool editingDefines = false;
+	static uint32_t lastDefinesFrame = 0;
+	const auto frame = globals::state->frameCount;
+	if (!editingDefines || (frame != lastDefinesFrame && frame != lastDefinesFrame + 1u)) {
+		shaderDefines = globals::state->GetShaderDefinesSnapshot()->canonicalText;
+		appliedDefines = shaderDefines;
 	}
-	if (ImGui::IsItemDeactivatedAfterEdit() || (ImGui::IsItemActive() &&
-												   (ImGui::IsKeyPressed(ImGuiKey_Enter) ||
-													   ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)))) {
-		globals::state->SetDefines(shaderDefines);
-		shaderCache->Clear();
+	lastDefinesFrame = frame;
+	const bool applyDefines = Util::Widgets::InputText("Shader Defines", &shaderDefines, ImGuiInputTextFlags_EnterReturnsTrue);
+	editingDefines = ImGui::IsItemActive();
+	if ((applyDefines || ImGui::IsItemDeactivatedAfterEdit()) &&
+		!ImGui::IsKeyPressed(ImGuiKey_Escape, false) && shaderDefines != appliedDefines) {
+		const auto previousDefines = globals::state->GetShaderDefinesSnapshot();
+		if (shaderDefines != previousDefines->canonicalText) {
+			globals::state->SetDefines(shaderDefines);
+			if (globals::state->GetShaderDefinesSnapshot()->canonicalText != previousDefines->canonicalText)
+				shaderCache->Clear();
+		}
+		appliedDefines = shaderDefines;
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Semicolon-separated shader defines; enter a space to clear. Rebuild shaders after editing. Compute shaders need a restart to recompile.");
+		ImGui::Text("Semicolon-separated shader defines; leave empty to clear. Press Enter or leave the field to apply. Closing this page discards unapplied edits. Compute shaders need a restart to recompile.");
 	}
 
 	// Half-precision (partial precision) shader compile flag
@@ -109,7 +124,7 @@ void AdvancedSettingsRenderer::RenderShaderCompileFlags()
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Request partial precision with D3DCOMPILE_PARTIAL_PRECISION. Image quality and performance depend on the shader and GPU. Changing this clears the cache; shaders recompile as needed.");
+			"Allows less precise graphics calculations, which may change performance or image quality. Off keeps normal precision. Changing this rebuilds affected shaders.");
 	}
 
 	// Avoid flow control compiler flag (transient — not saved to config because the
@@ -122,7 +137,7 @@ void AdvancedSettingsRenderer::RenderShaderCompileFlags()
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Ask the compiler to avoid flow-control instructions with D3DCOMPILE_AVOID_FLOW_CONTROL. May help short branches but add work when skipped branches are evaluated. Resets each launch. Changing this clears the cache; shaders recompile as needed.");
+			"Asks graphics effects to calculate alternatives instead of skipping unused work. May improve or worsen performance. Resets each launch; changing it rebuilds affected shaders.");
 	}
 }
 
@@ -144,12 +159,12 @@ void AdvancedSettingsRenderer::RenderShaderThreading()
 	shaderCache->compilationThreadCount = std::clamp(shaderCache->compilationThreadCount, 1, maxThreads);
 	shaderCache->backgroundCompilationThreadCount = std::clamp(shaderCache->backgroundCompilationThreadCount, 1, maxThreads);
 
-	Util::Widgets::SliderInt("Compiler Threads", &shaderCache->compilationThreadCount, 1, maxThreads);
+	Util::Widgets::SliderInt("Compiler Threads", &shaderCache->compilationThreadCount, 1, maxThreads, "%d", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Startup compile threads. Default: 75%% of logical CPUs, including E-cores, at cooperative OS priority to leave system headroom. Higher compiles faster but may reduce responsiveness.");
+			"How much processor capacity prepares shaders at startup. Higher values may finish sooner but leave less capacity for other programs.");
 	}
-	Util::Widgets::SliderInt("Background Compiler Threads", &shaderCache->backgroundCompilationThreadCount, 1, maxThreads);
+	Util::Widgets::SliderInt("Background Compiler Threads", &shaderCache->backgroundCompilationThreadCount, 1, maxThreads, "%d", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
 			"Gameplay compile threads. Default: half the performance cores to protect render-thread time; workers resume normal game priority after startup. Higher compiles faster but may stutter.");
@@ -211,6 +226,10 @@ void AdvancedSettingsRenderer::RenderShaderReplacementTable()
 	auto state = globals::state;
 
 	Util::DrawSectionHeader("Replace Original Shaders");
+	ImGui::BeginDisabled(globals::features::reverseZ.IsActive());
+	const SKSE::stl::scope_exit restoreDisabled([]() noexcept { ImGui::EndDisabled(); });
+	if (globals::features::reverseZ.IsActive())
+		ImGui::TextUnformatted("Reverse Z requires shader replacements. Disable Reverse Z and restart to change them.");
 
 	if (ImGui::BeginTable("##ReplaceToggles", 3, ImGuiTableFlags_SizingStretchSame)) {
 		globals::state->ForEachShaderTypeWithIndex([&](auto type, int classIndex) {
@@ -586,8 +605,17 @@ void AdvancedSettingsRenderer::RenderRuntimeDebugControls()
 	// Frame annotations toggle
 	Util::Widgets::Checkbox("Frame Annotations", &globals::state->frameAnnotations);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Enable detailed frame annotations for debugging render passes and draw calls.");
+		ImGui::Text("Adds labels to graphics captures so maintainers can identify each effect. Off avoids this extra recording work.");
 	}
+
+#ifdef TRACY_SUPPORT
+	bool perDrawZones = Util::TracyZones::PerDrawZonesEnabled();
+	if (Util::Widgets::Checkbox("Tracy Per-Draw Zones", &perDrawZones))
+		Util::TracyZones::SetPerDrawZones(perDrawZones);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextUnformatted("Records detailed drawing times in Tracy for troubleshooting. Off keeps captures smaller. Use briefly: detailed recording can slow the game and use substantial memory.");
+	}
+#endif
 
 	// Debug addresses section
 	if (ImGui::TreeNodeEx("Addresses")) {
@@ -616,9 +644,16 @@ void AdvancedSettingsRenderer::RenderShaderBlockingPanel()
 		ImVec4 blockedBgColor = Util::Colors::GetError();
 		blockedBgColor.w = 0.15f;  // Semi-transparent background
 		ImGui::PushStyleColor(ImGuiCol_ChildBg, blockedBgColor);
+		const auto restoreStyle = SKSE::stl::scope_exit([] {
+			ImGui::PopStyleColor();
+			ImGui::PopStyleVar(2);
+		});
 
-		float maxHeight = ImGui::GetContentRegionAvail().y * 0.3f;  // Limit to 30% to keep Active Shaders visible
-		if (ImGui::BeginChild("##BlockedShaderInfo", ImVec2(0, maxHeight), true, ImGuiChildFlags_AutoResizeY)) {
+		const float maxHeight = std::max(1.0f, ImGui::GetContentRegionAvail().y * 0.3f);
+		ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(FLT_MAX, maxHeight));
+		const bool childVisible = ImGui::BeginChild("##BlockedShaderInfo", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
+		const auto endChild = SKSE::stl::scope_exit([] { ImGui::EndChild(); });
+		if (childVisible) {
 			Util::Text::Error("Shader Blocking Active");
 			ImGui::SameLine();
 			if (ImGui::Button("Stop Blocking##Section")) {
@@ -663,11 +698,6 @@ void AdvancedSettingsRenderer::RenderShaderBlockingPanel()
 				}
 			}
 		}
-		ImGui::EndChild();
-
-		ImGui::PopStyleVar();    // ChildRounding
-		ImGui::PopStyleVar();    // WindowBorderSize
-		ImGui::PopStyleColor();  // ChildBg
 	}
 
 	// Blocking hotkeys + enable toggle

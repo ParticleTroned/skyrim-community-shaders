@@ -1,13 +1,52 @@
 #pragma once
 
+#include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <istream>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Util
 {
+	/** Accepts one nonempty filename component without drive syntax or navigation. */
+	inline bool IsSinglePathComponent(std::string_view name)
+	{
+		return !name.empty() && name.find_first_of("/\\:<>\"|?*") == std::string_view::npos && name.find('\0') == std::string_view::npos &&
+		       name != "." && name != ".." && name.back() != '.' && name.back() != ' ';
+	}
+
+	/** Joins a Data-relative resource path, rejecting roots and parent traversal. */
+	inline std::filesystem::path JoinRelativePath(const std::filesystem::path& base, const std::filesystem::path& path)
+	{
+		if (path.has_root_path())
+			throw std::invalid_argument("Resource path must be relative");
+		for (const auto& part : path) {
+			if (part == ".")
+				continue;
+			if (!IsSinglePathComponent(part.string()))
+				throw std::invalid_argument("Invalid resource path component");
+		}
+		return base / path;
+	}
+
+	/** Appends trimmed config lines after removing hash comments. */
+	inline void ReadConfigLines(std::istream& stream, std::vector<std::string>& lines)
+	{
+		std::string line;
+		while (std::getline(stream, line)) {
+			line.resize(std::min(line.size(), line.find('#')));
+			const auto begin = line.find_first_not_of(" \t\r\n");
+			if (begin != std::string::npos)
+				lines.push_back(line.substr(begin, line.find_last_not_of(" \t\r\n") - begin + 1));
+		}
+		if (stream.bad() || (stream.fail() && !stream.eof()))
+			throw std::runtime_error("Could not read geometry configuration");
+	}
+
 	/** Preserve Unicode filenames when passing paths through JSON and DevBench. */
 	inline std::string PathToUtf8(const std::filesystem::path& path)
 	{

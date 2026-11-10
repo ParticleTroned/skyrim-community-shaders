@@ -8,7 +8,7 @@
 namespace FeatureIssues
 {
 	// Forward declarations
-	static void DrawFeatureIssue(const FeatureIssueInfo& issue, const ImVec4& color);
+	static void DrawFeatureIssue(const FeatureIssueInfo& issue, const ImVec4& color, std::string& pendingRemoval);
 	static bool IsVersionMismatchForCoreFeature(const FeatureIssueInfo& issue);
 
 	// Static storage for feature issues
@@ -107,6 +107,11 @@ namespace FeatureIssues
 	bool HasFeatureIssues()
 	{
 		return !s_featureIssues.empty();
+	}
+
+	size_t CountLoadFailures()
+	{
+		return static_cast<size_t>(std::ranges::count_if(s_featureIssues, [](const FeatureIssueInfo& issue) { return !issue.IsConflict(); }));
 	}
 
 	bool HasObsoleteShaderModifyingFeatures()
@@ -271,11 +276,15 @@ namespace FeatureIssues
 
 		// Check for duplicates before adding
 		auto existingIssue = std::find_if(s_featureIssues.begin(), s_featureIssues.end(),
-			[&shortName](const FeatureIssueInfo& existing) {
-				return existing.shortName == shortName;
+			[&shortName, &issue](const FeatureIssueInfo& existing) {
+				return existing.shortName == shortName && existing.IsConflict() == issue.IsConflict();
 			});
 
 		if (existingIssue != s_featureIssues.end()) {
+			if (issue.IsConflict()) {
+				*existingIssue = std::move(issue);
+				return;
+			}
 			// Update existing issue with new information if this one has more details
 			if (issueType == FeatureIssueInfo::IssueType::OBSOLETE &&
 				existingIssue->issueType == FeatureIssueInfo::IssueType::UNKNOWN) {
@@ -292,6 +301,10 @@ namespace FeatureIssues
 	}
 	bool DeleteFeatureFiles(const FeatureIssueInfo& issue)
 	{
+		if (issue.IsConflict()) {
+			logger::warn("Cannot delete feature files to resolve a mod conflict: {}", issue.shortName);
+			return false;
+		}
 		bool allSuccessful = true;
 		std::vector<std::string> deletedFiles;
 		std::vector<std::string> failedFiles;
@@ -356,6 +369,8 @@ namespace FeatureIssues
 		std::vector<const FeatureIssueInfo*> obsoleteIssues;
 		std::vector<const FeatureIssueInfo*> versionIssues;
 		std::vector<const FeatureIssueInfo*> overrideIssues;
+		std::vector<const FeatureIssueInfo*> conflictIssues;
+		std::string pendingRemoval;
 
 		for (const auto& issue : featureIssues) {
 			if (issue.IsObsolete() && issue.ModifiedShaderDirectory()) {
@@ -370,6 +385,8 @@ namespace FeatureIssues
 				versionIssues.push_back(&issue);
 			} else if (issue.IsOverrideFailed()) {
 				overrideIssues.push_back(&issue);
+			} else if (issue.IsConflict()) {
+				conflictIssues.push_back(&issue);
 			}
 		}
 		// Shader Breaking Features Section (most critical)
@@ -377,7 +394,7 @@ namespace FeatureIssues
 				"These features changed core shaders. Uninstall them completely with your mod manager; deleting their INIs will not fix compilation errors.",
 				theme.StatusPalette.Error, !shaderBreakingIssues.empty())) {
 			for (const auto* issue : shaderBreakingIssues) {
-				DrawFeatureIssue(*issue, theme.StatusPalette.Error);
+				DrawFeatureIssue(*issue, theme.StatusPalette.Error, pendingRemoval);
 			}
 		}
 		// Unknown Features Section (potentially compilation breaking)
@@ -385,7 +402,7 @@ namespace FeatureIssues
 				"Unrecognized features may come from development branches or newer CSX versions. CSX attempted to disable them. Remove them to prevent compilation failures; their shader changes are unknown.",
 				theme.StatusPalette.Error, !unknownIssues.empty())) {
 			for (const auto* issue : unknownIssues) {
-				DrawFeatureIssue(*issue, theme.StatusPalette.Error);
+				DrawFeatureIssue(*issue, theme.StatusPalette.Error, pendingRemoval);
 			}
 		}
 		// Obsolete Features Section (non-shader-breaking)
@@ -393,7 +410,7 @@ namespace FeatureIssues
 				"These obsolete features were disabled automatically. They were removed or replaced and do not modify core shaders.",
 				theme.StatusPalette.Warning, !obsoleteIssues.empty())) {
 			for (const auto* issue : obsoleteIssues) {
-				DrawFeatureIssue(*issue, theme.StatusPalette.Warning);
+				DrawFeatureIssue(*issue, theme.StatusPalette.Warning, pendingRemoval);
 			}
 		}
 		// Version Mismatch Section
@@ -401,7 +418,15 @@ namespace FeatureIssues
 				"These features were disabled due to incompatible versions. Check for updates or replacements.",
 				theme.StatusPalette.Warning, !versionIssues.empty())) {
 			for (const auto* issue : versionIssues) {
-				DrawFeatureIssue(*issue, theme.StatusPalette.Warning);
+				DrawFeatureIssue(*issue, theme.StatusPalette.Warning, pendingRemoval);
+			}
+		}
+		if (auto section = Util::SectionWrapper("Conflicting Mods",
+				"These features were disabled because an incompatible mod was detected. Keep the feature disabled at boot to use that mod, or remove the mod and restart to use the feature.",
+				theme.StatusPalette.Warning, !conflictIssues.empty())) {
+			for (const auto* issue : conflictIssues) {
+				DrawFeatureIssue(*issue, theme.StatusPalette.Warning, pendingRemoval);
+				ImGui::TextWrapped("%s", issue->rejectionReason.c_str());
 			}
 		}
 		// Override Failures Section
@@ -409,9 +434,13 @@ namespace FeatureIssues
 				"The following override files failed to load or apply. Check the file format and content.",
 				theme.StatusPalette.Error, !overrideIssues.empty())) {
 			for (const auto* issue : overrideIssues) {
-				DrawFeatureIssue(*issue, theme.StatusPalette.Error);
+				DrawFeatureIssue(*issue, theme.StatusPalette.Error, pendingRemoval);
 			}
 		}
+
+		// Grouped pointers must remain valid until every issue has finished drawing.
+		if (!pendingRemoval.empty())
+			std::erase_if(s_featureIssues, [&](const auto& issue) { return issue.shortName == pendingRemoval && !issue.IsConflict(); });
 
 		// Common cleanup actions section
 		ImGui::TextColored(theme.Palette.Text, "Cleanup Actions:");
@@ -462,13 +491,15 @@ namespace FeatureIssues
 		ImGui::BulletText("Use 'Clear Issue List' to refresh after manual cleanup");
 	}
 
-	static void DrawFeatureIssue(const FeatureIssueInfo& issue, const ImVec4& color)
+	static void DrawFeatureIssue(const FeatureIssueInfo& issue, const ImVec4& color, std::string& pendingRemoval)
 	{
 		// Get theme colors directly
 		auto menu = Menu::GetSingleton();
 		const auto& theme = menu->GetTheme();
 
 		ImGui::PushID(issue.shortName.c_str());
+		ImGui::PushID(static_cast<int>(issue.issueType));
+		const SKSE::stl::scope_exit restoreIds([] { ImGui::PopID(); ImGui::PopID(); });
 
 		// Show feature name with appropriate color
 		ImGui::Bullet();
@@ -640,7 +671,7 @@ namespace FeatureIssues
 		// Show delete button for:
 		// 1. Features that don't modify shader directories (safe to delete)
 		// 2. Obsolete features with replacements (user can install replacement after deletion)
-		bool canSafelyDelete = (!issue.ModifiedShaderDirectory() || (issue.IsObsolete() && !issue.replacementFeature.empty())) && !IsVersionMismatchForCoreFeature(issue);
+		bool canSafelyDelete = !issue.IsConflict() && (!issue.ModifiedShaderDirectory() || (issue.IsObsolete() && !issue.replacementFeature.empty())) && !IsVersionMismatchForCoreFeature(issue);
 		if (canSafelyDelete) {
 			ImGui::SameLine();
 			std::string deleteButtonId = "Delete##" + issue.shortName;
@@ -695,11 +726,7 @@ namespace FeatureIssues
 
 				if (ImGui::Button("Delete", ImVec2(120, 0))) {
 					if (DeleteFeatureFiles(issue)) {
-						// Remove from issues list after successful deletion
-						auto& issues = const_cast<std::vector<FeatureIssueInfo>&>(GetFeatureIssues());
-						issues.erase(std::remove_if(issues.begin(), issues.end(),
-										 [&issue](const FeatureIssueInfo& i) { return i.shortName == issue.shortName; }),
-							issues.end());
+						pendingRemoval = issue.shortName;
 					}
 					ImGui::CloseCurrentPopup();
 				}
@@ -710,7 +737,6 @@ namespace FeatureIssues
 				}
 			}
 		}
-		ImGui::PopID();
 	}
 
 	static bool IsVersionMismatchForCoreFeature(const FeatureIssueInfo& issue)
@@ -746,10 +772,6 @@ namespace FeatureIssues
 	{
 		std::filesystem::path featuresPath = Util::PathHelpers::GetFeaturesPath();
 
-		if (!std::filesystem::exists(featuresPath)) {
-			return;
-		}
-
 		// Get list of active feature names
 		std::set<std::string> activeFeatureNames;
 		const auto& features = Feature::GetFeatureList();
@@ -768,11 +790,17 @@ namespace FeatureIssues
 					AddFeatureIssue(feature->GetShortName(), feature->version, feature->failedLoadedMessage,
 						FeatureIssueInfo::IssueType::VERSION_MISMATCH, fileInfo);
 				}
+				if (!feature->loaded && !feature->conflictMessage.empty()) {
+					AddFeatureIssue(feature->GetShortName(), feature->version, feature->conflictMessage,
+						FeatureIssueInfo::IssueType::CONFLICT);
+				}
 			}
 		}
 
 		// Scan for INI files
 		try {
+			if (!std::filesystem::exists(featuresPath))
+				return;
 			for (const auto& entry : std::filesystem::directory_iterator(featuresPath)) {
 				if (entry.is_regular_file() && entry.path().extension() == ".ini") {
 					std::string featureName = entry.path().stem().string();

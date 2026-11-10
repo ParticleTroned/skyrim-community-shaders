@@ -1,3 +1,4 @@
+#include "Common/ReverseZ.hlsli"
 #define LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS
 
 #include "Common/AdaptiveBalanceFire.hlsli"
@@ -19,34 +20,36 @@
 #	undef IBL
 #endif
 
+#if defined(VSHADER)
 struct VS_INPUT
 {
 	float4 Position: POSITION0;
-#if defined(TEXCOORD)
-#	if defined(STRIP_PARTICLES)
+#	if defined(TEXCOORD)
+#		if defined(STRIP_PARTICLES)
 	float3
-#	else
+#		else
 	float2
-#	endif
+#		endif
 		TexCoord0: TEXCOORD0;
-#endif
-#if defined(NORMALS) || defined(MOTIONVECTORS_NORMALS)
+#	endif
+#	if defined(NORMALS) || defined(MOTIONVECTORS_NORMALS)
 	float4 Normal: NORMAL0;
-#endif
-#if defined(BINORMAL_TANGENT)
+#	endif
+#	if defined(BINORMAL_TANGENT)
 	float4 Bitangent: BINORMAL0;
-#endif
-#if defined(VC)
+#	endif
+#	if defined(VC)
 	float4 Color: COLOR0;
-#endif
-#if defined(SKINNED)
+#	endif
+#	if defined(SKINNED)
 	float4 BoneWeights: BLENDWEIGHT0;
 	float4 BoneIndices: BLENDINDICES0;
-#endif
-#if defined(VR)
+#	endif
+#	if defined(VR)
 	uint InstanceID: SV_INSTANCEID;
-#endif  // VR
+#	endif  // VR
 };
+#endif
 
 struct VS_OUTPUT
 {
@@ -103,6 +106,7 @@ cbuffer VS_PerFrame : register(b12)
 {
 #	if !defined(VR)
 	row_major float4x4 ScreenProj[1] : packoffset(c0);
+	row_major float4x4 Proj[1] : packoffset(c4);
 	row_major float4x4 ViewProj[1] : packoffset(c8);
 #		if defined(SKINNED)
 	float3 BonesPivot[1] : packoffset(c40);
@@ -112,6 +116,7 @@ cbuffer VS_PerFrame : register(b12)
 #		endif      // SKINNED
 #	else
 	row_major float4x4 ScreenProj[2] : packoffset(c0);
+	row_major float4x4 Proj[2] : packoffset(c8);
 	row_major float4x4 ViewProj[2] : packoffset(c16);
 #		if defined(SKINNED)
 	float3 BonesPivot[2] : packoffset(c80);
@@ -215,7 +220,12 @@ VS_OUTPUT main(VS_INPUT input)
 		transpose(float3x3(transpose(World[eyeIndex])[0], transpose(World[eyeIndex])[1], transpose(World[eyeIndex])[2]));
 
 #	if defined(SKY_OBJECT)
-	float4x4 viewProj = float4x4(ViewProj[eyeIndex][0], ViewProj[eyeIndex][1], ViewProj[eyeIndex][3], ViewProj[eyeIndex][3]);
+#		ifdef REVERSE_Z
+	float4 skyObjectDepthRow = FrameBuffer::IsReverseProjection(Proj[eyeIndex]) ? 0.0.xxxx : ViewProj[eyeIndex][3];
+#		else
+	float4 skyObjectDepthRow = ViewProj[eyeIndex][3];
+#		endif
+	float4x4 viewProj = float4x4(ViewProj[eyeIndex][0], ViewProj[eyeIndex][1], skyObjectDepthRow, ViewProj[eyeIndex][3]);
 #	else
 	row_major float4x4 viewProj = ViewProj[eyeIndex];
 #	endif
@@ -262,7 +272,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 #	if !defined(MOTIONVECTORS_NORMALS)
 	float fogColorParam = min(FogParam.w,
-		exp2(FogParam.z * log2(saturate(length(viewPos.xyz) * FogParam.y - FogParam.x))));
+		exp2(FogParam.z * log2(saturate(length(FrameBuffer::ToStandardClip(viewPos, FrameBuffer::IsReverseProjection(Proj[eyeIndex]))) * FogParam.y - FogParam.x))));
 
 	vsout.FogParam.xyz = lerp(FogNearColor.xyz, FogFarColor.xyz, fogColorParam);
 	vsout.FogParam.w = fogColorParam;
@@ -636,36 +646,36 @@ float3 GetAmbientEffectLighting(float3 worldPosition, float2 screenPosition, uin
 #	if defined(LIGHTING)
 	ApplyParticleLightingInfluence(dirColor, ambientColor);
 #	endif
-	[branch] if (!any(dirColor != 0.0))
+	shadowVariance = 1.0;
+	[branch] if (any(dirColor != 0.0))
 	{
-		shadowVariance = 1.0;
-		return ambientColor;
-	}
-	float3 viewDirection = worldPosition / max(length(worldPosition), 1e-5);
-	float shadow = 1.0;
+		float3 viewDirection = worldPosition / max(length(worldPosition), 1e-5);
+		float shadow = 1.0;
 #	if defined(LIGHTING)
-	if (ShadowSampling::HasDirectionalShadows()) {
-		shadow = ShadowSampling::Get3DFilteredShadow(worldPosition, viewDirection, screenPosition, eyeIndex);
-	}
-#	else
-	// Sky statics use world shadows without depending on the scene shadow-mask pass.
-	if (!SharedData::InInterior && !SharedData::HideSky && !SharedData::InMapMenu) {
-		static const uint SampleCount = 8;
-		static const float ViewRayLength = 2048.0;
-		float3 startPosition = worldPosition - viewDirection * ViewRayLength;
-		float3 endPosition = worldPosition + viewDirection * clamp(maxShadowDistance, 0.0, ViewRayLength);
-		float noise = Random::InterleavedGradientNoise(Stereo::EyeStableNoiseCoord(screenPosition, SharedData::BufferDim.xy), SharedData::FrameCount);
-		shadow = 0.0;
-		for (uint i = 0; i < SampleCount; i++) {
-			float3 samplePosition = lerp(startPosition, endPosition, (float(i) + noise) / float(SampleCount));
-			shadow += ShadowSampling::GetWorldShadow(samplePosition, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
+		if (ShadowSampling::HasDirectionalShadows()) {
+			shadow = ShadowSampling::Get3DFilteredShadow(worldPosition, viewDirection, screenPosition, eyeIndex);
 		}
-		shadow /= float(SampleCount);
-	}
+#	else
+		// Sky statics use world shadows without depending on the scene shadow-mask pass.
+		if (!SharedData::InInterior && !SharedData::HideSky && !SharedData::InMapMenu) {
+			static const uint SampleCount = 8;
+			static const float ViewRayLength = 2048.0;
+			float3 startPosition = worldPosition - viewDirection * ViewRayLength;
+			float3 endPosition = worldPosition + viewDirection * clamp(maxShadowDistance, 0.0, ViewRayLength);
+			float noise = Random::InterleavedGradientNoise(Stereo::EyeStableNoiseCoord(screenPosition, SharedData::BufferDim.xy), SharedData::FrameCount);
+			shadow = 0.0;
+			for (uint i = 0; i < SampleCount; i++) {
+				float3 samplePosition = lerp(startPosition, endPosition, (float(i) + noise) / float(SampleCount));
+				shadow += ShadowSampling::GetWorldShadow(samplePosition, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
+			}
+			shadow /= float(SampleCount);
+		}
 #	endif
-	dirColor *= shadow;
-	shadowVariance = 1.0 - sqrt(saturate(fwidth(shadow)));
-	return ambientColor + dirColor;
+		dirColor *= shadow;
+		shadowVariance = 1.0 - sqrt(saturate(fwidth(shadow)));
+		ambientColor += dirColor;
+	}
+	return ambientColor;
 }
 
 void ExtractEffectLighting(float3 inputColor, out float3 dirColor, out float3 ambientColor, float skylightingDiffuse)
@@ -742,15 +752,19 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 #		endif
 	}
 
+	color = Color::WeatherEffectLighting(color, (Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) != 0);
+
 #		if defined(LIGHT_LIMIT_FIX)
 	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld))
 #		endif
 	{
+		const float effectLightingMult = Color::EffectLightingMult();
 		// Saturation needs the complete light color before its channels are accumulated.
-		float3 pointLightColor = ApplyParticlePointInfluence(Color::PointLight(float3(PLightColorR.x, PLightColorG.x, PLightColorB.x)));
-		color.x += dot(pointLightColor.x * lightFadeMul * Color::EffectLightingMult(), 1.0.xxxx);
-		color.y += dot(pointLightColor.y * lightFadeMul * Color::EffectLightingMult(), 1.0.xxxx);
-		color.z += dot(pointLightColor.z * lightFadeMul * Color::EffectLightingMult(), 1.0.xxxx);
+		[unroll] for (uint lightIndex = 0; lightIndex < 4; lightIndex++)
+		{
+			float3 pointLightColor = float3(PLightColorR[lightIndex], PLightColorG[lightIndex], PLightColorB[lightIndex]);
+			color += ApplyParticlePointInfluence(Color::PointLight(pointLightColor)) * lightFadeMul[lightIndex] * effectLightingMult;
+		}
 	}
 
 	return color;
@@ -807,56 +821,16 @@ PS_OUTPUT main(PS_INPUT input)
 	float softMul = 1;
 #	if defined(SOFT)
 	float depth = TexDepthSamplerEffect.Load(int3(input.Position.xy, 0)).x;
+#		ifdef REVERSE_Z
+	if (FrameBuffer::IsReverseProjection())
+		depth = 1 - depth;
+#		endif
 	softMul = saturate(-input.TexCoord0.w + LightingInfluence.y / ((1 - depth) * CameraDataEffect.z + CameraDataEffect.y));
 #	endif
 
 	float lightingInfluence = LightingInfluence.x;
 	float3 propertyColor = Color::Effect(PropertyColor.xyz);
 	float shadowVariance = 1.0;
-
-#	if defined(LIGHTING)
-	propertyColor = GetLightingColor(input.MSPosition.xyz, input.WorldPosition.xyz, input.Position.xy, eyeIndex, shadowVariance);
-
-#		if defined(LIGHT_LIMIT_FIX)
-	uint lightCount = 0;
-	if (LightingInfluence.x > 0.0) {
-		float3 viewPosition = mul(FrameBuffer::CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
-		float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
-		bool inWorld = Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld;
-
-		uint clusterIndex = 0;
-		if (inWorld && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
-			lightCount = LightLimitFix::lightGrid[clusterIndex].lightCount;
-			uint lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
-			[loop] for (uint i = 0; i < lightCount; i++)
-			{
-				uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + i];
-				LightLimitFix::Light light = LightLimitFix::lights[clusteredLightIndex];
-				if (LightLimitFix::IsLightIgnored(light) || light.lightFlags & LightLimitFix::LightFlags::Shadow) {
-					continue;
-				}
-				float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
-				float lightDist = length(lightDirection);
-
-#			if defined(ISL)
-				float intensityMultiplier = InverseSquareLighting::GetAttenuation(lightDist, light);
-#			else
-				float intensityFactor = saturate(lightDist / light.radius);
-				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
-#			endif
-
-				const bool isPointLightLinear = (light.lightFlags & LightLimitFix::LightFlags::Linear) != 0;
-				float3 lightColor =
-					Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * 0.5 * light.fade * Color::EffectLightingMult();
-				propertyColor += ApplyParticlePointInfluence(lightColor);
-			}
-		}
-	}
-#		endif
-#	elif defined(MEMBRANE)
-	propertyColor *= 0;
-	lightingInfluence = 0;
-#	endif
 
 	float4 baseTexColor = float4(1, 1, 1, 1);
 	float4 baseColor = float4(1, 1, 1, 1);
@@ -935,13 +909,72 @@ PS_OUTPUT main(PS_INPUT input)
 		baseColor.xyz = Color::Effect(grayscaleColor);
 	}
 
-	float3 lightColor = lerp(baseColor.xyz, propertyColor * baseColor.xyz, lightingInfluence.xxx);
+#	if !defined(MOTIONVECTORS_NORMALS)
+	if (alpha * fogMul.w - AlphaTestRefRS < 0) {
+		discard;
+	}
+#	endif
+
+#	if defined(LIGHTING)
+	propertyColor = GetLightingColor(input.MSPosition.xyz, input.WorldPosition.xyz, input.Position.xy, eyeIndex, shadowVariance);
+
+#		if defined(LIGHT_LIMIT_FIX)
+	uint lightCount = 0;
+	if (LightingInfluence.x > 0.0) {
+		float3 viewPosition = mul(FrameBuffer::CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
+		float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
+		bool inWorld = Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld;
+
+		uint clusterIndex = 0;
+		if (inWorld && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
+			lightCount = LightLimitFix::lightGrid[clusterIndex].lightCount;
+			uint lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
+			[loop] for (uint i = 0; i < lightCount; i++)
+			{
+				uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + i];
+				LightLimitFix::Light light = LightLimitFix::lights[clusteredLightIndex];
+				if (LightLimitFix::IsLightIgnored(light) || light.lightFlags & LightLimitFix::LightFlags::Shadow) {
+					continue;
+				}
+				float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
+				float lightDist = length(lightDirection);
+
+#			if defined(ISL)
+				float intensityMultiplier = InverseSquareLighting::GetAttenuation(lightDist, light);
+#			else
+				float intensityFactor = saturate(lightDist / light.radius);
+				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
+#			endif
+
+				const bool isPointLightLinear = (light.lightFlags & LightLimitFix::LightFlags::Linear) != 0;
+				float3 lightColor =
+					Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * 0.5 * light.fade * Color::EffectLightingMult();
+				propertyColor += ApplyParticlePointInfluence(lightColor);
+			}
+		}
+	}
+#		endif
+#	elif defined(MEMBRANE)
+	propertyColor *= 0;
+	lightingInfluence = 0;
+#	endif
+
+#	if defined(LIGHTING)
+	propertyColor = Color::AdjustUtilityColor(propertyColor, SharedData::adaptiveBalanceSettings.appearance.effectLightingSaturation,
+		SharedData::adaptiveBalanceSettings.appearance.effectLightingGammaOffset);
+#	endif
 
 #	if !defined(LIGHTING) && defined(VC) && defined(TEXCOORD) && defined(NORMALS) && defined(TEXTURE) && defined(FALLOFF) && defined(SOFT)
 	const bool isSkyStatic = Color::IsSceneColorDraw() && (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha) && lightingInfluence == 1.0;
 #	else
 	const bool isSkyStatic = false;
 #	endif
+#	if !defined(LIGHTING) && !defined(MOTIONVECTORS_NORMALS)
+	if (isSkyStatic || (Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject))
+		propertyColor = Color::WeatherEffectLighting(propertyColor, true);
+#	endif
+	float3 lightColor = lerp(baseColor.xyz, propertyColor * baseColor.xyz, lightingInfluence.xxx);
+
 	const float skyStaticTransparency = isSkyStatic ? SharedData::adaptiveBalanceSettings.skyStaticTransparency : 0.0;
 	if (isSkyStatic) {
 		if (skyStaticTransparency == 1.0)
@@ -960,6 +993,7 @@ PS_OUTPUT main(PS_INPUT input)
 		{
 			ambientLighting = GetAmbientEffectLighting(input.WorldPosition.xyz, input.Position.xy, eyeIndex, maxShadowDistance, shadowVariance);
 		}
+		ambientLighting = Color::WeatherEffectLighting(ambientLighting, true);
 		lightColor = lerp(baseColor.xyz, baseColor.xyz * ambientLighting * SharedData::adaptiveBalanceSettings.skyStaticBrightness, lightingInfluence);
 	}
 #	endif
@@ -971,9 +1005,6 @@ PS_OUTPUT main(PS_INPUT input)
 	} else if (IsParticleEffect()) {
 		lightColor = AdaptiveBalanceAppearance::ApplyColor(lightColor,
 			SharedData::adaptiveBalanceSettings.appearance.particleIntensity, 1.0, 1.0, 1.0.xxx);
-	}
-	if (alpha * fogMul.w - AlphaTestRefRS < 0) {
-		discard;
 	}
 #	endif
 
@@ -1020,6 +1051,9 @@ PS_OUTPUT main(PS_INPUT input)
 #	elif defined(MULTBLEND) || defined(MULTBLEND_DECAL)
 	if (skyStaticTransparency != 0.0)
 		finalColor.xyz = lerp(finalColor.xyz, 1.0.xxx, skyStaticTransparency);
+#	endif
+#	if !defined(MOTIONVECTORS_NORMALS)
+	finalColor.xyz = AdaptiveBalanceAppearance::ApplyAurora(finalColor.xyz);
 #	endif
 	psout.Diffuse = finalColor;
 #	if defined(LIGHTING) && defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)

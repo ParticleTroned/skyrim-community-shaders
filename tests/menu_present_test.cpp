@@ -79,6 +79,14 @@ namespace globals
 	{
 		struct
 		{
+			void UpdateRenderTargetCapture()
+			{
+				++effects;
+				renderOrder += "render-targets;";
+			}
+		} performanceOverlay;
+		struct
+		{
 			bool IsFrameGenerationDx12PathActive()
 			{
 				++timingCapabilityQueries;
@@ -181,8 +189,8 @@ int main()
 							const auto actual = IDXGISwapChain_Present::thunk(chain, 2, flags);
 							const bool test = !vr && (flags & DXGI_PRESENT_TEST) != 0;
 							const char* expectedOrder = test ? "present;" :
-							                                   (vr ? "mirror;reset;accepted;overlay;capture;indicator;present;collect;" :
-																	 "mirror;reset;overlay;capture;indicator;timing-end;present;timing-begin;collect;");
+							                                   (vr ? "mirror;reset;accepted;overlay;render-targets;capture;indicator;present;collect;" :
+																	 "mirror;reset;overlay;render-targets;capture;indicator;timing-end;present;timing-begin;collect;");
 							const bool expectedBlurReady = blurReady || (!test && initialized && SUCCEEDED(result));
 							if (actual != result || presentCalls != 1 || forwardedChain != chain || forwardedFlags != flags || forwardedInterval != 2 ||
 								flatBegins != unsigned(!vr && !test) || flatCompletions != flatBegins || timingCapabilityQueries != flatBegins ||

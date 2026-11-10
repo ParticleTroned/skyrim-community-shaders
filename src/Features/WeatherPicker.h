@@ -36,6 +36,8 @@ public:
 	 * @param open Pointer to the open/close state owned by the caller.
 	 */
 	void RenderWeatherDetailsWindow(bool* open);
+	/** Whether the menu or game cursor allows interaction with weather details. */
+	bool CanInteractWithDetails() const;
 	void ResetWindowLayout();
 
 	/**

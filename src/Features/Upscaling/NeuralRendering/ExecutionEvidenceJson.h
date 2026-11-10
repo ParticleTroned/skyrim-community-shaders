@@ -1,6 +1,9 @@
 #pragma once
+#include "ReconstructionTuningJson.h"
 
+#include "DriverSupport.h"
 #include "ExecutionEvidence.h"
+#include "NgxCapabilityInfo.h"
 #include <algorithm>
 #include <nlohmann/json.hpp>
 
@@ -13,6 +16,21 @@ namespace NeuralRendering::Evidence
 	{
 		return value ? Json(*value) : Json(nullptr);
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	inline Json DriverSupportJson(const DriverSupport& value)
+	{
+		return { { "installedRelease", OptionalJson(value.installedRelease) }, { "minimumRelease", kMinimumNvidiaDriverRelease },
+			{ "needsUpdate", value.installedRelease ? Json(value.RequiresUpdate()) : Json(nullptr) },
+			{ "queryResult", value.queryResult }, { "message", value.Message() } };
+	}
+
+	inline Json DriverRequirementsJson(const NgxDriverRequirements& value)
+	{
+		return { { "needsUpdate", OptionalJson(value.needsUpdate) }, { "minimumMajor", OptionalJson(value.minimumMajor) },
+			{ "minimumMinor", OptionalJson(value.minimumMinor) }, { "updateQuery", OptionalJson(value.updateQuery) },
+			{ "majorQuery", OptionalJson(value.majorQuery) }, { "minorQuery", OptionalJson(value.minorQuery) } };
+	}
+#endif
 	inline Json ExtentJson(const UpscalingDLSS::Extent& value)
 	{
 		return { { "width", value.width }, { "height", value.height } };
@@ -43,6 +61,8 @@ namespace NeuralRendering::Evidence
 			{ "inputInitializationContract", "valid_rectangles_before_evaluation" }, { "nativeReadableFootprint", nullptr },
 			{ "motionSourceUnits", "full_input_normalized" }, { "motionConsumerUnits", "native_guide_pixels" },
 			{ "motionConversion", "native_parameter_scale_once" }, { "motionVectorScale", value.motionVectorScale },
+			{ "jitterPixels", value.jitterPixels }, { "scalingRatio", value.ScalingRatio() },
+			{ "nativeControlMask", value.nativeControlMask },
 			{ "featureUpscaling", value.featureUpscaling } };
 	}
 	/** Rectangular support is a conservative enclosure; exact occupancy has its own producer. */
@@ -69,9 +89,46 @@ namespace NeuralRendering::Evidence
 			{ "capacityPixels", static_cast<std::uint64_t>(value.allocationCapacity.width) * value.allocationCapacity.height }
 		};
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** The frozen plan describes candidate geometry; native records prove actual submitted work. */
+	inline Json PeripheralCompressionJson(const PeripheralCompressionPlan& value)
+	{
+		return { { "requested", value.requested }, { "active", value.Active() },
+			{ "reason", GetPeripheralCompressionReasonName(value.reason) }, { "qualified", false },
+			{ "mappingVersion", PeripheralMapping::kVersion }, { "uniformPercent", value.uniformPercent },
+			{ "source", ExtentJson(value.source) }, { "sourceGuides", ExtentJson(value.sourceGuides) },
+			{ "ordinaryModel", ExtentJson(value.ordinaryModel) }, { "ordinaryGuides", ExtentJson(value.ordinaryGuides) },
+			{ "candidateModel", ExtentJson(value.model) }, { "candidateGuides", ExtentJson(value.guides) },
+			{ "sourceCrop", ViewportJson(value.sourceCrop) }, { "ownedOutput", SubrectJson(value.ownedOutput) },
+			{ "baselinePixels", value.baselinePixels }, { "candidatePixels", value.candidatePixels },
+			{ "compressionPercent", value.compressionPercent }, { "protectedFraction", value.mapping.protectedFraction },
+			{ "shape", value.mapping.shaped ? "fov" : "rectangle" }, { "maskCenter", value.mapping.center }, { "maskRadii", value.mapping.radii }, { "workOrigin", value.mapping.origin }, { "workingFraction", value.mapping.work },
+			{ "maximumFootprint", value.maximumFootprint }, { "motionConvention", "normalized_endpoint_difference" },
+			{ "faceDetailProtection", { { "requestedPercent", value.faceDetailRequestedPercent }, { "active", value.mapping.faceDetail.enabled != 0 },
+										  { "regionsCurrent", value.faceDetailRegionsCurrent }, { "observedRegions", value.faceDetailObservedRegions }, { "fixedModelGrid", true } } } };
+	}
+	inline Json ModelReconstructionJson(const std::optional<ModelReconstructionEvidence>& value)
+	{
+		if (!value)
+			return nullptr;
+		return { { "mode", GetGuidedReconstructionModeName(value->decision.mode) },
+			{ "reason", GetGuidedReconstructionReasonName(value->decision.reason) }, { "effectivePercent", value->effectivePercent },
+			{ "target", ExtentJson(value->target) }, { "unpackedModel", ExtentJson(value->unpackedModel) },
+			{ "basicFilter", "bilinear" }, { "enabled", value->enabled },
+			{ "packed", value->packed }, { "matchedReferenceDomain", value->matchedReferenceDomain },
+			{ "confidenceRejectionPercent", value->confidenceRejectionPercent },
+			{ "experimentalReconstruction", ReconstructionTuningJson(value->reconstructionTuning) },
+			{ "kernel", value->decision.mode == GuidedReconstructionMode::GuidedLowResolution ? Json("2x2") : Json(nullptr) } };
+	}
+#endif
 	inline Json ContextJson(const ExecutionContext& value)
 	{
-		return { { "sourceTransactionId", value.sourceTransactionId },
+		return {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			{ "modelReconstruction", ModelReconstructionJson(value.modelReconstruction) },
+			{ "peripheralCompression", value.peripheralCompression ? PeripheralCompressionJson(*value.peripheralCompression) : Json(nullptr) },
+#endif
+			{ "sourceTransactionId", value.sourceTransactionId },
 			{ "mode", value.renderingMode ? Json(GetRenderingModeName(*value.renderingMode)) : Json(nullptr) },
 			{ "fovOnly", OptionalJson(value.fovOnly) }, { "renderscaleFov", OptionalJson(value.renderscaleFov) }, { "captureEpoch", OptionalJson(value.captureEpoch) },
 			{ "configurationEpoch", OptionalJson(value.configurationEpoch) }, { "sourceContext", value.sourceContext },
@@ -80,7 +137,8 @@ namespace NeuralRendering::Evidence
 			{ "sourceColorOrigin", OptionalJson(value.sourceColorOrigin) }, { "sourceGuideOrigin", OptionalJson(value.sourceGuideOrigin) },
 			{ "jitterPixels", OptionalJson(value.jitterPixels) }, { "jitterConvention", "engine_input_pixel_offset_dlss_negates_xy" },
 			{ "motionVectorConvention", "engine_normalized_per_eye_scaled_by_nr_viewport_no_jitter_parameter_in_feature18" },
-			{ "pixelCoordinates", "top_left_origin_integer_texels_half_open_rectangles" } };
+			{ "pixelCoordinates", "top_left_origin_integer_texels_half_open_rectangles" }
+		};
 	}
 	/** Missing samples are null; clocks and inclusive/self semantics stay explicit. */
 	inline Json PassTimingJson(const Util::PassTimingHandle& handle)

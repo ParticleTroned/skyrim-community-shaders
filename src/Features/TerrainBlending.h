@@ -18,6 +18,7 @@ public:
 		return {
 			"Softens the seams where objects meet the ground.",
 			{ "Seamless terrain-to-object blending transitions",
+				"Optional landscape texture seam blending, disabled by default",
 				"Advanced depth buffer manipulation for smooth integration",
 				"Support for alternative terrain rendering modes",
 				"Multi-pass rendering optimization for complex scenes",
@@ -32,7 +33,7 @@ public:
 		uint32_t Enabled = true;
 		float TerrainCullDistance = 1024.0f;
 		float BlendStrength = REL::Module::IsVR() ? 0.5f : 1.0f;
-		float pad0 = 0.0f;
+		uint32_t LandscapeSeams = false;
 	};
 	STATIC_ASSERT_ALIGNAS_16(Settings);
 

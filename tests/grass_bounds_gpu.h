@@ -1,10 +1,13 @@
-void RunGrassBounds()
+void RunGrassBounds(bool reversed = false)
 {
 	ComPtr<ID3D11Device> device;
 	ComPtr<ID3D11DeviceContext> context;
 	Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
 		D3D11_SDK_VERSION, device.GetAddressOf(), nullptr, context.GetAddressOf()));
-	auto code = Compile(L"tests/shaders/GrassBoundsTestCS.hlsl", "cs_5_0");
+	std::vector<D3D_SHADER_MACRO> defines;
+	if (reversed)
+		defines.push_back({ "REVERSE_Z", "1" });
+	auto code = Compile(L"tests/shaders/GrassBoundsTestCS.hlsl", "cs_5_0", defines);
 	ComPtr<ID3D11ComputeShader> shader;
 	Check(device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, shader.GetAddressOf()));
 	Util::SetResourceName(shader.Get(), "GrassTest::BoundsCS");
@@ -20,6 +23,10 @@ void RunGrassBounds()
 				Case item{};
 				item.matrix = { 1.2f, .1f, skew, 0, 0, 1.5f, -.15f, 0, 0, 0, 1.0001f, -.1f, 0, 0, 1, 0 };
 				item.sphere = { skew * depth, depth * .2f, depth, radius };
+				if (reversed) {
+					item.matrix[10] = -0.1f / (1000.0f - 0.1f);
+					item.matrix[11] = 100.0f / (1000.0f - 0.1f);
+				}
 				cases.push_back(item);
 			}
 	Case nearPlane = cases.front();
@@ -91,7 +98,7 @@ void RunGrassBounds()
 				for (size_t row = 0; row < 4; ++row)
 					for (size_t column = 0; column < 4; ++column) clip[row] += item.matrix[row * 4 + column] * position[column];
 				Require(clip[0] / clip[3] >= bound[0] && clip[0] / clip[3] <= bound[2] &&
-							clip[1] / clip[3] >= bound[1] && clip[1] / clip[3] <= bound[3] && clip[2] / clip[3] >= bound[4],
+							clip[1] / clip[3] >= bound[1] && clip[1] / clip[3] <= bound[3] && (reversed ? clip[2] / clip[3] <= bound[4] : clip[2] / clip[3] >= bound[4]),
 					"Analytic grass bounds exclude a sphere surface sample");
 			}
 	}

@@ -1,3 +1,5 @@
+#include "reverse_z_test_stub.h"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -50,12 +52,15 @@ namespace RE
 	{
 		enum class Type
 		{
+			None = -1,
 			Lighting,
 			Grass,
 			DistantTree,
 			Sky,
 			Effect,
 			ImageSpace,
+			Utility,
+			Water,
 			Total
 		};
 		struct TypeValue
@@ -66,6 +71,8 @@ namespace RE
 			unsigned underlying() const { return static_cast<unsigned>(value); }
 		} shaderType;
 		const char* fxpFilename = "Lighting";
+		bool imageSpaceMapped = true;
+		std::vector<BSGraphics::PixelShader*> pixelShaders;
 	};
 }
 namespace REL
@@ -82,6 +89,12 @@ namespace REL
 namespace logger
 {
 	unsigned warnings = 0;
+	unsigned errors = 0;
+	template <class... T>
+	void error(const char*, T&&...)
+	{
+		++errors;
+	}
 	template <class... T>
 	void debug(const char*, T&&...)
 	{}
@@ -96,10 +109,18 @@ struct TestState
 	bool developer = false, enablePShaders = true, settingCustomShader = false;
 	bool deferredPixelShaderMissing = false;
 	RE::BSShader* currentShader = nullptr;
+	RE::BSShader::Type selectedCustomPixelShaderType = RE::BSShader::Type::None;
 	uint32_t modifiedPixelDescriptor = 0;
 	uint32_t currentVertexDescriptor = 0, currentPixelDescriptor = 0, modifiedVertexDescriptor = 0;
 	uint32_t lastModifiedVertexDescriptor = 0, lastModifiedPixelDescriptor = 0, frameCount = 0;
 	bool updateShader = false;
+	struct
+	{
+		RE::BSGraphics::VertexShader* vertex = nullptr;
+		RE::BSGraphics::PixelShader* pixel = nullptr;
+		uint32_t vertexDescriptor = 0, pixelDescriptor = 0;
+		bool pixelCleared = false;
+	} techniqueShaderSelection;
 	struct
 	{
 		uint32_t VertexShaderDescriptor = 0, PixelShaderDescriptor = 0;
@@ -123,9 +144,13 @@ struct TestDeferred
 struct TestContext
 {
 	ID3D11PixelShader* bound = nullptr;
-	unsigned binds = 0;
+	unsigned binds = 0, vertexBinds = 0;
 	ID3D11VertexShader* vertex = nullptr;
-	void VSSetShader(ID3D11VertexShader* shader, void*, unsigned) { vertex = shader; }
+	void VSSetShader(ID3D11VertexShader* shader, void*, unsigned)
+	{
+		vertex = shader;
+		++vertexBinds;
+	}
 	void PSSetShader(ID3D11PixelShader* shader, void*, unsigned)
 	{
 		bound = shader;
@@ -159,6 +184,11 @@ namespace globals
 	}
 	namespace features
 	{
+		struct UnifiedWater
+		{
+			bool loaded = true;
+			bool RequiresVanillaWaterShaders() const { return false; }
+		} unifiedWater;
 		struct Upscaling
 		{
 			bool IsNeuralRenderingEnabled() const { return false; }
@@ -166,6 +196,11 @@ namespace globals
 		} upscaling;
 		struct TerrainBlending
 		{
+			bool loaded = true;
+			struct
+			{
+				bool Enabled = true, LandscapeSeams = false;
+			} settings;
 			void OnBeginTechnique(RE::BSShader*, uint32_t, uint32_t) {}
 		} terrainBlending;
 	}
@@ -193,7 +228,10 @@ namespace SIE
 	};
 	namespace SShaderCache
 	{
-		bool ResolveImageSpaceDescriptor(const RE::BSShader&, uint32_t&) { return true; }
+		bool ResolveImageSpaceDescriptor(const RE::BSShader& shader, uint32_t&)
+		{
+			return shader.shaderType.get() != RE::BSShader::Type::ImageSpace || shader.imageSpaceMapped;
+		}
 		std::string GetShaderString(ShaderClass, const RE::BSShader&, uint32_t descriptor, bool)
 		{
 			return std::to_string(descriptor);
@@ -206,15 +244,29 @@ namespace SIE
 		std::array<std::unordered_map<uint32_t, std::unique_ptr<RE::BSGraphics::PixelShader>>,
 			static_cast<unsigned>(RE::BSShader::Type::Total)>
 			pixelShaders;
-		std::mutex pixelShadersMutex;
+		struct
+		{
+			std::mutex mutex;
+			unsigned locks = 0;
+			void lock()
+			{
+				mutex.lock();
+				++locks;
+			}
+			void unlock() { mutex.unlock(); }
+		} pixelShadersMutex;
 		std::atomic<unsigned> activeShaderCaptureFramesRemaining{ 0 };
 		int blockedKeyIndex = -1;
 		std::string blockedKey;
 		std::vector<uint32_t> blockedIDs;
-		bool safeLoad = false, async = true, compilationSucceeds = true;
-		unsigned compiles = 0;
+		bool enabled = true, safeLoad = false, async = true, compilationSucceeds = true;
+		unsigned compiles = 0, vertexLookups = 0;
 		RE::BSGraphics::VertexShader* vertex = nullptr;
-		auto* GetVertexShader(const RE::BSShader&, uint32_t) { return vertex; }
+		auto* GetVertexShader(const RE::BSShader&, uint32_t)
+		{
+			++vertexLookups;
+			return vertex;
+		}
 		struct Task
 		{
 			ShaderClass stage;
@@ -226,8 +278,10 @@ namespace SIE
 			std::set<uint32_t> requests;
 			void Add(Task task) { requests.insert(task.descriptor); }
 		} compilationSet;
-		static bool IsSupportedShader(const RE::BSShader&) { return true; }
-		bool IsEnabled() const { return true; }
+		static bool IsSupportedShader(RE::BSShader::Type) { return true; }
+		static bool IsSupportedShader(const RE::BSShader&);
+		bool IsEnabled() const { return enabled; }
+		std::string GetDefinesString(const RE::BSShader&, uint32_t) const { return {}; }
 		bool IsSaveLoadSafeModeActive() const { return safeLoad; }
 		bool ShouldUseAsyncCompilation() const { return async; }
 		void TrackActiveShader(ShaderClass, const RE::BSShader&, uint32_t) {}
@@ -250,14 +304,26 @@ namespace SIE
 	};
 #include "pixel_lookup.h"
 #include "pixel_prewarm.h"
+#include "shader_support.h"
 }
 namespace Permutations
 {
-	std::vector<uint32_t> pixelPermutations;
-	const auto& GeneratePBRLightingPixelPermutations() { return pixelPermutations; }
+	std::set<uint32_t> pixelPermutations;
+	bool lastLandscapeSeams = false;
+	const auto& GeneratePBRLightingPixelPermutations(bool seams)
+	{
+		lastLandscapeSeams = seams;
+		return pixelPermutations;
+	}
+	std::set<uint32_t> GeneratePBRUtilityPixelPermutations() { return {}; }
 }
 struct TruePBR
 {
+	bool loaded = true;
+	struct
+	{
+		bool Enabled = true;
+	} settings;
 	void GenerateShaderPermutations(RE::BSShader*);
 };
 #include "pbr_prewarm.h"
@@ -282,6 +348,16 @@ namespace Hooks
 		static inline bool (*func)(RE::BSShader*, uint32_t, uint32_t, bool) = nullptr;
 	};
 }
+struct TerrainSeams
+{
+	bool enabled = false;
+	bool IsEnabled() const { return enabled; }
+	static TerrainSeams& GetInstance()
+	{
+		static TerrainSeams instance;
+		return instance;
+	}
+};
 #include "begin_technique.h"
 namespace NeuralRendering
 {
@@ -311,6 +387,8 @@ namespace NeuralRendering
 	};
 }
 unsigned assertions = 0;
+RE::BSGraphics::VertexShader* nativeTechniqueVertex = nullptr;
+bool nativeTechniqueClearPixel = false, nativeTechniqueChangeDescriptors = false;
 void Require(bool condition, const std::source_location& location = std::source_location::current())
 {
 	++assertions;
@@ -335,6 +413,11 @@ struct Fixture
 		globals::game::currentPixelShader = &current;
 		state.currentShader = &shader;
 		native.shader = reinterpret_cast<ID3D11PixelShader*>(&native);
+		globals::features::terrainBlending = {};
+		TerrainSeams::GetInstance().enabled = false;
+		globals::features::reverseZ.active = false;
+		nativeTechniqueVertex = nullptr;
+		nativeTechniqueClearPixel = nativeTechniqueChangeDescriptors = false;
 	}
 	void Bind(uint32_t descriptor)
 	{
@@ -416,6 +499,26 @@ void TestExactAndProtectedLookups()
 	f.Bind(requested);
 	Require(f.context.bound == f.native.shader && !f.state.deferredPixelShaderMissing);
 }
+void TestReverseWarmupAndWaterFailure()
+{
+	Fixture f;
+	globals::features::reverseZ.active = true;
+	f.deferred.deferredPass = false;
+	f.shader.shaderType.value = RE::BSShader::Type::Water;
+	constexpr uint32_t descriptor = 0x10u;
+	Require(!f.cache.GetPixelShader(f.shader, descriptor, SIE::ShaderCache::PixelShaderLookup::Compile));
+	Require(f.cache.compiles == 0 && f.cache.compilationSet.requests.contains(descriptor));
+	Require(f.cache.GetPixelShader(f.shader, descriptor, SIE::ShaderCache::PixelShaderLookup::Draw));
+	Require(f.cache.compiles == 1);
+	f.cache.pixelShaders[f.shader.shaderType.underlying()].clear();
+	f.cache.compilationSucceeds = false;
+	Hooks::BSShader_BeginTechnique::func = [](RE::BSShader*, uint32_t, uint32_t, bool) { return false; };
+	const auto errors = logger::errors;
+	for (unsigned repeat = 0; repeat < 3; ++repeat)
+		Require(!Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, false));
+	Require(logger::errors == errors + (errors == 0 ? 1 : 0));
+	Require(f.context.vertexBinds == 0 && f.context.binds == 0);
+}
 void TestUnusedCategoriesStayCold()
 {
 	Fixture f;
@@ -474,9 +577,73 @@ bool nativeTechniqueReady = true;
 RE::BSGraphics::PixelShader* nativeTechniquePixel = nullptr;
 bool NativeTechnique(RE::BSShader*, uint32_t, uint32_t, bool skipPixel)
 {
-	if (nativeTechniqueReady)
-		Hooks::BSShader__BeginTechnique_SetPixelShader::thunk(nullptr, skipPixel ? nullptr : nativeTechniquePixel);
+	if (nativeTechniqueReady && nativeTechniqueVertex)
+		Hooks::BSShader__BeginTechnique_SetVertexShader::thunk(nullptr, nativeTechniqueVertex);
+	if (nativeTechniqueReady && !skipPixel)
+		Hooks::BSShader__BeginTechnique_SetPixelShader::thunk(nullptr, nativeTechniquePixel);
+	else if (nativeTechniqueReady && nativeTechniqueClearPixel)
+		Hooks::BSShader__BeginTechnique_SetPixelShader::thunk(nullptr, nullptr);
+	if (nativeTechniqueChangeDescriptors) {
+		++globals::state->modifiedVertexDescriptor;
+		++globals::state->modifiedPixelDescriptor;
+	}
 	return nativeTechniqueReady;
+}
+void TestReverseTechniqueSelection()
+{
+	constexpr uint32_t descriptor = 0x10001u;
+	for (bool skipPixel : { false, true }) {
+		for (bool clearPixel : { false, true }) {
+			Fixture f;
+			globals::features::reverseZ.active = true;
+			ID3D11VertexShader nativeVS, customVS;
+			RE::BSGraphics::VertexShader nativeVertex{ &nativeVS }, customVertex{ &customVS };
+			f.cache.vertex = &customVertex;
+			auto* customPixel = f.cache.Add(f.shader, descriptor);
+			nativeTechniqueVertex = &nativeVertex;
+			nativeTechniquePixel = &f.native;
+			nativeTechniqueReady = true;
+			nativeTechniqueClearPixel = clearPixel;
+			Hooks::BSShader_BeginTechnique::func = NativeTechnique;
+			for (unsigned repeat = 1; repeat <= 3; ++repeat) {
+				Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, skipPixel));
+				Require(f.cache.vertexLookups == repeat && f.context.vertexBinds == repeat);
+				Require(f.cache.pixelShadersMutex.locks == (skipPixel ? 0u : repeat));
+				Require(f.context.binds == repeat && f.context.vertex == &customVS);
+				Require(*globals::game::currentVertexShader == &customVertex);
+				Require(f.current == (skipPixel ? nullptr : customPixel));
+				Require(f.context.bound == (skipPixel ? nullptr : customPixel->shader));
+			}
+		}
+	}
+	Fixture f;
+	globals::features::reverseZ.active = true;
+	ID3D11VertexShader nativeVS, customVS;
+	RE::BSGraphics::VertexShader nativeVertex{ &nativeVS }, customVertex{ &customVS };
+	nativeTechniqueVertex = &nativeVertex;
+	nativeTechniquePixel = &f.native;
+	nativeTechniqueReady = true;
+	Hooks::BSShader_BeginTechnique::func = NativeTechnique;
+	f.cache.Add(f.shader, descriptor);
+	Require(!Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, false));
+	f.cache.vertex = &customVertex;
+	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, false));
+	// A new technique without shader setup must not inherit the prior successful pair.
+	nativeTechniqueReady = false;
+	f.cache.vertex = nullptr;
+	Require(!Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, false));
+	nativeTechniqueReady = true;
+	f.cache.vertex = &customVertex;
+	f.cache.pixelShaders[0].clear();
+	f.cache.compilationSucceeds = false;
+	Require(!Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, false));
+	f.cache.Add(f.shader, descriptor);
+	auto* changedPixel = f.cache.Add(f.shader, descriptor + 1);
+	nativeTechniqueChangeDescriptors = true;
+	const auto previousLookups = f.cache.vertexLookups;
+	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, false));
+	Require(f.cache.vertexLookups == previousLookups + 2 && f.current == changedPixel);
+	Require(f.context.bound == changedPixel->shader);
 }
 void TestTechniqueAdmission()
 {
@@ -488,25 +655,31 @@ void TestTechniqueAdmission()
 	// Native shader availability must not admit a draw with incompatible outputs.
 	Require(!Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, false));
 	Require(f.context.binds == 0 && f.state.deferredPixelShaderMissing);
-	// A new depth-only technique must not inherit the rejected pixel stage.
+	Require(f.state.selectedCustomPixelShaderType == RE::BSShader::Type::None);
+	// A new depth-only technique must not inherit the rejected draw-admission state.
 	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, true));
-	Require(!f.state.deferredPixelShaderMissing && f.context.binds == 1 && f.context.bound == nullptr);
+	Require(!f.state.deferredPixelShaderMissing && f.context.binds == 0 && f.context.bound == nullptr);
+	Require(f.state.selectedCustomPixelShaderType == RE::BSShader::Type::None);
 	auto* fallback = f.cache.Add(f.shader, plain);
 	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, false));
 	Require(f.context.bound == fallback->shader);
+	Require(f.state.selectedCustomPixelShaderType == RE::BSShader::Type::Lighting);
 	nativeTechniqueReady = false;
 	Require(!Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, false));
+	Require(f.state.selectedCustomPixelShaderType == RE::BSShader::Type::None);
 	ID3D11VertexShader nativeVS;
 	RE::BSGraphics::VertexShader vertex{ &nativeVS };
 	f.cache.vertex = &vertex;
 	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, false));
 	Require(f.current == fallback && f.context.vertex == &nativeVS && !f.state.settingCustomShader);
+	Require(f.state.selectedCustomPixelShaderType == RE::BSShader::Type::Lighting);
 	// Depth-only fallback requires a vertex stage but never a pixel variant.
 	f.cache.pixelShaders[0].clear();
 	f.cache.compilationSet.requests.clear();
 	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, true));
 	Require(f.current == nullptr && !f.state.deferredPixelShaderMissing);
 	Require(f.context.bound == nullptr && f.cache.compilationSet.requests.empty());
+	Require(f.state.selectedCustomPixelShaderType == RE::BSShader::Type::None);
 	// Effect techniques retain their native admission rules.
 	f.shader.shaderType.value = RE::BSShader::Type::Effect;
 	Require(!Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, false));
@@ -531,17 +704,105 @@ void TestWarningDeduplication()
 	state.RecordPreparationFailure(args, "category capture pending");
 	Require(logger::warnings == 3);
 }
+void TestNativeImageSpaceAdmission()
+{
+	for (bool reverse : { false, true }) {
+		for (bool skipPixel : { false, true }) {
+			Fixture f;
+			f.shader.shaderType.value = RE::BSShader::Type::ImageSpace;
+			f.shader.fxpFilename = "ISCopy";
+			f.shader.imageSpaceMapped = false;
+			globals::features::reverseZ.active = reverse;
+			Hooks::BSShader_BeginTechnique::func = NativeTechnique;
+			nativeTechniqueReady = true;
+			nativeTechniquePixel = &f.native;
+			Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, 0, 0, skipPixel));
+			Require(f.context.bound == (skipPixel ? nullptr : f.native.shader));
+			Require(f.state.selectedCustomPixelShaderType == RE::BSShader::Type::None);
+			Require(!f.state.deferredPixelShaderMissing && !f.state.settingCustomShader);
+			Require(f.cache.compiles == 0 && f.cache.compilationSet.requests.empty());
+			nativeTechniqueReady = false;
+			Require(!Hooks::BSShader_BeginTechnique::thunk(&f.shader, 0, 0, skipPixel));
+		}
+	}
+	Fixture f;
+	f.shader.shaderType.value = RE::BSShader::Type::ImageSpace;
+	globals::features::reverseZ.active = true;
+	f.cache.async = false;
+	f.cache.compilationSucceeds = false;
+	Hooks::BSShader_BeginTechnique::func = NativeTechnique;
+	nativeTechniqueReady = true;
+	nativeTechniquePixel = &f.native;
+	Require(!Hooks::BSShader_BeginTechnique::thunk(&f.shader, 0, 0, false));
+	ID3D11VertexShader replacementVertex;
+	RE::BSGraphics::VertexShader vertex{ &replacementVertex };
+	f.cache.vertex = &vertex;
+	auto* pixel = f.cache.Add(f.shader, 0);
+	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, 0, 0, false));
+	Require(f.context.vertex == &replacementVertex && f.context.bound == pixel->shader);
+	Require(f.state.selectedCustomPixelShaderType == RE::BSShader::Type::ImageSpace);
+}
+void TestPixelFamilyProof()
+{
+	Fixture f;
+	constexpr uint32_t descriptor = 0x10001u;
+	Hooks::BSShader_BeginTechnique::func = NativeTechnique;
+	nativeTechniqueReady = true;
+	nativeTechniquePixel = &f.native;
+	auto* lighting = f.cache.Add(f.shader, descriptor);
+	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, false));
+	Require(f.context.bound == lighting->shader && f.state.selectedCustomPixelShaderType == RE::BSShader::Type::Lighting);
+	// Skipping the pixel stage can retain a consuming shader from a different family.
+	f.shader.shaderType.value = RE::BSShader::Type::Utility;
+	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, true));
+	Require(f.context.bound == lighting->shader && f.state.selectedCustomPixelShaderType == RE::BSShader::Type::None);
+	auto* utility = f.cache.Add(f.shader, descriptor);
+	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, false));
+	Require(f.context.bound == utility->shader && f.state.selectedCustomPixelShaderType == RE::BSShader::Type::Utility);
+	// Native selection must not reuse the custom shader's resource-consumer proof.
+	f.cache.enabled = false;
+	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, false));
+	Require(f.context.bound == f.native.shader && f.state.selectedCustomPixelShaderType == RE::BSShader::Type::None);
+}
+void TestSeamTechniqueFallback()
+{
+	constexpr auto seams = static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::LandscapeSeams);
+	constexpr uint32_t plain = 0x10001u;
+	for (bool enabled : { false, true }) {
+		for (bool ready : { false, true }) {
+			for (bool skipPixel : { false, true }) {
+				Fixture f;
+				TerrainSeams::GetInstance().enabled = enabled;
+				Hooks::BSShader_BeginTechnique::func = NativeTechnique;
+				nativeTechniqueReady = true;
+				nativeTechniquePixel = &f.native;
+				f.cache.Add(f.shader, plain);
+				ID3D11VertexShader nativeVS;
+				RE::BSGraphics::VertexShader vertex{ &nativeVS };
+				if (ready) {
+					f.cache.vertex = &vertex;
+					f.cache.Add(f.shader, plain | seams);
+				}
+				Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain | seams, plain | seams, skipPixel));
+				const auto expected = plain | (enabled && ready && !skipPixel ? seams : 0u);
+				Require(f.state.currentVertexDescriptor == expected && f.state.currentPixelDescriptor == expected);
+			}
+		}
+	}
+}
 void TestNullPixelBinding()
 {
 	for (bool cached : { false, true }) {
 		Fixture f;
 		f.context.bound = f.native.shader;
+		f.state.selectedCustomPixelShaderType = RE::BSShader::Type::Lighting;
 		f.current = &f.native;
 		f.state.modifiedPixelDescriptor = 0x10021u;
 		if (cached)
 			f.cache.Add(f.shader, f.state.modifiedPixelDescriptor);
 		Hooks::BSShader__BeginTechnique_SetPixelShader::thunk(nullptr, nullptr);
 		Require(f.context.bound == nullptr && f.current == nullptr);
+		Require(f.state.selectedCustomPixelShaderType == RE::BSShader::Type::None);
 		Require(!f.state.deferredPixelShaderMissing && f.deferred.captureReady);
 		Require(f.cache.compilationSet.requests.empty());
 	}
@@ -568,6 +829,45 @@ void TestPBRPrewarming()
 		Require(f.cache.compilationSet.requests.empty());
 	}
 }
+void TestSeamPrewarming()
+{
+	constexpr auto seams = static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::LandscapeSeams);
+	constexpr auto deferred = static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::Deferred);
+	constexpr auto land = static_cast<uint32_t>(SIE::ShaderCache::LightingShaderTechniques::MTLand) << 24;
+	constexpr auto lod = static_cast<uint32_t>(SIE::ShaderCache::LightingShaderTechniques::MTLandLODBlend) << 24;
+	const auto category = SIE::ShaderCache::GetCharacterCategoryFlag(RE::BSShader::Type::Lighting);
+	Permutations::pixelPermutations = {};
+	for (unsigned configuration = 0; configuration < 32; ++configuration) {
+		for (bool categories : { false, true }) {
+			Fixture f;
+			TruePBR feature;
+			feature.loaded = (configuration & 1u) != 0;
+			feature.settings.Enabled = (configuration & 2u) != 0;
+			auto& terrain = globals::features::terrainBlending;
+			terrain.loaded = (configuration & 4u) != 0;
+			terrain.settings.Enabled = (configuration & 8u) != 0;
+			terrain.settings.LandscapeSeams = (configuration & 16u) != 0;
+			f.deferred.categories = categories;
+			RE::BSGraphics::PixelShader nativeLand, nativeLod, unrelated;
+			nativeLand.id = land;
+			nativeLod.id = lod;
+			f.shader.pixelShaders = { &nativeLand, &nativeLod, &unrelated };
+			feature.GenerateShaderPermutations(&f.shader);
+			const bool enabled = configuration == 31;
+			Require(Permutations::lastLandscapeSeams == enabled);
+			std::set<uint32_t> expected;
+			if (enabled) {
+				for (const auto descriptor : { land | seams, lod | seams }) {
+					expected.insert(descriptor);
+					expected.insert(descriptor | deferred);
+					if (categories)
+						expected.insert(descriptor | deferred | category);
+				}
+			}
+			Require(f.cache.compilationSet.requests == expected);
+		}
+	}
+}
 int main()
 {
 	try {
@@ -578,11 +878,17 @@ int main()
 				for (bool categories : { false, true }) TestLayoutTransitions(type, categories);
 			TestColdAndFailedVariants();
 			TestExactAndProtectedLookups();
+			TestReverseWarmupAndWaterFailure();
 			TestUnusedCategoriesStayCold();
 			TestBoundGrassVariant();
 			TestNullPixelBinding();
 			TestTechniqueAdmission();
+			TestReverseTechniqueSelection();
+			TestPixelFamilyProof();
+			TestSeamTechniqueFallback();
 			TestPBRPrewarming();
+			TestSeamPrewarming();
+			TestNativeImageSpaceAdmission();
 		}
 		TestWarningDeduplication();
 		std::cout << "Category fallback and warning checks: " << assertions << " passed (flat and VR)\n";

@@ -15,6 +15,7 @@
 #include <imgui_internal.h>
 
 #include "RE/Skyrim.h"
+#include "SKSE/SKSE.h"
 
 using namespace std::literals;
 
@@ -374,6 +375,10 @@ namespace BackgroundBlur
 		Util::ScopedDeviceContextState stateGuard(isolatedContext.get(), isolatedState.get());
 		if (!stateGuard)
 			return;
+		// The saved blur state must not retain the caller's render target.
+		const SKSE::stl::scope_exit releaseTarget([context]() noexcept {
+			context->OMSetRenderTargets(0, nullptr, nullptr);
+		});
 		CS_GPU_PASS("Menu::BackgroundBlur");
 		context->ClearState();
 		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);

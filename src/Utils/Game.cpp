@@ -2,6 +2,10 @@
 
 #include "State.h"
 
+#include <RE/B/BSGeometry.h>
+#include <RE/B/BSParticleShaderProperty.h>
+#include <RE/B/BSParticleShaderRainEmitter.h>
+
 #include <limits>
 
 namespace
@@ -26,6 +30,29 @@ namespace
 
 namespace Util
 {
+	RE::TESLandTexture* GetDefaultLandTexture()
+	{
+		static const auto address = REL::Relocation<RE::TESLandTexture**>(RELOCATION_ID(514783, 400936));
+		return *address;
+	}
+
+	RE::BSParticleShaderRainEmitter* GetRainEmitterFromPrecipGeometry(RE::BSGeometry* a_precipObject)
+	{
+		if (!a_precipObject)
+			return nullptr;
+
+		auto* shaderProperty = a_precipObject->GetGeometryRuntimeData().shaderProperty.get();
+		auto* particleProperty = netimmerse_cast<RE::BSParticleShaderProperty*>(shaderProperty);
+		if (!particleProperty || !particleProperty->particleEmitter)
+			return nullptr;
+
+		auto* emitter = particleProperty->particleEmitter;
+		if (!emitter->emitterType.any(RE::BSParticleShaderEmitter::EMITTER_TYPE::kRain))
+			return nullptr;
+
+		return static_cast<RE::BSParticleShaderRainEmitter*>(emitter);
+	}
+
 	RE::TESObjectREFR* GetOwnUserData(const RE::NiAVObject* object)
 	{
 		return object ? REL::RelocateMember<RE::TESObjectREFR*>(object, 0x0F8, 0x110) : nullptr;
@@ -337,7 +364,7 @@ namespace Util
 
 	bool IsInterior()
 	{
-		auto tes = RE::TES::GetSingleton();
+		auto* tes = globals::game::tes ? globals::game::tes : RE::TES::GetSingleton();
 		if (tes && !tes->interiorCell) {
 			if (auto worldSpace = tes->GetRuntimeData2().worldSpace) {
 				if (!worldSpace->flags.any(RE::TESWorldSpace::Flag::kNoSky, RE::TESWorldSpace::Flag::kFixedDimensions)) {

@@ -26,6 +26,24 @@ namespace
 	}
 	static_assert(CoversGeometry());
 
+	constexpr bool CoversOutputOwnership()
+	{
+		const std::array flat{ Region{ .output = { 0, 0, 18, 7 } } };
+		const std::array packed{ Region{ .output = { 0, 0, 9, 7 } }, Region{ .output = { 9, 0, 9, 7 } } };
+		if (!CoversOutput(flat, 18, 7) || !CoversOutput(packed, 18, 7) ||
+			CoversOutput({}, 18, 7) || CoversOutput(packed, 17, 7) || CoversOutput(flat, 18, 0))
+			return false;
+		for (const auto invalid : { Rect{ 8, 0, 9, 7 }, Rect{ 10, 0, 8, 7 }, Rect{ 9, 1, 9, 6 },
+				 Rect{ 9, 0, UINT32_MAX, 7 }, Rect{ 9, 0, 0, 7 } }) {
+			auto changed = packed;
+			changed[1].output = invalid;
+			if (CoversOutput(changed, 18, 7))
+				return false;
+		}
+		return true;
+	}
+	static_assert(CoversOutputOwnership());
+
 	bool RejectsBeforeNarrowing()
 	{
 		const double maximum = std::numeric_limits<double>::max();

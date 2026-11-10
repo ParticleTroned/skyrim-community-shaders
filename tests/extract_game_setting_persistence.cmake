@@ -23,6 +23,7 @@ extract_between("extern/CommonLibSSE-NG/include/SKSE/Impl/PCH.h" "[[nodiscard]] 
 set(_output "${_output}\n}\nnamespace Util {\n")
 extract_between("src/Utils/GameSetting.h" "struct GameSetting" "\n\t/**")
 extract_between("src/Utils/GameSetting.cpp" "static constexpr std::string_view CS_SETTINGS_PATH" "\n\tvoid DumpSettingsOptions")
+extract_between("src/Utils/GameSetting.cpp" "\tvoid ResetGameSettingsToDefaults(" "\n\tvoid RenderImGuiSettingsTree(")
 extract_between("src/Utils/Format.cpp" "bool IEquals(" "\n\tstd::string GetShaderDefinesSuffix(")
 set(_output
     "${_output}\nnamespace FileHelpers {\nbool WriteTextFileAtomic(const std::filesystem::path&, std::string_view, std::string&, bool allowDirectFallback = true, bool overwriteExisting = true);\nnamespace {\n"
@@ -40,6 +41,7 @@ file(
 set(_output "")
 extract_between("src/Features/DynamicCubemaps.cpp" "void DynamicCubemaps::LoadSettings(" "void DynamicCubemaps::SaveSettings(")
 extract_between("src/Features/DynamicCubemaps.cpp" "void DynamicCubemaps::OnSettingsSaved()" "void DynamicCubemaps::RestoreDefaultSettings()")
+extract_between("src/Features/DynamicCubemaps.cpp" "void DynamicCubemaps::RestoreDefaultSettings()" "bool DynamicCubemaps::IsSSRRuntimeActive()")
 extract_between("src/Features/DynamicCubemaps.cpp" "void DynamicCubemaps::DataLoaded()" "void DynamicCubemaps::PostPostLoad()")
 file(
     WRITE "${OUTPUT_DIRECTORY}/cubemap_game_settings_under_test.h"

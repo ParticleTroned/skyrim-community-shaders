@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Format.h"
+#include "PathValidation.h"
 #include "WinApi.h"
 #include <algorithm>
 #include <filesystem>
@@ -204,16 +205,6 @@ namespace Util
 		std::filesystem::path GetLogPath();
 
 	}
-
-	/**
-	 * @brief Returns true when the resolved test path is inside basePath.
-	 *
-	 * Existing symlinks and junctions are resolved before comparison. Invalid
-	 * or unresolvable paths fail closed.
-	 */
-	bool IsPathWithinDirectory(
-		const std::filesystem::path& basePath,
-		const std::filesystem::path& testPath);
 
 	/**
 	 * File system utilities for safe file operations

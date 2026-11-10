@@ -2,7 +2,7 @@ set(_depth_encode_test_dir
     "${CMAKE_CURRENT_BINARY_DIR}/generated/vr-depth-encode"
 )
 set(_depth_encode_headers)
-foreach(_name IN ITEMS scope_exit identity texture_desc validation)
+foreach(_name IN ITEMS scope_exit identity texture_desc source_descriptions validation)
     list(
         APPEND _depth_encode_headers
         "${_depth_encode_test_dir}/depth_encode_${_name}.h"
@@ -16,6 +16,7 @@ add_custom_command(
         "${PROJECT_SOURCE_DIR}/tests/extract_vr_depth_encode.cmake"
     DEPENDS
         src/Features/Upscaling.cpp
+        src/Features/Upscaling/TextureSourceDescriptions.h
         tests/extract_vr_depth_encode.cmake
         tests/extract_source_region.cmake
     VERBATIM

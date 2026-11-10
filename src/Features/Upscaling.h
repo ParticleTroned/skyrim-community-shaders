@@ -1,10 +1,12 @@
 #pragma once
+#include "Upscaling/NeuralRendering/ReconstructionTuning.h"
 
 #include "Upscaling/FrameTelemetryRing.h"
 
 #include "Feature.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
+#include "Upscaling/FoveatedInputBundle.h"
 #include "Upscaling/FoveatedMaskCalibration.h"
 #include "Upscaling/FoveatedMaskVisualization.h"
 #include "Upscaling/FoveatedRegionPlan.h"
@@ -12,11 +14,15 @@
 #include "Upscaling/NeuralRendering/CaptureEvidence.h"
 #include "Upscaling/NeuralRendering/CentralAreaPolicy.h"
 #include "Upscaling/NeuralRendering/CharacterRendering.h"
+#include "Upscaling/NeuralRendering/CombatPausePolicy.h"
 #include "Upscaling/NeuralRendering/MainDepthPresentation.h"
+#include "Upscaling/NeuralRendering/ModelResolutionPolicy.h"
 #include "Upscaling/NeuralRendering/PipelinePolicy.h"
 #include "Upscaling/NeuralRendering/PreDlssInputHistory.h"
+#include "Upscaling/NeuralRendering/Style.h"
 #include "Upscaling/RCAS/RCAS.h"
 #include "Upscaling/Streamline.h"
+#include "Upscaling/TextureSourceDescriptions.h"
 #include "Upscaling/VRMenuPointerOverlay.h"
 #include "Upscaling/VROrdinarySaveRecovery.h"
 #include "Upscaling/VRPresentationStretchTelemetryPolicy.h"
@@ -137,8 +143,12 @@ public:
 		StereoPreflightFailed,
 		CachedPairSignatureMismatch,
 		NeuralEvaluationFailed,
-		StereoDispatchFailed
+		StereoDispatchFailed,
+		CombatPause
 	};
+
+	/** Last frame-latched combat decision; reading status never samples gameplay. */
+	[[nodiscard]] NeuralRendering::CombatPauseSnapshot GetNeuralCombatPauseSnapshot() const noexcept;
 
 	/** @brief One coherent two-eye neural-rendering routing decision. */
 	struct NeuralStereoRouteSnapshot
@@ -319,7 +329,7 @@ public:
 	static constexpr uint32_t kDLSSPresetF = 4;
 	static constexpr uint32_t kDLSSPresetE = 5;
 	static constexpr uint32_t kDLSSPresetMaxIndex = kDLSSPresetE;
-	static constexpr uint32_t kFsr4RuntimeSelectionSchemaVersion = 1;
+	static constexpr uint32_t kFsr4RuntimeSelectionSchemaVersion = 2;
 	// CSX owns renderer-transition coverage; the external Stabilizer fade must
 	// stay disabled to avoid stacking a second timed black hold.
 	static constexpr float kVRFpsStabilizerDefaultFadeDuration = 0.0f;
@@ -460,6 +470,7 @@ public:
 		uint frameGenerationMode = 0;  // Disabled by default
 		uint frameGenerationForceEnable = 0;
 		bool frameGenerationAllowInMenus = false;
+		bool antiLag2Enabled = false;
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
 		float sharpnessFSR = REL::Module::IsVR() ? 0.9f : 0.0f;
 		bool fsrSharedGuideInputs = true;
@@ -490,16 +501,25 @@ public:
 			NeuralRendering::ResolveInsertionPoint(NeuralRendering::RenderingMode::ReducedResolution));
 		bool neuralRenderingBatchedStereo = true;
 		bool neuralRenderingDirectCommit = true;
-		uint neuralRenderingModelResolutionPercent = 100;
+		uint neuralRenderingModelResolutionPercent = 90;
+		bool neuralRenderingGuidedReconstruction = true;
+		uint neuralRenderingConfidenceRejectionPercent = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		NeuralRendering::ReconstructionTuning neuralReconstructionTuning{};
+#endif
+		uint neuralRenderingPeripheralCompressionPercent = 100;
+		uint neuralRenderingFaceDetailProtectionPercent = 0;
+		bool neuralRenderingPauseInCombat = true;
 		bool neuralRenderingPressureResolutionEnabled = true;
 		uint neuralRenderingCentralAreaPercent = NeuralRendering::kMaximumCentralAreaPercent;
 		uint neuralRenderingCentralFeatherPixels = NeuralRendering::kDefaultCentralFeatherPixels;
-		uint neuralRenderingPreset = 3;
-		float neuralRenderingIntensity = 0.8f;
-		float neuralRenderingLocalTone = 0.75f;
-		float neuralRenderingLocalStructure = 0.9f;
-		float neuralRenderingSkinStructure = 0.9f;
-		uint neuralRenderingStyle = 3;
+		uint neuralRenderingPreset = 4;
+		float neuralRenderingIntensity = 1.75f;
+		float neuralRenderingLocalTone = 1.25f;
+		float neuralRenderingLocalStructure = 1.5f;
+		float neuralRenderingSkinStructure = 1.3f;
+		uint neuralRenderingStyle = NeuralRendering::kDefaultStyle;
+		uint neuralRenderingNetwork = 0;
 		bool neuralRenderingAutoMask = true;
 		bool neuralRenderingUICorrection = false;
 		float neuralRenderingSingleSubrectScale = 1.0f;
@@ -893,6 +913,9 @@ public:
 		uint32_t queuedFrame = 0;
 		VRUpscalingTransitionOrigin origin = VRUpscalingTransitionOrigin::CSMenu;
 		bool directMenuEdit = false;
+		VRVendorRelatchPolicy::StartupNativeFallbackControlAction
+			startupNativeFallbackControlAction =
+				VRVendorRelatchPolicy::StartupNativeFallbackControlAction::PassThrough;
 		bool stabilizerDoorHandoff = false;
 		uint64_t stabilizerDoorHandoffSerial = 0;
 
@@ -1000,6 +1023,8 @@ public:
 	/** @brief Backend-neutral identity for resources owned by one physical render-scale contract. */
 	struct VRRenderScaleResourceKey
 	{
+		bool reversedDepth = false;
+		double additionalDepthBytesPerPixel = 0;
 		bool valid = false;
 		bool active = false;
 		UpscaleMethod method = UpscaleMethod::kNONE;
@@ -2524,6 +2549,8 @@ public:
 	double refreshRate = 0.0f;
 	float2 resolutionScale = { 1.0f, 1.0f };
 	LARGE_INTEGER qpf;
+	int64_t frameLimitDeadline = 0;
+	int64_t frameLimitInterval = 0;
 
 	// FG FPS Measurement for Overlay
 	bool IsFrameGenerationDx12PathActive() const;
@@ -2567,7 +2594,8 @@ public:
 		uint32_t a_fallbackMethod);
 	virtual json CapturePerformanceCostMeasurementState() const override;
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
-	void DrawVRRenderScaleLinkSetting(UpscaleMethod a_upscaleMethod);
+	/** Draw the link preference and native-AA availability for the desired profile. */
+	void DrawVRRenderScaleLinkSetting();
 	/** Apply the shared menu/API link policy without bypassing transition admission. */
 	bool SetRenderScaleLinkedToUpscaling(bool a_enabled);
 	/** Apply a VR FOV switch change and select screen-space FOV defaults on enable. */
@@ -2737,8 +2765,9 @@ public:
 	static const char* GetVRRenderScaleModeStatusName(VRRenderScaleStatus a_status);
 	bool IsVRStartupNativeFallbackRestartRequired() const noexcept
 	{
-		return vrStartupRenderScaleNativeFallbackRestartRequired.load(
-			std::memory_order_acquire);
+		return VRVendorRelatchPolicy::IsStartupNativeFallbackActive(
+			vrStartupRenderScaleNativeFallbackState.load(
+				std::memory_order_acquire));
 	}
 	bool IsVRStartupNativeFallbackSavedIntentActive() const;
 	bool CanRetryVRStartupNativeFallbackFromCSMenu(bool a_forceMemorySample = false);
@@ -2779,6 +2808,12 @@ public:
 		uint32_t a_minDelayFrames = 0,
 		bool a_providerNeutralNativeRecovery = false);
 	bool ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller = nullptr);
+	/** Per-draw admission only; queued mutation and unfinished drain cleanup remain authoritative. */
+	[[nodiscard]] bool HasPendingPerfModeRenderTargetWork() const noexcept
+	{
+		return pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+		       vrRenderScaleRelatchDrainEpoch.load(std::memory_order_acquire) != 0;
+	}
 	/** Service settings relatches only after the complete native stereo submit has returned. */
 	void ServiceVRRenderScaleRelatchAtFrameBoundary();
 	void RecordTrueHMDRenderTargetSize(uint32_t a_eyeWidth, uint32_t a_eyeHeight);
@@ -3004,9 +3039,11 @@ public:
 
 	// Helper to create/resize per-eye buffers matching source formats
 	bool CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
-		ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, uint32_t contractGeneration = 0);
+		ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, uint32_t contractGeneration = 0,
+		const UpscalingTextures::VRInputSourceDescriptions* sourceDescriptions = nullptr);
 	void EnsureVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
-		ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, uint32_t contractGeneration = 0);
+		ID3D11Resource* colorSrc, ID3D11Resource* mvecSrc, ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, uint32_t contractGeneration = 0,
+		const UpscalingTextures::VRInputSourceDescriptions* sourceDescriptions = nullptr);
 	bool EnsureVRPresentationTextures(uint32_t inWidth, uint32_t inHeight, uint32_t outWidth, uint32_t outHeight,
 		ID3D11Resource* colorSrc, bool allowResourceCreation = true, DXGI_FORMAT colorFormat = DXGI_FORMAT_R8G8B8A8_UNORM);
 	struct VRExistingVendorProviderSnapshot
@@ -3027,12 +3064,14 @@ public:
 
 	// Helper: Create a Texture2D matching source format at a given size
 	static eastl::unique_ptr<Texture2D> CreateTextureFromSource(ID3D11Resource* src, uint32_t width, uint32_t height,
-		bool copyBindFlags = false, bool createSRV = false, bool createUAV = false, const char* name = nullptr, bool createRTV = false, bool shareWithRuntime = false, DXGI_FORMAT formatOverride = DXGI_FORMAT_UNKNOWN);
+		bool copyBindFlags = false, bool createSRV = false, bool createUAV = false, const char* name = nullptr, bool createRTV = false, bool shareWithRuntime = false, DXGI_FORMAT formatOverride = DXGI_FORMAT_UNKNOWN,
+		const UpscalingTextures::TextureSourceDescription* sourceDescription = nullptr);
 
 	// Shared Pipeline Steps
 	/** Prepares color and optional guides after encoding; DLSS depth is already encoded. */
 	bool PreparePerEyeInputs(ID3D11Resource* colorSrc, ID3D11Resource* depthSrc, ID3D11Resource* mvecSrc,
-		ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, bool copyAuxiliaryInputs = true, bool copyDepthInput = true);
+		ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, bool copyAuxiliaryInputs = true, bool copyDepthInput = true,
+		const UpscalingTextures::VRInputSourceDescriptions* sourceDescriptions = nullptr);
 	bool AreVRPerEyeUpscalingResourcesReady(bool requireDepth, bool requireLinearDepth) const;
 	/** Rejects any guide retained by an unsafe optional-provider ownership domain. */
 	bool HasQuarantinedVRGuideInputs() const;
@@ -3047,7 +3086,8 @@ public:
 		ID3D11Resource* a_motionVectorSource,
 		ID3D11Resource* a_reactiveSource,
 		ID3D11Resource* a_transparencySource,
-		uint32_t a_contractGeneration) const;
+		uint32_t a_contractGeneration,
+		const UpscalingTextures::VRInputSourceDescriptions* a_sourceDescriptions = nullptr) const;
 	bool AreExistingVRSubmitVendorResourcesCompatible(
 		UpscaleMethod a_upscaleMethod,
 		const VRExistingVendorProviderSnapshot& a_provider,
@@ -3389,6 +3429,16 @@ public:
 	Texture2D* sharpenerTexture = nullptr;
 	bool dlssUpscaleOutputInSharpenerTexture = false;
 	eastl::unique_ptr<Texture2D> foveatedCenterColorIn[2];
+	std::array<UpscalingTextures::FoveatedInputBundle, 2> foveatedBorrowedInputs{};
+	uint64_t perEyeInputContentSerial = 0;
+	uint32_t perEyeInputPreparedFrame = std::numeric_limits<uint32_t>::max();
+	/** Invalidate borrowed contents before any intermediate producer writes. */
+	void InvalidatePreparedEyeInputs();
+	/** Select the current retained input without aliasing either owning texture container. */
+	Texture2D* GetFoveatedCenterInput(uint32_t eye, UpscalingTextures::CenterInput role) const;
+	bool TryBorrowFoveatedCenterInputs(uint32_t eye, uint32_t width, uint32_t height,
+		uint32_t sourceFrame, uint64_t neuralGeneration, bool validateOnly);
+	bool RetireStagedFoveatedInputs(uint32_t eye);
 	eastl::unique_ptr<Texture2D> foveatedCenterColorOut[2];
 	eastl::unique_ptr<Texture2D> foveatedCenterNeuralOut[2];
 	eastl::unique_ptr<Texture2D> foveatedCenterNeuralSelected[2];
@@ -3440,6 +3490,8 @@ public:
 	bool historyResetThisFrame = false;
 	NeuralRendering::PreDlssInputHistory flatDlssInputHistory;
 	std::atomic<uint32_t> neuralTemporalAdmissionLatch{ 0 };
+	mutable std::mutex neuralCombatPauseMutex;
+	mutable NeuralRendering::CombatPausePolicy neuralCombatPause;
 	uint32_t neuralInsertionPointLatchedFrame = std::numeric_limits<uint32_t>::max();
 	NeuralRendering::InsertionPoint neuralInsertionPointLatched =
 		NeuralRendering::kDefaultInsertionPoint;
@@ -3495,7 +3547,10 @@ public:
 	// process on the coherent startup None/native contract. Automatic replay and
 	// boot relatching remain blocked; only an explicit inactive profile or a new
 	// CS-menu request admitted after native/memory recovery may clear the latch.
-	std::atomic<bool> vrStartupRenderScaleNativeFallbackRestartRequired{ false };
+	std::atomic<VRVendorRelatchPolicy::StartupNativeFallbackAtomicState>
+		vrStartupRenderScaleNativeFallbackState{
+			VRVendorRelatchPolicy::kStartupNativeFallbackInactive
+		};
 	std::atomic<bool> postLoadRuntimeResetPending{ false };
 	std::atomic<uint64_t> nextVRRenderScalePostLoadRecoveryEpoch{ 1 };
 	std::atomic<uint64_t> pendingPostLoadRuntimeResetEpoch{ 0 };
@@ -4086,10 +4141,19 @@ public:
 	void RefreshSubmitStageUnderwaterMask();
 	void RequestHistoryReset() noexcept;
 	[[nodiscard]] bool RecordVRRenderScaleTransitionRequested(const VRRenderScaleDesiredProfile& a_request);
+	/** @brief Validate retry health using caller-owned transition readiness without reacquiring request locks. */
+	[[nodiscard]] bool CanRetryVRStartupNativeFallbackFromSnapshot(
+		const VRRenderScaleTransitionSnapshot& a_controller,
+		bool a_transitionReady) const;
+	/** @brief Resolve the exact published request while queue, request, and controller ownership are held. */
+	[[nodiscard]] bool TryResolveVRStartupNativeFallbackLocked(
+		const VRRenderScaleDesiredProfile& a_request);
 	bool StoreDeferredVRRenderScaleRequestLatestWinsLocked(
 		const VRRenderScaleDesiredProfile& a_request);
 	void SuspendVRRenderScaleControllerForDeferredRequest(
 		const VRRenderScaleDesiredProfile& a_request);
+	/** Sample the runtime combat state once per frame for every NR route. */
+	[[nodiscard]] NeuralRendering::CombatPauseSnapshot ResolveNeuralCombatPause() const noexcept;
 	[[nodiscard]] NeuralRendering::TemporalAdmissionResult BuildNeuralTemporalAdmission(
 		NeuralStereoRouteRole a_role,
 		bool a_menuContextActive,
@@ -4257,7 +4321,8 @@ public:
 	/** Legal eye/crop extraction from a depth SRV into numeric raw R32_FLOAT depth. */
 	bool CopyRawDepthRegion(ID3D11Resource* source, Texture2D& destination,
 		const D3D11_BOX& sourceBox, UINT destinationX = 0, UINT destinationY = 0);
-	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name, DXGI_FORMAT formatOverride = DXGI_FORMAT_UNKNOWN);
+	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>& texture, ID3D11Resource* source, uint32_t width, uint32_t height, bool copyBindFlags, bool createSRV, bool createUAV, bool createRTV, const char* name, DXGI_FORMAT formatOverride = DXGI_FORMAT_UNKNOWN,
+		const UpscalingTextures::TextureSourceDescription* sourceDescription = nullptr);
 	bool PrepareSubmitNeuralFloatResources(uint32_t eyeIndex, ID3D11Resource* source, uint32_t width, uint32_t height, bool directCommit, bool validateOnly);
 	ID3D11Resource* GetSubmitNeuralFloatEvaluationOutput(uint32_t eyeIndex, bool directCommit) const noexcept;
 	bool CommitSubmitNeuralFloatOutput(uint32_t eyeIndex, bool directCommit,
@@ -4269,14 +4334,16 @@ public:
 	void UnbindUpscalingResources();
 	void AbandonFoveatedResourcesUnsafe();
 	void DestroyFoveatedResources();
-	bool EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t outputHeight, ID3D11Resource* colorSource);
+	bool EnsurePeripheryTAAResources(uint32_t outputWidthPerEye, uint32_t outputHeight, ID3D11Resource* colorSource,
+		const UpscalingTextures::TextureSourceDescription* sourceDescription = nullptr);
 	bool EnsurePeripheryTAATileBuffer(uint32_t eyeIndex, uint32_t tileCapacity);
 	bool BuildPeripheryTAATileList(uint32_t eyeIndex, uint32_t outputWidth, uint32_t outputHeight, float centerScale, float taaOuterScale, float centerHorizontalScale, float centerOffsetX, float centerOffsetY, uint32_t coveragePadding, uint32_t& outTileCount);
 	void DestroyPeripheryTAAResources();
 	/** Returns the producer and resource contract used by both periphery history dispatch routes. */
 	[[nodiscard]] VRSubmitTemporalSnapshot::Key GetPeripheryTAAHistoryKey(UpscaleMethod a_upscaleMethod, uint32_t inputWidth, uint32_t inputHeight, uint32_t outputWidth, uint32_t outputHeight) const;
 	/** Preserves lifecycle deferral without publishing incomplete vendor output. */
-	[[nodiscard]] FidelityFX::UpscaleResult DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, ID3D11Resource* colorTexture, ID3D11Resource* depthTexture, ID3D11Resource* motionVectors, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask, ID3D11Resource* colorOutput = nullptr);
+	[[nodiscard]] FidelityFX::UpscaleResult DispatchFoveatedVendorUpscaling(UpscaleMethod a_upscaleMethod, ID3D11Resource* colorTexture, ID3D11Resource* depthTexture, ID3D11Resource* motionVectors, ID3D11Resource* reactiveMask, ID3D11Resource* transparencyMask, ID3D11Resource* colorOutput = nullptr,
+		const UpscalingTextures::VRInputSourceDescriptions* sourceDescriptions = nullptr);
 	enum class NeuralCenterPhase : uint8_t
 	{
 		Disabled,
@@ -4447,7 +4514,7 @@ public:
 	 */
 	void ApplySharpening();
 
-	static void TimerSleepQPC(int64_t targetQPC);
+	static void TimerSleepQPC(int64_t targetQPC, int64_t frequency);
 
 	void FrameLimiter();
 
@@ -5004,7 +5071,12 @@ private:
 	bool EnsureVRMenuDesktopEyePair(DXGI_FORMAT a_format, uint32_t a_eyeWidth, uint32_t a_eyeHeight);
 	bool DrawVRMenuBridgeIntoFinalCompositeLayer(ID3D11DeviceContext* a_context, DXGI_FORMAT a_format, UINT a_indexCount,
 		UINT a_instanceCount, UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation,
-		uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_finalWidth, uint32_t a_finalHeight);
+		uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_finalWidth, uint32_t a_finalHeight, bool a_premultipliedSource);
+	void DrawVRMenuTransparencyFixSetting();
+	void ApplyVRMenuTransparencyFixAtFrameBoundary();
+	bool PrepareVRMenuNativeFallback(ID3D11RenderTargetView* a_target, uint32_t a_width, uint32_t a_height);
+	void RestoreVRMenuNativeDrawOrder(const char* a_reason);
+	void ResetVRMenuNativeFallback();
 	bool TryCaptureAndSuppressVRMenuBridgeDraw(ID3D11DeviceContext* a_context, UINT a_indexCount, UINT a_instanceCount,
 		UINT a_startIndexLocation, INT a_baseVertexLocation, UINT a_startInstanceLocation, uint32_t a_callerRva,
 		const char** a_decisionReason = nullptr);
@@ -5030,6 +5102,7 @@ private:
 		bool sealed = false;
 		bool poisoned = false;
 		bool menuLayerRequired = false;
+		bool nativeMenuFallback = false;
 		bool mapLayerRequired = false;
 		bool mapLayerCapture = false;
 		const char* failureReason = nullptr;
@@ -5081,6 +5154,14 @@ private:
 	uint64_t vrMenuPresentationContextChangeConsumedSequence = 0;
 	uint32_t vrMenuAdapterPreflightFailureFrame = std::numeric_limits<uint32_t>::max();
 	bool vrMenuParallelBridgeDrawInProgress = false;
+	std::atomic_bool vrMenuTransparencyFixRequested{ false };
+	bool vrMenuTransparencyFixActive = false;
+	winrt::com_ptr<ID3D11DeviceContext1> vrMenuNativeFallbackContext;
+	winrt::com_ptr<ID3DDeviceContextState> vrMenuNativeFallbackState;
+	winrt::com_ptr<ID3D11Buffer> vrMenuNativeFallbackConstants;
+	std::uintptr_t vrMenuNativeFallbackTarget = 0;
+	bool vrMenuNativeFallbackPending = false;
+	bool vrMenuNativeFallbackUnavailable = false;
 	eastl::unique_ptr<Texture2D> vrMapMenuUISupersampleColor;
 	winrt::com_ptr<ID3D11Texture2D> vrMapMenuUISupersampleDepth;
 	std::array<winrt::com_ptr<ID3D11DepthStencilView>, 8> vrMapMenuUISupersampleDepthViews{};

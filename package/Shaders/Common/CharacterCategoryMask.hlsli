@@ -6,6 +6,19 @@ namespace CharacterCategoryMask
 	static const uint CategoryCount = 5u;
 	static const uint Excluded = 255u;
 
+	float Strength(uint category, float4 firstFour, float weapons)
+	{
+		if (category == 1u)
+			return firstFour.x;
+		if (category == 2u)
+			return firstFour.y;
+		if (category == 3u)
+			return firstFour.z;
+		if (category == 4u)
+			return firstFour.w;
+		return category == 5u ? weapons : 0.0;
+	}
+
 	float EncodeCategory(uint category, uint focusFade)
 	{
 		const uint code = category == Excluded ? 1u :

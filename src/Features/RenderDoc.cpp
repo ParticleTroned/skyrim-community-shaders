@@ -5,6 +5,7 @@
 #include "Globals.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Format.h"
+#include "Utils/StringUtils.h"
 // Include additional core headers required by the feature implementation
 #include "Menu.h"
 #include "Plugin.h"
@@ -16,6 +17,7 @@
 #include <Renderdoc/renderdoc_app.h>
 #include <algorithm>
 #include <chrono>
+#include <cwchar>
 #include <dxgi.h>
 #include <filesystem>
 #include <format>
@@ -23,6 +25,14 @@
 #include <thread>
 #include <vector>
 #include <windows.h>
+
+namespace
+{
+	bool IsCaptureFile(const std::filesystem::directory_entry& a_entry)
+	{
+		return a_entry.is_regular_file() && _wcsicmp(a_entry.path().extension().c_str(), L".rdc") == 0;
+	}
+}
 
 // Global feature instance implementation
 RenderDoc* RenderDoc::GetSingleton()
@@ -110,9 +120,16 @@ void RenderDoc::Load()
 		auto runtimeName = std::string{ magic_enum::enum_name(REL::Module::GetRuntime()) };
 		auto gameVersion = Util::GetFormattedVersion(REL::Module::get().version());
 
-		// Build the path using std::filesystem so we don't hardcode separators
-		std::filesystem::path fileBase = capturesDir / std::format("Skyrim_{}_{}", runtimeName, gameVersion);
-		renderDocApi->SetCaptureFilePathTemplate(fileBase.string().c_str());
+		// RenderDoc only checks capture names within the current process.
+		SYSTEMTIME sessionStart{};
+		GetSystemTime(&sessionStart);
+		std::filesystem::path fileBase = capturesDir / std::format(
+														   "Skyrim_{}_{}_{:04}{:02}{:02}_{:02}{:02}{:02}_{:03}Z_{}",
+														   runtimeName, gameVersion,
+														   sessionStart.wYear, sessionStart.wMonth, sessionStart.wDay,
+														   sessionStart.wHour, sessionStart.wMinute, sessionStart.wSecond,
+														   sessionStart.wMilliseconds, GetCurrentProcessId());
+		renderDocApi->SetCaptureFilePathTemplate(Util::PathToUtf8(fileBase).c_str());
 	} catch (const std::exception& e) {
 		logger::warn("[RenderDoc] Failed to prepare capture directory/template: {}", e.what());
 	}
@@ -471,7 +488,7 @@ uint32_t RenderDoc::CalculateCapturesDiskUsage()
 				break;
 			}
 
-			if (entry.is_regular_file()) {
+			if (IsCaptureFile(entry)) {
 				totalSize += entry.file_size(ec);
 				if (ec) {
 					logger::warn("[RenderDoc] Failed to get file size for '{}': {}", entry.path().string(), ec.message());
@@ -494,7 +511,7 @@ void RenderDoc::ClearFrameCaptures()
 		// Clear previous failed deletion tracking for a fresh start
 		failedDeletions.clear();
 
-		// Remove all files in the captures directory using safe deletion
+		// Keep unrelated files in the capture directory.
 		std::error_code ec;
 		for (const auto& entry : std::filesystem::directory_iterator(path, ec)) {
 			if (ec) {
@@ -502,7 +519,7 @@ void RenderDoc::ClearFrameCaptures()
 				break;
 			}
 
-			if (entry.is_regular_file()) {
+			if (IsCaptureFile(entry)) {
 				// Use safe delete with proper error handling and logging
 				auto deleteResult = Util::FileHelpers::SafeDelete(entry.path().string(), "capture file");
 				if (!deleteResult.success) {
@@ -611,7 +628,7 @@ void RenderDoc::RefreshCaptureFileCache()
 		auto capturesPath = GetCapturesPath();
 		std::error_code ec;
 		for (const auto& entry : std::filesystem::directory_iterator(capturesPath, ec)) {
-			if (ec || !entry.is_regular_file())
+			if (ec || !IsCaptureFile(entry))
 				continue;
 
 			CaptureFileInfo info;
@@ -800,15 +817,6 @@ void RenderDoc::SetCaptureFilePathTemplate(const std::string& a_template)
 	logger::info("[RenderDoc] Set capture file path template to: {}", a_template);
 }
 
-bool RenderDoc::IsCapturing() const
-{
-	if (!renderDocApi)
-		return false;
-
-	// RenderDoc API doesn't have a direct IsCapturing method, but we can check if captures are enabled
-	return enableRenderDocCapture && renderDocApi != nullptr;
-}
-
 std::string RenderDoc::GetCapturePath(uint32_t a_index)
 {
 	if (!renderDocApi) {
@@ -940,31 +948,23 @@ void RenderDoc::ApplyAutomaticCommentsToNewCaptures()
 		return;  // No new captures
 	}
 
-	// Check for pending user comments and apply them to the first new capture
-	std::string userComments;
-	{
-		std::lock_guard<std::mutex> lock(pendingCommentsMutex);
-		if (!pendingCaptureComments.empty()) {
-			userComments = std::move(pendingCaptureComments);
-			pendingCaptureComments.clear();
-		}
-	}
-
 	// Build automatic comments for new captures
 	std::string automaticComments = BuildAutomaticCaptureComments("");
 
-	// Apply comments to new captures: user comments to first capture, automatic to others
+	// Keep comments and the retry position until a capture path is available.
+	std::lock_guard<std::mutex> lock(pendingCommentsMutex);
 	for (uint32_t i = lastCaptureCount; i < numCaptures; ++i) {
 		std::string capturePath = GetCapturePath(i);
-		if (!capturePath.empty()) {
-			// Use user comments for the first new capture, automatic for subsequent ones
-			const std::string& commentsToApply = (i == lastCaptureCount && !userComments.empty()) ? userComments : automaticComments;
-			renderDocApi->SetCaptureFileComments(capturePath.c_str(), commentsToApply.c_str());
-			logger::info("[RenderDoc] Applied comments to capture {}: {}", i, commentsToApply);
+		if (capturePath.empty()) {
+			break;
 		}
-	}
 
-	lastCaptureCount = numCaptures;
+		const std::string& commentsToApply = !pendingCaptureComments.empty() ? pendingCaptureComments : automaticComments;
+		renderDocApi->SetCaptureFileComments(capturePath.c_str(), commentsToApply.c_str());
+		logger::info("[RenderDoc] Applied comments to capture {}: {}", i, commentsToApply);
+		pendingCaptureComments.clear();
+		lastCaptureCount = i + 1;
+	}
 }
 
 std::string RenderDoc::GetOverlayWarningMessage() const

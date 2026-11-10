@@ -8,6 +8,7 @@ extract_between("${_cache}" "\t\tstd::atomic_uint64_t g_shaderSourceGeneration" 
 extract_between("${_cache}" "\t\tstruct StandaloneCompileKey" "\n\t}\n\n\tbool ShaderCache::CompileStandaloneShaderCached" "standalone_compile_key.h")
 extract_between("${_cache}" "\tbool ShaderCache::CompileStandaloneShaderCached" "\n\tvoid ShaderCache::PersistCompiledShaderBlob" "standalone_cache_under_test.h")
 file(READ "${PROJECT_ROOT}/src/Utils/D3D.cpp" _d3d)
+extract_between("${_d3d}" "\tnamespace\n\t{\n\t\tusing ShaderCompileFailureKey" "\n\tVRDepthLayout DetectVRDepthLayout(" "standalone_failures_under_test.h")
 extract_between("${_d3d}" "\tID3D11DeviceChild* CompileShader(" "\n\t// RAII wrapper for D3D mapped resources" "standalone_d3d_under_test.h")
 file(READ "${PROJECT_ROOT}/src/Utils/FileSystem.cpp" _filesystem)
 extract_between("${_filesystem}" "\t\t\tbool WriteTextFileDirect(" "\n\t\t}\n\n\t\tDeletionResult SafeDelete(" "standalone_file_direct.h")

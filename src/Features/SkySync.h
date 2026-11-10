@@ -6,7 +6,9 @@
 #include "WeatherColorAdjustment.h"
 
 #include <optional>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace RE
 {
@@ -18,6 +20,8 @@ struct SkySync : Feature
 public:
 	static constexpr float DefaultHorizonFadeHours = 0.7f;
 	static constexpr float MaxHorizonFadeHours = 1.5f;
+	static constexpr size_t MaxDisabledWorldspaces = 128;
+	static constexpr size_t MaxWorldspaceEditorIDLength = 256;
 
 	virtual inline std::string GetName() override { return "Sky Sync"; }
 	virtual inline std::string GetShortName() override { return "SkySync"; }
@@ -51,6 +55,7 @@ public:
 		float MinShadowElevation = REL::Module::IsVR() ? 0.25f : 10.0f;
 		bool DimSunlightUnderHorizon = true;
 		float HorizonFadeHours = DefaultHorizonFadeHours;
+		std::vector<std::string> DisabledWorldspaces = { "Blackreach", "AlftandWorld", "Sovngarde", "DLC01SoulCairn", "DLC01Boneyard", "DLC2ApocryphaWorld" };
 	};
 
 	Settings settings;
@@ -75,6 +80,12 @@ public:
 	bool SetSunlightDimming(bool enabled, float fadeHours);
 	/** Returns the direct-light brightness factor applied on the last sky update. */
 	float GetSunlightDimmingFactor() const { return sunlightDimmingFactor; }
+	/** Stages a bounded, case-insensitive exclusion list; invalid input preserves the previous list. */
+	bool SetDisabledWorldspaces(const json& a_worldspaces);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Reports configured exclusions and the last sky-update decision, including pending changes. */
+	json GetWorldspaceStatus() const;
+#endif
 
 	/** @brief Returns the active caster's world-space direction before elevation limits, or nullopt when inactive or invalid. */
 	std::optional<RE::NiPoint3> GetCelestialLightDirection() const;
@@ -207,6 +218,12 @@ private:
 
 	bool moonAndStarsLoaded = false;
 	RE::TESObjectCELL* currentCell = nullptr;
+	RE::TESWorldSpace* cachedWorldspace = nullptr;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	std::string cachedWorldspaceEditorID;
+#endif
+	bool worldspaceCacheValid = false;
+	bool worldspaceDisabled = false;
 	float sunAngle = 90.0f;
 	float currentSkyRotation = D3D11_FLOAT32_MAX;
 	float masserPhaseIntensityFactor = 0.0f;
@@ -225,6 +242,9 @@ private:
 	ShadowFader shadowFader;
 
 	void DisableOnConflict(std::string_view conflictName);
+	void DrawWorldspaceSettings();
+	void UpdateWorldspace();
+	static RE::TESWorldSpace* GetCurrentWorldspace();
 	void ResetRuntimeState();
 	void RestoreSunlight();
 	void ApplyWeatherLensFlareSetting(const RE::Sky* sky);

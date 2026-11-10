@@ -57,12 +57,12 @@ void InteriorSun::DrawSettings()
 	Util::Widgets::Checkbox("Force Double-Sided Rendering", &settings.ForceDoubleSidedRendering);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Disable interior sun-shadow backface culling to reduce leaks in unmasked/unprepared interiors. Adds a small performance cost.");
+			"Lets both sides of walls block sunlight, reducing light leaks indoors. Off uses the usual wall checks. May cost more performance.");
 	}
 	Util::Widgets::Checkbox("Force Single Shadow Cascade", &settings.ForceSingleShadowCascade);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Use the high-detail shadow split throughout Interior Sun's distance so prepared wall masks avoid lower-resolution splits.");
+			"Uses consistent shadow detail across the chosen indoor distance, helping prepared walls block sunlight reliably. Off uses the usual near and far detail levels.");
 	}
 	if (Util::Widgets::SliderFloat("Interior Shadow Distance", &settings.InteriorShadowDistance, 1000.0f, 8000.0f))
 		runtimeSettingsDirty.store(true, std::memory_order_release);
@@ -132,24 +132,27 @@ void InteriorSun::EarlyPrepass()
 {
 	const auto* tes = globals::game::tes;
 	isInteriorWithSun.store(IsEnabled() && IsInteriorWithSun(tes ? tes->interiorCell : nullptr), std::memory_order_release);
-	if (!runtimeSettingsDirty.load(std::memory_order_acquire) || Util::IsRuntimeToggleBlocked(globals::state))
+	const bool applySettings = runtimeSettingsDirty.load(std::memory_order_acquire) && !Util::IsRuntimeToggleBlocked(globals::state);
+	if (!applySettings && (IsActiveInteriorSun() || arraysCleared))
 		return;
 	Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context));
 	if (!ownership)
 		return;
-	const auto* player = RE::PlayerCharacter::GetSingleton();
-	const auto* cell = player ? player->GetParentCell() : nullptr;
-	if (!LocationContext::HasAttachedCell(tes, cell))
-		return;
-	if (runtimeSettingsDirty.exchange(false, std::memory_order_acq_rel)) {
-		const bool changed = runtimeEnabled.exchange(settings.Enabled, std::memory_order_acq_rel) != settings.Enabled;
-		const float distance = settings.Enabled ? settings.InteriorShadowDistance : vanillaInteriorShadowDistance;
-		if (gInteriorShadowDistance && (changed || *gInteriorShadowDistance != distance)) {
-			*gInteriorShadowDistance = distance;
-			SetShadowDistance(cell->IsInteriorCell());
+	if (applySettings) {
+		const auto* player = RE::PlayerCharacter::GetSingleton();
+		const auto* cell = player ? player->GetParentCell() : nullptr;
+		if (LocationContext::HasAttachedCell(tes, cell) && runtimeSettingsDirty.exchange(false, std::memory_order_acq_rel)) {
+			const bool changed = runtimeEnabled.exchange(settings.Enabled, std::memory_order_acq_rel) != settings.Enabled;
+			const float distance = settings.Enabled ? settings.InteriorShadowDistance : vanillaInteriorShadowDistance;
+			if (gInteriorShadowDistance && (changed || *gInteriorShadowDistance != distance)) {
+				*gInteriorShadowDistance = distance;
+				SetShadowDistance(cell->IsInteriorCell());
+			}
 		}
+		isInteriorWithSun.store(IsEnabled() && IsInteriorWithSun(tes ? tes->interiorCell : nullptr), std::memory_order_release);
 	}
-	isInteriorWithSun.store(IsEnabled() && IsInteriorWithSun(tes->interiorCell), std::memory_order_release);
+	if (!IsActiveInteriorSun() && !arraysCleared)
+		ClearArrays();
 }
 
 inline bool InteriorSun::IsInteriorWithSun(const RE::TESObjectCELL* cell)
@@ -196,12 +199,12 @@ void InteriorSun::DirShadowLightCulling::thunk(RE::BSShadowDirectionalLight* dir
 		if (portalGraph) {
 			singleton.PopulateReplacementJobArrays(cell, portalGraph, dirLight, jobArrays);
 			passedJobArrays = &singleton.replacementJobArrays;
-		} else
-			singleton.currentCell = nullptr;
+		} else {
+			singleton.ClearArrays();
+		}
 	} else {
 		if (!singleton.arraysCleared)
 			singleton.ClearArrays();
-		singleton.currentCell = nullptr;
 	}
 
 	func(dirLight, *passedJobArrays, nodes);
@@ -224,6 +227,8 @@ void InteriorSun::ClearArrays()
 	for (auto& jobArray : replacementJobArrays)
 		jobArray.clear();
 
+	currentCell = nullptr;
+	currentPortalGraph.reset();
 	arraysCleared = true;
 }
 
@@ -236,15 +241,15 @@ void InteriorSun::SetRuntimeEnabled(bool a_enabled)
 void InteriorSun::PopulateReplacementJobArrays(const RE::TESObjectCELL* cell, const RE::NiPointer<RE::BSPortalGraph>& portalGraph, const RE::BSShadowDirectionalLight* dirLight, RE::BSTArray<RE::BSTArray<RE::NiPointer<RE::NiAVObject>>>& jobArrays)
 {
 	CS_PROFILE_CPU_SCOPE("InteriorSun::PrepareShadowJobs");
-	if (cell != currentCell) {
+	if (cell != currentCell || portalGraph != currentPortalGraph) {
 		InitialiseOnNewCell(portalGraph);
 		currentCell = cell;
+		currentPortalGraph = portalGraph;
 	}
 
 	const auto jobArraySize = jobArrays.size();
 	if (jobArraySize == 0) {
 		ClearArrays();
-		currentCell = nullptr;
 		return;
 	}
 

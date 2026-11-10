@@ -8,6 +8,8 @@ namespace WaterEffects
 	// https://bartwronski.files.wordpress.com/2014/03/ac4_gdc.pdf
 
 	static const int fullParallaxSteps = 16;
+	// Scale the hard ceiling with quality to keep the same height range.
+	static const int maxParallaxStepMultiplier = 4;
 	static const int minFoveatedParallaxSteps = 4;
 	static const int minFoveatedFlowmapParallaxSteps = 8;
 
@@ -44,11 +46,27 @@ namespace WaterEffects
 
 	bool ShouldContinueWaterParallaxMarch(float currentHeight, float currentBound, int stepIndex, int stepCount, float detailWeight)
 	{
+		if (stepIndex >= maxParallaxStepMultiplier * stepCount)
+			return false;
+
 #if defined(VR)
 		return currentHeight > currentBound && (detailWeight >= 0.9999 || stepIndex < stepCount);
 #else
 		return currentHeight > currentBound;
 #endif
+	}
+
+	/** Interpolates a crossed height segment, or returns the last bound if no hit was reached. */
+	float GetParallaxAmount(float currBound, float currHeight, float prevHeight, float stepSize)
+	{
+		if (currHeight > currBound)
+			return currBound;
+
+		float prevBound = currBound - stepSize;
+		float delta2 = prevBound - prevHeight;
+		float delta1 = currBound - currHeight;
+		float denominator = delta2 - delta1;
+		return denominator != 0.0 ? (currBound * delta2 - prevBound * delta1) / denominator : currBound;
 	}
 
 	float GetMipLevel(float2 coords, Texture2D<float4> tex, float screenNoise)
@@ -96,9 +114,29 @@ namespace WaterEffects
 		return heights.x + heights.y + heights.z;
 	}
 
+	/** Returns mean alpha from the smallest mip of a complete, averaged mip chain. */
+	float GetMeanAlpha(Texture2D<float4> tex, SamplerState samp)
+	{
+		uint width, height, levels;
+		tex.GetDimensions(0, width, height, levels);
+		return tex.SampleLevel(samp, 0.0.xx, levels - 1).w;
+	}
+
+	/** Returns the mean height using the same amplitudes as the sampled relief. */
+	float GetMeanHeight()
+	{
+		float3 heights;
+		heights.x = GetMeanAlpha(Normals01Tex, Normals01Sampler);
+		heights.y = GetMeanAlpha(Normals02Tex, Normals02Sampler);
+		heights.z = GetMeanAlpha(Normals03Tex, Normals03Sampler);
+		heights = 1.0 - heights;
+		heights *= NormalsAmplitude.xyz;
+		return heights.x + heights.y + heights.z;
+	}
+
 	float2 GetParallaxOffset(PS_INPUT input, float3 normalScalesRcp, float parallaxDetailWeight)
 	{
-		if (GetWaterParallaxStrength() == 0.0 || !ShouldEvaluateWaterParallax(parallaxDetailWeight))
+		if (!any(NormalsAmplitude.xyz) || GetWaterParallaxStrength() == 0.0 || !ShouldEvaluateWaterParallax(parallaxDetailWeight))
 			return 0.0.xx;
 
 		float3 viewDirection = normalize(input.WPosition.xyz);
@@ -114,29 +152,27 @@ namespace WaterEffects
 		mipLevels.y = GetMipLevel(input.TexCoord1.zw, Normals02Tex, screenNoise);
 		mipLevels.z = GetMipLevel(input.TexCoord2.xy, Normals03Tex, screenNoise);
 
+		// The water mesh represents the mean surface of the relief.
+		float meanHeight = GetMeanHeight();
+
 		int parallaxSteps = GetWaterParallaxStepCount(parallaxDetailWeight, minFoveatedParallaxSteps, GetFullWaterParallaxSteps());
 		float stepSize = rcp((float)parallaxSteps);
 		float currBound = 0.0;
-		float currHeight = 1.0;
-		float prevHeight = 1.0;
+		float currHeight = GetHeight(input, -meanHeight * parallaxOffsetTS.xy, normalScalesRcp, mipLevels);
+		float prevHeight = currHeight;
 		int stepIndex = 0;
 
 		[loop] while (ShouldContinueWaterParallaxMarch(currHeight, currBound, stepIndex, parallaxSteps, parallaxDetailWeight))
 		{
 			prevHeight = currHeight;
 			currBound += stepSize;
-			currHeight = GetHeight(input, currBound * parallaxOffsetTS.xy, normalScalesRcp, mipLevels);
+			currHeight = GetHeight(input, (currBound - meanHeight) * parallaxOffsetTS.xy, normalScalesRcp, mipLevels);
 			stepIndex++;
 		}
 
-		float prevBound = currBound - stepSize;
+		float parallaxAmount = GetParallaxAmount(currBound, currHeight, prevHeight, stepSize);
 
-		float delta2 = prevBound - prevHeight;
-		float delta1 = currBound - currHeight;
-		float denominator = delta2 - delta1;
-		float parallaxAmount = denominator != 0.0 ? (currBound * delta2 - prevBound * delta1) / denominator : currBound;
-
-		return parallaxOffsetTS.xy * parallaxAmount * saturate(parallaxDetailWeight);
+		return parallaxOffsetTS.xy * (parallaxAmount - meanHeight) * saturate(parallaxDetailWeight);
 	}
 
 #if defined(FLOWMAP)
@@ -193,9 +229,14 @@ namespace WaterEffects
 		int numSteps = GetWaterParallaxStepCount(parallaxDetailWeight, minFoveatedFlowmapParallaxSteps, maxSteps);
 		float stepSize = rcp((float)numSteps);
 
+		float meanHeight = 1.0 - GetMeanAlpha(FlowMapNormalsTex, FlowMapNormalsSampler);
+
 		float currBound = 0.0;
-		float currHeight = 1.0;
-		float prevHeight = 1.0;
+		PS_INPUT startInput = input;
+		startInput.TexCoord3.xy = input.TexCoord3.xy - meanHeight * parallaxDir;
+		float2 cellBlend0 = 0.5 + -(-0.5 + abs(frac(input.TexCoord2.zw * (64 * flowmapDims)) * 2 - 1));
+		float currHeight = 1.0 - GetFlowmapBlendedHeight(startInput, cellBlend0, uvShiftPx, 0);
+		float prevHeight = currHeight;
 
 		[loop] for (int i = 0; i < numSteps && currHeight > currBound; i++)
 		{
@@ -203,19 +244,14 @@ namespace WaterEffects
 			currBound += stepSize;
 
 			PS_INPUT offsetInput = input;
-			offsetInput.TexCoord3.xy = input.TexCoord3.xy + currBound * parallaxDir;
+			offsetInput.TexCoord3.xy = input.TexCoord3.xy + (currBound - meanHeight) * parallaxDir;
 
 			float2 cellBlend = 0.5 + -(-0.5 + abs(frac(offsetInput.TexCoord2.zw * (64 * flowmapDims)) * 2 - 1));
 			currHeight = 1.0 - GetFlowmapBlendedHeight(offsetInput, cellBlend, uvShiftPx, 0);
 		}
 
-		float prevBound = currBound - stepSize;
-		float delta2 = prevBound - prevHeight;
-		float delta1 = currBound - currHeight;
-		float denominator = delta2 - delta1;
-
-		float parallaxAmount = denominator != 0.0 ? (currBound * delta2 - prevBound * delta1) / denominator : currBound;
-		return parallaxAmount * saturate(parallaxDetailWeight);
+		float parallaxAmount = GetParallaxAmount(currBound, currHeight, prevHeight, stepSize);
+		return (parallaxAmount - meanHeight) * saturate(parallaxDetailWeight);
 	}
 
 	float GetFlowmapParallaxHeight(PS_INPUT input, float2 currentOffset, float3 normalScalesRcp, float mipLevel)
@@ -228,7 +264,7 @@ namespace WaterEffects
 
 	float2 GetFlowmapParallaxUVOffset(PS_INPUT input, float3 viewDirection, float3 normalScalesRcp, float parallaxDetailWeight)
 	{
-		if (GetWaterParallaxStrength() == 0.0 || !ShouldEvaluateWaterParallax(parallaxDetailWeight))
+		if (NormalsAmplitude.x == 0.0 || GetWaterParallaxStrength() == 0.0 || !ShouldEvaluateWaterParallax(parallaxDetailWeight))
 			return 0.0.xx;
 
 		float2 parallaxOffsetTS = viewDirection.xy / -viewDirection.z;
@@ -237,28 +273,26 @@ namespace WaterEffects
 		float screenNoise = Random::InterleavedGradientNoise(Stereo::EyeStableNoiseCoord(input.HPosition.xy, SharedData::BufferDim.xy), SharedData::FrameCount);
 		float mipLevel = GetMipLevel(input.TexCoord1.xy, Normals01Tex, screenNoise);
 
+		float meanHeight = (1.0 - GetMeanAlpha(Normals01Tex, Normals01Sampler)) * NormalsAmplitude.x;
+
 		int parallaxSteps = GetWaterParallaxStepCount(parallaxDetailWeight, minFoveatedParallaxSteps, GetFullWaterParallaxSteps());
 		float stepSize = rcp((float)parallaxSteps);
 		float currBound = 0.0;
-		float currHeight = 1.0;
-		float prevHeight = 1.0;
+		float currHeight = GetFlowmapParallaxHeight(input, -meanHeight * parallaxOffsetTS.xy, normalScalesRcp, mipLevel);
+		float prevHeight = currHeight;
 		int stepIndex = 0;
 
 		[loop] while (ShouldContinueWaterParallaxMarch(currHeight, currBound, stepIndex, parallaxSteps, parallaxDetailWeight))
 		{
 			prevHeight = currHeight;
 			currBound += stepSize;
-			currHeight = GetFlowmapParallaxHeight(input, currBound * parallaxOffsetTS.xy, normalScalesRcp, mipLevel);
+			currHeight = GetFlowmapParallaxHeight(input, (currBound - meanHeight) * parallaxOffsetTS.xy, normalScalesRcp, mipLevel);
 			stepIndex++;
 		}
 
-		float prevBound = currBound - stepSize;
-		float delta2 = prevBound - prevHeight;
-		float delta1 = currBound - currHeight;
-		float denominator = delta2 - delta1;
-		float parallaxAmount = denominator != 0.0 ? (currBound * delta2 - prevBound * delta1) / denominator : currBound;
+		float parallaxAmount = GetParallaxAmount(currBound, currHeight, prevHeight, stepSize);
 
-		return parallaxOffsetTS.xy * parallaxAmount * saturate(parallaxDetailWeight);
+		return parallaxOffsetTS.xy * (parallaxAmount - meanHeight) * saturate(parallaxDetailWeight);
 	}
 
 	float2 GetFlowmapParallaxOffset(PS_INPUT input, float2 flowmapDimensions, float3 viewDirection, float3 normalScalesRcp, float parallaxDetailWeight)

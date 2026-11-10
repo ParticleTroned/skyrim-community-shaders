@@ -20,6 +20,7 @@ namespace
 {
 	constexpr uint kOcclusionCornerCount = 4;
 	constexpr uint kAllOcclusionCornersMask = (1u << kOcclusionCornerCount) - 1u;
+	constexpr float kOcclusionBelowGridMargin = 512.0f;
 
 	struct ProbeGridPreset
 	{
@@ -531,6 +532,8 @@ bool Skylighting::UpdateInteriorState()
 
 void Skylighting::ResetSkylighting()
 {
+	worldProbeGrid.reset();
+	occlusionCullBelowZ.reset();
 	// Consume before clearing so a loading event during the reset remains queued.
 	queuedResetSkylighting.exchange(false, std::memory_order_acq_rel);
 	needsOcclusionRefresh = true;
@@ -654,7 +657,9 @@ void Skylighting::DrawSettings()
 	if (page.Is("look")) {
 		MenuUI::DetailText("Diffuse visibility controls object darkness. Specular visibility controls sky reflections.");
 		Util::Widgets::SliderFloat("Diffuse Min Visibility", &settings.MinDiffuseVisibility, 0.01f, 1.f, "%.2f");
+		Util::AddTooltip("Minimum brightness allowed in sheltered areas. Higher values lighten dark corners and covered surfaces.");
 		Util::Widgets::SliderFloat("Specular Min Visibility", &settings.MinSpecularVisibility, 0.01f, 1.f, "%.2f");
+		Util::AddTooltip("Minimum sky reflection allowed under cover. Higher values keep sheltered surfaces shinier.");
 		if (Util::Widgets::Checkbox("Include Marked Roof Occluders", &settings.IncludeMarkedRoofOccluders))
 			QueueResetSkylighting();
 		if (auto _tt = Util::HoverTooltipWrapper())
@@ -694,7 +699,7 @@ void Skylighting::DrawSettings()
 		MenuUI::SectionHeading("Refresh frequency");
 		Util::Widgets::Checkbox("Enable Reduced Update Frequency", &settings.EnableReducedUpdateFrequency);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Updates skylighting less often for a bigger FPS gain. Higher values can react a bit slower.");
+			ImGui::Text("Updates skylighting less often to save work. On may react more slowly to movement and scene changes; off refreshes it every frame.");
 
 		NormalizeSettingsForRuntime(settings);
 		uint stableSliceCount = ClampStableSliceCount(settings.StableSliceCount, probeArrayDims[2]);
@@ -718,7 +723,7 @@ void Skylighting::DrawSettings()
 				settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, static_cast<uint>(probeIntervalUI));
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text(usesIncrementalProbeSlices ?
-								"Minimum equals Occlusion Update Interval. Incremental probes still follow fresh occlusion quadrants." :
+								"With gradual updates enabled, lighting refreshes as each new shadow region becomes ready. It cannot update faster than the shadow checks." :
 								"Skylight refresh interval: 1 = every frame. Higher saves work but reacts slower. Minimum equals Occlusion Update Interval.");
 		}
 		ImGui::EndDisabled();
@@ -741,7 +746,7 @@ void Skylighting::DrawSettings()
 			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Spreads skylighting work over multiple frames to smooth spikes.");
+			ImGui::Text("Spreads lighting updates across several frames to reduce sudden workloads. Off updates the whole area at once; on may take longer to settle.");
 
 		ImGui::BeginDisabled(!settings.EnableIncrementalProbeUpdates);
 		{
@@ -837,6 +842,8 @@ json Skylighting::CapturePerformanceSettingsState() const
 
 void Skylighting::SetupResources()
 {
+	worldProbeGrid.reset();
+	occlusionCullBelowZ.reset();
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
 	if (!renderer || !device || !globals::d3d::context) {
@@ -958,6 +965,8 @@ void Skylighting::SetupResources()
 
 void Skylighting::SetupRenderTargetResources()
 {
+	worldProbeGrid.reset();
+	occlusionCullBelowZ.reset();
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
 	if (resourceDevice != device) {
@@ -1078,6 +1087,30 @@ float3 Skylighting::GetProbeCell(float3 a_eyePosition) const
 	return { round(cell.x), round(cell.y), round(cell.z) };
 }
 
+std::optional<float> Skylighting::GetOcclusionCullBelowZ() const
+{
+	const auto* state = globals::state;
+	if (!worldProbeGrid || !state || !globals::game::shadowState ||
+		HasPendingReset() || needsOcclusionRefresh || state->isMapMenuOpen ||
+		state->frameCount - worldProbeGrid->frame > 1u ||
+		!probeArrayDims[0] || !probeArrayDims[1] || !probeArrayDims[2])
+		return std::nullopt;
+
+	const auto eyePosition = Util::GetEyePosition(0);
+	if (!std::isfinite(eyePosition.x) || !std::isfinite(eyePosition.y) || !std::isfinite(eyePosition.z))
+		return std::nullopt;
+
+	const auto cellSize = GetProbeCellSize();
+	const auto cellOrigin = GetProbeCell({ eyePosition.x, eyePosition.y, eyePosition.z }) * cellSize;
+	const float bottomZ = cellOrigin.z - cellSize.z * probeArrayDims[2] * 0.5f;
+	// World publication can follow capture; a changed height must keep every occluder.
+	if (!std::isfinite(bottomZ) || bottomZ != worldProbeGrid->bottomZ)
+		return std::nullopt;
+
+	const float cutoff = bottomZ - kOcclusionBelowGridMargin;
+	return std::isfinite(cutoff) ? std::optional<float>{ cutoff } : std::nullopt;
+}
+
 bool Skylighting::PrepareOcclusionCapture()
 {
 	const auto* state = globals::state;
@@ -1116,6 +1149,7 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 	if (!a_inWorld)
 		return data;
 
+	worldProbeGrid.reset();
 	if (!IsRuntimeActive())
 		return data;
 
@@ -1136,6 +1170,9 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 	const auto cellSize = GetProbeCellSize();
 	const auto cellID = GetProbeCell(eyePos);
 	auto cellOrigin = cellID * cellSize;
+	const float bottomZ = cellOrigin.z - cellSize.z * probeArrayDims[2] * 0.5f;
+	if (std::isfinite(cellOrigin.x) && std::isfinite(cellOrigin.y) && std::isfinite(bottomZ))
+		worldProbeGrid = WorldProbeGrid{ bottomZ, globals::state->frameCount };
 	float3 cellIDDiff = prevCellID - cellID;
 	probeUpdateCellID = cellID;
 	DirectX::XMINT3 cellIDDiffI = { (int)cellIDDiff.x, (int)cellIDDiff.y, (int)cellIDDiff.z };
@@ -1445,6 +1482,14 @@ RE::BSShaderProperty::RenderPassArray* Skylighting::BSLightingShaderProperty_Get
 		return precipitationOcclusionMapRenderPassList;
 
 	if (skylighting.inOcclusion) {
+		const auto& bounds = geometry->worldBound;
+		// Only complete, finite bounds can establish that no probe sees this occluder.
+		if (skylighting.occlusionCullBelowZ &&
+			std::isfinite(bounds.center.x) && std::isfinite(bounds.center.y) &&
+			std::isfinite(bounds.center.z) && std::isfinite(bounds.radius) && bounds.radius > 0.0f &&
+			static_cast<double>(bounds.center.z) + bounds.radius < *skylighting.occlusionCullBelowZ)
+			return precipitationOcclusionMapRenderPassList;
+
 		if (auto userData = geometry->GetUserData()) {
 			RE::BSFadeNode* fadeNode = nullptr;
 
@@ -1455,7 +1500,8 @@ RE::BSShaderProperty::RenderPassArray* Skylighting::BSLightingShaderProperty_Get
 			}
 
 			if (fadeNode) {
-				if (auto extraData = fadeNode->GetExtraData("BSX")) {
+				static const RE::BSFixedString bsxKey{ "BSX" };
+				if (auto extraData = fadeNode->GetExtraData(bsxKey)) {
 					auto bsxFlags = (RE::BSXFlags*)extraData;
 					auto value = static_cast<int32_t>(bsxFlags->value);
 
@@ -1558,6 +1604,9 @@ void Skylighting::RenderOcclusion()
 		return;
 	}
 
+	// Precipitation setup temporarily changes the renderer's camera position.
+	const auto cullBelowZ = GetOcclusionCullBelowZ();
+
 	{
 		CS_GPU_PASS("Skylighting::PrecipitationMask");
 
@@ -1595,10 +1644,12 @@ void Skylighting::RenderOcclusion()
 		static REL::Relocation<void(RE::Precipitation*, RE::NiPointer<RE::NiCamera>)> _computeProjection{ REL::RelocationID(25643, 26185) };
 		const float originaLastCubeSize = precip->lastCubeSize;
 		const bool originalOcclusionState = inOcclusion;
+		const auto originalCullBelowZ = occlusionCullBelowZ;
 		bool projectionChanged = false;
 
 		const SKSE::stl::scope_exit restoreEngineState([&]() noexcept {
 			inOcclusion = originalOcclusionState;
+			occlusionCullBelowZ = originalCullBelowZ;
 			PrecipitationShaderCubeSize = originalPrecipitationShaderCubeSize;
 			precip->lastCubeSize = originaLastCubeSize;
 			PrecipitationShaderDirection = originalParticleShaderDirection;
@@ -1614,6 +1665,7 @@ void Skylighting::RenderOcclusion()
 		precipitation.views[0] = texOcclusion->dsv.get();
 
 		inOcclusion = true;
+		occlusionCullBelowZ = worldProbeGrid ? cullBelowZ : std::nullopt;
 		PrecipitationShaderCubeSize = ClampProbeFieldSize(settings.ProbeFieldSize);
 		precip->lastCubeSize = PrecipitationShaderCubeSize;
 
@@ -1635,7 +1687,7 @@ void Skylighting::RenderOcclusion()
 			}
 
 			// disc transformation
-			vPoint.x = sqrt(vPoint.x * sin(settings.MaxZenith));
+			vPoint.x = sqrt(vPoint.x) * sin(settings.MaxZenith);
 			vPoint.y *= 6.28318530718f;
 
 			vPoint = { vPoint.x * cos(vPoint.y), vPoint.x * sin(vPoint.y) };

@@ -5,7 +5,7 @@ set_tests_properties(CompileDedupe PROPERTIES TIMEOUT 30)
 
 set(_shared_compile_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/shared-compile")
 set(_shared_compile_headers)
-foreach(_header IN ITEMS shared_compile_includes.h shared_compile_snapshot.h shared_compile_counter.h)
+foreach(_header IN ITEMS shared_compile_includes.h shared_compile_snapshot.h shared_compile_counter.h shared_compile_generation.h)
     list(APPEND _shared_compile_headers "${_shared_compile_dir}/${_header}")
 endforeach()
 add_custom_command(
@@ -13,7 +13,7 @@ add_custom_command(
     COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
         "-DOUTPUT_DIRECTORY=${_shared_compile_dir}" -P
         "${PROJECT_SOURCE_DIR}/tests/extract_shared_shader_compile.cmake"
-    DEPENDS src/ShaderCache.cpp tests/extract_shared_shader_compile.cmake tests/extract_source_region.cmake
+    DEPENDS src/ShaderCache.cpp src/ShaderCache.h tests/extract_shared_shader_compile.cmake tests/extract_source_region.cmake
     VERBATIM
 )
 add_controller_test(shared_shader_compile_test SharedShaderCompile tests/shared_shader_compile_test.cpp)

@@ -1,5 +1,6 @@
 #include "ThemeManager.h"
 #include "../Menu.h"
+#include "Layout.h"
 #include "ThemePresets.h"
 
 #include "BackgroundBlur.h"
@@ -188,23 +189,18 @@ void ThemeManager::SetupImGuiStyle(const Menu& menu)
 	// rescale here
 	auto styleCopy = themeSettings.Style;
 
-	float globalScale = themeSettings.GlobalScale;
-
-	// Use default global scale (0.0) for built-in themes when GlobalScale equals the default
-	if (std::abs(globalScale - Constants::DEFAULT_GLOBAL_SCALE) < 0.001f) {
-		globalScale = Constants::DEFAULT_GLOBAL_SCALE;  // Ensure built-in themes stay at 0.0
-	}
-
 	// Scale style sizes by GlobalScale and font-size ratio (theme values target 1080p baseline)
 	float fontScale = 1.0f;
 	auto& io = ImGui::GetIO();
+	const float globalScale = MenuUI::Layout::EffectiveScale(themeSettings.GlobalScale,
+		io.FontDefault ? io.FontDefault->LegacySize : Constants::DEFAULT_FONT_SIZE, io.DisplaySize, style.FontScaleDpi);
 	if (io.FontDefault) {
 		const float baselineFontSize = REL::Module::IsVR() ?
 		                                   Constants::DEFAULT_SCREEN_HEIGHT * Constants::DEFAULT_FONT_RATIO :
 		                                   Util::kBaselineFontSize;
 		fontScale = io.FontDefault->LegacySize / baselineFontSize;
 	}
-	const float scaleFactor = fontScale * exp2(globalScale);
+	const float scaleFactor = fontScale * globalScale;
 	styleCopy.ScaleAllSizes(scaleFactor);
 	// Keep scrolling targets usable at the same scale as the detail controls.
 	styleCopy.ScrollbarSize = std::max(styleCopy.ScrollbarSize, Constants::MIN_SCROLLBAR_SIZE * scaleFactor);
@@ -225,15 +221,13 @@ void ThemeManager::SetupImGuiStyle(const Menu& menu)
 	styleCopy.DockingSeparatorSize = scaleSize(themeSettings.Style.DockingSeparatorSize);
 
 	styleCopy.MouseCursorScale = 1.f;
-	if (!REL::Module::IsVR()) {
-		// Desktop font state belongs to ImGui, not saved theme geometry.
-		styleCopy.FontSizeBase = style.FontSizeBase;
-		styleCopy.FontScaleDpi = style.FontScaleDpi;
-		styleCopy._NextFrameFontSizeBase = style._NextFrameFontSizeBase;
-	}
+	// Live font state belongs to ImGui, not saved theme geometry.
+	styleCopy.FontSizeBase = style.FontSizeBase;
+	styleCopy.FontScaleDpi = style.FontScaleDpi;
+	styleCopy._NextFrameFontSizeBase = style._NextFrameFontSizeBase;
 	style = styleCopy;
 	style.HoverDelayNormal = themeSettings.TooltipHoverDelay;
-	style.FontScaleMain = exp2(globalScale);
+	style.FontScaleMain = globalScale;
 
 	// Always use the unified FullPalette system instead of switching between simple/full
 	// This ensures consistent behavior regardless of UI presentation mode
@@ -515,14 +509,8 @@ bool ThemeManager::ReloadFont(const Menu& menu, float& cachedFontSize)
 		return false;
 	}
 
-	float globalScale = themeSettings.GlobalScale;
-
-	// Use default global scale (0.0) for built-in themes when GlobalScale equals the default
-	if (std::abs(globalScale - Constants::DEFAULT_GLOBAL_SCALE) < 0.001f) {
-		globalScale = Constants::DEFAULT_GLOBAL_SCALE;  // Ensure built-in themes stay at 0.0
-	}
-
-	ImGui::GetStyle().FontScaleMain = exp2(globalScale);
+	ImGui::GetStyle().FontScaleMain = MenuUI::Layout::EffectiveScale(themeSettings.GlobalScale,
+		io.FontDefault->LegacySize, io.DisplaySize, ImGui::GetStyle().FontScaleDpi);
 	ImGui::GetStyle().FontSizeBase = 0.0f;  // Force UpdateFontsNewFrame to re-detect from font->LegacySize
 
 	cachedFontSize = fontSize;

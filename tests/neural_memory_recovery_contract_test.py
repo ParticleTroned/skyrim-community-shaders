@@ -218,7 +218,7 @@ class MemoryRecoveryContracts(unittest.TestCase):
                           "bool Renderer::State::RetryWorkingResolutionLocked(",
                           "void Renderer::State::FinishMemoryRecoveryLocked("):
             self.assertIn("PublishModelResolutionCeilingLocked()", body(RENDERER, signature))
-        evaluation = body(UPSCALING, "NeuralStereoEvaluationSummary EvaluatePreparedNeuralStereo(")
+        evaluation = body(UPSCALING, "bool PrepareNeuralStereoOutputTargets(")
         self.assertEqual(evaluation.count("ModelResolutionCeiling()"), 1)
         self.assertIn("pressureResolutionEnabled &&", evaluation)
         self.assertNotIn("modelResolutionPercent =", evaluation)
@@ -227,7 +227,9 @@ class MemoryRecoveryContracts(unittest.TestCase):
         for entry in ("Apply", "ApplyStereo", "ApplySequentialStereo"):
             source = body(RENDERER, f"bool Renderer::{entry}(")
             self.assertLess(source.index(f"state_->{entry}Locked("), source.index("FinishMemoryRecoveryLocked(succeeded, outcome)"))
-            self.assertLess(source.index("FinishMemoryRecoveryLocked(succeeded, outcome)"), source.index("state_->FinishCapture("))
+            self.assertLess(source.index("FinishMemoryRecoveryLocked(succeeded, outcome)"), source.index("state_->FinishApplyLocked("))
+            self.assertEqual(source.count("state_->FinishApplyLocked(outcome)"), 2)
+        self.assertIn("FinishCapture(outcome)", body(RENDERER, "void FinishApplyLocked("))
         per_slot = body(RENDERER, "void Renderer::State::SucceedLocked(")
         self.assertFalse("memoryRecovery_.Succeeded(" in per_slot)
 
@@ -364,7 +366,8 @@ class MemoryRecoveryContracts(unittest.TestCase):
 
     def test_faulted_backend_does_not_reserve_future_streaming_work(self):
         finish = body(RENDERER, "void FinishMemoryAdmissionLocked()", "\t\t")
-        self.assertLess(finish.index("memoryReservation_.Reset()"), finish.index("PublishMemoryBudgetWorkLocked()"))
+        self.assertIn("!failureLatched_ && !quarantined_", finish)
+        self.assertLess(finish.index("memoryReservation_.Reset()"), finish.rindex("PublishMemoryBudgetWorkLocked()"))
         publication = body(RENDERER, "void PublishMemoryBudgetWorkLocked(", "\t\t")
         self.assertIn("if (!requested || failureLatched_ || quarantined_)", publication)
         self.assertNotIn(".Sample(", publication)

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CharacterFocusPolicy.h"
+#include "FaceDetailMapping.h"
 
 #include "../DLSSViewportCrop.h"
 #include "CharacterActorPolicy.h"
@@ -9,6 +10,7 @@
 #include "CharacterSettings.h"
 #include "ComputeSubrect.h"
 #include "PackedCropPolicy.h"
+#include "SceneCategorySelection.h"
 
 #include <array>
 #include <cstdint>
@@ -276,6 +278,8 @@ namespace NeuralRendering
 		CharacterSettings settings{};
 		/** True when compositing into the source raster before temporal upscaling. */
 		bool outputIsJittered = false;
+		/** Permit source-frame scene selection inside an already required reconstruction. */
+		bool fuseSceneSelection = false;
 	};
 
 	struct CharacterMaskPrepareResult
@@ -302,6 +306,7 @@ namespace NeuralRendering
 		ComputeSubrect maskSupport{};
 		ComputeSubrect computeSubrect{};
 		bool providerBlending = false;
+		std::optional<SceneCategorySelection> sceneCategories;
 	};
 
 	/** Owns character observations, stable per-eye regions, and R8 selection masks. */
@@ -309,6 +314,10 @@ namespace NeuralRendering
 	{
 	public:
 		static CharacterRendering& Instance();
+		/** Observe an NPC head once per source frame, without authoring a category texture. */
+		void ObserveFaceDetail(std::uint32_t frame, std::uint32_t actor, const CharacterActorBound& bound);
+		/** Return only source-matched head regions in the pre-DLSS input crop. */
+		[[nodiscard]] FaceDetailRegions GetFaceDetailRegions(std::uint32_t frame, std::uint32_t eye, const UpscalingDLSS::ViewportCrop& crop) const;
 
 		CharacterRendering(const CharacterRendering&) = delete;
 		CharacterRendering& operator=(const CharacterRendering&) = delete;

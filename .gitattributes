@@ -3,5 +3,7 @@
 
 # Ensure patch files always use LF line endings
 *.patch text eol=lf
+# Pinned NVIDIA SDK inputs retain their original bytes and notices.
+extern/NeuralRenderingSDK/** -text -whitespace
 # Complete ledger cells are audited by the reporting tool; text diffs are oversized.
 docs/development/vr-render-scale-*ledger*.csv -diff

@@ -160,7 +160,11 @@ uint ComputeIndex3(float texelPos, float endPoint0Pos, float endPoint1Pos)
 
 uint ComputeIndex4(float texelPos, float endPoint0Pos, float endPoint1Pos)
 {
-	float r = (texelPos - endPoint0Pos) / (endPoint1Pos - endPoint0Pos);
+	const float span = endPoint1Pos - endPoint0Pos;
+	// Half conversion can collapse distinct colour endpoints onto the same position.
+	if (span == 0.0f)
+		return 0;
+	float r = (texelPos - endPoint0Pos) / span;
 	return (uint)clamp(r * 14.93333f + 0.03333f + 0.5f, 0.0f, 15.0f);
 }
 
@@ -200,7 +204,10 @@ void InsetColorBBoxP1(float3 texels[16], inout float3 blockMin, inout float3 blo
 void OptimizeEndpointsP1(float3 texels[16], inout float3 blockMin, inout float3 blockMax, in float3 blockMinNonInset, in float3 blockMaxNonInset)
 {
 	float3 blockDir = blockMax - blockMin;
-	blockDir = blockDir / (blockDir.x + blockDir.y + blockDir.z);
+	const float blockRange = blockDir.x + blockDir.y + blockDir.z;
+	if (blockRange <= 0.0f)
+		return;
+	blockDir /= blockRange;
 
 	float endPoint0Pos = f32tof16(dot(blockMin, blockDir));
 	float endPoint1Pos = f32tof16(dot(blockMax, blockDir));
@@ -247,33 +254,40 @@ void EncodeP1(inout uint4 block, inout float blockMSLE, float3 texels[16])
 
 	float3 blockMinNonInset = blockMin;
 	float3 blockMaxNonInset = blockMax;
+	// Constant blocks have no endpoint direction and must retain their original colour.
+	if (any(blockMin != blockMax)) {
 #if INSET_COLOR_BBOX
-	InsetColorBBoxP1(texels, blockMin, blockMax);
+		InsetColorBBoxP1(texels, blockMin, blockMax);
 #endif
 
 #if OPTIMIZE_ENDPOINTS
-	OptimizeEndpointsP1(texels, blockMin, blockMax, blockMinNonInset, blockMaxNonInset);
+		OptimizeEndpointsP1(texels, blockMin, blockMax, blockMinNonInset, blockMaxNonInset);
 #endif
-
-	float3 blockDir = blockMax - blockMin;
-	blockDir = blockDir / (blockDir.x + blockDir.y + blockDir.z);
-
-	float3 endpoint0 = Quantize10(blockMin);
-	float3 endpoint1 = Quantize10(blockMax);
-	float endPoint0Pos = f32tof16(dot(blockMin, blockDir));
-	float endPoint1Pos = f32tof16(dot(blockMax, blockDir));
-
-	float fixupTexelPos = f32tof16(dot(texels[0], blockDir));
-	uint fixupIndex = ComputeIndex4(fixupTexelPos, endPoint0Pos, endPoint1Pos);
-	if (fixupIndex > 7) {
-		Swap(endPoint0Pos, endPoint1Pos);
-		Swap(endpoint0, endpoint1);
 	}
 
+	float3 blockDir = blockMax - blockMin;
+	const float blockRange = blockDir.x + blockDir.y + blockDir.z;
+
+	float3 endpoint0 = Quantize10(blockMin);
+	float3 endpoint1 = endpoint0;
 	uint indices[16] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-	for (uint i = 0; i < 16; ++i) {
-		float texelPos = f32tof16(dot(texels[i], blockDir));
-		indices[i] = ComputeIndex4(texelPos, endPoint0Pos, endPoint1Pos);
+	if (blockRange > 0.0f) {
+		blockDir /= blockRange;
+		endpoint1 = Quantize10(blockMax);
+		float endPoint0Pos = f32tof16(dot(blockMin, blockDir));
+		float endPoint1Pos = f32tof16(dot(blockMax, blockDir));
+
+		float fixupTexelPos = f32tof16(dot(texels[0], blockDir));
+		uint fixupIndex = ComputeIndex4(fixupTexelPos, endPoint0Pos, endPoint1Pos);
+		if (fixupIndex > 7) {
+			Swap(endPoint0Pos, endPoint1Pos);
+			Swap(endpoint0, endpoint1);
+		}
+
+		for (uint i = 0; i < 16; ++i) {
+			float texelPos = f32tof16(dot(texels[i], blockDir));
+			indices[i] = ComputeIndex4(texelPos, endPoint0Pos, endPoint1Pos);
+		}
 	}
 
 	float3 endpoint0Unq = Unquantize10(endpoint0);
@@ -322,13 +336,15 @@ void EncodeP1(inout uint4 block, inout float blockMSLE, float3 texels[16])
 
 	if (all(blockCoord < TextureSizeInBlocks)) {
 		int2 texelBase = int2(blockCoord) * 4;
+		uint mipWidth, mipHeight, elements, levels;
+		SrcTexture.GetDimensions(MipLevel, mipWidth, mipHeight, elements, levels);
+		int2 maxTexel = int2(mipWidth, mipHeight) - 1;
 
 		float3 texels[16];
 		[unroll] for (int i = 0; i < 16; i++)
 		{
-			int tx = i % 4;
-			int ty = i / 4;
-			texels[i] = SrcTexture.Load(int4(texelBase.x + tx, texelBase.y + ty, int(faceIndex), int(MipLevel))).rgb;
+			int2 texel = min(texelBase + int2(i % 4, i / 4), maxTexel);
+			texels[i] = SrcTexture.Load(int4(texel, int(faceIndex), int(MipLevel))).rgb;
 		}
 
 		uint4 block = uint4(0, 0, 0, 0);

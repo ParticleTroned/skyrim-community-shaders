@@ -9,6 +9,40 @@ namespace
 {
 	using namespace NeuralRendering;
 	using nlohmann::json;
+	constexpr bool NoOpSceneMaskPolicy()
+	{
+		CharacterSettings settings;
+		settings.sceneStrengthsEnabled = true;
+		settings.faceStrength = settings.skinStrength = settings.hairStrength = settings.armorStrength = settings.weaponsStrength = 1.0f;
+		if (IsCharacterMaskActive(settings))
+			return false;
+		settings.providerBlending = true;
+		if (IsCharacterMaskActive(settings))
+			return false;
+		settings.hairStrength = 0.65f;
+		if (!IsCharacterMaskActive(settings))
+			return false;
+		if (GetEnabledCharacterCategoryMask(settings) != CharacterPolicy::CategoryBit(CharacterCategory::Hair))
+			return false;
+		settings.faceStrength = 0.0f;
+		if (!IsCharacterCategoryEnabled(CharacterCategory::Face, settings))
+			return false;
+		settings.faceStrength = 1.0f;
+		settings.hair = false;
+		if (IsCharacterMaskActive(settings))
+			return false;
+		settings.debugView = CharacterDebugView::CharacterMask;
+		if (!IsCharacterMaskActive(settings))
+			return false;
+		settings.debugView = CharacterDebugView::Off;
+		settings.maskTestMode = CharacterMaskTestMode::ForceHalf;
+		if (!IsCharacterMaskActive(settings))
+			return false;
+		settings.sceneStrengthsEnabled = false;
+		settings.enabled = true;
+		return IsCharacterMaskActive(settings);
+	}
+	static_assert(NoOpSceneMaskPolicy());
 
 	// Match the production flat settings interface without a game/D3D dependency.
 	struct FlatSettings

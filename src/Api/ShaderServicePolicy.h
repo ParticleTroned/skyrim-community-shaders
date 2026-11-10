@@ -13,6 +13,7 @@ namespace CSX::Api
 		bool compiling = false;
 		bool previousCacheAvailable = false;
 		bool diskCacheHeld = false;
+		bool cacheInstallationRepairRequired = false;
 		bool featureFound = false;
 		bool persistentMutationBlocked = false;
 		std::uint64_t stateRevision = 0;

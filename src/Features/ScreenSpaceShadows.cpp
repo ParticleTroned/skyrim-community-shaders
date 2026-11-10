@@ -1,5 +1,6 @@
 #include "ScreenSpaceShadows.h"
 #include "Menu/SettingsPage.h"
+#include "ReverseZ.h"
 
 #include "Features/TerrainBlending.h"
 #include "FoveatedCommon.h"
@@ -39,7 +40,7 @@ namespace
 	constexpr float kVRBaseSamplesMin = 16.0f;
 	constexpr float kVRBaseSamplesMax = 96.0f;
 	constexpr float kVRCullDistanceMin = 0.0f;
-	constexpr float kVRCullDistanceMax = 20480.0f;
+	constexpr float kVRCullDistanceMax = 40960.0f;
 	constexpr float kSurfaceThicknessMin = 0.005f;
 	constexpr float kSurfaceThicknessMax = 0.05f;
 	constexpr float kBilinearThresholdMin = 0.02f;
@@ -412,6 +413,11 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetOrCreateRaymarchShader(
 	}
 	selected->lastUse = ++raymarchShaderUseCounter;
 	compiledSampleCount = a_sampleCount;
+	auto& shader = a_rightEye ? selected->right : selected->left;
+	if (auto* cached = shader.get())
+		return cached;
+	if (shader.HasFailed())
+		return nullptr;
 
 	std::string sampleCount = std::format("{}", a_sampleCount);
 	std::vector<std::pair<const char*, const char*>> defines{ { "SAMPLE_COUNT", sampleCount.c_str() } };
@@ -420,7 +426,6 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetOrCreateRaymarchShader(
 	if (useTerrainBlendingDepth)
 		defines.push_back({ "TERRAIN_BLENDING", "" });
 
-	auto& shader = a_rightEye ? selected->right : selected->left;
 	return shader.Get(
 		L"Data\\Shaders\\ScreenSpaceShadows\\RaymarchCS.hlsl",
 		defines,
@@ -610,8 +615,8 @@ void ScreenSpaceShadows::DrawShadows()
 				data.WaveOffset[0] = dispatchData.WaveOffset_Shader[0];
 				data.WaveOffset[1] = dispatchData.WaveOffset_Shader[1];
 
-				data.FarDepthValue = 1.0f;
-				data.NearDepthValue = 0.0f;
+				data.FarDepthValue = globals::features::reverseZ.GetFarDepth();
+				data.NearDepthValue = globals::features::reverseZ.GetNearDepth();
 
 				data.DynamicRes = dynamicRes;
 				data.DynamicSampleCount = dynamicSampleCount;
@@ -844,14 +849,17 @@ void ScreenSpaceShadows::Prepass()
 		return;
 	}
 
-	float white[4] = { 1, 1, 1, 1 };
-	context->ClearUnorderedAccessViewFloat(screenSpaceShadowsTexture->uav.get(), white);
-
-	if (auto sky = globals::game::sky)
-		if (bendSettings.Enable && sky->mode.get() == RE::Sky::Mode::kFull) {
-			DrawShadows();
-			DrawStereoSync();
-		}
+	auto* sky = globals::game::sky;
+	const bool drawShadows = sky && bendSettings.Enable && sky->mode.get() == RE::Sky::Mode::kFull;
+	if (drawShadows || !shadowTextureCleared) {
+		const float white[4] = { 1, 1, 1, 1 };
+		context->ClearUnorderedAccessViewFloat(screenSpaceShadowsTexture->uav.get(), white);
+	}
+	shadowTextureCleared = !drawShadows;
+	if (drawShadows) {
+		DrawShadows();
+		DrawStereoSync();
+	}
 
 	auto view = screenSpaceShadowsTexture->srv.get();
 	context->PSSetShaderResources(45, 1, &view);
@@ -887,6 +895,7 @@ bool ScreenSpaceShadows::HasShaderDefine(RE::BSShader::Type)
 
 void ScreenSpaceShadows::SetupResources()
 {
+	shadowTextureCleared = false;
 	auto device = globals::d3d::device;
 	static ID3D11Device* shaderDevice = nullptr;
 	if (shaderDevice != device) {
@@ -922,10 +931,10 @@ void ScreenSpaceShadows::SetupResources()
 		samplerDesc.MaxAnisotropy = 1;
 		samplerDesc.MinLOD = 0;
 		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
-		samplerDesc.BorderColor[0] = 1.0f;
-		samplerDesc.BorderColor[1] = 1.0f;
-		samplerDesc.BorderColor[2] = 1.0f;
-		samplerDesc.BorderColor[3] = 1.0f;
+		samplerDesc.BorderColor[0] = globals::features::reverseZ.GetFarDepth();
+		samplerDesc.BorderColor[1] = globals::features::reverseZ.GetFarDepth();
+		samplerDesc.BorderColor[2] = globals::features::reverseZ.GetFarDepth();
+		samplerDesc.BorderColor[3] = globals::features::reverseZ.GetFarDepth();
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, &pointBorderSampler));
 	}
 

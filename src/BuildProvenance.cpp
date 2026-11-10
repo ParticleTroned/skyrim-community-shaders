@@ -4,6 +4,7 @@
 #include <nlohmann/json.hpp>
 #include <winver.h>
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Api/DevBenchJson.h"
 #	include <DevBenchAPI.h>
 #	include <atomic>
 #endif
@@ -65,7 +66,7 @@ namespace BuildProvenance
 		auto* host = DevBenchAPI::GetDevBenchInterface001();
 		if (!host || registered.exchange(true, std::memory_order_acq_rel))
 			return;
-		static constexpr auto descriptor = R"({"description":"Read-only CSX producer registry. Reports the embedded build identity, source commit and dirty-source state; physical DLL hashing remains the deployment harness responsibility. This endpoint does not claim any rendering service is available.","inputSchema":{"type":"object","required":["contractMajor","action","clientId","commandId"],"properties":{"contractMajor":{"type":"integer","const":1},"action":{"type":"string","enum":["registry","capabilities"]},"clientId":{"type":"string","minLength":1,"maxLength":128},"commandId":{"type":"string","minLength":1,"maxLength":128}}}})";
+		static constexpr auto descriptor = R"({"description":"Reply and event strings replace invalid UTF-8 with U+FFFD; request validation remains strict. Read-only CSX producer registry. Reports the embedded build identity, source commit and dirty-source state; physical DLL hashing remains the deployment harness responsibility. This endpoint does not claim any rendering service is available.","inputSchema":{"type":"object","required":["contractMajor","action","clientId","commandId"],"properties":{"contractMajor":{"type":"integer","const":1},"action":{"type":"string","enum":["registry","capabilities"]},"clientId":{"type":"string","minLength":1,"maxLength":128},"commandId":{"type":"string","minLength":1,"maxLength":128}}},"outputSchema":{"type":"object","description":"Invalid UTF-8 in output strings is replaced with U+FFFD; valid UTF-8 output is unchanged."}})";
 		host->RegisterTool("communityshaders.build_api", descriptor, [](void*, const char* request, void* sink, DevBenchAPI::WriteFn write) noexcept {
 				try {
 					const auto args = json::parse(request ? request : "{}");
@@ -80,11 +81,15 @@ namespace BuildProvenance
 					}
 					const json result{ { "ok", true }, { "contractMajor", 1 }, { "action", action },
 						{ "producer", GetProducer() }, { "readOnly", true } };
-					const auto text = result.dump();
+					const auto text = CSX::Api::DumpForDevBench(result);
 					write(sink, text.c_str());
 				} catch (const std::exception& error) {
-					const auto text = json{ { "ok", false }, { "error", error.what() } }.dump();
-					write(sink, text.c_str());
+					try {
+						const auto text = CSX::Api::DumpForDevBench(json{ { "ok", false }, { "error", error.what() } });
+						write(sink, text.c_str());
+					} catch (...) {
+						write(sink, R"({"ok":false,"error":"producer registry serialization failed"})");
+					}
 				} catch (...) {
 					write(sink, R"({"ok":false,"error":"producer registry failure"})");
 				} }, nullptr);

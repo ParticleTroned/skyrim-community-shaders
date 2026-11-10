@@ -2,9 +2,12 @@
 
 #include "CentralAreaPolicy.h"
 #include "DevelopmentDiagnostics.h"
-#include "ModelResolutionPolicy.h"
+#include "GuidedReconstructionPolicy.h"
+#include "PeripheralCompressionPolicy.h"
 #include "TuningLimits.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -34,6 +37,64 @@ namespace NeuralRendering
 	{
 		return ParseBoundedInteger(value, kMinimumModelResolutionPercent, kMaximumModelResolutionPercent);
 	}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	template <class Mode>
+	struct ComparisonRequest
+	{
+		Mode mode = Mode::Auto;
+		std::uint32_t frames = 0;
+		std::uint64_t expectedRevision = 0;
+	};
+	using ReconstructionComparisonRequest = ComparisonRequest<GuidedReconstructionOverride>;
+	using PeripheralComparisonRequest = ComparisonRequest<PeripheralCompressionOverride>;
+
+	/** Validate a complete comparison lease before renderer ownership or mutation. */
+	template <class Lease, class Mode, std::size_t Count, class Name>
+	[[nodiscard]] inline std::optional<ComparisonRequest<Mode>> ParseComparisonLease(const nlohmann::json& args,
+		const char* action, const char* modeField, const char* framesField, const char* revisionField,
+		const std::array<Mode, Count>& modes, Name name)
+	{
+		if (!args.is_object())
+			return std::nullopt;
+		for (const auto& item : args.items())
+			if (item.key() != "action" && item.key() != "expectedBuildId" && item.key() != modeField && item.key() != framesField && item.key() != revisionField)
+				return std::nullopt;
+		if (args.value("action", nlohmann::json{}) != action)
+			return std::nullopt;
+		const auto mode = args.find(modeField), frames = args.find(framesField), revision = args.find(revisionField);
+		if (mode == args.end() || !mode->is_string() || frames == args.end() || revision == args.end() || !revision->is_number_integer())
+			return std::nullopt;
+		const auto selected = std::ranges::find_if(modes, [&](Mode candidate) { return *mode == name(candidate); });
+		if (selected == modes.end())
+			return std::nullopt;
+		ComparisonRequest<Mode> result;
+		result.mode = *selected;
+		const auto boundedFrames = ParseBoundedInteger(*frames, 0, Lease::kMaximumFrames);
+		if (!boundedFrames || (result.mode == Mode::Auto ? *boundedFrames != 0 : *boundedFrames == 0) ||
+			(!revision->is_number_unsigned() && revision->get<std::int64_t>() <= 0))
+			return std::nullopt;
+		result.expectedRevision = revision->get<std::uint64_t>();
+		if (result.expectedRevision == 0 || result.expectedRevision == std::numeric_limits<std::uint64_t>::max())
+			return std::nullopt;
+		result.frames = *boundedFrames;
+		return result;
+	}
+	/** Parse the guided reconstruction comparison without persisting benchmark state. */
+	[[nodiscard]] inline std::optional<ReconstructionComparisonRequest> ParseReconstructionComparison(const nlohmann::json& args)
+	{
+		using enum GuidedReconstructionOverride;
+		return ParseComparisonLease<GuidedReconstructionExperiment>(args, "nr_reconstruction_compare", "reconstructionOverride", "reconstructionOverrideFrames",
+			"expectedReconstructionOverrideRevision", std::array{ Auto, Basic, GuidedExperiment }, GetGuidedReconstructionOverrideName);
+	}
+	/** Parse peripheral baseline, identity and compressed-profile comparison leases. */
+	[[nodiscard]] inline std::optional<PeripheralComparisonRequest> ParsePeripheralComparison(const nlohmann::json& args)
+	{
+		using enum PeripheralCompressionOverride;
+		return ParseComparisonLease<PeripheralCompressionExperiment>(args, "nr_peripheral_compare", "peripheralOverride", "peripheralOverrideFrames",
+			"expectedPeripheralOverrideRevision", std::array{ Auto, Ordinary, Identity, CompressedExperiment }, GetPeripheralCompressionOverrideName);
+	}
+#endif
 
 	/** Selects feature-owned fields from an ordinary or legacy upscaling profile. */
 	inline nlohmann::json RenderingSettings(const nlohmann::json& settings)
@@ -133,6 +194,7 @@ namespace NeuralRendering
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		destination.neuralCharacterCurrentContextEnabled = source.neuralCharacterCurrentContextEnabled;
 		destination.neuralCharacterGpuMaskSupportEnabled = source.neuralCharacterGpuMaskSupportEnabled;
+		destination.neuralReconstructionTuning = source.neuralReconstructionTuning;
 #endif
 	}
 }

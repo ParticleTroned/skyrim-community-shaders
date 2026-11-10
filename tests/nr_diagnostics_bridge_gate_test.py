@@ -12,24 +12,29 @@ root = Path(__file__).resolve().parents[1]
 empty_units = ["src/Features/Upscaling/NeuralRendering/ExposureCapture.cpp",
                "src/Features/ScreenshotNeuralDiagnostics.cpp"]
 checks = {
+    "src/Features/Upscaling/NeuralRendering/GuidedReconstructionPolicy.h": ["GuidedReconstructionOverride", "GuidedReconstructionExperiment"],
+    "src/Features/Upscaling/NeuralRendering/ExecutionEvidenceJson.h": ["ModelReconstructionJson"],
+    "src/Features/Upscaling/NeuralRendering/ConfigurationSerialization.h": ["ReconstructionComparisonRequest", "ParseReconstructionComparison"],
     "src/Features/Upscaling/NeuralRendering/PackedCropDiagnostics.h": ["PackedCropDiagnostics", "PackedCropObservation", "PackedCropRebuildTimings"],
     "src/Features/Upscaling/NeuralRendering/ModelResolution.h": ["cropDiagnostics_", "CropDiagnostics"],
     "src/Features/Upscaling/NeuralRendering/ModelResolution.cpp": ["captureTransition", "retainedRejection", "cropDiagnostics_"],
     "src/Features/Upscaling/NeuralRendering/PackedCropPolicy.h": ["retainedRejection"],
-    "src/Features/Upscaling/NeuralRendering/Renderer.cpp": ["modelPreparationEvidence_", "MergeModelPreparationEvidenceLocked", "SimulateTransientStall", "prewarmReservedBytes", "stageMicroseconds", "packedCropAdmission_", "BeginPackedCropAdmissionLocked", "PackedCropCpuTimer", "cropEvent", "colorAllocation", "RecordEvaluation", "diagnosticSourceTransaction_", "ConfigurePackedCropDiagnostics"],
-    "src/Features/Upscaling/NeuralRendering/Renderer.h": ["SimulateTransientStall", "prewarmReservedBytes", "shaderGenerationApplied", "packedCropCapacityDiagnostics", "ConfigurePackedCropDiagnostics"],
+    "src/Features/Upscaling/NeuralRendering/Renderer.cpp": ["snapshot_.peripheralCompression", "modelPreparationEvidence_", "MergeModelPreparationEvidenceLocked", "SimulateTransientStall", "prewarmReservedBytes", "stageMicroseconds", "packedCropAdmission_", "BeginPackedCropAdmissionLocked", "PackedCropCpuTimer", "cropEvent", "colorAllocation", "RecordEvaluation", "diagnosticSourceTransaction_", "ConfigurePackedCropDiagnostics", "ConfigureReconstructionOverride", "ResolveReconstructionOverride", "reconstructionHistoryReset", "peripheralOverride"],
+    "src/Features/Upscaling/NeuralRendering/Renderer.h": ["SimulateTransientStall", "prewarmReservedBytes", "shaderGenerationApplied", "packedCropCapacityDiagnostics", "ConfigurePackedCropDiagnostics", "ConfigureReconstructionOverride", "ResolveReconstructionOverride", "reconstructionHistoryReset", "peripheralOverride"],
     "src/Features/Upscaling/NeuralRendering/Runtime.cpp": ["GetLifecycleCounts", "lifecycleCounts_"],
     "src/Features/Upscaling/NeuralRendering/Runtime.h": ["LifecycleCounts", "lifecycleCounts_"],
     "src/Features/Upscaling/NeuralRendering/PrewarmPolicy.h": ["stageMicroseconds"],
     "src/Features/Upscaling/NeuralRendering/D3D12Interop.cpp": ["SimulateBackpressureTimeout"],
     "src/Features/Upscaling/NeuralRendering/D3D12Interop.h": ["SimulateBackpressureTimeout"],
-    "src/Features/Upscaling/NeuralRendering/ExecutionEvidence.h": ["MergeResourcePreparation"],
-    "src/Features/Upscaling/NeuralCapture.cpp": ["SetNeuralCaptureExecutionContext", "neuralCaptureMutex", "SerializeNeuralCaptureRecord"],
+    "src/Features/Upscaling/NeuralRendering/ExecutionEvidence.h": ["MergeResourcePreparation", "ModelReconstructionEvidence", "modelReconstruction"],
+    "src/Features/Upscaling/NeuralCapture.cpp": ["SetNeuralCaptureExecutionContext", "neuralCaptureMutex", "SerializeNeuralCaptureRecord", "ResolveReconstructionOverride"],
     "src/Globals.cpp": ["RecordNeuralCaptureCamera", "ExposureCapture::"],
     "src/Hooks.cpp": ["ExposureCapture::"],
     "src/FrameAnnotations.cpp": ["ExposureProducerScope"],
     "src/Features/Upscaling.h": ["foveatedMaskBinocularGapVisualization", "NeuralCaptureRecord", "neuralCaptureMutex", "neuralPassTelemetryMutex", "neuralStereoRouteSnapshotMutex", "SetNeuralCaptureExecutionContext"],
     "src/Features/Upscaling.cpp": ["foveatedMaskBinocularGapVisualization", "neuralCaptureMutex", "neuralPassTelemetryMutex", "neuralStereoRouteSnapshotMutex"],
+    "src/Features/Upscaling/Streamline.h": ["dlssPassTelemetryMutex", "dlssPassTelemetryFrames", "dlssViewportCropTelemetryMutex", "dlssViewportCropTelemetry{}"],
+    "src/Features/Upscaling/Streamline.cpp": ["collectPassTelemetry", "publishCropTelemetry", "dlssPassTelemetryMutex", "dlssPassTelemetryFrames", "dlssViewportCropTelemetryMutex", "dlssViewportCropTelemetry["],
     "src/Features/ScreenshotApi.cpp": ["RetainNeuralDiagnostics", "FinalizeNeuralDiagnostics"],
     "src/Features/ScreenshotApi.h": ["diagnosticSnapshot"],
     "src/Features/NeuralRenderingFeature.cpp": ["Json StatusJson", "Json CaptureJson", 'ImGui::TreeNode("Colour experiments and diagnostics")' ],
@@ -64,4 +69,17 @@ with tempfile.TemporaryDirectory(prefix="csx-nr-diagnostics-") as temporary:
                 assert "frameBufferCached.vr = *frameBufferVR" in output[enabled]
                 assert "void ObserveVRFrameBufferUpload" in output[enabled]
                 assert "context->Unmap(resource, subresource)" in output[enabled]
+        if name == "src/Features/Upscaling/Streamline.cpp":
+            for enabled in (False, True):
+                for symbol in ("UpscalingDLSS::EvaluateCropContinuity(",
+                               "UpscalingDLSS::MakeSuccessfulCropHistory(",
+                               "CheckFrameConstants(", "SetDLSSOptions(",
+                               "slEvaluateFeature(sl::kFeatureDLSS,",
+                               "InvalidateDLSSRelatchDrain();",
+                               "NotifyDlssMemoryPressure();",
+                               "dlssBudgetWarningThrottle.ShouldLog(",
+                               "[Streamline] slEvaluateFeature failed",
+                               "GetDLSSPassTelemetrySnapshot(",
+                               "GetDLSSViewportCropTelemetrySnapshot("):
+                    assert symbol in output[enabled], (name, symbol, "production rendering contract missing")
 print("NR capture implementations, hooks and measurement storage are development-only; shared camera observation remains")

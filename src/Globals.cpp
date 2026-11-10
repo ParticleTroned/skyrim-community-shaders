@@ -1,4 +1,5 @@
 #include "Globals.h"
+#include "Features/ReverseZ.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "RenderMap/D3DContextHooks.h"
@@ -12,6 +13,7 @@
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
 #include "Features/FoliageLighting.h"
+#include "Features/FurShells.h"
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
 #include "Features/GrassOptimizations.h"
@@ -29,8 +31,10 @@
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/ScreenshotFeature.h"
+#include "Features/SeasonalWeather.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
+#include "Features/SnowCover.h"
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
@@ -56,6 +60,7 @@
 #include "Utils/VRFrameBufferUpload.h"
 #include <array>
 #include <cstring>
+#include <mutex>
 
 namespace globals
 {
@@ -69,6 +74,7 @@ namespace globals
 	namespace features
 	{
 		AdaptiveBrightness adaptiveBrightness{};
+		ReverseZ reverseZ{};
 		CloudShadows cloudShadows{};
 		Wetterness wetterness{};
 		DynamicCubemaps dynamicCubemaps{};
@@ -84,6 +90,9 @@ namespace globals
 		HairSpecular hairSpecular{};
 		HorizonFix horizonFix{};
 		InteriorSun interiorSun{};
+		FurShells furShells{};
+		SnowCover snowCover{};
+		SeasonalWeather seasonalWeather{};
 		InverseSquareLighting inverseSquareLighting{};
 		ScreenSpaceGI screenSpaceGI{};
 		ScreenSpaceShadows screenSpaceShadows{};
@@ -274,13 +283,20 @@ namespace globals
 #endif
 	}
 
+	static bool vrFrameBufferUploadHookReady = false;
+	bool IsVRFrameBufferUploadHookReady() { return vrFrameBufferUploadHookReady; }
+
 	void ObserveVRFrameBufferUpload(ID3D11DeviceContext* context, ID3D11Resource* resource,
-		UINT subresource, const void* source)
+		UINT subresource, const void* source, void* destination)
 	{
 		if (context == d3d::context && resource == *game::perFrame && subresource == 0) {
 			game::mappedFrameBuffer = nullptr;
-			if (source)
-				CacheFramebuffer(source);
+			if (source && destination) {
+				auto corrected = *static_cast<const FrameBufferVR*>(source);
+				if (features::reverseZ.FixupMappedFrameBufferVR(corrected))
+					std::memcpy(destination, &corrected, sizeof(corrected));
+				CacheFramebuffer(&corrected);
+			}
 		}
 		context->Unmap(resource, subresource);
 	}
@@ -296,7 +312,17 @@ namespace globals
 		}
 		const auto upload = REL::RelocationID(75472, 0).address();
 		constexpr std::array<std::uint8_t, 8> mapResult{ 0xFF, 0x50, 0x70, 0x48, 0x8B, 0x44, 0x24, 0x40 };
-		constexpr std::array<std::uint8_t, 10> sourceCopy{ 0x48, 0x8D, 0x4C, 0x24, 0x50, 0xBA, 0x0B, 0x00, 0x00, 0x00 };
+		// Validate the copy and argument setup so the CPU source stays intact until Unmap.
+		constexpr std::array<std::uint8_t, 120> sourceCopy{
+			0x48, 0x8D, 0x4C, 0x24, 0x50, 0xBA, 0x0B, 0x00, 0x00, 0x00, 0x66, 0x66, 0x0F, 0x1F, 0x84, 0x00,
+			0x00, 0x00, 0x00, 0x00, 0x48, 0x8D, 0x80, 0x80, 0x00, 0x00, 0x00, 0x0F, 0x10, 0x01, 0x0F, 0x10,
+			0x49, 0x10, 0x48, 0x8D, 0x89, 0x80, 0x00, 0x00, 0x00, 0x0F, 0x11, 0x40, 0x80, 0x0F, 0x10, 0x41,
+			0xA0, 0x0F, 0x11, 0x48, 0x90, 0x0F, 0x10, 0x49, 0xB0, 0x0F, 0x11, 0x40, 0xA0, 0x0F, 0x10, 0x41,
+			0xC0, 0x0F, 0x11, 0x48, 0xB0, 0x0F, 0x10, 0x49, 0xD0, 0x0F, 0x11, 0x40, 0xC0, 0x0F, 0x10, 0x41,
+			0xE0, 0x0F, 0x11, 0x48, 0xD0, 0x0F, 0x10, 0x49, 0xF0, 0x0F, 0x11, 0x40, 0xE0, 0x0F, 0x11, 0x48,
+			0xF0, 0x48, 0x83, 0xEA, 0x01, 0x75, 0xAD, 0x48, 0x8B, 0x0D, 0x2E, 0x12, 0x3C, 0x02, 0x45, 0x33,
+			0xC0, 0x48, 0x8B, 0x15, 0xF4, 0x35, 0x3C, 0x02
+		};
 		constexpr std::array<std::uint8_t, 6> unmap{ 0x48, 0x8B, 0x01, 0xFF, 0x50, 0x78 };
 		if (std::memcmp(reinterpret_cast<const void*>(upload + 0x6FA), mapResult.data(), mapResult.size()) != 0 ||
 			std::memcmp(reinterpret_cast<const void*>(upload + 0x72C), sourceCopy.data(), sourceCopy.size()) != 0 ||
@@ -310,7 +336,7 @@ namespace globals
 		auto& trampoline = SKSE::GetTrampoline();
 		const auto observer = reinterpret_cast<std::uintptr_t>(trampoline.allocate(code));
 		trampoline.write_call<6>(upload + 0x7A4, observer);
-		installed = true;
+		installed = vrFrameBufferUploadHookReady = true;
 		logger::info("Installed VR frame-buffer upload observer");
 	}
 
@@ -327,7 +353,7 @@ namespace globals
 		{
 			HRESULT hr = func(This, pResource, Subresource, MapType, MapFlags, pMappedResource);
 			if (hr == S_OK) {
-				if (*globals::game::perFrame.get() == pResource)
+				if (This == d3d::context && Subresource == 0 && *globals::game::perFrame.get() == pResource)
 					globals::game::mappedFrameBuffer = pMappedResource;
 			}
 			return hr;
@@ -344,8 +370,14 @@ namespace globals
 	{
 		static void thunk(ID3D11DeviceContext* This, ID3D11Resource* pResource, UINT Subresource)
 		{
-			if (*globals::game::perFrame.get() == pResource && globals::game::mappedFrameBuffer)
-				CacheFramebuffer(globals::game::mappedFrameBuffer->pData);
+			if (This == d3d::context && Subresource == 0 && *globals::game::perFrame.get() == pResource && globals::game::mappedFrameBuffer) {
+				auto* bytes = globals::game::mappedFrameBuffer->pData;
+				if (game::isVR)
+					features::reverseZ.FixupMappedFrameBufferVR(*static_cast<FrameBufferVR*>(bytes));
+				else
+					features::reverseZ.FixupMappedFrameBuffer(*static_cast<FrameBuffer*>(bytes));
+				CacheFramebuffer(bytes);
+			}
 			func(This, pResource, Subresource);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -455,6 +487,12 @@ namespace globals
 	/// Share draw hooks for underwater composition and live HDR observation.
 	void InstallD3DHooks(ID3D11DeviceContext* a_context)
 	{
+		static std::mutex installationMutex;
+		static winrt::com_ptr<ID3D11DeviceContext> installedContext;
+		std::scoped_lock lock(installationMutex);
+		// Native context dispatch can change after first use without replacing the context.
+		if (installedContext.get() == a_context)
+			return;
 		InstallVRFrameBufferUploadHook();
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
@@ -471,5 +509,6 @@ namespace globals
 		stl::detour_vfunc<40, ID3D11DeviceContext_DrawInstancedIndirect>(a_context);
 		CSX::RenderMap::InstallD3DContextHooks(a_context);
 #endif
+		installedContext.copy_from(a_context);
 	}
 }

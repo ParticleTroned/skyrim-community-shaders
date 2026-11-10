@@ -62,7 +62,7 @@ void ExtendedMaterials::DrawSettings()
 		Util::UIntCheckbox("Enable Complex Material", settings.EnableComplexMaterial);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Enable Complex Material support through environment masks: parallax, metals and specular reflections. Invalid mask alpha on modded content may warp textures.");
+				"Adds surface depth and metallic shine to compatible textures. Off uses their simpler appearance. Incorrectly prepared textures may look distorted.");
 		}
 
 		ImGui::Spacing();
@@ -73,7 +73,7 @@ void ExtendedMaterials::DrawSettings()
 		DrawParallaxStrength();
 		Util::UIntCheckbox("Enable Parallax", settings.EnableParallax);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Enables parallax on standard meshes made for parallax.");
+			ImGui::Text("On: compatible surfaces gain visible depth, such as recessed stone joints. Off: their textures look flat.");
 		}
 
 		if (Util::UIntCheckbox("Enable Legacy Terrain", settings.EnableTerrain)) {
@@ -83,15 +83,15 @@ void ExtendedMaterials::DrawSettings()
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Enable terrain parallax from landscape texture alpha. All landscape textures must support parallax.");
+				"Adds surface depth to older landscape texture packs. Enable only when all installed landscape textures support parallax; otherwise some ground may look distorted.");
 		}
 		Util::UIntCheckbox("Enable Terrain Height Blending", settings.EnableHeightBlending);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Enables landscape texture blending based on parallax. ");
+			ImGui::Text("Uses surface height to blend neighbouring ground textures, so details overlap more naturally. Off keeps ordinary texture transitions.");
 		}
 		Util::UIntCheckbox("Enable Parallax Warping Fix", settings.EnableParallaxWarpingFix);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Enables a fix reducing parallax scale on curved and smooth normal triangles.");
+			ImGui::Text("Reduces distorted surface depth on curved objects. Off keeps full depth even where it may appear stretched.");
 		}
 
 		ImGui::Spacing();
@@ -102,7 +102,7 @@ void ExtendedMaterials::DrawSettings()
 		Util::UIntCheckbox("Enable Shadows", settings.EnableShadows);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
-				"Add inexpensive soft parallax shadows for all directional and point lights.");
+				"On: raised texture details cast soft shadows into their grooves. Off: keeps surface depth without these extra shadows.");
 		}
 		ImGui::Spacing();
 		ImGui::Spacing();

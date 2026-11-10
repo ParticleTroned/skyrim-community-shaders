@@ -5,17 +5,18 @@
 
 namespace Util
 {
-	/** @brief Pass the validated engine upload's CPU source to an Unmap observer. */
+	/** @brief Pass the native CPU source and write-only mapped destination to an Unmap observer. */
 	struct VRFrameBufferUploadThunk : Xbyak::CodeGenerator
 	{
 		explicit VRFrameBufferUploadThunk(std::uintptr_t observer)
 		{
-			// The caller stores its Map result at rsp+0x40 and upload bytes at rsp+0x50.
-			// Our return address adds eight bytes; a failed Map supplies no source.
+			// The return address shifts Map.pData and the intact CPU source by eight bytes.
+			// The fifth argument reuses the caller's expired MapFlags stack slot.
 			mov(rax, ptr[rsp + 0x48]);
 			lea(r9, ptr[rsp + 0x58]);
 			test(rax, rax);
 			cmovz(r9, rax);
+			mov(ptr[rsp + 0x28], rax);
 			mov(rax, observer);
 			jmp(rax);
 		}

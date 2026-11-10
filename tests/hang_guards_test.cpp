@@ -67,10 +67,12 @@ struct Upscaling
 	double refreshRate = 60.0;
 	LARGE_INTEGER qpf = [] { LARGE_INTEGER value{}; value.QuadPart = 1000; return value; }();
 	bool generation = false;
+	int64_t frameLimitDeadline = 0;
+	int64_t frameLimitInterval = 0;
 
 	HANDLE GetFrameLatencyWaitableObject() const { return frameLatencyHandle; }
 	bool ShouldUseFrameGenerationThisFrame() const { return generation; }
-	void TimerSleepQPC(int64_t target)
+	void TimerSleepQPC(int64_t target, int64_t)
 	{
 		++sleepCalls;
 		clockTicks = target;
@@ -148,6 +150,23 @@ namespace
 		nextWaitResult = WAIT_TIMEOUT;
 		upscaling.FrameLimiter();
 		Require(waitCalls == 12 && sleepCalls == 2 && clockTicks - previousTicks > 30, "timeout must retain frame-generation pacing fallback");
+		const auto deadline = upscaling.frameLimitDeadline;
+		clockTicks = deadline + 2;
+		upscaling.FrameLimiter();
+		Require(upscaling.frameLimitDeadline == deadline + upscaling.frameLimitInterval, "small overshoots must retain cadence");
+		clockTicks += 1000;
+		upscaling.FrameLimiter();
+		Require(upscaling.frameLimitDeadline > clockTicks, "long hitches must rebase the deadline");
+		upscaling.settings.frameLimitMode = false;
+		upscaling.FrameLimiter();
+		Require(upscaling.frameLimitDeadline == 0 && upscaling.frameLimitInterval == 0, "disabled pacing must forget the deadline");
+		upscaling.settings.frameLimitMode = true;
+		for (double invalid : { 0.0, -60.0, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN() }) {
+			upscaling.refreshRate = invalid;
+			const auto previousSleeps = sleepCalls;
+			upscaling.FrameLimiter();
+			Require(sleepCalls == previousSleeps && upscaling.frameLimitDeadline == 0, "invalid timing must not sleep");
+		}
 	}
 }
 

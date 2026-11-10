@@ -172,6 +172,19 @@ namespace
 		auto [retried, first] = cache.Acquire(*rejected);
 		Require(first && *retried == Outcome::Native, "Failed admission must be native-first when retried");
 	}
+	void CheckMainOwnership()
+	{
+		Cache cache;
+		for (const auto first : { Outcome::Native, Outcome::Batched }) {
+			cache.Clear();
+			Require(!cache.MainOutcome(), "New frames must reconsider coverage ownership");
+			cache.CommitMain(first);
+			cache.Acquire({ 8, 8, 8, 0 });
+			cache.Acquire({ 0, 0, 0, 0 });
+			cache.CommitMain(first == Outcome::Native ? Outcome::Batched : Outcome::Native);
+			Require(cache.MainOutcome() == first, "Depth and colour must not change the first main-view route");
+		}
+	}
 
 }
 
@@ -183,6 +196,7 @@ int main()
 		CheckFadeHistoryAllocations();
 		CheckAllocationFailure();
 		CheckPopulatedAllocationFailure();
+		CheckMainOwnership();
 		std::cout << "Grass pass isolation, fade history, fallback, growth, frame reset and zero warm allocations passed\n";
 		return 0;
 	} catch (const std::exception& error) {

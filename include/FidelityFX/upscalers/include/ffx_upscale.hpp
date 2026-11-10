@@ -1,16 +1,13 @@
-// This file is derived from the FidelityFX SDK.
-//
-// Source:
-// https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/blob/main/Kits/FidelityFX/upscalers/include/ffx_upscale.hpp
+// This file is part of the FidelityFX SDK.
 //
 // Copyright (C) 2026 Advanced Micro Devices, Inc.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
+// of this software and associated documentation files(the "Software"), to deal
 // in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// to use, copy, modify, merge, publish, distribute, sublicense, and /or sell
 // copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
+// furnished to do so, subject to the following conditions :
 //
 // The above copyright notice and this permission notice shall be included in
 // all copies or substantial portions of the Software.
@@ -27,6 +24,8 @@
 
 #include "../../api/include/ffx_api.hpp"
 #include "ffx_upscale.h"
+
+// Helper types for header initialization. Api definition is in .h file.
 
 namespace ffx
 {
@@ -115,4 +114,4 @@ struct struct_type<ffxCreateContextDescUpscaleVersion> : std::integral_constant<
 struct CreateContextDescUpscaleVersion : public InitHelper<ffxCreateContextDescUpscaleVersion>
 {};
 
-}
+}  // namespace ffx

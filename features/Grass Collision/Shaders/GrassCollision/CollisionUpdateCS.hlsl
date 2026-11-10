@@ -1,3 +1,4 @@
+#include "Common/PerformanceCostReference.hlsli"
 #include "GrassCollision/GrassCollisionContact.hlsli"
 
 cbuffer PerFrameCB : register(b0)
@@ -43,6 +44,8 @@ RWTexture2D<float4> Deformation : register(u0);
 RWTexture2D<float4> Velocity : register(u1);
 
 groupshared BoundingBoxPacked SharedBoundingBoxes[64];
+groupshared uint SharedBoundingBoxCount;
+groupshared float4 SharedTileBounds;
 
 // Negative prefers the candidate; zero leaves only the impulse-direction tie break.
 int CompareContact(float2 bounds, float compression, float2 selectedBounds, float selectedCompression)
@@ -55,14 +58,44 @@ int CompareContact(float2 bounds, float compression, float2 selectedBounds, floa
 }
 
 [numthreads(8, 8, 1)] void main(
-	uint3 dispatchThreadId : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex) {
-	if (groupIndex < BoundingBoxCount)
-		SharedBoundingBoxes[groupIndex] = CollisionBoundingBoxes[groupIndex];
-	GroupMemoryBarrierWithGroupSync();
-
+	uint3 dispatchThreadId : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex, uint3 groupID : SV_GroupID) {
 	const uint TEXTURE_SIZE = 1024;
 	const float WORLD_SIZE = 8192.0;
 	const float COLLISION_ACCELERATION = 50.0;
+	uint boundingBoxCount = BoundingBoxCount;
+#if !defined(GRASS_COLLISION_TEST_UNFILTERED) && !(CSX_PERF_REFERENCE_FLAGS & CSX_PERF_GRASS_TILE_FILTER)
+	// Direct scans avoid compaction for short actor lists.
+	if (BoundingBoxCount > 4) {
+		if (groupIndex == 0) {
+			SharedBoundingBoxCount = 0;
+			uint2 firstCell = (groupID.xy * 8 + TEXTURE_SIZE - ArrayOrigin) % TEXTURE_SIZE;
+			uint2 lastCell = (firstCell + 7) % TEXTURE_SIZE;
+			// A tile crossing the ring seam conservatively spans the full logical axis.
+			float2 minimumCell = float2(firstCell.x <= lastCell.x ? firstCell.x : 0,
+				firstCell.y <= lastCell.y ? firstCell.y : 0);
+			float2 maximumCell = float2(firstCell.x <= lastCell.x ? lastCell.x : TEXTURE_SIZE - 1,
+				firstCell.y <= lastCell.y ? lastCell.y : TEXTURE_SIZE - 1);
+			SharedTileBounds.xy = (minimumCell + 0.5 - TEXTURE_SIZE * 0.5) / TEXTURE_SIZE * WORLD_SIZE + PosOffset;
+			SharedTileBounds.zw = (maximumCell + 0.5 - TEXTURE_SIZE * 0.5) / TEXTURE_SIZE * WORLD_SIZE + PosOffset;
+		}
+		GroupMemoryBarrierWithGroupSync();
+		if (groupIndex < BoundingBoxCount) {
+			BoundingBoxPacked box = CollisionBoundingBoxes[groupIndex];
+			if (all(SharedTileBounds.zw >= box.MinExtent) && all(SharedTileBounds.xy <= box.MaxExtent)) {
+				uint index;
+				InterlockedAdd(SharedBoundingBoxCount, 1, index);
+				SharedBoundingBoxes[index] = box;
+			}
+		}
+		GroupMemoryBarrierWithGroupSync();
+		boundingBoxCount = SharedBoundingBoxCount;
+	} else
+#endif
+	{
+		if (groupIndex < BoundingBoxCount)
+			SharedBoundingBoxes[groupIndex] = CollisionBoundingBoxes[groupIndex];
+		GroupMemoryBarrierWithGroupSync();
+	}
 	int2 cellID = int2((dispatchThreadId.xy + TEXTURE_SIZE - ArrayOrigin) % TEXTURE_SIZE);
 	float2 cellCentreMS = float2(cellID) + 0.5 - TEXTURE_SIZE * 0.5;
 	cellCentreMS = cellCentreMS / TEXTURE_SIZE * WORLD_SIZE + PosOffset;
@@ -100,7 +133,7 @@ int CompareContact(float2 bounds, float compression, float2 selectedBounds, floa
 	float collisionCompression = 0.0;
 	float2 impactBounds = 0.0;
 	bool hasImpact = false;
-	for (uint i = 0; i < BoundingBoxCount; ++i) {
+	for (uint i = 0; i < boundingBoxCount; ++i) {
 		BoundingBoxPacked boundingBox = SharedBoundingBoxes[i];
 		if (all(cellCentreMS >= boundingBox.MinExtent && cellCentreMS <= boundingBox.MaxExtent)) {
 			for (uint j = boundingBox.IndexStart; j < boundingBox.IndexEnd; ++j) {

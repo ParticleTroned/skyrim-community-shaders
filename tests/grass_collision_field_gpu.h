@@ -111,6 +111,16 @@ void RunGrassCollisionField()
 	ComPtr<ID3D11ComputeShader> shader;
 	Check(device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, shader.GetAddressOf()));
 	Util::SetResourceName(shader.Get(), "GrassTest::CollisionUpdateCS");
+	auto referenceCode = Compile(L"features/Grass Collision/Shaders/GrassCollision/CollisionUpdateCS.hlsl", "cs_5_0",
+		{ { "GRASS_COLLISION_TEST_UNFILTERED", "1" } });
+	auto devReferenceCode = Compile(L"features/Grass Collision/Shaders/GrassCollision/CollisionUpdateCS.hlsl", "cs_5_0",
+		{ { "CSX_PERF_REFERENCE_FLAGS", "2" } });
+	Require(referenceCode->GetBufferSize() == devReferenceCode->GetBufferSize() &&
+				std::memcmp(referenceCode->GetBufferPointer(), devReferenceCode->GetBufferPointer(), referenceCode->GetBufferSize()) == 0,
+		"DevBench grass reference changed the unfiltered shader");
+	ComPtr<ID3D11ComputeShader> referenceShader;
+	Check(device->CreateComputeShader(referenceCode->GetBufferPointer(), referenceCode->GetBufferSize(), nullptr, referenceShader.GetAddressOf()));
+	Util::SetResourceName(referenceShader.Get(), "GrassTest::UnfilteredCollisionUpdateCS");
 	ComPtr<ID3D11ShaderReflection> reflection;
 	Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
 	D3D11ShaderTest::ConstantBuffer constants(device.Get(), reflection.Get(), "PerFrameCB");
@@ -125,7 +135,8 @@ void RunGrassCollisionField()
 	const auto makeField = [&](DXGI_FORMAT format, const char* name) {
 		Field field;
 		D3D11_TEXTURE2D_DESC desc{};
-		desc.Width = desc.Height = 8;
+		desc.Width = 24;
+		desc.Height = 16;
 		desc.ArraySize = desc.MipLevels = desc.SampleDesc.Count = 1;
 		desc.Format = format;
 		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
@@ -181,14 +192,14 @@ void RunGrassCollisionField()
 	constants.SetVariable("MaximumCompression", 1.0f);
 	constants.SetVariable("CompressionRecovery", .25f);
 	ComPtr<ID3D11ShaderResourceView> boxes, capsules;
-	const auto dispatch = [&] {
+	const auto dispatch = [&](ID3D11ComputeShader* selectedShader = nullptr, UINT groupsX = 1, UINT groupsY = 1) {
 		constants.Bind(context.Get());
 		ID3D11ShaderResourceView* inputs[]{ boxes.Get(), capsules.Get(), previous.srv.Get(), velocity.srv.Get() };
 		context->CSSetShaderResources(0, 4, inputs);
 		ID3D11UnorderedAccessView* outputs[]{ output.uav.Get(), outputVelocity.uav.Get() };
 		context->CSSetUnorderedAccessViews(0, 2, outputs, nullptr);
-		context->CSSetShader(shader.Get(), nullptr, 0);
-		context->Dispatch(1, 1, 1);
+		context->CSSetShader(selectedShader ? selectedShader : shader.Get(), nullptr, 0);
+		context->Dispatch(groupsX, groupsY, 1);
 		ID3D11UnorderedAccessView* empty[2]{};
 		context->CSSetUnorderedAccessViews(0, 2, empty, nullptr);
 		ID3D11ShaderResourceView* emptyInputs[4]{};
@@ -355,6 +366,86 @@ void RunGrassCollisionField()
 		Require(tiedImpact[0] == impact[0] && tiedImpact[1] == -impact[1] && tiedImpact[2] == impact[2],
 			"Contact penetration or direction ties changed with input order");
 	} while (std::next_permutation(order.begin(), order.end()));
+	const auto readTile = [&](const Field& field) {
+		context->CopyResource(staging.Get(), field.texture.Get());
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		Check(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped));
+		std::array<std::array<float, 4>, 24 * 16> result{};
+		for (size_t row = 0; row < 16; ++row)
+			std::memcpy(result.data() + row * 24, static_cast<const std::byte*>(mapped.pData) + row * mapped.RowPitch, 24 * sizeof(result[0]));
+		context->Unmap(staging.Get(), 0);
+		return result;
+	};
+	std::array<Box, 64> tiedBoxes{};
+	for (size_t i = 0; i < tiedBoxes.size(); ++i) {
+		tiedBoxes[i].minimum = { -1e8f, -1e8f };
+		tiedBoxes[i].maximum = { 1e8f, 1e8f };
+		tiedBoxes[i].begin = unsigned(i % ties.size());
+		tiedBoxes[i].end = tiedBoxes[i].begin + 1;
+	}
+	capsules = structured(ties, "GrassTest::CompactedTies", sizeof(capsule));
+	constants.SetVariable("BoundingBoxCount", 64u);
+	for (unsigned tieOrder = 0; tieOrder < 3; ++tieOrder) {
+		boxes = structured(tiedBoxes, "GrassTest::CompactedTieBoxes", sizeof(Box));
+		dispatch(referenceShader.Get(), 3, 2);
+		const auto expectedState = readTile(output), expectedMotion = readTile(outputVelocity);
+		for (unsigned repeat = 0; repeat < 2; ++repeat) {
+			dispatch(nullptr, 3, 2);
+			Require(readTile(output) == expectedState && readTile(outputVelocity) == expectedMotion,
+				"Atomic tile compaction changed tied-contact priority");
+		}
+		std::rotate(tiedBoxes.begin(), tiedBoxes.begin() + 1, tiedBoxes.end());
+	}
+	for (const auto origin : { std::array<unsigned, 2>{ 0, 0 }, std::array<unsigned, 2>{ 3, 0 }, std::array<unsigned, 2>{ 3, 3 },
+			 std::array<unsigned, 2>{ 11, 11 }, std::array<unsigned, 2>{ 19, 11 }, std::array<unsigned, 2>{ 1023, 1023 } }) {
+		for (const auto offset : { std::array<float, 2>{ 0, 0 }, std::array<float, 2>{ 3.99f, -3.99f },
+				 std::array<float, 2>{ 100000, -200000 } }) {
+			std::array<std::array<float, 16>, 3> contacts{ capsule, capsule, capsule };
+			const std::array<std::array<unsigned, 2>, 3> contactCells{ { { 0, 0 }, { 11, 11 }, { 23, 15 } } };
+			for (size_t contact = 0; contact < contacts.size(); ++contact) {
+				for (size_t axis = 0; axis < 2; ++axis) {
+					const unsigned cell = (contactCells[contact][axis] + 1024 - origin[axis]) % 1024;
+					const float coordinate = (float(cell) + .5f - 512) * 8 + offset[axis];
+					for (size_t endpoint : { 0u, 4u, 8u, 12u })
+						contacts[contact][endpoint + axis] = coordinate;
+				}
+			}
+			capsules = structured(contacts, "GrassTest::TileCapsules", sizeof(capsule));
+			for (unsigned count : { 0u, 1u, 4u, 5u, 32u, 64u }) {
+				for (bool dense : { false, true }) {
+					std::array<Box, 64> tileBoxes{};
+					for (size_t i = 0; i < tileBoxes.size(); ++i) {
+						auto& box = tileBoxes[i];
+						box.minimum = { 1e8f, 1e8f };
+						box.maximum = { 1e8f + 64, 1e8f + 64 };
+						box.begin = unsigned(i % contacts.size());
+						box.end = box.begin + 1;
+						if (dense) {
+							box.minimum = { -1e8f, -1e8f };
+							box.maximum = { 1e8f, 1e8f };
+						} else if (i < contacts.size()) {
+							for (size_t axis = 0; axis < 2; ++axis) {
+								box.minimum[axis] = contacts[box.begin][axis] - 16;
+								box.maximum[axis] = contacts[box.begin][axis] + 16;
+							}
+						}
+					}
+					boxes = structured(tileBoxes, "GrassTest::TileBoxes", sizeof(Box));
+					constants.SetVariable("BoundingBoxCount", count);
+					constants.SetVariable("ArrayOrigin", origin);
+					constants.SetVariable("PosOffset", offset);
+					dispatch(referenceShader.Get(), 3, 2);
+					const auto expectedState = readTile(output), expectedMotion = readTile(outputVelocity);
+					dispatch(nullptr, 3, 2);
+					Require(readTile(output) == expectedState && readTile(outputVelocity) == expectedMotion,
+						"Tile-filtered contacts differ from the full actor list across ring seams or dense overlap");
+				}
+			}
+		}
+	}
+	constants.SetVariable("BoundingBoxCount", 1u);
+	constants.SetVariable("ArrayOrigin", std::array<unsigned, 2>{ 0, 0 });
+	constants.SetVariable("PosOffset", std::array<float, 2>{ 0, 0 });
 	boxes = structured(twoLayers, "GrassTest::LayeredBox");
 	capsules = structured(std::array{ elevatedCapsule, capsule }, "GrassTest::LayeredCapsules", sizeof(capsule));
 	constants.SetVariable("MaximumBend", .001f);

@@ -141,7 +141,13 @@ namespace Diagnostics::SunReceiverTrace
 			QueryPerformanceCounter(&now);
 			event.qpc = now.QuadPart;
 			event.frame = Frame();
-			event.graphicsFrame = globals::game::graphicsState ? globals::game::graphicsState->GetFrameCount() : 0;
+			if (auto* graphicsState = globals::game::graphicsState) {
+#	ifdef ENABLE_SKYRIM_AE
+				event.graphicsFrame = graphicsState->GetFrameCount();
+#	else
+				event.graphicsFrame = graphicsState->frameCount;
+#	endif
+			}
 			event.kind = static_cast<std::uint32_t>(kind);
 			event.after = after;
 			event.call = call;

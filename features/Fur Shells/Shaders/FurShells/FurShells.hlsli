@@ -1,6 +1,7 @@
 #ifndef __FUR_SHELLS_HLSLI__
 #define __FUR_SHELLS_HLSLI__
 
+#include "Common/PerformanceCostReference.hlsli"
 #include "Common/VRStereoEffects.hlsli"
 
 namespace FurShells
@@ -135,9 +136,15 @@ namespace FurShells
 				float3 axis = (previous ? Previous.TouchB[index] : Current.TouchB[index]).xyz - pointA;
 				float t = saturate(dot(a_absolutePosition - pointA, axis) / max(dot(axis, axis), 1e-4));
 				float3 offset = a_absolutePosition - (pointA + axis * t);
-				float distance = length(offset);
-				float3 direction = offset / max(distance, 1e-4);
 				float radius = (previous ? Previous.TouchA[index] : Current.TouchA[index]).w;
+				float distanceSquared = dot(offset, offset);
+#	if !(CSX_PERF_REFERENCE_FLAGS & CSX_PERF_FUR_CONTACT_REJECT)
+				float maximumReach = radius + margin;
+				// Keep the contact boundary conservative through float rounding.
+				[branch] if (distanceSquared > maximumReach * maximumReach * 1.000001) continue;
+#	endif
+				float distance = sqrt(distanceSquared);
+				float3 direction = offset / max(distance, 1e-4);
 				float strength = (previous ? Previous.TouchMove[index] : Current.TouchMove[index]).w;
 				float reach = saturate((radius + margin - distance) / margin);
 				float influence = reach * strength;

@@ -3203,6 +3203,7 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE xbyak::xbyak "${DETOURS_LIBRARY}"
     )
     add_d3d_shader_test(grass_d3d_state_test GrassD3DState tests/grass_d3d_state_test.cpp)
+    add_d3d_shader_test(fur_touch_shader_test FurTouchShader tests/fur_touch_shader_test.cpp)
     target_link_libraries(grass_d3d_state_test PRIVATE windowsapp.lib)
     target_compile_definitions(grass_d3d_state_test PRIVATE NOMINMAX)
     add_d3d_shader_test(grass_batch_shader_test GrassBatchShader tests/grass_batch_shader_test.cpp)

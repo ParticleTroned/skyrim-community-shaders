@@ -31,6 +31,8 @@ inline void RunScreenshotScheduleTests()
 	auto fixture = [&](ScreenshotApi& api) -> ScreenshotApi::SequenceRecord& {
 		api.sequences.clear();
 		api.requests.clear();
+		api.requests["parent"].requestId = "parent";
+		api.requests["parent"].kind = "sequence";
 		api.sequenceOrder.clear();
 		api.sequenceOrder.push_back("parent");
 		auto& sequence = api.sequences["parent"];
@@ -84,6 +86,8 @@ inline void RunScreenshotScheduleTests()
 	auto& gapSequence = fixture(gap);
 	gapSequence.frameCount = 10000;
 	gap.sequenceOrder.push_back("ready");
+	gap.requests["ready"].requestId = "ready";
+	gap.requests["ready"].kind = "sequence";
 	auto& ready = gap.sequences["ready"];
 	ready.requestId = "ready";
 	ready.inFlight = 0;

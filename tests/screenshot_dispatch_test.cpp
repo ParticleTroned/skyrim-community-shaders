@@ -8,6 +8,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <deque>
 #include <exception>
 #include <filesystem>
@@ -557,10 +558,13 @@ void TestProductionDestructorDeadline()
 		throw std::runtime_error("completed detached worker retained its isolated state");
 }
 
-int main()
+void RunDispatchTests()
 {
+	std::fputs("Dispatch: worker isolation\n", stderr);
 	TestProductionWorkerIsolation();
+	std::fputs("Dispatch: destructor deadline\n", stderr);
 	TestProductionDestructorDeadline();
+	std::fputs("Dispatch: recording status\n", stderr);
 	{
 		ScreenshotApi api;
 		auto& sequence = api.sequences.at("parent");
@@ -587,6 +591,7 @@ int main()
 				throw std::runtime_error("stopped, cancelled, finalizing or exhausted sequence reported recording");
 		}
 	}
+	std::fputs("Dispatch: preparation failure and trim\n", stderr);
 	for (const bool requestedManifest : { false, true }) {
 		for (const bool missingLease : { false, true }) {
 			ScreenshotApi api;
@@ -629,7 +634,9 @@ int main()
 				throw std::runtime_error("failed preparation could not be safely acknowledged and trimmed");
 		}
 	}
+	std::fputs("Dispatch: scheduler\n", stderr);
 	RunScreenshotScheduleTests();
+	std::fputs("Dispatch: cancellation\n", stderr);
 	for (const bool shutdown : { false, true }) {
 		ScreenshotApi api;
 		api.sequenceDispatchQueue.push_back({ "child" });
@@ -651,5 +658,15 @@ int main()
 		CSX::ScreenshotPolicy::ResolveBusyDispatch(true, popped.requests.at("child").cancelRequested, false) !=
 			CSX::ScreenshotPolicy::BusyDispatchDisposition::Cancel)
 		throw std::runtime_error("parent cancellation did not reach its child after dispatch popped it");
-	return 0;
+}
+
+int main()
+{
+	try {
+		RunDispatchTests();
+		return 0;
+	} catch (const std::exception& error) {
+		std::fprintf(stderr, "Dispatch fixture failed: %s\n", error.what());
+		return 1;
+	}
 }

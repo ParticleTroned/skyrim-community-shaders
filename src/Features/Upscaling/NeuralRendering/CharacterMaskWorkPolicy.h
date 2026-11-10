@@ -30,6 +30,15 @@ namespace NeuralRendering
 		       a_dirty.Area() >= (static_cast<std::uint64_t>(a_width) * a_height + 1u) / 2u;
 	}
 
+	/** One source texel is exact only on the unfiltered pre-upscale raster. */
+	[[nodiscard]] constexpr bool UsePixelAlignedCharacterMask(bool a_outputIsJittered,
+		std::uint32_t a_inputWidth, std::uint32_t a_inputHeight,
+		std::uint32_t a_outputWidth, std::uint32_t a_outputHeight, std::uint32_t a_featherRadius) noexcept
+	{
+		return a_outputIsJittered && a_inputWidth != 0 && a_inputHeight != 0 &&
+		       a_inputWidth == a_outputWidth && a_inputHeight == a_outputHeight && a_featherRadius == 0;
+	}
+
 	/** Before temporal upscaling, selection shares the source raster's jittered grid. */
 	[[nodiscard]] constexpr std::array<float, 2> ResolveCharacterMaskSamplingJitter(
 		bool a_outputIsJittered, float a_capturedX, float a_capturedY) noexcept

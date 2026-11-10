@@ -38,6 +38,8 @@ extract_between("${_vr}" "bool VR::CanOpenMenuFromWorld() const" "bool VR::IsOve
 extract_between("${_vr}" "bool VR::UseFixedWorldMenuPositioning() const" "void VR::SetMenuDistance(" "vr_menu_effective_under_test.h")
 extract_between("${_vr}" "Vector3 VR::GetEffectiveHMDMenuOffset() const" "void VR::SetMenuLayoutUnlocked(" "vr_menu_offsets_under_test.h")
 extract_between("${_vr}" "void VR::SetMenuLayoutUnlocked(" "void VR::UpdateVROverlayPosition()" "vr_menu_layout_lock_under_test.h")
+extract_between("${_vr}" "\tconstexpr double kDesktopWindowStableCheckIntervalSecs" "\tconstexpr int kVRControllerBindingsVersion" "vr_menu_desktop_helpers_under_test.h")
+extract_between("${_vr}" "void VR::UpdateMenuDesktopWindowManagement(" "void VR::SubmitCaptureIndicator(" "vr_menu_desktop_management_under_test.h")
 file(READ "${PROJECT_ROOT}/src/Features/VR/OverlayDrag.cpp" _drag)
 extract_between("${_drag}" "bool IsFiniteVector(" "bool TryApplyOffsetDelta(" "vr_menu_fixed_helpers_under_test.h")
 extract_between("${_drag}" "bool MakeVerticalFacingTransform(" "\n}\n\nbool VR::GetGripPressed(" "vr_menu_fixed_facing_under_test.h")

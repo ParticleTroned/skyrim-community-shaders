@@ -1,6 +1,8 @@
 #ifndef __LOD_LANDSCAPE_DEPENDENCY_HLSL__
 #define __LOD_LANDSCAPE_DEPENDENCY_HLSL__
 
+#include "Common/ReverseZ.hlsli"
+
 namespace LodLandscape
 {
 	float4 AdjustLodLandscapeVertexPositionMS(float4 positionMS, row_major float4x4 world, float4 cellParams)
@@ -16,7 +18,7 @@ namespace LodLandscape
 
 	float4 AdjustLodLandscapeVertexPositionCS(float4 positionCS)
 	{
-		positionCS.z += min(1, 1e-4 * max(0, positionCS.z - 70000)) * 0.5;
+		positionCS = FrameBuffer::OffsetClipDepth(positionCS, min(1, 1e-4 * max(0, FrameBuffer::ToStandardClipZ(positionCS) - 70000)) * 0.5);
 		return positionCS;
 	}
 }

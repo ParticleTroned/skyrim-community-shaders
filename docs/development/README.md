@@ -10,6 +10,8 @@ and detailed test or provenance records stay in ignored local documentation.
 -   [VSCode setup](vscode-setup.md): editor support and optional shader deployment.
 -   [Runtime downloads](runtime-downloads.md): DLL development when runtime payloads are unavailable.
 -   [Build identities](build-provenance.md): manifests, artifact hashes, and verification.
+-   [Hardware-counter builds](nsight-perf-build.md): optional NVIDIA SDK integration for developer profiling.
+-   [DLL loader diagnostic](dll-load-smoke.md): optional repeated loading of a built DLL in a surrogate host.
 -   [Test-build versioning](test-build-versioning.md): reproducible test distributions.
 -   [Release distribution](csx-release-distribution.md): complete AIO packaging and fork publication.
 
@@ -19,6 +21,14 @@ Clone a fork with its submodules, then run from the repository root:
 pwsh ./tools/setup-dev.ps1
 pwsh ./tools/cmake.ps1 --preset ALL
 pwsh ./tools/cmake.ps1 --build --preset CSmain
+```
+
+The AMD Anti-Lag 2 headers are pinned in `extern/AntiLag2-SDK`. Existing
+checkouts must initialize that submodule before configuring, including VR
+builds of the shared source:
+
+```powershell
+pwsh ./tools/git.ps1 submodule update --init extern/AntiLag2-SDK
 ```
 
 Keep local deployment configuration in the ignored `CMakeUserPresets.json`.
@@ -50,6 +60,12 @@ pwsh ./tools/new-worktree.ps1 -Name my-branch
 pwsh ./tools/pre-commit.ps1 run
 pwsh ./tools/validate-local.ps1
 ```
+
+If submodule initialization fails, the worktree helper fetches missing
+top-level dependency pins from their absolute `.gitmodules` URLs and retries
+recursive initialization once. It preserves branch/tag refs and dependency
+pins. Unresolved failures leave the new worktree in place, report an error
+and skip preset copying. `-NoSubmodules` bypasses initialization and recovery.
 
 Validation saves complete evidence locally. Public results state checks,
 outcomes, limitations, and source/build identities without machine-specific

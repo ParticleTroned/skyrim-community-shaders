@@ -88,8 +88,6 @@ namespace NeuralRendering
 		static constexpr std::uint32_t kMaximumRetryLevel = 4;
 		static constexpr std::uint64_t kDemandMarginBytes = 128 * kMiB;
 		static constexpr std::uint64_t kDemandProbeIntervalMs = 120000;
-		// Native allocation bytes are private; this is a reserve, not a measurement.
-		static constexpr std::uint64_t kNativeFeatureReserve = 128 * kMiB;
 		MemoryRecoveryPhase phase = MemoryRecoveryPhase::Ready;
 		MemoryStartupKind startupKind = MemoryStartupKind::Cold;
 		MemoryBudgetSample sample{};
@@ -252,7 +250,7 @@ namespace NeuralRendering
 			ObserveAttempt(nowMs);
 			if (phase == MemoryRecoveryPhase::Waiting)
 				return AdmitRecovery(nowMs);
-			if ((phase == MemoryRecoveryPhase::Rebuilding || phase == MemoryRecoveryPhase::Probation) && !current.valid) {
+			if (!current.valid && (additionalBytes || phase == MemoryRecoveryPhase::Rebuilding || phase == MemoryRecoveryPhase::Probation)) {
 				Suspend(nowMs);
 				return false;
 			}

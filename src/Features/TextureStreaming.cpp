@@ -13,6 +13,7 @@
 #include "TextureStreaming/RestorationPriority.h"
 #include "TextureStreaming/Settings.h"
 #include "TextureStreaming/TextureData.h"
+#include "TextureStreaming/WorkSchedule.h"
 #include "TruePBR/TextureEnumeration.h"
 #include "Utils/Game.h"
 #include "Utils/GpuMemoryBudget.h"
@@ -52,6 +53,33 @@ namespace
 	constexpr std::size_t maximumRecords = 16384, maximumConsumers = 256, maximumFrontier = 16384;
 	constexpr std::size_t maximumReducedTextures = 512;
 	constexpr std::uint64_t uploadBytesPerFrame = 4 * Policy::MiB;
+
+	/** Visits used child slots, rejecting implausible addresses and inventory overflow before retention. */
+	template <class Children, class Visitor>
+	bool VisitInventoryChildren(const Children& children, std::size_t available, Visitor&& visit)
+	{
+		const auto capacity = children.capacity();
+		const auto slots = children.free_idx();
+		const auto count = children.size();
+		const auto* data = children.begin();
+		if (slots > capacity || count > slots || count > available ||
+			(capacity && !Util::IsLikelyValidPointer(data)))
+			return false;
+		std::size_t observed = 0;
+		// NiTArray::end() includes unused capacity; free_idx() includes active slots and holes.
+		for (std::uint32_t index = 0; index < slots; ++index) {
+			auto* child = data[index].get();
+			if (!child)
+				continue;
+			// Address plausibility does not establish lifetime against concurrent native mutation.
+			if (!Util::IsLikelyValidPointer(child) || observed >= count)
+				return false;
+			++observed;
+			visit(child);
+		}
+		return observed == count;
+	}
+
 	std::atomic_bool originHookReady{ false };
 	std::atomic_uint64_t originSerial{ 0 };
 	// DDS-loader ABI and runtime addresses reference dnai92/SPS; see README.md#texture-streaming-reference.
@@ -498,7 +526,7 @@ struct TextureStreaming::State
 	};
 
 	mutable std::mutex mutex;
-	bool requestedEnabled = true, enabled = true, externalStreamingConflict = false;
+	bool requestedEnabled = StreamingTextures::DefaultEnabled, enabled = StreamingTextures::DefaultEnabled, externalStreamingConflict = false;
 	StreamingTextures::Modes modes;
 	StreamingTextures::Options options;
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -511,7 +539,9 @@ struct TextureStreaming::State
 #endif
 	std::uint32_t maximumDrop = 2;
 	StreamingTextures::Categories categories;
-	std::uint64_t epoch = 1, scan = 0, completeScan = 0, nextScanMs = 0, deviceGeneration = 0;
+	std::uint64_t epoch = 1, scan = 0, completeScan = 0, deviceGeneration = 0;
+	StreamingTextures::WorkSchedule workSchedule;
+	std::size_t learningRemaining = 0;
 	std::uint32_t worldStart = 0, lastFrame = UINT32_MAX;
 	bool paused = false, reading = false;
 	std::unordered_map<std::uint64_t, Record> records;
@@ -538,9 +568,10 @@ struct TextureStreaming::State
 	} terrainReduction;
 #endif
 	std::string detail = "Disabled";
+	std::string inventoryFailure;
 	Memory::Snapshot memory;
 
-	void SuspendPreviewReductions(const char* reason);
+	void SuspendInventory(const char* reason);
 	void ObserveTexture(RE::NiSourceTexture* source, RE::BSGeometry* geometry, bool eligible, std::uint32_t requiredCategories);
 	void Defer(Block reason, const Record& record)
 	{
@@ -561,8 +592,16 @@ struct TextureStreaming::State
 	bool previewActive = false;
 	void ScanPreviews();
 	void ProtectPreviewTexture(RE::NiSourceTexture* texture);
-	void Scan();
-	void Prune();
+	using Deadline = std::chrono::steady_clock::time_point;
+	enum class Selection
+	{
+		Reduced,
+		Full,
+		Preview
+	};
+	void InvalidateInventory(std::uint64_t now);
+	void Scan(Deadline deadline);
+	void Prune(Deadline deadline);
 	void AdoptLoads();
 	std::uint32_t Demand(Record& record);
 	std::uint32_t Target(const Record& record, std::uint32_t demanded) const
@@ -570,8 +609,9 @@ struct TextureStreaming::State
 		return ReductionRequested() ? demanded : std::min(demanded, Policy::CappedDrop(record.full.Width, record.full.Height, record.full.MipLevels, options.maximumSize));
 	}
 	bool ReductionRequested() const noexcept;
+	StreamingTextures::InventoryWork InventoryMode() const;
 	void UpdateConfigurationDetail();
-	void Select(bool previewOnly = false);
+	void Select(Deadline deadline, Selection selection);
 	void ServiceTransaction();
 	void CancelTransaction();
 	void Publish(Record& record, Transaction& work);
@@ -588,6 +628,8 @@ struct TextureStreaming::State
 
 void TextureStreaming::State::AdoptLoads()
 {
+	if (!StreamingTextures::LoadHooks::HasPending())
+		return;
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(400);
 	for (unsigned count = 0; count < 64 && std::chrono::steady_clock::now() < deadline; ++count) {
 		auto load = StreamingTextures::LoadHooks::Poll();
@@ -779,18 +821,28 @@ void TextureStreaming::State::ObserveTexture(RE::NiSourceTexture* source, RE::BS
 		record.protectedConsumer = true;
 }
 
-void TextureStreaming::State::SuspendPreviewReductions(const char* reason)
+void TextureStreaming::State::SuspendInventory(const char* reason)
 {
-	const bool report = enabled;
+	if (!inventoryFailure.empty())
+		return;
+	inventoryFailure = reason;
 	enabled = false;
+	++epoch;
+	completeScan = 0;
+	frontier.clear();
+	visited.clear();
+	previewFrontier.clear();
+	previewVisited.clear();
+	previewRoots.clear();
+	for (auto& [id, record] : records)
+		record.consumers.Clear();
 	StreamingTextures::LoadHooks::Configure(false, modes, options, categories, maximumDrop);
 	for (const auto id : reducedRecords)
 		if (auto found = records.find(id); found != records.end()) {
 			found->second.previewProtected = found->second.protectedConsumer = true;
 			StreamingTextures::LoadHooks::Forget(found->second.path);
 		}
-	if (report)
-		Fail(reason);
+	Fail(reason);
 }
 
 void TextureStreaming::State::ProtectPreviewTexture(RE::NiSourceTexture* texture)
@@ -818,9 +870,13 @@ void TextureStreaming::State::ProtectPreviewTexture(RE::NiSourceTexture* texture
 
 void TextureStreaming::State::ScanPreviews()
 {
+	if (!inventoryFailure.empty())
+		return;
 	auto preview = StreamingTextures::Preview::Roots();
-	if (!preview.complete)
-		SuspendPreviewReductions("Preview inventory exceeds the bounded scan; distance streaming suspended");
+	if (!preview.complete) {
+		SuspendInventory("Invalid or oversized preview root inventory; texture streaming suspended until restart");
+		return;
+	}
 	auto roots = std::move(preview.roots);
 	previewActive = !roots.empty() || StreamingTextures::Preview::Active();
 	if (roots != previewRoots) {
@@ -858,21 +914,16 @@ void TextureStreaming::State::ScanPreviews()
 				} visitor(*this);
 				PBRTextures::ForEach(*property, visitor);
 			}
-		if (auto* branch = object->AsNode())
-			for (const auto& child : branch->GetChildren())
-				if (child) {
-					if (previewFrontier.size() >= maximumFrontier) {
-						SuspendPreviewReductions("Preview exceeds the bounded scan; distance streaming suspended");
-						previewFrontier.clear();
-						nextPreviewScanMs = now + 10000;
-						return;
-					}
-					previewFrontier.push_back(child);
-				}
+		if (auto* branch = object->AsNode()) {
+			if (!VisitInventoryChildren(branch->GetChildren(), maximumFrontier - previewFrontier.size(), [&](auto* child) {
+					previewFrontier.emplace_back(child);
+				})) {
+				SuspendInventory("Invalid or oversized preview child inventory; texture streaming suspended until restart");
+				return;
+			}
+		}
 		if (previewVisited.size() >= 20000) {
-			SuspendPreviewReductions("Preview exceeds the bounded scan; distance streaming suspended");
-			previewFrontier.clear();
-			nextPreviewScanMs = now + 10000;
+			SuspendInventory("Preview exceeds the bounded scan; texture streaming suspended until restart");
 			return;
 		}
 	}
@@ -880,19 +931,41 @@ void TextureStreaming::State::ScanPreviews()
 		nextPreviewScanMs = now + 250;
 }
 
-void TextureStreaming::State::Scan()
+void TextureStreaming::State::InvalidateInventory(std::uint64_t now)
 {
+	frontier.clear();
+	visited.clear();
+	completeScan = 0;
+	learningRemaining = 0;
+	selectionCursor = 0;
+	workSchedule.Reset(now);
+	for (auto& [id, record] : records)
+		record.consumers.Clear();
+}
+
+void TextureStreaming::State::Scan(Deadline deadline)
+{
+	if (!inventoryFailure.empty())
+		return;
 	if (frontier.empty()) {
-		if (GetTickCount64() < nextScanMs)
+		const auto now = GetTickCount64();
+		if (learningRemaining || !workSchedule.Due(now))
 			return;
 		auto* root = RE::Main::WorldRootNode();
 		if (!root)
 			return;
+		if (!Util::IsLikelyValidPointer(root)) {
+			SuspendInventory("Invalid world inventory root; texture streaming suspended until restart");
+			return;
+		}
+		if (workSchedule.DeferUnchangedLearning(now, globals::state->frameCount, demand, epoch, originSerial.load(), root,
+				StreamingTextures::LoadHooks::NeedsLearningRefresh()))
+			return;
 		++scan;
+		workSchedule.Begin(now);
 		visited.clear();
 		frontier.push_back({ RE::NiPointer<RE::NiAVObject>(root), false });
 	}
-	const auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(400);
 	unsigned count = 0;
 	while (!frontier.empty() && ++count <= 512 && std::chrono::steady_clock::now() < deadline) {
 		auto node = std::move(frontier.back());
@@ -961,15 +1034,16 @@ void TextureStreaming::State::Scan()
 				PBRTextures::ForEach(*property, visitor);
 			}
 		}
-		if (auto* branch = node.object->AsNode())
-			for (auto& child : branch->GetChildren())
-				if (child)
-					frontier.push_back({ child, node.staticOwner, node.protectedHierarchy });
-		if (frontier.size() > maximumFrontier || visited.size() > 131072) {
-			frontier.clear();
-			completeScan = 0;
-			nextScanMs = GetTickCount64() + 10000;
-			Fail("Scene exceeds the bounded inventory; shrinking is suspended");
+		if (auto* branch = node.object->AsNode()) {
+			if (!VisitInventoryChildren(branch->GetChildren(), maximumFrontier - frontier.size(), [&](auto* child) {
+					frontier.push_back({ RE::NiPointer<RE::NiAVObject>(child), node.staticOwner, node.protectedHierarchy });
+				})) {
+				SuspendInventory("Invalid or oversized world child inventory; texture streaming suspended until restart");
+				return;
+			}
+		}
+		if (visited.size() > 131072) {
+			SuspendInventory("Scene exceeds the bounded inventory; texture streaming suspended until restart");
 			return;
 		}
 	}
@@ -979,7 +1053,11 @@ void TextureStreaming::State::Scan()
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		++terrainInventoryDiagnostics.scansCompleted;
 #endif
-		nextScanMs = GetTickCount64() + 250;
+		workSchedule.Complete(GetTickCount64());
+		if (workSchedule.mode == StreamingTextures::InventoryWork::Learning) {
+			selectionCursor = 0;
+			learningRemaining = records.size();
+		}
 	}
 }
 
@@ -1071,7 +1149,7 @@ bool TextureStreaming::State::ReductionRequested() const noexcept
 	return enabled && (modes.continuous || (modes.onPressure && pressure.conserving));
 }
 
-void TextureStreaming::State::Select(bool previewOnly)
+void TextureStreaming::State::Select(Deadline deadline, Selection selection)
 {
 	if (reading || transaction || !memory.Fresh(GetTickCount64())) {
 		diagnostics.Defer(reading ? Block::ReaderPending : transaction ? (transaction->published ? Block::RetirementPending : Block::UploadPending) :
@@ -1083,7 +1161,7 @@ void TextureStreaming::State::Select(bool previewOnly)
 	StreamingTextures::RestorationPriority selectedPriority;
 	const auto now = GetTickCount64();
 	const auto consider = [&](std::uint64_t id, Record& record) {
-		if (previewOnly && !record.previewProtected)
+		if (selection == Selection::Preview && !record.previewProtected)
 			return;
 		if (record.source->rendererTexture != record.engine || record.engine->texture != record.current) {
 			Defer(Block::SourceChanged, record);
@@ -1163,12 +1241,11 @@ void TextureStreaming::State::Select(bool previewOnly)
 			selectedPriority = priority;
 		}
 	};
-	const auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(400);
 	// Service the bounded reduced set first so refill demand cannot queue behind the full inventory.
 	auto reduced = reducedRecords.find(reducedCursor);
 	if (reduced == reducedRecords.end())
 		reduced = reducedRecords.begin();
-	for (unsigned count = 0; reduced != reducedRecords.end() && count < 64 && std::chrono::steady_clock::now() < deadline; ++count) {
+	for (unsigned count = 0; selection != Selection::Full && reduced != reducedRecords.end() && count < 64 && std::chrono::steady_clock::now() < deadline; ++count) {
 		const auto id = *reduced++;
 		reducedCursor = reduced == reducedRecords.end() ? 0 : *reduced;
 		if (auto entry = records.find(id); entry != records.end())
@@ -1177,12 +1254,19 @@ void TextureStreaming::State::Select(bool previewOnly)
 	auto entry = records.find(selectionCursor);
 	if (entry == records.end())
 		entry = records.begin();
-	for (unsigned count = 0; entry != records.end() && count < 64 && std::chrono::steady_clock::now() < deadline; ++count) {
+	const bool learning = workSchedule.mode == StreamingTextures::InventoryWork::Learning;
+	for (unsigned count = 0; selection == Selection::Full && entry != records.end() && count < 64 &&
+							 (!learning || learningRemaining) && std::chrono::steady_clock::now() < deadline;
+		++count) {
 		auto current = entry++;
+		if (learning)
+			--learningRemaining;
 		selectionCursor = entry == records.end() ? 0 : entry->first;
 		if (!current->second.drop)
 			consider(current->first, current->second);
 	}
+	if (selection == Selection::Full && learning && entry == records.end())
+		learningRemaining = 0;
 
 	if (!selected)
 		return;
@@ -1463,6 +1547,12 @@ void TextureStreaming::State::ServiceTransaction()
 	}
 }
 
+StreamingTextures::InventoryWork TextureStreaming::State::InventoryMode() const
+{
+	return StreamingTextures::ResolveInventoryWork(enabled, ReductionRequested(), options.maximumSize != 0,
+		!reducedRecords.empty(), reading || transaction.has_value() || StreamingTextures::LoadHooks::HasPending(), options.rememberedSizes);
+}
+
 void TextureStreaming::State::Tick()
 {
 	if (!globals::d3d::device || !globals::d3d::context || !globals::game::renderer || !globals::state || !globals::game::shadowState)
@@ -1471,7 +1561,7 @@ void TextureStreaming::State::Tick()
 	if (lastFrame == frame)
 		return;
 	lastFrame = frame;
-	if (!enabled && records.empty() && !reading && !transaction && !StreamingTextures::LoadHooks::HasPending()) {
+	if (!enabled && workSchedule.mode == StreamingTextures::InventoryWork::Idle && records.empty() && !reading && !transaction && !StreamingTextures::LoadHooks::HasPending()) {
 		detail = "Disabled";
 		return;
 	}
@@ -1499,12 +1589,7 @@ void TextureStreaming::State::Tick()
 			reader.ClearCache();
 		}
 		deviceGeneration = memory.generation;
-		frontier.clear();
-		visited.clear();
-		completeScan = 0;
-		for (auto& [id, record] : records) {
-			record.consumers.Clear();
-		}
+		InvalidateInventory(GetTickCount64());
 	}
 	const auto now = GetTickCount64();
 	const auto pressureChange = pressure.Update(now, memory.sampledAtMs, memory.Fresh(now), memory.local.Budget,
@@ -1523,19 +1608,33 @@ void TextureStreaming::State::Tick()
 		if (transition || !previewWork)
 			CancelTransaction();
 		ServiceTransaction();
+		const auto deadline = std::chrono::steady_clock::now() + StreamingTextures::MaintenanceBudget;
 		if (loading && !transition && previewActive)
-			Select(true);
-		Prune();
+			Select(deadline, Selection::Preview);
+		Prune(deadline);
 		detail = loading ? "Waiting for world loading" : "Waiting for render-scale or NR transition";
 		return;
 	}
-	if (enabled && originHookReady)
-		Scan();
-	else if (enabled)
-		diagnostics.Defer(Block::OriginUnavailable);
+	const auto inventoryWork = InventoryMode();
+	if (workSchedule.Update(inventoryWork, now))
+		InvalidateInventory(now);
 	ServiceTransaction();
-	Select();
-	Prune();
+	const bool inventoryDue = !frontier.empty() || workSchedule.Due(now);
+	const bool fullSelection = inventoryWork == StreamingTextures::InventoryWork::Active || learningRemaining;
+	if (enabled && !inventoryDue && !fullSelection && reducedRecords.empty())
+		return;
+	const auto startWork = std::chrono::steady_clock::now();
+	const auto deadline = startWork + StreamingTextures::MaintenanceBudget;
+	if (!reducedRecords.empty())
+		Select(startWork + StreamingTextures::RestorationBudget, Selection::Reduced);
+	if (inventoryDue || fullSelection || !enabled || !reducedRecords.empty())
+		Prune(std::min(deadline, std::chrono::steady_clock::now() + StreamingTextures::PruningBudget));
+	if (enabled && originHookReady && inventoryDue)
+		Scan(std::min(deadline, std::chrono::steady_clock::now() + StreamingTextures::InventoryBudget));
+	else if (enabled && !originHookReady)
+		diagnostics.Defer(Block::OriginUnavailable);
+	if (inventoryWork == StreamingTextures::InventoryWork::Active || learningRemaining)
+		Select(deadline, Selection::Full);
 }
 
 void TextureStreaming::State::UpdatePressureDiagnostics(std::uint64_t now)
@@ -1564,11 +1663,10 @@ void TextureStreaming::State::ReportPressureEpisode(std::string_view reason, std
 		DiagnosticStatus(diagnostics, pressureEpisode.initial).dump());
 }
 
-void TextureStreaming::State::Prune()
+void TextureStreaming::State::Prune(Deadline deadline)
 {
 	if (!enabled && reducedRecords.empty() && !reading && !transaction)
 		reader.ClearCache(true);
-	const auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(200);
 	auto entry = records.find(pruneCursor);
 	if (entry == records.end())
 		entry = records.begin();
@@ -1647,15 +1745,20 @@ void TextureStreaming::CaptureWorldDemand(float mipBias)
 	std::scoped_lock lock(state->mutex);
 	if (!state->enabled || !globals::game::shadowState || !globals::state)
 		return;
-	const auto& plan = globals::features::upscaling.GetRuntimeResolutionPlan();
 	auto& demand = state->demand;
 	demand = {};
+	const auto now = GetTickCount64();
+	const auto work = state->InventoryMode();
+	if (!state->workSchedule.NeedsDemand(work, now, state->learningRemaining,
+			work != StreamingTextures::InventoryWork::Learning || StreamingTextures::LoadHooks::NeedsLearningRefresh()))
+		return;
+	const auto& plan = globals::features::upscaling.GetRuntimeResolutionPlan();
 	if (plan.menuContextActive || plan.loadingMenuActive || globals::state->IsSaveLoadSafeModeActive())
 		return;
 	demand.eyeCount = globals::game::isVR ? 2 : 1;
 	demand.mipBias = mipBias;
 	demand.frame = globals::state->frameCount;
-	demand.sampledAtMs = GetTickCount64();
+	demand.sampledAtMs = now;
 	for (unsigned i = 0; i < demand.eyeCount; ++i) {
 		const auto camera = Util::GetCameraData(i);
 		const auto position = Util::GetEyePosition(i);
@@ -1669,6 +1772,7 @@ void TextureStreaming::CaptureWorldDemand(float mipBias)
 void TextureStreaming::State::UpdateConfigurationDetail()
 {
 	detail = externalStreamingConflict ? streamingConflictWarning :
+	         !inventoryFailure.empty() ? inventoryFailure :
 	         !enabled                  ? "Restoring texture detail as headroom permits" :
 	         modes.continuous          ? "Continuous texture streaming" :
 	         modes.onPressure          ? "Monitoring GPU memory pressure" :
@@ -1684,7 +1788,7 @@ void TextureStreaming::Configure(bool enabled, std::uint32_t maximumDrop, std::o
 	std::scoped_lock lock(state->mutex);
 	const auto nextModes = modes.value_or(state->modes);
 	const bool coverageChanged = categories && state->categories != *categories;
-	const bool active = enabled && !state->externalStreamingConflict;
+	const bool active = enabled && !state->externalStreamingConflict && state->inventoryFailure.empty();
 	if (coverageChanged || state->modes != nextModes || state->enabled != active || state->maximumDrop != maximumDrop || (options && state->options != *options))
 		++state->epoch;
 	if (options && state->options.reserveMiB != options->reserveMiB)
@@ -1693,12 +1797,7 @@ void TextureStreaming::Configure(bool enabled, std::uint32_t maximumDrop, std::o
 		state->options = *options;
 	if (coverageChanged) {
 		state->categories = *categories;
-		state->frontier.clear();
-		state->visited.clear();
-		state->completeScan = 0;
-		state->nextScanMs = 0;
-		for (auto& [id, record] : state->records)
-			record.consumers.Clear();
+		state->InvalidateInventory(GetTickCount64());
 	}
 	state->modes = nextModes;
 	state->requestedEnabled = enabled;
@@ -1718,7 +1817,7 @@ void TextureStreaming::SetDebugForceStreaming(bool enabled)
 	if (state->modes.continuous == enabled)
 		return;
 	state->modes.continuous = enabled;
-	state->enabled = state->requestedEnabled && !state->externalStreamingConflict;
+	state->enabled = state->requestedEnabled && !state->externalStreamingConflict && state->inventoryFailure.empty();
 	StreamingTextures::LoadHooks::Configure(state->enabled, state->modes, state->options, state->categories, state->maximumDrop);
 	++state->epoch;
 	state->UpdateConfigurationDetail();
@@ -1730,7 +1829,7 @@ void TextureStreaming::LoadSettings(nlohmann::json& object)
 		const auto maximum = StreamingTextures::ParseMaximumMipDrop(object.value("MaximumMipDrop", nlohmann::json(2)));
 		const auto modes = object.contains("Modes") ? StreamingTextures::ParseModes(object.at("Modes")) :
 		                                              StreamingTextures::Modes{};
-		Configure(object.value("Enabled", modes.Enabled()), maximum, object.contains("Categories") ? StreamingTextures::ParseCategories(object.at("Categories")) : StreamingTextures::Categories{}, modes,
+		Configure(object.value("Enabled", StreamingTextures::DefaultEnabled), maximum, object.contains("Categories") ? StreamingTextures::ParseCategories(object.at("Categories")) : StreamingTextures::Categories{}, modes,
 			object.contains("Options") ? StreamingTextures::ParseOptions(object.at("Options")) : StreamingTextures::Options{});
 	} catch (const std::exception& error) {
 		logger::warn("[TextureStreaming] Invalid saved settings retained previous configuration: {}", error.what());
@@ -1743,7 +1842,7 @@ void TextureStreaming::SaveSettings(nlohmann::json& object)
 		{ "MaximumMipDrop", state->maximumDrop }, { "Categories", StreamingTextures::SerializeCategories(state->categories) },
 		{ "Options", StreamingTextures::SerializeOptions(state->options) } };
 }
-void TextureStreaming::RestoreDefaultSettings() { Configure(true, 2, StreamingTextures::Categories{}, StreamingTextures::Modes{}, StreamingTextures::Options{}); }
+void TextureStreaming::RestoreDefaultSettings() { Configure(StreamingTextures::DefaultEnabled, 2, StreamingTextures::Categories{}, StreamingTextures::Modes{}, StreamingTextures::Options{}); }
 nlohmann::json TextureStreaming::GetStatus() const
 {
 	std::scoped_lock lock(state->mutex);
@@ -1757,8 +1856,11 @@ nlohmann::json TextureStreaming::GetStatus() const
 		desiredRestores += record.desired < record.drop;
 	}
 	const auto& memory = state->memory;
+	const auto unavailableReason = state->externalStreamingConflict ? streamingConflictWarning :
+	                               !state->inventoryFailure.empty() ? state->inventoryFailure :
+	                                                                  failedLoadedMessage;
 	nlohmann::json result = { { "enabled", state->enabled }, { "requestedEnabled", state->requestedEnabled }, { "maximumMipDrop", state->maximumDrop },
-		{ "externalStreamingConflict", state->externalStreamingConflict }, { "unavailableReason", state->externalStreamingConflict ? streamingConflictWarning : failedLoadedMessage },
+		{ "externalStreamingConflict", state->externalStreamingConflict }, { "unavailableReason", unavailableReason },
 		{ "modes", StreamingTextures::SerializeModes(state->modes) },
 		{ "options", StreamingTextures::SerializeOptions(state->options) }, { "rememberedSizes", StreamingTextures::LoadHooks::Status() },
 		{ "categories", StreamingTextures::SerializeCategories(state->categories) }, { "originHookReady", originHookReady.load() },
@@ -1831,16 +1933,18 @@ void TextureStreaming::DrawSettingsEnabledControl()
 	bool enabled;
 	std::uint32_t maximum;
 	bool conflict;
+	bool inventorySuspended;
 	{
 		std::scoped_lock lock(state->mutex);
 		enabled = state->requestedEnabled;
 		maximum = state->maximumDrop;
 		conflict = state->externalStreamingConflict;
+		inventorySuspended = !state->inventoryFailure.empty();
 	}
-	const auto disabled = Util::DisableGuard(conflict || !originHookReady.load());
+	const auto disabled = Util::DisableGuard(conflict || inventorySuspended || !originHookReady.load());
 	if (Util::Widgets::Checkbox("Enabled", &enabled))
 		Configure(enabled, maximum);
-	Util::AddTooltip("Turns texture streaming on or off while keeping your current tuning.", ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+	Util::AddTooltip("On: reduces distant texture detail under the selected conditions to free graphics memory. Off: restores full detail as textures reload.", ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
 }
 void TextureStreaming::DrawSettings()
 {
@@ -1850,6 +1954,7 @@ void TextureStreaming::DrawSettings()
 	StreamingTextures::Options options;
 	StreamingTextures::Categories categories;
 	std::string detail;
+	std::string inventoryFailure;
 	std::uint64_t reduced, logicalBytesRemoved = 0;
 	{
 		std::scoped_lock lock(state->mutex);
@@ -1860,6 +1965,7 @@ void TextureStreaming::DrawSettings()
 		options = state->options;
 		categories = state->categories;
 		detail = state->detail;
+		inventoryFailure = state->inventoryFailure;
 		reduced = state->reducedRecords.size();
 		for (const auto id : state->reducedRecords)
 			if (auto entry = state->records.find(id); entry != state->records.end()) {
@@ -1867,9 +1973,11 @@ void TextureStreaming::DrawSettings()
 				logicalBytesRemoved += record.bytes[0] - record.bytes[record.drop];
 			}
 	}
-	const bool available = originHookReady.load() && !conflict;
+	const bool available = originHookReady.load() && !conflict && inventoryFailure.empty();
 	if (conflict)
 		Util::Text::WrappedWarning(streamingConflictWarning);
+	else if (!inventoryFailure.empty())
+		Util::Text::WrappedWarning(inventoryFailure.c_str());
 	else if (!available)
 		Util::Text::WrappedWarning("Texture streaming is unavailable because texture source tracking could not start. Restart the game to try again.");
 	const auto settingsAvailabilityGuard = Util::DisableGuard(!available || !enabled);
@@ -1908,18 +2016,18 @@ void TextureStreaming::DrawSettings()
 		Util::AddTooltip("Caps eligible textures even nearby and with enough VRAM. Reduces fine detail. Protected textures stay full size; Unlimited preserves source detail.");
 		Util::Widgets::SliderInt("Maximum mip levels removed", &maximum, 1, Policy::MaximumDrop, "%d", ImGuiSliderFlags_AlwaysClamp);
 		maximum = std::clamp(maximum, 1, static_cast<int>(Policy::MaximumDrop));
-		Util::AddTooltip("Limits distance-based reductions. The optional size cap can remove more mips, including nearby. Texture protections still apply.");
+		Util::AddTooltip("Limits how many steps of texture detail may be removed with distance. Higher values save more memory but look softer. The separate size cap can reduce detail further.");
 		if (modes != previousModes || options != previousOptions || maximum != previousMaximum)
 			Configure(enabled, maximum, std::nullopt, modes, options);
 	}
 	if (page.Is("categories")) {
 		const auto previous = categories;
 		const std::array choices{
-			MenuUI::ToggleChoice{ "Landscape", &categories.landscapeStatics, "Landscape-folder textures used by ordinary static meshes." },
-			MenuUI::ToggleChoice{ "Cutouts", &categories.alphaTestedStatics, "Non-animated alpha-tested static surfaces. Lower detail can soften fine edges." },
-			MenuUI::ToggleChoice{ "Emissive", &categories.emissiveStatics, "Diffuse and normal maps on static emissive surfaces. Glow maps remain protected." },
-			MenuUI::ToggleChoice{ "Terrain", &categories.terrain, "Near-terrain diffuse and normal layers. Shared layers keep nearby detail. Parallax terrain also requires Parallax. LOD, overlays and noise remain excluded." },
-			MenuUI::ToggleChoice{ "Parallax", &categories.parallax, "Experimental diffuse and normal streaming on parallax meshes and terrain. For terrain also enable Terrain. Height maps stay full size; appearance may change." },
+			MenuUI::ToggleChoice{ "Landscape", &categories.landscapeStatics, "Allows reduced texture detail on static objects using landscape textures. Off keeps those objects at full texture detail." },
+			MenuUI::ToggleChoice{ "Cutouts", &categories.alphaTestedStatics, "Allows reduced detail on static cutout surfaces such as fences. Fine edges may soften. Off protects their full detail." },
+			MenuUI::ToggleChoice{ "Emissive", &categories.emissiveStatics, "Allows reduced surface detail on glowing static objects. Their glow textures stay full quality. Off protects all of their textures." },
+			MenuUI::ToggleChoice{ "Terrain", &categories.terrain, "Allows reduced detail on nearby terrain textures when eligible. The nearest use keeps needed detail. Terrain with surface depth also needs Parallax enabled." },
+			MenuUI::ToggleChoice{ "Parallax", &categories.parallax, "Allows reduced texture detail on surfaces with depth effects. Off keeps their full detail. Terrain also needs Terrain enabled. Experimental: the appearance may change." },
 		};
 		for (const auto& choice : choices) {
 			Util::Widgets::Checkbox(choice.label, choice.value);

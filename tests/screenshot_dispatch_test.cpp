@@ -1,21 +1,27 @@
 #include "Features/ScreenshotApiPolicy.h"
 #include "Features/ScreenshotManifestSnapshot.h"
+#include "Features/ScreenshotSequencePolicy.h"
 #include "Features/ScreenshotWorkerThread.h"
+#include "Utils/JsonCleanup.h"
 
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
+#include <exception>
 #include <filesystem>
 #include <iterator>
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace logger
@@ -95,11 +101,17 @@ namespace globals
 	{
 		unsigned frameCount = 0;
 		bool isLoadingMenuOpen = false;
-	};
-	inline State* state = nullptr;
+	} testState;
+	auto* state = &testState;
 	namespace game
 	{
 		inline bool isVR = true;
+		struct UI
+		{
+			bool paused = false;
+			bool GameIsPaused() const { return paused; }
+		} testUI;
+		auto* ui = &testUI;
 	}
 }
 struct ScreenshotFeature
@@ -125,6 +137,7 @@ struct ScreenshotApi
 	struct RequestRecord
 	{
 		std::string requestId;
+		std::string kind = "sequence_frame";
 		std::string state = "accepted";
 		std::string terminalUtc;
 		std::string parentRequestId;
@@ -134,6 +147,8 @@ struct ScreenshotApi
 		unsigned terminalArtifacts = 0;
 		std::chrono::steady_clock::time_point terminalAt{};
 		json effective = json::object();
+		bool sourceAcquired = false;
+		std::exception_ptr finalizationJournalFailure;
 		json error = nullptr;
 		json errors = json::array();
 	};
@@ -142,9 +157,9 @@ struct ScreenshotApi
 		std::string requestId = "parent";
 		std::string activeChildRequestId = "child";
 		bool cancelRequested = false;
+		bool stopRequested = false;
 		bool finalizing = false;
 		bool preparationPending = false;
-		bool stopRequested = false;
 		bool frameManifest = true;
 		unsigned nextOrdinal = 1;
 		unsigned frameCount = 1;
@@ -158,6 +173,13 @@ struct ScreenshotApi
 		std::shared_ptr<const ManifestChildNode> manifestChildren;
 		unsigned inFlight = 1;
 		std::string outcome;
+		CSX::ScreenshotPolicy::SequenceClock clock;
+		std::string scheduleBasis = "game_frames";
+		uint32_t intervalFrames = 1;
+		uint32_t intervalMs = 100;
+		uint32_t startDelayFrames = 0;
+		uint32_t startDelayMs = 0;
+		std::exception_ptr manifestReportingFailure;
 	};
 	struct DispatchEntry
 	{
@@ -223,12 +245,14 @@ struct ScreenshotApi
 		void Trim() {}
 	} service;
 	mutable std::mutex mutex;
-	std::deque<std::string> requestOrder, sequenceOrder;
-	unsigned sequenceCursor = 0, completedArtifacts = 0, failedArtifacts = 0;
+	std::deque<std::string> requestOrder;
+	unsigned completedArtifacts = 0, failedArtifacts = 0;
 	unsigned queuedManifests = 0;
 	bool acceptingRequests = true;
 	std::unordered_map<std::string, RequestRecord> requests;
 	std::unordered_map<std::string, SequenceRecord> sequences;
+	std::deque<std::string> sequenceOrder;
+	std::size_t sequenceCursor = 0;
 	std::deque<DispatchEntry> manualDispatchQueue;
 	std::deque<DispatchEntry> sequenceDispatchQueue;
 
@@ -251,7 +275,7 @@ struct ScreenshotApi
 			preparationIo.Wait();
 		return configured;
 	}
-	bool IsTerminal(std::string_view state) const { return state == "failed" || state == "cancelled" || state == "completed" || state == "stopped"; }
+	bool IsTerminal(std::string_view state) const { return state == "failed" || state == "cancelled" || state == "completed" || state == "stopped" || state == "dropped"; }
 	void DrainWorkerResultsLocked();
 	bool IsSequenceRecording() const;
 	json BuildStatus(const ScreenshotFeature&) const;
@@ -281,12 +305,26 @@ struct ScreenshotApi
 				QueueSequenceManifestLocked(sequence, true);
 		}
 	}
+	void FailSequenceFinalizationLocked(SequenceRecord& sequence, std::exception_ptr) noexcept
+	{
+		sequence.finalizing = true;
+		sequence.directoryLease.reset();
+		requests.at(sequence.requestId).state = "failed";
+	}
+	void FailRequestCompletionLocked(RequestRecord& record, std::exception_ptr) noexcept
+	{
+		record.state = "failed";
+		FinishSequenceChildLocked(record);
+	}
 	void FinishSequenceChildLocked(RequestRecord& child)
 	{
 		if (child.parentRequestId.empty())
 			return;
 		auto& sequence = sequences.at(child.parentRequestId);
 		--sequence.inFlight;
+		sequence.dropped += child.state == "dropped";
+		if (auto active = requests.find(sequence.activeChildRequestId); active != requests.end() && &active->second == &child)
+			sequence.activeChildRequestId.clear();
 		TryFinalizeSequenceLocked(sequence);
 	}
 	void MarkSequenceCancellationLocked(SequenceRecord&);
@@ -297,9 +335,32 @@ struct ScreenshotApi
 	bool DrainForShutdown(std::chrono::milliseconds);
 	bool CanAdmitPreparationLocked() const;
 	unsigned partialManifests = 0;
+	struct DueFrame
+	{
+		std::string parentRequestId;
+		std::string childRequestId;
+		uint32_t ordinal;
+	};
+	std::optional<DueFrame> PrepareDueFrameLocked(uint64_t, std::chrono::steady_clock::time_point);
+	std::vector<std::pair<std::string, std::string>> UpdateSequenceClocksLocked(uint64_t, std::chrono::steady_clock::time_point);
+	DueFrame CreateSequenceFrameLocked(SequenceRecord& sequence, uint64_t, std::chrono::steady_clock::time_point)
+	{
+		const auto ordinal = sequence.nextOrdinal++;
+		const auto id = sequence.requestId + std::to_string(ordinal);
+		requests[id].parentRequestId = sequence.requestId;
+		++sequence.inFlight;
+		sequence.clock.Advance(sequence.intervalFrames, sequence.intervalMs);
+		return { sequence.requestId, id, ordinal };
+	}
+	void FinishSourceLocked(RequestRecord&, std::string_view, std::string_view);
+	bool RemoveQueuedDispatchLocked(std::string_view id)
+	{
+		return std::erase_if(sequenceDispatchQueue, [id](const auto& entry) { return entry.requestId == id; }) != 0;
+	}
 };
 
 #include "screenshot_dispatch_under_test.h"
+#include "screenshot_schedule_test.h"
 
 void AwaitResults(const std::shared_ptr<ScreenshotApi::WorkerState>& state, std::size_t preparation, std::size_t manifest)
 {
@@ -568,6 +629,7 @@ int main()
 				throw std::runtime_error("failed preparation could not be safely acknowledged and trimmed");
 		}
 	}
+	RunScreenshotScheduleTests();
 	for (const bool shutdown : { false, true }) {
 		ScreenshotApi api;
 		api.sequenceDispatchQueue.push_back({ "child" });

@@ -56,9 +56,13 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 namespace
 {
 	constexpr float kVRCullDistanceMin = 0.0f;
-	constexpr float kVRCullDistanceMax = 20480.0f;
+	constexpr float kVRCullDistanceMax = 40960.0f;
 	constexpr int kResolutionModeMin = 0;
 	constexpr int kResolutionModeMax = 2;
+	constexpr int kNumSlicesMin = 1;
+	constexpr int kNumSlicesMax = 10;
+	constexpr int kNumStepsMin = 1;
+	constexpr int kNumStepsMax = 20;
 
 	class ScopedOCUEffectBuffer
 	{
@@ -287,8 +291,15 @@ namespace
 		       a_settings.EnableBlur;
 	}
 
+	void ClampSampleCounts(ScreenSpaceGI::Settings& a_settings)
+	{
+		a_settings.NumSlices = std::clamp<uint>(a_settings.NumSlices, kNumSlicesMin, kNumSlicesMax);
+		a_settings.NumSteps = std::clamp<uint>(a_settings.NumSteps, kNumStepsMin, kNumStepsMax);
+	}
+
 	void ApplyPlatformSettingOverrides(ScreenSpaceGI::Settings& a_settings)
 	{
+		ClampSampleCounts(a_settings);
 		a_settings.ResolutionMode = ClampResolutionMode(a_settings.ResolutionMode);
 		a_settings.ResourceProfile = ClampResourceProfile(a_settings.ResourceProfile);
 		a_settings.VRCullDistance = ClampVRCullDistance(a_settings.VRCullDistance);
@@ -409,12 +420,14 @@ void ScreenSpaceGI::DrawSettings()
 		if (!ShadersOK())
 			Util::Text::Error("Compute shaders failed to compile!");
 	}
-	if (page.Is("coverage") || page.Is("quality") || page.Is("look") || page.Is("indirect") || page.Is("smoothing"))
+	if (page.Is("coverage") || page.Is("quality") || page.Is("look") || page.Is("indirect") || page.Is("smoothing")) {
 		Util::Widgets::Checkbox("Advanced options", &showAdvanced);
+		Util::AddTooltip("Shows extra tuning controls. Hiding them keeps their current values and does not change image quality.");
+	}
 	if (page.Is("coverage") && !isVR) {
 		auto guard = Util::DisableGuard(!settings.Enabled);
 		Util::Widgets::Checkbox("Vanilla SSAO", &settings.EnableVanillaSSAO);
-		Util::AddTooltip("Enable Skyrim's built-in SSAO. Usually disabled with SSGI to avoid double-darkening.");
+		Util::AddTooltip("Adds Skyrim's original soft contact shadows on top of this effect. Usually leave off to avoid making corners and creases too dark.");
 	}
 
 	///////////////////////////////
@@ -471,23 +484,23 @@ void ScreenSpaceGI::DrawSettings()
 				Util::AddTooltip("Adds bounced light to ambient shadows. Turning it off keeps ambient shadows enabled.");
 				controls.Next();
 				bool keepGIResources = settings.ResourceProfile == kResourceProfileFullGI;
-				if (Util::Widgets::Checkbox("Keep GI resources resident", &keepGIResources))
+				if (Util::Widgets::Checkbox("Keep bounced lighting ready", &keepGIResources))
 					settings.ResourceProfile = keepGIResources ? kResourceProfileFullGI : kResourceProfileAOOnly;
-				Util::AddTooltip("Keep GI buffers for runtime switching. Turning this off disables GI and frees buffers after restart.");
+				Util::AddTooltip("Reserves graphics memory so bounced lighting can be switched on later. Off disables bounced lighting. Save and restart to change this memory reservation.");
 				controls.Next();
 				Util::Widgets::Checkbox("AO Interiors Only", &settings.AOInteriorsOnly);
-				Util::AddTooltip("Run ambient shadows only in interiors.");
+				Util::AddTooltip("On: soft shadows in corners and creases appear indoors only. Off: they also appear outdoors.");
 				controls.Next();
 				const auto indirectDisabled = Util::DisableGuard(!settings.EnableGI);
 				Util::Widgets::Checkbox("GI Interiors Only", &settings.ILInteriorsOnly);
-				Util::AddTooltip("Run indirect lighting only in interiors.");
+				Util::AddTooltip("On: bounced light appears indoors only. Off: it also appears outdoors.");
 			}
 
 			if (showAdvanced) {
 				auto hqSpecGuard = Util::DisableGuard(!settings.Enabled || !settings.EnableGI);
 				recompileFlag |= Util::Widgets::Checkbox("(Experimental) HQ Specular IL", &settings.EnableExperimentalSpecularGI);
 				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("An experimental specular GI that is more accurate but requires more samples. Won't be blurred.");
+					ImGui::Text("Uses more accurate reflections of bounced light. Off uses the normal reflection treatment. Experimental: may look grainy unless quality is raised, at extra cost.");
 			}
 
 			settings.ResourceProfile = ClampResourceProfile(settings.ResourceProfile);
@@ -515,16 +528,16 @@ void ScreenSpaceGI::DrawSettings()
 
 			if (showAdvanced) {
 				int numSlices = static_cast<int>(settings.NumSlices);
-				if (Util::Widgets::SliderInt("Slices", &numSlices, 1, 10))
-					settings.NumSlices = static_cast<uint>(std::clamp(numSlices, 1, 10));
+				if (Util::Widgets::SliderInt("Slices", &numSlices, kNumSlicesMin, kNumSlicesMax))
+					settings.NumSlices = static_cast<uint>(std::clamp(numSlices, kNumSlicesMin, kNumSlicesMax));
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::Text(
 						"How many directions do the samples take.\n"
 						"Controls noise.");
 
 				int numSteps = static_cast<int>(settings.NumSteps);
-				if (Util::Widgets::SliderInt("Steps Per Slice", &numSteps, 1, 20))
-					settings.NumSteps = static_cast<uint>(std::clamp(numSteps, 1, 20));
+				if (Util::Widgets::SliderInt("Steps Per Slice", &numSteps, kNumStepsMin, kNumStepsMax))
+					settings.NumSteps = static_cast<uint>(std::clamp(numSteps, kNumStepsMin, kNumStepsMax));
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::Text(
 						"Samples per direction. Controls lighting accuracy and noise at large effect radii.");
@@ -532,7 +545,7 @@ void ScreenSpaceGI::DrawSettings()
 
 			recompileFlag |= Util::Widgets::Checkbox("Adaptive Sampling", &settings.EnableAdaptiveSampling);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text("Reduces AO sample count in far distance and low-variance regions to improve performance.");
+				ImGui::Text("Uses fewer lighting checks in distant or simple areas to save work. Off keeps full sampling everywhere, which can retain more detail.");
 			}
 
 			const int previousResolutionMode = settings.ResolutionMode;
@@ -560,10 +573,12 @@ void ScreenSpaceGI::DrawSettings()
 			auto visualGuard = Util::DisableGuard(!settings.Enabled);
 
 			Util::Widgets::SliderFloat("AO Power", &settings.AOPower, 0.f, 6.f, "%.2f");
+			Util::AddTooltip("Strength of soft shadows around corners and contact points. Higher values darken them.");
 
 			{
 				auto ilGuard = Util::DisableGuard(!settings.EnableGI);
 				Util::Widgets::SliderFloat("IL Source Brightness", &settings.GIStrength, 0.f, 6.f, "%.2f");
+				Util::AddTooltip("Brightness of light bouncing from visible surfaces. Higher values brighten the surrounding scene.");
 			}
 
 			ImGui::Separator();
@@ -571,7 +586,7 @@ void ScreenSpaceGI::DrawSettings()
 			Util::Widgets::SliderFloat("AO radius", &settings.AORadius, 10.f, 1024.0f, "%.1f units");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				std::vector<std::string> tooltipLines = {
-					"A smaller radius produces tighter AO.",
+					"Lower values keep soft shadows closer to corners and contact points.",
 					Util::Units::FormatDistance(settings.AORadius)
 				};
 				Util::DrawMultiLineTooltip(tooltipLines);
@@ -583,7 +598,7 @@ void ScreenSpaceGI::DrawSettings()
 				Util::Widgets::SliderFloat("IL radius", &settings.GIRadius, 10.f, 1024.0f, "%.1f units");
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					std::vector<std::string> tooltipLines = {
-						"A larger radius produces wider IL.",
+						"Higher values let bounced light reach farther across nearby surfaces.",
 						Util::Units::FormatDistance(settings.GIRadius)
 					};
 					Util::DrawMultiLineTooltip(tooltipLines);
@@ -634,7 +649,7 @@ void ScreenSpaceGI::DrawSettings()
 			if (showAdvanced) {
 				Util::Widgets::SliderFloat("IL Distance Compensation", &settings.GIDistanceCompensation, -5.0f, 5.0f, "%.1f");
 				if (auto _tt = Util::HoverTooltipWrapper())
-					ImGui::Text("Brighten/Dimming further radiance samples.");
+					ImGui::Text("Adjusts the contribution from distant bounced light. Higher values brighten it; lower values dim it.");
 
 				ImGui::Separator();
 			}
@@ -654,8 +669,10 @@ void ScreenSpaceGI::DrawSettings()
 				MenuUI::DetailGrid denoisers("denoisers");
 				denoisers.Next();
 				recompileFlag |= Util::Widgets::Checkbox("Temporal Denoiser", &settings.EnableTemporalDenoiser);
+				Util::AddTooltip("Combines lighting across recent frames to reduce grain. Off reacts immediately but looks noisier. On may leave brief trails after movement.");
 				denoisers.Next();
 				Util::Widgets::Checkbox("Blur", &settings.EnableBlur);
+				Util::AddTooltip("Smooths grain in nearby shadows and bounced light. Off keeps sharper but noisier detail.");
 			}
 
 			if (showAdvanced) {
@@ -676,7 +693,7 @@ void ScreenSpaceGI::DrawSettings()
 					Util::PercentageSlider("Movement Disocclusion", &settings.DepthDisocclusion, 0.f, 20.f);
 					if (auto _tt = Util::HoverTooltipWrapper())
 						ImGui::Text(
-							"Reject previous-frame radiance when a pixel moves too far. Lower values reject more strictly.");
+							"Stops old lighting lingering after movement. Lower values clear it more quickly but can reveal more grain.");
 
 					ImGui::Separator();
 				}
@@ -688,7 +705,7 @@ void ScreenSpaceGI::DrawSettings()
 					Util::Widgets::SliderFloat("Geometry Weight", &settings.DistanceNormalisation, 0.f, 5.f, "%.2f");
 					if (auto _tt = Util::HoverTooltipWrapper())
 						ImGui::Text(
-							"Higher value makes the blur more sensitive to differences in geometry.");
+							"Higher values keep smoothing from crossing object edges, preserving sharper boundaries.");
 				}
 			}
 		}
@@ -705,7 +722,7 @@ void ScreenSpaceGI::DrawSettings()
 			BUFFER_VIEWER_NODE(texNoise, debugRescale)
 			BUFFER_VIEWER_NODE(texWorkingDepth, debugRescale)
 			BUFFER_VIEWER_NODE(texPrevGeo, debugRescale)
-			BUFFER_VIEWER_NODE(texRadiance, debugRescale)
+			BUFFER_VIEWER_NODE_TITLE(texRadianceTemp, "Radiance", debugRescale)
 			BUFFER_VIEWER_NODE(texAo[0], debugRescale)
 			BUFFER_VIEWER_NODE(texAo[1], debugRescale)
 			BUFFER_VIEWER_NODE(texIlY[0], debugRescale)
@@ -861,11 +878,11 @@ void ScreenSpaceGI::DrawPerformanceSettings(bool a_advanced)
 	if (a_advanced) {
 		ImGui::SeparatorText("Sampling");
 		int numSlices = static_cast<int>(settings.NumSlices);
-		if (Util::Widgets::SliderInt("Slices", &numSlices, 1, 10))
-			settings.NumSlices = static_cast<uint>(std::clamp(numSlices, 1, 10));
+		if (Util::Widgets::SliderInt("Slices", &numSlices, kNumSlicesMin, kNumSlicesMax))
+			settings.NumSlices = static_cast<uint>(std::clamp(numSlices, kNumSlicesMin, kNumSlicesMax));
 		int numSteps = static_cast<int>(settings.NumSteps);
-		if (Util::Widgets::SliderInt("Steps Per Slice", &numSteps, 1, 20))
-			settings.NumSteps = static_cast<uint>(std::clamp(numSteps, 1, 20));
+		if (Util::Widgets::SliderInt("Steps Per Slice", &numSteps, kNumStepsMin, kNumStepsMax))
+			settings.NumSteps = static_cast<uint>(std::clamp(numSteps, kNumStepsMin, kNumStepsMax));
 	}
 
 	if (IsResourceProfileRestartPending()) {
@@ -916,6 +933,7 @@ void ScreenSpaceGI::RestorePerformanceCostMeasurementState(const json& a_state)
 
 	const bool wasEnabled = settings.Enabled;
 	runtimeToggle.ReplaceSettings(settings, a_state.get<Settings>(), &Settings::Enabled);
+	ClampSampleCounts(settings);
 	settings.ResolutionMode = ClampResolutionMode(settings.ResolutionMode);
 	settings.ResourceProfile = ClampResourceProfile(settings.ResourceProfile);
 	settings.VRCullDistance = ClampVRCullDistance(settings.VRCullDistance);
@@ -1010,6 +1028,7 @@ void ScreenSpaceGI::PostPostLoad()
 
 void ScreenSpaceGI::SetupResources()
 {
+	idleOutputsCleared = false;
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
 
@@ -1713,15 +1732,20 @@ void ScreenSpaceGI::DrawSSGI()
 	};
 
 	auto clearOutputsAndReturn = [&]() {
+		if (idleOutputsCleared)
+			return;
 		FLOAT clr[4] = { 0.f, 0.f, 0.f, 0.f };
 		auto clearOutputIfValid = [&](auto& a_textureArray, uint a_index) {
 			if (a_index < 2 && a_textureArray[a_index] && a_textureArray[a_index]->uav)
 				context->ClearUnorderedAccessViewFloat(a_textureArray[a_index]->uav.get(), clr);
 		};
-		clearOutputIfValid(texAo, outputAoIdx);
-		clearOutputIfValid(texIlY, outputIlIdx);
-		clearOutputIfValid(texIlCoCg, outputIlIdx);
-		clearOutputIfValid(texGiSpecular, outputAoIdx);
+		for (uint i = 0; i < 2; ++i) {
+			clearOutputIfValid(texAo, i);
+			clearOutputIfValid(texIlY, i);
+			clearOutputIfValid(texIlCoCg, i);
+			clearOutputIfValid(texGiSpecular, i);
+		}
+		idleOutputsCleared = true;
 	};
 
 	if (!(settings.Enabled && ssgiOutputNeeded)) {
@@ -1826,6 +1850,7 @@ void ScreenSpaceGI::DrawSSGI()
 		return;
 	}
 
+	idleOutputsCleared = false;
 	CS_GPU_PASS("ScreenSpaceGI::SSGI");
 
 	uint inputAoTexIdx = lastFrameAoTexIdx;

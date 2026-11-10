@@ -1,10 +1,14 @@
+#include "Features/GrassOptimizations/GrassPolicy.h"
 #include "Features/LightLimitFix/ShadowCullingPolicy.h"
 #include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
+#include "Features/Upscaling/NeuralRendering/GuidedReconstructionPolicy.h"
 #include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
+#include "Menu/AdaptiveBalancePresets.h"
 #include "Menu/SettingsActions.h"
 #include "Menu/SettingsPage.h"
 #include "Utils/FeatureProfiling.h"
 #include "Utils/NumericEntry.h"
+#include "Utils/StringUtils.h"
 #include "Utils/UISmoothing.h"
 #include "Utils/VRFrameTiming.h"
 #include <algorithm>
@@ -16,6 +20,7 @@
 #include <filesystem>
 #include <fmt/format.h>
 #include <format>
+#include <fstream>
 #include <functional>
 #include <future>
 #include <imgui_internal.h>
@@ -27,6 +32,7 @@
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 #define NOMINMAX
 #include <windows.h>
 
@@ -119,6 +125,7 @@ namespace globals
 			DEFAULT
 		};
 		bool blocked = false, snapshotFailure = false;
+		bool developerMode = false;
 		bool frameAnnotations = false, useFrameAnnotations = false;
 		void LoadFrameAnnotations(nlohmann::json& advanced)
 		{
@@ -129,6 +136,7 @@ namespace globals
 		void Save() { ++saves; }
 		void Load() { ++loads; }
 		bool IsPersistentMutationBlocked() const { return blocked; }
+		bool IsDeveloperMode() const { return developerMode; }
 		static std::filesystem::path GetConfigPath(ConfigMode) { return "SettingsDefault.json"; }
 		void SaveToJson(nlohmann::json& value, bool)
 		{
@@ -407,7 +415,14 @@ struct Upscaling
 {
 	struct Settings
 	{
+		uint32_t neuralRenderingMode = static_cast<uint32_t>(NeuralRendering::RenderingMode::ReducedResolution);
 		uint32_t neuralRenderingModelResolutionPercent = 100;
+		bool neuralRenderingGuidedReconstruction = true;
+		uint32_t neuralRenderingConfidenceRejectionPercent = 0;
+		NeuralRendering::ReconstructionTuning neuralReconstructionTuning{};
+		unsigned neuralRenderingPeripheralCompressionPercent = 0;
+		unsigned neuralRenderingFaceDetailProtectionPercent = 0;
+		bool neuralRenderingPauseInCombat = false;
 		bool neuralRenderingPressureResolutionEnabled = true;
 		bool neuralCharacterPackedCrops = false;
 		bool neuralCharacterRenderingEnabled = false;
@@ -446,6 +461,7 @@ struct ShadowControlObservation
 	ImVec2 center;
 	bool disabled;
 	float alpha;
+	float minimum = 0, maximum = 0;
 };
 std::map<std::string, ShadowControlObservation> shadowControls;
 void ObserveShadowControl(const char* label)
@@ -460,10 +476,12 @@ bool TrackedShadowCheckbox(const char* label, bool* value)
 	ObserveShadowControl(label);
 	return changed;
 }
-bool TrackedShadowSlider(const char* label, float* value, float minimum, float maximum, const char* format)
+bool TrackedShadowSlider(const char* label, float* value, float minimum, float maximum, const char* format, ImGuiSliderFlags flags = 0)
 {
-	const bool changed = Util::Widgets::SliderFloat(label, value, minimum, maximum, format);
+	const bool changed = Util::Widgets::SliderFloat(label, value, minimum, maximum, format, flags);
 	ObserveShadowControl(label);
+	shadowControls.at(label).minimum = minimum;
+	shadowControls.at(label).maximum = maximum;
 	return changed;
 }
 namespace LightLimitFixDetail::ShadowCulling
@@ -496,6 +514,36 @@ struct LLFShadowsFixture
 #include "settings_llf_shadows_under_test.h"
 	}
 };
+
+struct GrassOptimizations
+{
+	GrassPolicy::Settings settings;
+	mutable std::mutex settingsMutex;
+	std::atomic_uint32_t queueSettings{ 3 };
+	struct Renderer
+	{
+		bool IsRenderingAvailable() const { return true; }
+	} rendererStorage;
+	Renderer* renderer = &rendererStorage;
+	GrassPolicy::Settings GetSettings() const;
+	bool SetSettings(const GrassPolicy::Settings&, std::string&);
+	void DrawControls(bool, std::string_view);
+};
+struct GrassSliderObservation
+{
+	ImVec2 start, finish, number;
+	float minimum, maximum;
+};
+std::map<std::string, GrassSliderObservation> grassSliders;
+bool TrackedGrassSlider(const char* label, float* value, float minimum, float maximum, const char* format, ImGuiSliderFlags flags = 0)
+{
+	const bool changed = Util::Widgets::SliderFloat(label, value, minimum, maximum, format, flags);
+	const auto number = Util::controls.at(globals::features::vr.headset ? "Click to open the number pad." : "Double-click to enter a value.");
+	grassSliders[label] = { { ImGui::GetItemRectMin().x + 2, number.GetCenter().y },
+		{ number.Min.x - ImGui::GetStyle().ItemInnerSpacing.x - 2, number.GetCenter().y }, number.GetCenter(), minimum, maximum };
+	return changed;
+}
+#include "settings_grass_under_test.h"
 
 using uint = unsigned int;
 struct float3
@@ -600,6 +648,44 @@ bool TrackedSelectable(const char* label)
 	return clicked;
 }
 #include "settings_constraint_warning_under_test.h"
+
+std::map<std::string, ImVec4> presetButtonColors;
+ImGuiID presetNameInputId = 0;
+bool TrackedPresetNameInput(const char* label, const char* hint, std::string* name)
+{
+	const bool changed = ImGui::InputTextWithHint(label, hint, name);
+	if (std::strcmp(label, "##PresetName") == 0) {
+		presetNameInputId = ImGui::GetItemID();
+		Util::controls["Preset name input"] = { ImGui::GetItemRectMin(), ImGui::GetItemRectMax() };
+	}
+	return changed;
+}
+bool TrackedPresetButton(const char* label, ImVec2 size)
+{
+	presetButtonColors[label] = ImGui::GetStyleColorVec4(ImGuiCol_Button);
+	const bool clicked = ImGui::Button(label, size);
+	Util::controls[label] = { ImGui::GetItemRectMin(), ImGui::GetItemRectMax() };
+	return clicked;
+}
+#include "settings_adaptive_presets_under_test.h"
+
+namespace Util::PathHelpers
+{
+	std::filesystem::path presetTestRoot;
+	std::filesystem::path GetCommunityShaderPath() { return presetTestRoot; }
+	std::filesystem::path GetOverridesPath() { return presetTestRoot / "Overrides"; }
+}
+namespace PresetFilesTest
+{
+	struct AdaptiveBrightness
+	{
+		static constexpr const char* kDefaultGlobalPresetName = "Default";
+		static constexpr const char* kDefaultLocationOverridePresetName = "Default";
+		static constexpr const char* kDefaultFullPresetName = "Default";
+		static constexpr std::string_view kFeatureShortName = "AdaptiveBrightness";
+	};
+#include "settings_preset_files_under_test.h"
+}
 
 void require(bool condition, const char* reason)
 {
@@ -740,6 +826,246 @@ int main()
 		int width, height;
 		io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
 		io.Fonts->SetTexID(ImTextureID(1));
+
+		for (float zoom : { .5f, 1.0f, 1.5f, 2.0f }) {
+			ImGui::GetStyle().FontScaleMain = zoom;
+			frame([&] {
+				const float base = ImGui::GetFontSize();
+				{
+					Util::Widgets::ControlStyle controls(true);
+					require(std::abs(ImGui::GetFontSize() - base * (14.0f / 12.0f)) < 1.1f,
+						"slider labels apply global zoom exactly once");
+				}
+				require(ImGui::GetFontSize() == base, "slider typography restores font state");
+			});
+		}
+		ImGui::GetStyle().FontScaleMain = 1;
+
+		{
+			namespace Presets = MenuUI::AdaptiveBalancePresets;
+			const auto exportRoot = std::filesystem::current_path() / std::format("preset-folder-test-{}-{}", GetCurrentProcessId(), GetTickCount64());
+			require(std::filesystem::create_directory(exportRoot), "folder browser tests own a fresh directory");
+			const SKSE::stl::scope_exit cleanupExportRoot([&] { std::filesystem::remove_all(exportRoot); });
+			const auto customFolder = exportRoot / std::filesystem::path(u8"Shared_\u00e9_\u6f22##presets");
+			std::filesystem::create_directory(customFolder);
+			const auto regularFile = exportRoot / "not-a-folder.json";
+			std::ofstream(regularFile) << "{}";
+			Presets::State exchange;
+			Presets::ExportFolder exportFolder;
+			const Presets::Palette exportColors{ { .42f, .34f, .12f, 1 }, { .50f, .40f, .16f, 1 }, { .60f, .48f, .20f, 1 }, { .8f, .7f, .4f, 1 } };
+			const Presets::Palette importColors{ { .21f, .17f, .06f, 1 }, { .30f, .24f, .08f, 1 }, { .40f, .32f, .12f, 1 }, { .6f, .5f, .2f, 1 } };
+			const Presets::Targets targets{ "Tamriel", "The Reach", "Markarth" };
+			const std::array<std::string, 2> files{ std::string(96, 'W') + "_AdaptiveBrightness_City.json", "Clear_Nights_AdaptiveBrightness_City.json" };
+			std::string name = "My appearance", feedback;
+			const char* unavailable = nullptr;
+			bool refresh = false;
+			int transfers = 0;
+			float panelWidth = 850, panelHeight = 600, fontSize = 22, presetLine = 0, presetAvailableHeight = 0;
+			ImRect panelBounds;
+			MenuUI::SettingsPage::Select("PresetExchangeTest", "presets");
+			const auto draw = [&] {
+				ImGui::PushFont(ImGui::GetFont(), fontSize);
+				ImGui::BeginChild("PresetHMDPanel", { panelWidth, panelHeight });
+				panelBounds = ImGui::GetCurrentWindow()->Rect();
+				{
+					MenuUI::SettingsPage page("PresetExchangeTest", { { "presets", "Presets", "Exchange appearances" } });
+					if (page.Is("presets")) {
+						const auto colors = GImGui->ColorStack.Size;
+						const auto disabled = GImGui->DisabledStackSize;
+						presetLine = ImGui::GetTextLineHeight();
+						presetAvailableHeight = ImGui::GetContentRegionAvail().y;
+						Presets::DrawSelection(exchange, exportColors, importColors, targets, exportFolder, exportRoot / "Presets");
+						transfers += Presets::DrawTransfer(exchange, exchange.mode == Presets::Mode::Export ? exportColors : importColors,
+							name, files, "Presets/example.json", feedback, unavailable, refresh);
+						require(colors == GImGui->ColorStack.Size && disabled == GImGui->DisabledStackSize,
+							"preset exchange restores button colours and enclosing disabled state");
+					}
+				}
+				ImGui::EndChild();
+				ImGui::PopFont();
+			};
+			for (const ImVec2 panel : { ImVec2{ 850, 600 }, ImVec2{ 700, 500 }, ImVec2{ 620, 440 } }) {
+				panelWidth = panel.x;
+				panelHeight = panel.y;
+				for (float size : { 18.0f, 22.0f, 27.0f }) {
+					fontSize = size;
+					for (const auto mode : { Presets::Mode::Export, Presets::Mode::Import }) {
+						for (int collection = 0; collection < static_cast<int>(Presets::Collection::Count); ++collection) {
+							exchange.collection = static_cast<Presets::Collection>(collection);
+							exchange.mode = mode;
+							frame(draw);
+							frame(draw);
+							const auto viewport = MenuUI::DevBenchViewport::Describe(true);
+							require(viewport["scrollMaxY"].get<float>() == 0, std::format("Preset viewport {}x{} font {} mode {} collection {}: scroll {}, height {}, line {}, available {}", panelWidth, panelHeight, fontSize, static_cast<int>(mode), static_cast<int>(exchange.collection), viewport["scrollMaxY"].get<float>(), viewport["height"].get<float>(), presetLine, presetAvailableHeight).c_str());
+							const auto action = std::format("{} {}", mode == Presets::Mode::Export ? "Export" : "Import", Presets::CollectionName(exchange.collection));
+							const auto button = Util::controls.at(action);
+							require(button.Min.x >= 0 && button.Max.x <= panelWidth && button.Max.y <= panelHeight,
+								"preset action stays inside the visible HMD panel");
+							const auto fullBox = Util::controls.at("##full");
+							const auto baseBox = Util::controls.at("##base");
+							const auto locationsBox = Util::controls.at("##locations");
+							require(fullBox.GetHeight() <= presetLine * 2.5f && baseBox.Min.y - fullBox.Max.y >= presetLine * .6f,
+								"compact preset boxes leave visible space for the parent-child connectors");
+							require(locationsBox.Min.x - baseBox.Max.x >= presetLine * .5f,
+								"sibling preset boxes remain visibly separated");
+						}
+						if (mode == Presets::Mode::Import) {
+							refresh = false;
+							click(Util::controls.at("Choose a matching JSON preset from the Presets folder.").GetCenter(), draw);
+							frame(draw);
+							require(refresh && !GImGui->OpenPopupStack.empty(), "opening the preset picker requests a fresh file inventory");
+							const auto* popup = GImGui->OpenPopupStack.back().Window;
+							require(popup != nullptr, "the file picker has a visible window");
+							require(panelBounds.Contains(popup->Rect()) && popup->ScrollMax.x == 0,
+								std::format("Picker must fit panel {}x{} font {}: panel ({},{})-({},{}), popup ({},{})-({},{}), horizontal scroll {}",
+									panelWidth, panelHeight, fontSize, panelBounds.Min.x, panelBounds.Min.y, panelBounds.Max.x, panelBounds.Max.y,
+									popup->Pos.x, popup->Pos.y, popup->Rect().Max.x, popup->Rect().Max.y, popup->ScrollMax.x)
+									.c_str());
+							click(Util::controls.at(files[0]).GetCenter(), draw);
+							require(name == files[0] && transfers == 0, "choosing a file preserves its full name and never imports automatically");
+						} else {
+							click(Util::controls.at("Choose folder##ExportFolder").GetCenter(), draw);
+							frame(draw);
+							require(!GImGui->OpenPopupStack.empty(), "Choose folder opens an in-menu browser");
+							const auto* popup = GImGui->OpenPopupStack.back().Window;
+							require(popup != nullptr, "the folder browser has a visible window");
+							require(panelBounds.Contains(popup->Rect()) && popup->ScrollMax.x == 0 && popup->ScrollMax.y == 0,
+								std::format("Folder browser {}x{} font {}: panel ({},{})-({},{}), popup ({},{})-({},{}), horizontal scroll {}",
+									panelWidth, panelHeight, fontSize, panelBounds.Min.x, panelBounds.Min.y, panelBounds.Max.x, panelBounds.Max.y,
+									popup->Pos.x, popup->Pos.y, popup->Rect().Max.x, popup->Rect().Max.y, popup->ScrollMax.x)
+									.c_str());
+							click(Util::controls.at("Cancel").GetCenter(), draw);
+							require(exportFolder.directory.empty() && transfers == 0 && !std::filesystem::exists(exportRoot / "Presets"),
+								"opening and cancelling the browser leaves the destination unchanged and creates no files");
+						}
+					}
+				}
+			}
+			panelWidth = 850;
+			panelHeight = 600;
+			fontSize = 22;
+			exchange = {};
+			frame(draw);
+			frame(draw);
+			click(Util::controls.at("Choose folder##ExportFolder").GetCenter(), draw);
+			click(Util::controls.at(Util::PathToUtf8(customFolder)).GetCenter(), draw);
+			require(exportFolder.browsing == std::filesystem::canonical(customFolder) && exportFolder.directory.empty(),
+				"clicking a Unicode subfolder with ImGui marker characters navigates without selecting an export destination");
+			click(Util::controls.at("Parent folder").GetCenter(), draw);
+			exportFolder.input = Util::PathToUtf8(customFolder);
+			click(Util::controls.at("Go").GetCenter(), draw);
+			require(exportFolder.browsing == std::filesystem::canonical(customFolder) && exportFolder.directory.empty(),
+				"browsing a Unicode folder does not select it or export a preset");
+			click(Util::controls.at("Use this folder").GetCenter(), draw);
+			require(exportFolder.directory == std::filesystem::canonical(customFolder) && transfers == 0,
+				"explicit folder selection changes the shared export destination without writing a preset");
+			std::string folderError;
+			for (const auto& invalid : { std::string("relative"), Util::PathToUtf8(exportRoot / "missing"), Util::PathToUtf8(regularFile), std::string(4097, 'x'), std::string("bad\0path", 8) })
+				require(!Presets::SetExportFolder(exportFolder, invalid, folderError) && !folderError.empty() && exportFolder.directory == std::filesystem::canonical(customFolder),
+					"invalid folder input reports an error and preserves the selected destination");
+			click(Util::controls.at("Choose folder##ExportFolder").GetCenter(), draw);
+			exportFolder.input.clear();
+			click(Util::controls.at("Use this folder").GetCenter(), draw);
+			require(exportFolder.directory == std::filesystem::canonical(customFolder) && !exportFolder.error.empty() && !GImGui->OpenPopupStack.empty(),
+				"an empty path cannot silently reset the destination or close the browser");
+			click(Util::controls.at("Default folder").GetCenter(), draw);
+			require(exportFolder.directory.empty() && transfers == 0, "Default folder restores preset routing without writing a file");
+			const auto exportTint = presetButtonColors.at("##full");
+			click(Util::controls.at("Select import mode, then choose the contents and file and use the Import button below.").GetCenter(), draw);
+			require(exchange.mode == Presets::Mode::Import && transfers == 0, "switching to import changes mode without applying a file");
+			const auto importTint = presetButtonColors.at("##full");
+			require(importTint.x < exportTint.x && importTint.y < exportTint.y, "import changes the complete diagram to the darker palette");
+			for (int index = 0; index < static_cast<int>(Presets::Collection::Count); ++index) {
+				const auto collection = static_cast<Presets::Collection>(index);
+				click(Util::controls.at(std::format("##{}", Presets::CollectionId(collection))).GetCenter(), draw);
+				require(exchange.collection == collection && transfers == 0, "collection boxes select contents without performing a transfer");
+				const auto action = std::format("Import {}", Presets::CollectionName(collection));
+				require(Util::controls.contains(action), "the final action names both mode and selected collection");
+			}
+			unavailable = "Apply or cancel the open location edit before exchanging presets.";
+			frame(draw);
+			click(Util::controls.at("Import City").GetCenter(), draw);
+			require(transfers == 0, "unavailable and pending-edit transfers cannot apply a file");
+			unavailable = nullptr;
+			frame(draw);
+			click(Util::controls.at("Import City").GetCenter(), draw);
+			require(transfers == 1, "only the explicit named import button requests a transfer");
+			click(Util::controls.at("Preset name input").GetCenter(), draw);
+			const auto cityInput = presetNameInputId;
+			require(GImGui->ActiveId == cityInput, "preset name editing is active before external navigation");
+			exchange.collection = Presets::Collection::Base;
+			frame(draw);
+			frame(draw);
+			require(presetNameInputId != cityInput && GImGui->ActiveId != cityInput,
+				"external collection selection cannot retain the previous collection's text edit buffer");
+			const auto importInput = presetNameInputId;
+			click(Util::controls.at("Select export mode, then choose the contents and use the Export button below.").GetCenter(), draw);
+			require(exchange.mode == Presets::Mode::Export && transfers == 1, "the export mode selector never writes a file");
+			require(presetNameInputId != importInput, "import and export filename fields have independent edit identities");
+			click(Util::controls.at("Export Base appearance").GetCenter(), draw);
+			require(transfers == 2, "only the named export action requests a file write");
+			feedback = "Status line\nSecond line must stay in the tooltip";
+			frame(draw);
+			const auto feedbackBounds = Util::controls.at(feedback);
+			require(VisibleTextIndices({ { feedbackBounds.Min.x, feedbackBounds.Max.y },
+						{ feedbackBounds.Max.x, feedbackBounds.Max.y + ImGui::GetTextLineHeight() * 2 } }) == 0,
+				"multiline feedback cannot draw below its reserved single row");
+			name.assign(300, 'X');
+			feedback.assign(500, 'Y');
+			panelWidth = 620;
+			panelHeight = 440;
+			fontSize = 27;
+			frame(draw);
+			frame(draw);
+			require(MenuUI::DevBenchViewport::Describe(true)["scrollMaxY"].get<float>() == 0,
+				"long preset names and feedback do not make the HMD view scroll");
+		}
+
+		{
+			using namespace PresetFilesTest;
+			auto& root = Util::PathHelpers::presetTestRoot;
+			root = std::filesystem::current_path() / std::format("preset-picker-test-{}-{}", GetCurrentProcessId(), GetTickCount64());
+			require(std::filesystem::create_directory(root), "preset picker tests own a fresh temporary directory");
+			const SKSE::stl::scope_exit cleanup([&] { std::filesystem::remove_all(root); });
+			const auto directory = GetPresetDirectory();
+			const auto customDirectory = root / "custom-export";
+			std::filesystem::create_directory(customDirectory);
+			for (const auto kind : { PresetKind::Full, PresetKind::Global, PresetKind::Location, PresetKind::Worldspace, PresetKind::Region, PresetKind::City }) {
+				const auto customPath = GetPresetPath("Warm", kind, customDirectory);
+				require(customPath.parent_path() == customDirectory && customPath.filename() == GetPresetPath("Warm", kind).filename(),
+					"every preset export kind uses the chosen folder and preserves its importable filename");
+			}
+			std::filesystem::create_directories(directory);
+			std::filesystem::create_directories(Util::PathHelpers::GetOverridesPath());
+			const auto write = [](const std::filesystem::path& path) { std::ofstream(path) << "{}"; };
+			const auto full = GetPresetFilename("Warm", PresetKind::Full);
+			const auto suffixName = std::string("Warm_AdaptiveBrightness_Global_AdaptiveBrightness_Full.json");
+			write(directory / full);
+			write(directory / suffixName);
+			write(directory / "Warm tone_AdaptiveBrightness_Full.json");
+			write(directory / GetPresetFilename("Warm", PresetKind::City));
+			std::filesystem::create_directory(directory / GetPresetFilename("Folder", PresetKind::Full));
+			std::vector<std::string> files;
+			std::string status;
+			ReadPresetNames(PresetKind::Full, files, status);
+			require(files.size() == 2 && std::ranges::find(files, suffixName) != files.end(), "picker filters directories and incompatible names while keeping full exported filenames");
+			for (const auto& file : files)
+				require(ResolvePresetImportPath(file, PresetKind::Full) == directory / file, "every selectable file resolves to that exact exported file");
+			require(!status.empty(), "incompatible file names are explained");
+			const auto locations = GetPresetFilename("Places", PresetKind::Location);
+			write(directory / locations);
+			write(Util::PathHelpers::GetOverridesPath() / locations);
+			ReadPresetNames(PresetKind::Location, files, status);
+			require(files.size() == 1 && status.empty(), "duplicate live/preset names are removed and a successful refresh clears earlier errors");
+			require(ResolvePresetImportPath(files[0], PresetKind::Location) == directory / locations, "picker and importer give the Presets directory the same priority");
+			std::filesystem::remove_all(directory);
+			write(directory);
+			ReadPresetNames(PresetKind::Location, files, status);
+			require(files.size() == 1 && !status.empty(), "a failed preset directory scan reports its error and still offers readable legacy files");
+			std::filesystem::remove(directory);
+			ReadPresetNames(PresetKind::Location, files, status);
+			require(files.size() == 1 && status.empty(), "missing preset directories are harmless and a recovered scan clears errors");
+		}
 
 		using Viewport = MenuUI::DevBenchViewport;
 		bool allowScroll = true;
@@ -1319,7 +1645,7 @@ int main()
 
 		for (const float font : { 13.0f, 21.0f }) {
 			for (const float panelWidth : { 850.0f, 420.0f }) {
-				float value = .75f, controlY = 0;
+				float value = .75f, controlY = 0, contentWidth = 0;
 				bool overflow = true;
 				ImRect viewportBounds;
 				const auto draw = [&] {
@@ -1330,6 +1656,7 @@ int main()
 						if (page.Is("selection")) {
 							viewportBounds = ImGui::GetCurrentWindow()->InnerClipRect;
 							controlY = ImGui::GetCursorScreenPos().y;
+							contentWidth = ImGui::GetContentRegionAvail().x;
 							Util::Widgets::SliderFloat("Strength", &value, 0, 1);
 							if (overflow)
 								ImGui::Dummy({ 0, 1800 });
@@ -1362,12 +1689,19 @@ int main()
 				require(std::abs(back.Min.x - scrolledBack.Min.x) < .1f && std::abs(back.Min.y - scrolledBack.Min.y) < .1f && std::abs(back.Max.x - scrolledBack.Max.x) < .1f && std::abs(back.Max.y - scrolledBack.Max.y) < .1f, "Overview tab remains fixed at the bottom of a long detail page");
 				const auto scrolled = Viewport::Describe(true);
 				require(scrolled["scrollMaxY"].get<float>() > 0 && std::abs(scrolled["scrollY"].get<float>() - scrolled["scrollMaxY"].get<float>()) < 1, "DevBench still targets the scrolling settings body");
+				const float overflowingWidth = contentWidth;
 				overflow = false;
-				for (int settle = 0; settle < 3; ++settle) frame(draw);
+				for (int settle = 0; settle < 3; ++settle) {
+					frame(draw);
+					require(std::abs(contentWidth - overflowingWidth) < .1f, "hiding conditional settings cannot widen and reflow the content");
+				}
 				const auto shortBack = Util::controls.at("Start here. Choose a card to open its settings.");
 				require(std::abs(back.Min.x - shortBack.Min.x) < .1f && std::abs(back.Min.y - shortBack.Min.y) < .1f, "pinned tabs do not move when controls no longer need a scrollbar");
 				overflow = true;
-				for (int settle = 0; settle < 3; ++settle) frame(draw);
+				for (int settle = 0; settle < 3; ++settle) {
+					frame(draw);
+					require(std::abs(contentWidth - overflowingWidth) < .1f, "showing conditional settings cannot narrow and reflow the content");
+				}
 				require(Viewport::Scroll("PinnedPage", "selection", 1), "dynamic detail content can scroll after it grows again");
 				frame(draw);
 				frame(draw);
@@ -1511,6 +1845,116 @@ int main()
 			require(Util::controls.at("a4").Min.y > Util::controls.at("a0").Min.y, "wide checkbox targets wrap onto another row");
 			click(Util::controls.at("b1").GetCenter(), grids);
 			require(enabled[6] && std::count(enabled.begin(), enabled.end(), true) == 1, "aligned checkbox grid edits only the clicked setting");
+		}
+
+		for (const bool headset : { false, true }) {
+			globals::features::vr.headset = headset;
+			struct GrassCase
+			{
+				const char* section;
+				const char* label;
+				float GrassPolicy::Settings::* member;
+			};
+			const GrassCase cases[]{
+				{ "density", "Full-density grass size", &GrassPolicy::Settings::FullDetailPixelSize },
+				{ "meshes", "Middle LOD size", &GrassPolicy::Settings::MidLODPixelSize },
+				{ "meshes", "Far LOD size", &GrassPolicy::Settings::FarLODPixelSize },
+				{ "meshes", "LOD transition width", &GrassPolicy::Settings::MeshLODBandPixels },
+				{ "meshes", "Smallest far billboard size", &GrassPolicy::Settings::FarLODMinPixelSize },
+				{ "meshes", "Far minimum density", &GrassPolicy::Settings::FarLODMinDensity },
+				{ "meshes", "Far maximum density", &GrassPolicy::Settings::FarLODMaxDensity },
+				{ "meshes", "Billboard coverage bias", &GrassPolicy::Settings::FarLODCoverageBias },
+				{ "distance", "Grass render distance", &GrassPolicy::Settings::RenderDistanceOverride }
+			};
+			for (const auto& test : cases) {
+				GrassOptimizations grass;
+				grass.settings.EnableMeshLOD = true;
+				grass.settings.FarLODOptimization = true;
+				grass.settings.FarLODMinDensity = .013f;
+				// Saved thresholds need not lie on the displayed decimal grid.
+				grass.settings.MinPixelSize = 2.013f;
+				grass.settings.MidLODPixelSize = 8.017f;
+				auto draw = [&] { grass.DrawControls(true, test.section); };
+				frame(draw);
+				frame(draw);
+				for (const bool upper : { false, true }) {
+					const auto control = grassSliders.at(test.label);
+					const float expected = upper ? control.maximum : control.minimum;
+					const auto target = upper ? control.finish : control.start;
+					io.AddMousePosEvent(target.x, target.y);
+					frame(draw);
+					io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+					frame(draw);
+					// Drag past the end even if the numeric readout changes the track width.
+					io.AddMousePosEvent(target.x + (upper ? 100 : -100), target.y);
+					frame(draw);
+					io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+					frame(draw);
+					const auto actual = grass.GetSettings();
+					if (!actual.Valid() || std::abs(actual.*test.member - expected) > .0001f)
+						throw std::runtime_error(std::format("Grass slider '{}' did not retain its {} endpoint (headset={}): expected {}, got {}",
+							test.label, upper ? "upper" : "lower", headset, expected, actual.*test.member));
+					if (test.member == &GrassPolicy::Settings::MidLODPixelSize && !upper)
+						require(actual.FarLODPixelSize == actual.MidLODPixelSize, "lowering middle LOD keeps the far threshold valid at the same minimum");
+				}
+
+				const auto typeNumber = [&](const char* text) {
+					io.AddKeyEvent(ImGuiMod_Ctrl, true);
+					key(ImGuiKey_A, draw);
+					io.AddKeyEvent(ImGuiMod_Ctrl, false);
+					io.AddInputCharactersUTF8(text);
+					frame(draw);
+					key(ImGuiKey_Enter, draw);
+				};
+				const bool distance = test.member == &GrassPolicy::Settings::RenderDistanceOverride;
+				const float entered = distance ? 100.0f : test.member == &GrassPolicy::Settings::FullDetailPixelSize ? 2.029f :
+				                                                                                                       .019f;
+				const auto text = std::format("{}", entered);
+				const auto beforeEntry = grass.GetSettings().*test.member;
+				click(grassSliders.at(test.label).number, draw);
+				if (headset) {
+					frame(draw);
+					require(!GImGui->OpenPopupStack.empty(), "grass number pad opens");
+					click(Util::controls.at("Clear this entry. Your setting is unchanged.").GetCenter(), draw);
+					for (const char digit : text) {
+						if (digit == '.') {
+							click(Util::controls.at("Add a decimal point.").GetCenter(), draw);
+						} else {
+							const auto zero = Util::controls.at("Add this digit.");
+							const int value = digit - '0';
+							const int column = value ? (value - 1) % 3 - 1 : 0;
+							const int row = value ? -1 - (value - 1) / 3 : 0;
+							click({ zero.GetCenter().x + column * (zero.GetWidth() + ImGui::GetStyle().ItemSpacing.x),
+									  zero.GetCenter().y + row * (zero.GetHeight() + ImGui::GetStyle().ItemSpacing.y) },
+								draw);
+						}
+					}
+					require(grass.GetSettings().*test.member == beforeEntry, "grass number pad stages edits until Apply");
+					click(Util::controls.at("Use this value.").GetCenter(), draw);
+					require(GImGui->OpenPopupStack.empty(), "valid grass number pad entry closes");
+				} else {
+					click(grassSliders.at(test.label).number, draw);
+					frame(draw);
+					typeNumber(text.c_str());
+				}
+				require(grass.GetSettings().Valid() && grass.GetSettings().*test.member == entered, "grass numeric entry preserves valid precision beyond the display format");
+
+				if (!headset && !distance) {
+					for (const bool upper : { false, true }) {
+						const auto control = grassSliders.at(test.label);
+						io.AddKeyEvent(ImGuiMod_Ctrl, true);
+						click(control.start, draw);
+						io.AddKeyEvent(ImGuiMod_Ctrl, false);
+						frame(draw);
+						require(GImGui->TempInputId != 0, "grass Ctrl-click opens native numeric input");
+						typeNumber(upper ? "1000000" : "-1");
+						const auto actual = grass.GetSettings();
+						if (!actual.Valid() || actual.*test.member != (upper ? control.maximum : control.minimum))
+							throw std::runtime_error(std::format("Grass slider '{}' numeric input did not clamp to {}: got {}",
+								test.label, upper ? control.maximum : control.minimum, actual.*test.member));
+					}
+				}
+			}
 		}
 
 		{
@@ -1850,9 +2294,15 @@ int main()
 		};
 		for (const auto& test : {
 				 NeuralSliderCase{ "NR Model Resolution", &Upscaling::Settings::neuralRenderingModelResolutionPercent, DrawNeuralModelResolutionSettings, 30, 100 },
+				 NeuralSliderCase{ "Face detail protection", &Upscaling::Settings::neuralRenderingFaceDetailProtectionPercent, DrawNeuralModelResolutionSettings, 0, 100 },
+				 NeuralSliderCase{ "NR confidence rejection", &Upscaling::Settings::neuralRenderingConfidenceRejectionPercent, DrawNeuralModelResolutionSettings, 0, 100 },
 				 NeuralSliderCase{ "NR central area", &Upscaling::Settings::neuralRenderingCentralAreaPercent, DrawNeuralCentralAreaSettings, 25, 100 },
 				 NeuralSliderCase{ "NR central feather", &Upscaling::Settings::neuralRenderingCentralFeatherPixels, DrawNeuralCentralAreaSettings, 0, 256 } }) {
+			const bool previousDeveloperMode = globals::stateStorage.developerMode;
+			globals::stateStorage.developerMode = true;
+			const SKSE::stl::scope_exit restoreDeveloperMode([previousDeveloperMode] { globals::stateStorage.developerMode = previousDeveloperMode; });
 			Upscaling::Settings neuralSettings;
+			neuralSettings.neuralRenderingPeripheralCompressionPercent = 100;
 			neuralSettings.neuralRenderingCentralAreaPercent = 75;
 			const auto initialValue = neuralSettings.*test.member;
 			auto drawNeuralSlider = [&] {
@@ -1943,7 +2393,18 @@ int main()
 					frame(draw);
 					frame(draw);
 					const auto original = shadows.settings.ShadowCulling;
-					for (const char* control : { "Sun shadows", "Torch shadows", "Distant NPC shadows", "Indoor torches", "Object distance", "NPC distance" }) {
+					for (const char* slider : { "Sun shadow distance", "Torch shadow distance", "NPC distance" }) {
+						const auto observed = shadowControls.at(slider);
+						require(observed.minimum == 5 && observed.maximum == 300, "Existing shadow distance sliders retain 5..300 metres");
+					}
+					for (const char* slider : { "Small part cutoff distance", "Small part return distance" }) {
+						const auto observed = shadowControls.at(slider);
+						const float maximum = std::string_view(slider) == "Small part cutoff distance" ? MaximumDistanceMeters : original.actorPartDistanceMeters;
+						require(observed.minimum == 0 && observed.maximum == maximum, "Actor-part sliders expose ordered metre ranges");
+					}
+					const auto radius = shadowControls.at("Small part radius");
+					require(radius.minimum == 0 && radius.maximum == MaximumActorPartRadiusCentimeters, "Actor-part radius uses bounded centimetres with zero/off");
+					for (const char* control : { "Sun shadows", "Torch shadows", "Distant NPC shadows", "Small actor part shadows", "Indoor torches", "Sun shadow distance", "Torch shadow distance", "NPC distance", "Small part radius", "Small part cutoff distance", "Small part return distance" }) {
 						const auto observed = shadowControls.at(control);
 						require(observed.disabled == sps, "SPS alone gates native shadow controls independently of contact shadows");
 						require(!sps || observed.alpha < shadowControls.at("Enable Point Light Contact Shadows").alpha, "SPS greys native shadow controls while leaving contact shadows bright");
@@ -1956,11 +2417,56 @@ int main()
 					if (!sps) {
 						click(shadowControls.at("Sun shadows").center, draw);
 						require(shadows.settings.ShadowCulling.sun != original.sun, "native shadow controls remain editable without SPS");
+						click(shadowControls.at("Small actor part shadows").center, draw);
+						require(shadows.settings.ShadowCulling.smallActorParts != original.smallActorParts, "actor-part culling can be toggled independently");
 					}
 				}
 			}
 			conflict = false;
 			available = true;
+			globals::features::vr.headset = false;
+			Settings tuned;
+			const auto draw = [&] {
+				ImGui::PushItemWidth(300);
+				const SKSE::stl::scope_exit restoreWidth([] { ImGui::PopItemWidth(); });
+				DrawSettings(tuned, true);
+			};
+			const auto enter = [&](const char* label, const char* text) {
+				frame(draw);
+				frame(draw);
+				const auto bounds = Util::controls.at(std::format("Adjust {}. Double-click the value to enter a number.", label));
+				io.AddKeyEvent(ImGuiMod_Ctrl, true);
+				click({ bounds.Min.x + 30, bounds.Min.y + ImGui::GetFrameHeight() * .5f }, draw);
+				io.AddKeyEvent(ImGuiMod_Ctrl, false);
+				frame(draw);
+				require(GImGui->TempInputId != 0, "Actor-part slider supports native numeric entry");
+				io.AddInputCharactersUTF8(text);
+				frame(draw);
+				key(ImGuiKey_Enter, draw);
+				Validate(tuned);
+			};
+			enter("Small part radius", "25");
+			require(tuned.actorPartRadiusCentimeters == 25, "Small part size is independently editable in centimetres");
+			enter("Small part radius", "100");
+			require(tuned.actorPartRadiusCentimeters == MaximumActorPartRadiusCentimeters, "Small part size numeric entry is bounded");
+			enter("Small part radius", "0");
+			require(!tuned.ActorPartsEnabled() && tuned.actorPartRadiusCentimeters == 0, "Zero small part size disables the policy");
+			enter("Small part cutoff distance", "5");
+			require(tuned.actorPartDistanceMeters == 5 && tuned.actorPartReturnDistanceMeters == 5, "Lowering cutoff clamps the return distance");
+			enter("Small part return distance", "2");
+			require(tuned.actorPartReturnDistanceMeters == 2, "Return distance remains independently editable");
+			enter("Small part return distance", "100");
+			require(tuned.actorPartReturnDistanceMeters == 5, "Return input cannot exceed the cutoff");
+			enter("Small part cutoff distance", "0");
+			require(tuned.actorPartDistanceMeters == 0 && tuned.actorPartReturnDistanceMeters == 5, "Zero cutoff disables without losing the return setting");
+			enter("Small part return distance", "100");
+			require(tuned.actorPartReturnDistanceMeters == 100, "Return can be configured while cutoff is disabled");
+			enter("Small part cutoff distance", "5");
+			require(tuned.actorPartReturnDistanceMeters == 5, "Re-enabling a smaller cutoff clamps the return setting");
+			enter("Small part return distance", "0");
+			require(!tuned.ActorPartsEnabled() && tuned.actorPartReturnDistanceMeters == 0, "Zero return slider disables the policy");
+			frame(draw);
+			require(tuned.smallActorParts, "Editing part distances preserves the default-on toggle");
 		}
 		bool checked = true;
 		bool checkboxDisabled = false;
@@ -2001,6 +2507,22 @@ int main()
 			blocked = true;
 			click(Util::controls.at("Performance").GetCenter(), choices);
 			require(selection == 1, "primary choice groups respect the feature's disabled state");
+			const MenuUI::Choice describedChoices[]{
+				{ "fast", "Performance", "", "Uses less rendering work." },
+				{ "fine", "Quality", "", "Preserves finer detail." }
+			};
+			const auto drawDescribedChoices = [&] {
+				Util::DisableGuard guard(blocked);
+				MenuUI::ChoiceSetting("Quality", &selection, describedChoices);
+			};
+			blocked = false;
+			frame(drawDescribedChoices);
+			frame(drawDescribedChoices);
+			click(Util::controls.at("Uses less rendering work.").GetCenter(), drawDescribedChoices);
+			require(selection == 0, "choice-specific help belongs to its selectable card");
+			blocked = true;
+			click(Util::controls.at("Preserves finer detail.").GetCenter(), drawDescribedChoices);
+			require(selection == 0, "described choice groups retain their enclosing disabled state");
 
 			unsigned int lightFlags = 0b1001;
 			ImVec2 flagCentre;
@@ -2681,11 +3203,15 @@ int main()
 					"both skin profiles keep colour controls visible while kernel updates are pending");
 			}
 			unsigned int toggle = 256;
-			const auto drawToggle = [&] { Util::UIntCheckbox("Uint control", toggle); };
+			ImRect toggleBounds;
+			const auto drawToggle = [&] {
+				Util::UIntCheckbox("Uint control", toggle);
+				toggleBounds = { ImGui::GetItemRectMin(), ImGui::GetItemRectMax() };
+			};
 			frame(drawToggle);
 			frame(drawToggle);
 			require(toggle == 1, "integer-backed toggles normalize the full value");
-			click(Util::controls.at("Turn Uint control on or off.").GetCenter(), drawToggle);
+			click(toggleBounds.GetCenter(), drawToggle);
 			require(toggle == 0, "integer-backed toggles can clear values outside the low byte");
 		}
 

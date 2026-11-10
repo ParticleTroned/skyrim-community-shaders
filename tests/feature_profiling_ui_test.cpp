@@ -1,6 +1,7 @@
 #include "Menu/SettingsPage.h"
 #include "Profiler.h"
 #include "Utils/FeatureProfiling.h"
+#include "Utils/GraphSampleGate.h"
 #include "Utils/LegitProfiler.h"
 
 #include <array>
@@ -56,6 +57,12 @@ namespace MenuUI
 }
 namespace globals
 {
+	struct RenderState
+	{
+		uint32_t frameCount = 0;
+	} renderState;
+	auto* state = &renderState;
+
 	struct TimingSource
 	{
 		bool enabled = true;
@@ -77,7 +84,9 @@ namespace globals
 			requestedMode = mode;
 		}
 		auto GetExternalGpuTimings() const { return externalGpuTimings; }
-		const auto& GetResults() const { return results; }
+		const auto& GetResults(bool = true) const { return results; }
+		uint64_t GetHistoryEpoch() const { return 0; }
+		uint64_t GetGpuCaptureEpoch() const { return 0; }
 	} source;
 	auto* profiler = &source;
 }
@@ -125,6 +134,7 @@ namespace
 	std::string Draw(const char* feature, int mode, float panelWidth = 1500, float fontSize = 13, bool selectMode = true)
 	{
 		MenuUI::chosenMode = selectMode ? mode : -1;
+		++globals::renderState.frameCount;
 		ImGui::NewFrame();
 		ImGui::SetNextWindowPos({ 0, 0 });
 		ImGui::SetNextWindowSize({ panelWidth, 1000 });

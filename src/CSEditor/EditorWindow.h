@@ -14,6 +14,7 @@
 #include "WeatherUtils.h"
 #include "Widget.h"
 
+#include <atomic>
 #include <unordered_map>
 
 class EditorWindow
@@ -38,7 +39,7 @@ public:
 	PreviewMode previewMode = PreviewMode::None;
 	const static int maxRecordMarkers = 10;
 
-	// Owned by EditorWindow, created in Draw(), released in destructor
+	// Render-owned viewport copy, released after the editor closes.
 	Texture2D* tempTexture = nullptr;
 
 	/** @brief Screen-space bounds and source dimensions of the current game preview image. */
@@ -131,6 +132,8 @@ public:
 	/** @brief Advances delayed light-reference work independently of editor visibility. */
 	void AdvanceLightEditorDeferredWork();
 	void UpdateOpenState();
+	/** @brief Releases queued preview resources on the render thread before a new ImGui frame. */
+	void ReleasePendingPreviewResources();
 
 	/** @brief Selects and enables the Light Editor after its parent editor has opened. */
 	void ActivateLightEditor();
@@ -290,6 +293,7 @@ private:
 	bool showSettingsWindow = false;
 	std::string settingsSelectedCategory = "Flags";
 	bool wasOpen = false;
+	std::atomic_bool previewResourceReleasePending{ false };
 	ViewportImageRect viewportImageRect;
 
 	// Widget focus tracking for Ctrl+W

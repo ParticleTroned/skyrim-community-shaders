@@ -142,6 +142,46 @@ namespace VRDepthCullingTemporalPolicy
 		return static_cast<float>(std::min(score, static_cast<double>(std::numeric_limits<float>::max())));
 	}
 
+	enum class Relevance
+	{
+		Invalid,
+		Excluded,
+		Direct,
+		Expanded
+	};
+
+	/** Test the ordinary sphere first only when expansion is provably finite. */
+	template <class FrustumTest, class ExpansionObserver>
+	Relevance ClassifySphere(float a_radius, float a_distanceSquared, const MotionEnvelope& a_envelope,
+		FrustumTest&& a_test, ExpansionObserver&& a_expansionPerformed)
+	{
+		if (!std::isfinite(a_radius) || a_radius < 0 ||
+			!std::isfinite(a_distanceSquared) || a_distanceSquared < 0)
+			return Relevance::Invalid;
+
+		// sqrt(FLT_MAX) < 2^64: these bounds keep expansion below 2^67,
+		// far below the remaining half of the float range, including rounding.
+		const bool bounded = a_radius <= std::numeric_limits<float>::max() * 0.5f &&
+		                     a_envelope.translation >= 0 && a_envelope.translation <= 0x1p64 &&
+		                     a_envelope.rotationChord >= 0 && a_envelope.rotationChord <= 2;
+		float expandedRadius = 0;
+		const auto expand = [&] {
+			a_expansionPerformed();
+			float expansion = 0;
+			if (!TryCalculateMotionExpansion(a_distanceSquared, a_envelope, expansion))
+				return false;
+			expandedRadius = a_radius + expansion;
+			return std::isfinite(expandedRadius) && expandedRadius >= a_radius;
+		};
+		if (!bounded && !expand())
+			return Relevance::Invalid;
+		if (a_test(a_radius))
+			return Relevance::Direct;
+		if (bounded && !expand())
+			return Relevance::Invalid;
+		return a_test(expandedRadius) ? Relevance::Expanded : Relevance::Excluded;
+	}
+
 	constexpr bool IsHigherPriority(const Candidate& a_left, const Candidate& a_right)
 	{
 		if (a_left.directlyVisible != a_right.directlyVisible)

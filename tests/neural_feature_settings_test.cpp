@@ -79,16 +79,23 @@ struct IndependentSettings
 {
 	unsigned qualityMode = 0;
 	bool neuralRenderingEnabled = false;
-	float neuralRenderingIntensity = 0.8f;
+	float neuralRenderingIntensity = 1.75f;
 	unsigned neuralCharacterDebugView = 0;
 	unsigned neuralCharacterMaskTestMode = 0;
 	bool neuralCharacterCurrentContextEnabled = false;
 	bool neuralCharacterGpuMaskSupportEnabled = false;
-	unsigned neuralRenderingModelResolutionPercent = 100;
+	unsigned neuralRenderingModelResolutionPercent = 90;
+	bool neuralRenderingGuidedReconstruction = true;
+	unsigned neuralRenderingPeripheralCompressionPercent = 100;
+	unsigned neuralRenderingFaceDetailProtectionPercent = 0;
+	bool neuralRenderingPauseInCombat = true;
 	bool neuralRenderingPressureResolutionEnabled = true;
 	unsigned neuralRenderingCentralAreaPercent = 100, neuralRenderingCentralFeatherPixels = 64;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	NeuralRendering::ReconstructionTuning neuralReconstructionTuning{};
+#endif
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(IndependentSettings, qualityMode, neuralRenderingEnabled, neuralRenderingIntensity, neuralRenderingModelResolutionPercent, neuralRenderingPressureResolutionEnabled, neuralRenderingCentralAreaPercent, neuralRenderingCentralFeatherPixels)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(IndependentSettings, qualityMode, neuralRenderingEnabled, neuralRenderingIntensity, neuralRenderingModelResolutionPercent, neuralRenderingGuidedReconstruction, neuralRenderingPeripheralCompressionPercent, neuralRenderingFaceDetailProtectionPercent, neuralRenderingPauseInCombat, neuralRenderingPressureResolutionEnabled, neuralRenderingCentralAreaPercent, neuralRenderingCentralFeatherPixels)
 
 int main()
 {
@@ -98,6 +105,10 @@ int main()
 			throw std::runtime_error("Neural Rendering feature settings invariant");
 	};
 	const auto defaults = NeuralRendering::RenderingSettings(Json(IndependentSettings{}));
+	require(defaults.at("neuralRenderingGuidedReconstruction") == true);
+	require(defaults.at("neuralRenderingPeripheralCompressionPercent") == 100);
+	require(defaults.at("neuralRenderingPauseInCombat") == true);
+	require(NeuralRendering::PersistentRenderingSettings({ { "neuralRenderingGuidedReconstruction", true } }).at("neuralRenderingGuidedReconstruction") == true);
 	require(defaults.at("neuralRenderingCentralAreaPercent") == 100 && defaults.at("neuralRenderingCentralFeatherPixels") == 64);
 	const auto savedArea = NeuralRendering::PersistentRenderingSettings({ { "neuralRenderingCentralAreaPercent", 50 }, { "neuralRenderingCentralFeatherPixels", 256 } });
 	require(savedArea.at("neuralRenderingCentralAreaPercent") == 50 && savedArea.at("neuralRenderingCentralFeatherPixels") == 256);
@@ -143,6 +154,26 @@ int main()
 		tuningRejected = true;
 	}
 	require(tuningRejected);
+	for (unsigned minor : { 8u, 9u, 10u }) {
+		const auto limits = NeuralRendering::GetTuningLimitsForVersion(310, minor);
+		for (const auto& [field, maximum] : {
+				 std::pair{ "neuralRenderingIntensity", limits.intensity },
+				 std::pair{ "neuralRenderingLocalTone", limits.localToneStrength },
+				 std::pair{ "neuralRenderingLocalStructure", limits.localStructureStrength },
+				 std::pair{ "neuralRenderingSkinStructure", limits.skinStructureStrength } }) {
+			for (const auto& value : { Json(-1.0), Json(0.5), Json(1.5), Json(2.0), Json(2.1),
+					 Json(true), Json("1.5"), Json(nullptr), Json(std::numeric_limits<double>::infinity()),
+					 Json(std::numeric_limits<double>::quiet_NaN()) }) {
+				bool accepted = false;
+				try {
+					NeuralRendering::ValidateRenderingSettingsNormalization({ { field, value } }, { { field, maximum } }, limits);
+					accepted = true;
+				} catch (const std::invalid_argument&) {
+				}
+				require(accepted == (value.is_number() && value.get<double>() >= maximum && value.get<double>() <= 2.0));
+			}
+		}
+	}
 	NeuralRenderingFeature feature;
 	auto& backend = globals::features::upscaling;
 	auto& colour = NeuralRendering::Color::Registry::Instance();
@@ -209,14 +240,22 @@ int main()
 
 	IndependentSettings live{ 2, true, 1.75f, 2, 1 };
 	live.neuralRenderingModelResolutionPercent = 67;
+	live.neuralRenderingGuidedReconstruction = true;
 	live.neuralRenderingPressureResolutionEnabled = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	live.neuralReconstructionTuning = { .shadowTransferPercent = 50, .footprintSubdivisions = 4, .perChannelClamping = false, .depthSampleMotion = false };
+#endif
 	IndependentSettings upscalerEdit{ 4, false, 0.0f, 0, 0 };
 	NeuralRendering::CopyRenderingSettings(upscalerEdit, live);
 	require(upscalerEdit.qualityMode == 4 && upscalerEdit.neuralRenderingEnabled);
 	require(upscalerEdit.neuralRenderingIntensity == live.neuralRenderingIntensity);
 	require(upscalerEdit.neuralRenderingModelResolutionPercent == 67);
-	require(upscalerEdit.neuralRenderingPressureResolutionEnabled);
+	require(upscalerEdit.neuralRenderingPressureResolutionEnabled && upscalerEdit.neuralRenderingGuidedReconstruction);
 	require(upscalerEdit.neuralCharacterDebugView == 2 && upscalerEdit.neuralCharacterMaskTestMode == 1);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	require(upscalerEdit.neuralReconstructionTuning == live.neuralReconstructionTuning);
+	require(!Json(upscalerEdit).contains("neuralReconstructionTuning"));
+#endif
 	require(NeuralRendering::RenderingSettings(Json{ { "qualityMode", 4 } }).empty());
 	require(NeuralRendering::RenderingSettings(Json{ { "qualityMode", 4 }, { "neuralRenderingEnabled", false } }).size() == 1);
 

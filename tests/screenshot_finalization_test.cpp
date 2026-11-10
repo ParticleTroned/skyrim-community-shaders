@@ -776,6 +776,43 @@ struct ScreenshotFinalizationTest
 		std::fprintf(stderr, "CONSTRUCTION lane=%u persistent-nth=%zu PASS\n", lane, allocations);
 	}
 
+	static void ProviderPreparationTerminal(bool cancelled)
+	{
+		Case test;
+		auto& sequence = test.Sequence();
+		sequence.directoryLease.reset();
+		sequence.preparationPending = true;
+		sequence.providerRunId = 7;
+		sequence.nextOrdinal = 1;
+		sequence.cancelRequested = cancelled;
+		test.Record().expectedArtifacts = 2;
+		test.Record().state = cancelled ? "cancel_requested" : "preparing";
+		unsigned notifications = 0;
+		test.Record().referenceCompletion = [&](const json& status) {
+			Require(status.at("done") == true && status.at("ok") == false && status.at("runId") == 7 &&
+						status.at("state") == (cancelled ? "cancelled" : "failed") && status.at("manifestPath").is_null(),
+				"provider notification did not preserve the terminal run identity");
+			++notifications;
+		};
+		test.api->DrainReferenceNotifications();
+		const auto pending = CSX::Screenshot::ProviderBurstStatus(test.api->MakeSequenceReceipt(test.Record(), &sequence));
+		Require(pending.at("active") == true && pending.at("runId") == 7 && notifications == 0,
+			"provider became terminal while destination preparation was pending");
+		test.api->preparationWorkerState->preparationResults.push_back({
+			.requestId = "sequence",
+			.cancelled = cancelled,
+			.error = cancelled ? "" : "provider manifest destination unavailable",
+		});
+		test.api->preparationWorkerState->outstanding = 1;
+		test.api->DrainWorkerResultsLocked();
+		Require(!sequence.preparationPending && sequence.finalizing && test.Record().terminalArtifacts == 2 &&
+					test.api->manifestWorkerState->jobs.empty(),
+			"failed or cancelled provider preparation left work or a manifest outstanding");
+		test.api->DrainReferenceNotifications();
+		test.api->DrainReferenceNotifications();
+		Require(notifications == 1, "provider terminal notification was lost or duplicated");
+	}
+
 	static void RunCase(const char* name, void (*test)())
 	{
 		currentCase = name;
@@ -817,6 +854,8 @@ struct ScreenshotFinalizationTest
 		RunCase("construction-terminal", [] { PersistentConstruction(1); });
 		RunCase("construction-receipt", [] { PersistentConstruction(2); });
 		RunCase("construction-notification", [] { PersistentConstruction(3); });
+		RunCase("provider-preparation-failed", [] { ProviderPreparationTerminal(false); });
+		RunCase("provider-preparation-cancelled", [] { ProviderPreparationTerminal(true); });
 		CSX::Api::ServiceFoundation::SetEventAllocationTestHook(nullptr);
 	}
 };

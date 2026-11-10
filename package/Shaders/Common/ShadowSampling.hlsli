@@ -72,7 +72,7 @@ namespace ShadowSampling
 
 	float GetShadowDepth(float3 positionWS, uint eyeIndex)
 	{
-		return SharedData::GetScreenDepth(FrameBuffer::GetShadowDepth(positionWS, eyeIndex));
+		return FrameBuffer::WorldToView(positionWS, true, eyeIndex).z;
 	}
 
 	float GetWorldShadow(float3 positionWS, float3 offset, uint eyeIndex);
@@ -300,7 +300,7 @@ namespace ShadowSampling
 
 	float3 GetRawAmbientLighting(float3 normal)
 	{
-		return max(0, SharedData::GetAmbient(normal));
+		return Color::Ambient(max(0, SharedData::GetAmbient(normal)));
 	}
 
 	float3 GetAmbientLighting(float3 normal)

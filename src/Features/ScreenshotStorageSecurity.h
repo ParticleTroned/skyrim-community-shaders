@@ -64,7 +64,7 @@ namespace CSX::ScreenshotStorage
 	};
 
 	/**
-	 * Owns an exclusively-created sequence directory and prevents its path from
+	 * Holds a capture output directory and prevents its path from
 	 * being renamed or replaced until all frame and manifest writes finish.
 	 */
 	class DirectoryLease final
@@ -75,6 +75,10 @@ namespace CSX::ScreenshotStorage
 			const std::filesystem::path& a_destination,
 			std::string_view a_requestId,
 			const std::filesystem::path& a_approvedRoot = {});
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		/** Hold a host-selected directory without following a reparse point at its leaf. */
+		static std::shared_ptr<DirectoryLease> OpenOutputDirectory(const std::filesystem::path& a_directory);
+#endif
 
 		~DirectoryLease();
 

@@ -1,4 +1,44 @@
+add_controller_test(neural_combat_pause_test NeuralCombatPause tests/neural_combat_pause_test.cpp)
+set(_neural_combat_pause_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/neural-combat-pause")
+add_custom_command(
+    OUTPUT "${_neural_combat_pause_dir}/neural_combat_pause_under_test.h"
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_neural_combat_pause_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_neural_combat_pause.cmake"
+    DEPENDS src/Features/Upscaling.cpp tests/extract_neural_combat_pause.cmake
+        tests/extract_source_region.cmake
+    VERBATIM)
+target_sources(neural_combat_pause_test PRIVATE "${_neural_combat_pause_dir}/neural_combat_pause_under_test.h")
+target_include_directories(neural_combat_pause_test PRIVATE "${_neural_combat_pause_dir}")
+
 add_controller_test(nr_model_resolution_policy_test NRModelResolutionPolicy tests/nr_model_resolution_policy_test.cpp)
+add_controller_test(neural_face_detail_test NeuralFaceDetail tests/neural_face_detail_test.cpp)
+set(_face_detail_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/neural-face-detail")
+set(_face_detail_headers)
+foreach(_part IN ITEMS camera observation state bound units_constants units)
+    list(APPEND _face_detail_headers "${_face_detail_dir}/face_detail_${_part}_under_test.h")
+endforeach()
+add_custom_command(
+    OUTPUT ${_face_detail_headers}
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_face_detail_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_neural_face_detail.cmake"
+    DEPENDS src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp
+        src/Features/Upscaling/NeuralRendering/CharacterRendering.h src/Utils/Game.h
+        tests/extract_neural_face_detail.cmake tests/extract_source_region.cmake
+    VERBATIM)
+target_sources(neural_face_detail_test PRIVATE ${_face_detail_headers})
+target_include_directories(neural_face_detail_test PRIVATE "${_face_detail_dir}")
+add_controller_test(nr_peripheral_compression_policy_test NRPeripheralCompressionPolicy tests/nr_peripheral_compression_policy_test.cpp)
+add_controller_test(nr_peripheral_compression_policy_bridge_test NRPeripheralCompressionPolicyBridge tests/nr_peripheral_compression_policy_test.cpp)
+target_compile_definitions(nr_peripheral_compression_policy_bridge_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
+target_link_libraries(nr_peripheral_compression_policy_bridge_test PRIVATE nlohmann_json::nlohmann_json)
+foreach(_bridge IN ITEMS on off)
+    add_controller_test(nr_guided_reconstruction_${_bridge}_test NRGuidedReconstruction_${_bridge}
+        tests/nr_guided_reconstruction_policy_test.cpp)
+    target_link_libraries(nr_guided_reconstruction_${_bridge}_test PRIVATE nlohmann_json::nlohmann_json)
+endforeach()
+target_compile_definitions(nr_guided_reconstruction_on_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
 add_controller_test(nr_packed_crop_policy_test NRPackedCropPolicy tests/nr_packed_crop_policy_test.cpp)
 add_controller_test(nr_packed_crop_policy_production_test NRPackedCropPolicyProduction tests/nr_packed_crop_policy_test.cpp)
 target_compile_definitions(nr_packed_crop_policy_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
@@ -24,6 +64,9 @@ foreach(_target _test IN ZIP_LISTS _nr_model_targets _nr_model_tests)
     target_include_directories(${_target} PRIVATE "${_nr_accounting_directory}")
 endforeach()
 target_compile_definitions(nr_model_resolution_shader_bridge_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
+add_test(NAME NRReconstructionBridgeGate COMMAND "${Python3_EXECUTABLE}"
+    "${PROJECT_SOURCE_DIR}/tests/nr_reconstruction_bridge_gate_test.py" --compiler "${CMAKE_CXX_COMPILER}")
+set_tests_properties(NRReconstructionBridgeGate PROPERTIES LABELS "ControllerTests" TIMEOUT 30)
 set_tests_properties(${_nr_model_tests} PROPERTIES TIMEOUT 120)
 set(_neural_failure_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_failure_diagnostics")
 set(_neural_failure_headers
@@ -32,6 +75,8 @@ set(_neural_failure_headers
     "${_neural_failure_dir}/neural_failure_resource_key_under_test.h"
     "${_neural_failure_dir}/neural_failure_stage_under_test.h"
     "${_neural_failure_dir}/neural_failure_capture_under_test.h"
+    "${_neural_failure_dir}/neural_memory_lifecycle_under_test.h"
+    "${_neural_failure_dir}/neural_reconstruction_finish_under_test.h"
     "${_neural_failure_dir}/neural_stall_service_under_test.h")
 add_custom_command(
     OUTPUT ${_neural_failure_headers}
@@ -54,6 +99,10 @@ target_compile_definitions(neural_failure_diagnostics_on_test PRIVATE DEVBENCH_B
 
 add_controller_test(neural_stall_recovery_policy_test NeuralStallRecoveryPolicy tests/neural_stall_recovery_policy_test.cpp)
 add_controller_test(neural_memory_recovery_test NeuralMemoryRecovery tests/neural_memory_recovery_test.cpp)
+add_controller_test(neural_native_memory_test NeuralNativeMemory tests/neural_native_memory_test.cpp)
+add_test(NAME NeuralNativeStartupContract COMMAND "${Python3_EXECUTABLE}"
+    "${PROJECT_SOURCE_DIR}/tests/neural_native_startup_contract_test.py")
+set_tests_properties(NeuralNativeStartupContract PROPERTIES LABELS "ControllerTests" TIMEOUT 30)
 set(_neural_memory_publication_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_memory_publication")
 add_custom_command(
     OUTPUT "${_neural_memory_publication_dir}/neural_memory_publication_under_test.h"
@@ -353,7 +402,6 @@ set(_neural_selection_headers
     "${_neural_selection_test_dir}/neural_source_capture_under_test.h"
     "${_neural_selection_test_dir}/neural_source_admission_under_test.h"
     "${_neural_selection_test_dir}/neural_source_support_under_test.h"
-    "${_neural_selection_test_dir}/neural_authored_mode_under_test.h"
     "${_neural_selection_test_dir}/neural_empty_preflight_under_test.h"
     "${_neural_selection_test_dir}/neural_full_compute_subrect_under_test.h"
     "${_neural_selection_test_dir}/neural_prepared_slot_under_test.h"
@@ -361,6 +409,9 @@ set(_neural_selection_headers
     "${_neural_selection_test_dir}/neural_disposition_under_test.h"
     "${_neural_selection_test_dir}/neural_eye_mask_under_test.h"
     "${_neural_selection_test_dir}/neural_empty_dispatch_under_test.h"
+    "${_neural_selection_test_dir}/neural_stereo_output_targets_under_test.h"
+    "${_neural_selection_test_dir}/neural_finalized_dispatch_under_test.h"
+    "${_neural_selection_test_dir}/neural_final_ldr_plan_under_test.h"
     "${_neural_selection_test_dir}/neural_preparation_evidence_under_test.h"
     "${_neural_selection_test_dir}/neural_prepared_result_under_test.h"
     "${_neural_selection_test_dir}/neural_prepared_selection_under_test.h")
@@ -478,17 +529,72 @@ target_include_directories(deferred_mask_test PRIVATE "${_deferred_mask_test_dir
 
 set(_neural_native_creation_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/neural-native-creation")
 set(_neural_native_headers "${_neural_native_creation_dir}/neural_native_key_under_test.h"
-    "${_neural_native_creation_dir}/neural_native_creation_under_test.h")
+    "${_neural_native_creation_dir}/neural_runtime_minimum_under_test.h"
+    "${_neural_native_creation_dir}/neural_runtime_probe_under_test.h"
+    "${_neural_native_creation_dir}/neural_provider_snapshot_under_test.h"
+    "${_neural_native_creation_dir}/neural_native_creation_under_test.h"
+    "${_neural_native_creation_dir}/neural_installed_metadata_under_test.h"
+    "${_neural_native_creation_dir}/neural_runtime_tuning_under_test.h"
+    "${_neural_native_creation_dir}/neural_runtime_logging_under_test.h"
+    "${_neural_native_creation_dir}/neural_runtime_detail_under_test.h"
+    "${_neural_native_creation_dir}/neural_runtime_reset_under_test.h"
+    "${_neural_native_creation_dir}/neural_evaluation_success_detail_under_test.h"
+    "${_neural_native_creation_dir}/neural_sdk_parameters_under_test.h"
+    "${_neural_native_creation_dir}/neural_ngx_initialize_under_test.h"
+    "${_neural_native_creation_dir}/neural_ngx_shutdown_under_test.h"
+    "${_neural_native_creation_dir}/neural_ngx_statistics_under_test.h")
 add_custom_command(OUTPUT ${_neural_native_headers}
     COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
-        "-DOUTPUT_DIRECTORY=${_neural_native_creation_dir}" -P
+        "-DOUTPUT_DIRECTORY=${_neural_native_creation_dir}"
+        "-DNR_SDK_INCLUDE_DIR=${NEURAL_RENDERING_SDK_INCLUDE_DIR}" -P
         "${PROJECT_SOURCE_DIR}/tests/extract_neural_native_creation.cmake"
     DEPENDS src/Features/Upscaling/NeuralRendering/Runtime.cpp
+        src/Features/Upscaling/NeuralRendering/Runtime.h
+        src/Features/Upscaling/NeuralRendering/Renderer.cpp
+        "${NEURAL_RENDERING_SDK_INCLUDE_DIR}/nvsdk_ngx_defs_dlssnr.h"
+        extern/Streamline-DX12/external/ngx-sdk/include/nvsdk_ngx_defs.h
         tests/extract_neural_native_creation.cmake tests/extract_source_region.cmake
     VERBATIM)
 add_controller_test(neural_native_creation_test NeuralNativeCreation tests/neural_native_creation_test.cpp)
 target_sources(neural_native_creation_test PRIVATE ${_neural_native_headers})
 target_include_directories(neural_native_creation_test PRIVATE "${_neural_native_creation_dir}")
+add_controller_test(neural_runtime_admission_test NeuralRuntimeAdmission tests/neural_runtime_admission_test.cpp)
+target_sources(neural_runtime_admission_test PRIVATE ${_neural_native_headers})
+target_include_directories(neural_runtime_admission_test PRIVATE
+    "${_neural_native_creation_dir}" "${NEURAL_RENDERING_REFERENCE_INCLUDE_DIR}")
+add_controller_test(neural_ngx_initialization_test NeuralNgxInitialization tests/neural_ngx_initialization_test.cpp)
+target_sources(neural_ngx_initialization_test PRIVATE ${_neural_native_headers})
+target_include_directories(neural_ngx_initialization_test PRIVATE "${_neural_native_creation_dir}")
+foreach(_bridge IN ITEMS on off)
+    add_controller_test(neural_provider_snapshot_${_bridge}_test NeuralProviderSnapshot_${_bridge}
+        tests/neural_provider_snapshot_test.cpp)
+    target_sources(neural_provider_snapshot_${_bridge}_test PRIVATE ${_neural_native_headers})
+    target_include_directories(neural_provider_snapshot_${_bridge}_test PRIVATE "${_neural_native_creation_dir}")
+endforeach()
+target_compile_definitions(neural_provider_snapshot_on_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
+add_library(neural_direct_provider_fixture SHARED tests/neural_direct_provider_fixture.cpp)
+target_compile_definitions(neural_direct_provider_fixture PRIVATE NGX_SNIPPET_BUILD NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(neural_direct_provider_fixture PRIVATE NgxSdk)
+add_library(neural_direct_provider_no_parameters_fixture SHARED tests/neural_direct_provider_fixture.cpp)
+target_compile_definitions(neural_direct_provider_no_parameters_fixture PRIVATE NGX_SNIPPET_BUILD NOMINMAX WIN32_LEAN_AND_MEAN FIXTURE_WITHOUT_PARAMETERS)
+target_link_libraries(neural_direct_provider_no_parameters_fixture PRIVATE NgxSdk)
+add_executable(neural_direct_provider_test EXCLUDE_FROM_ALL tests/neural_direct_provider_test.cpp)
+target_compile_features(neural_direct_provider_test PRIVATE cxx_std_23)
+target_include_directories(neural_direct_provider_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_sources(neural_direct_provider_test PRIVATE tests/neural_direct_provider_contract_test.cpp
+    src/Features/Upscaling/NeuralRendering/DirectProvider.cpp src/Utils/PathValidation.cpp)
+target_compile_definitions(neural_direct_provider_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(neural_direct_provider_test PRIVATE NgxSdk wintrust version)
+add_dependencies(neural_direct_provider_test neural_direct_provider_fixture neural_direct_provider_no_parameters_fixture)
+add_test(NAME NeuralDirectProviderLifecycle COMMAND neural_direct_provider_test "$<TARGET_FILE:neural_direct_provider_fixture>" "$<TARGET_FILE:neural_direct_provider_no_parameters_fixture>")
+set_tests_properties(NeuralDirectProviderLifecycle PROPERTIES LABELS "ControllerTests")
+add_controller_test(crypto_hash_file_test CryptoHashFile tests/crypto_hash_file_test.cpp)
+target_sources(crypto_hash_file_test PRIVATE src/Utils/CryptoHash.cpp)
+target_compile_definitions(crypto_hash_file_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(crypto_hash_file_test PRIVATE bcrypt)
+add_controller_test(neural_ngx_statistics_test NeuralNgxStatistics tests/neural_ngx_statistics_test.cpp)
+target_sources(neural_ngx_statistics_test PRIVATE ${_neural_native_headers})
+target_include_directories(neural_ngx_statistics_test PRIVATE "${_neural_native_creation_dir}")
 
 add_test(NAME NeuralCachePrewarmWorkflow COMMAND "${Python3_EXECUTABLE}"
     "${PROJECT_SOURCE_DIR}/tests/neural_cache_prewarm_workflow_test.py")

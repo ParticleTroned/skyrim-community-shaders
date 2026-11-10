@@ -1,6 +1,7 @@
 #include "Common/Color.hlsli"
 #include "Common/DummyVSTexCoord.hlsl"
 #include "Common/FrameBuffer.hlsli"
+#include "Common/ReverseZ.hlsli"
 #include "Common/SharedData.hlsli"
 
 typedef VS_OUTPUT PS_INPUT;
@@ -169,7 +170,8 @@ PS_OUTPUT main(PS_INPUT input)
 	composedColor.xyz = Color::IrradianceToGamma(composedColor.xyz);
 #	endif
 
-	float depth = depthTex.SampleLevel(depthSampler, screenPosition, 0).x;
+	float nativeDepth = depthTex.SampleLevel(depthSampler, screenPosition, 0).x;
+	float depth = FrameBuffer::ToStandardDepth(nativeDepth);
 
 #	if defined(APPLY_FOG)
 	float fogDistanceFactor = (2 * CameraNearFar.x * CameraNearFar.y) / ((CameraNearFar.y + CameraNearFar.x) - (2 * (1.01 * depth - 0.01) - 1) * (CameraNearFar.y - CameraNearFar.x));
@@ -191,7 +193,7 @@ PS_OUTPUT main(PS_INPUT input)
 	if (EyePosition.w != 0 && snowMask != 0 && 1e-5 < SparklesParameters2.z) {
 		float shadowMask = shadowMaskTex.SampleLevel(shadowMaskSampler, screenPosition, 0).x;
 
-		float4 vsPosition = float4(2 * input.TexCoord.x - 1, 1 - 2 * input.TexCoord.y, depth, 1);
+		float4 vsPosition = float4(2 * input.TexCoord.x - 1, 1 - 2 * input.TexCoord.y, nativeDepth, 1);
 
 		float4 csPosition = mul(FrameBuffer::CameraViewProjInverse[0], vsPosition);
 		csPosition.xyz /= csPosition.w;

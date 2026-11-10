@@ -17,6 +17,7 @@
 #include "GpuPass.h"
 #include "Profiler.h"
 #include "Utils/D3D.h"
+#include "Utils/Finite.h"
 #include "Utils/Game.h"
 #include "Utils/GeometryBounds.h"
 #include "Utils/PassTimingCapture.h"
@@ -107,14 +108,6 @@ namespace NeuralRendering
 			VisibleArmorPixels,
 			VisibleWeaponsPixels,
 		};
-
-		bool IsSupportedDepthViewFormat(DXGI_FORMAT a_format) noexcept
-		{
-			return a_format == DXGI_FORMAT_R24_UNORM_X8_TYPELESS ||
-			       a_format == DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS ||
-			       a_format == DXGI_FORMAT_R32_FLOAT ||
-			       a_format == DXGI_FORMAT_R16_UNORM;
-		}
 
 		void Increment(std::uint64_t& a_value) noexcept
 		{
@@ -468,6 +461,7 @@ namespace NeuralRendering
 			float captureJitterX = 0.0f;
 			float captureJitterY = 0.0f;
 			bool outputIsJittered = false;
+			bool fuseSceneSelection = false;
 			std::uint64_t sourceCaptureSerial = 0;
 
 			bool operator==(const PrepareKey&) const = default;
@@ -477,6 +471,7 @@ namespace NeuralRendering
 		{
 			std::shared_ptr<CharacterMaskSupportCapture> supportEvidence;
 			ComPtr<ID3D11Texture2D> mask;
+			std::optional<SceneCategorySelection> sceneCategories;
 			ComPtr<ID3D11ShaderResourceView> maskSrv;
 			ComPtr<ID3D11UnorderedAccessView> maskUav;
 			ComPtr<ID3D11Texture2D> dirtyTiles;
@@ -530,6 +525,8 @@ namespace NeuralRendering
 			bool maskInitialized = false;
 			bool maskUniform = false;
 			float uniformMaskValue = 0.0f;
+			float maskBackground = 0.0f;
+			bool sceneStrengths = false;
 			StableCharacterComputeSubrect stableComputeSubrect{};
 			StablePackedCropSources stablePackedCrops{};
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -1017,8 +1014,9 @@ namespace NeuralRendering
 			a_slot.maskUniform = true;
 			a_slot.dirtyTilesValid = false;
 			a_slot.uniformMaskValue = a_value;
-			a_slot.previousMaskWorkSubrect = a_value == 0.0f ? ComputeSubrect{} :
-			                                                   BuildFullComputeSubrect(a_width, a_height);
+			a_slot.maskBackground = a_value;
+			a_slot.previousMaskWorkSubrect = a_value == 0.0f || (a_slot.sceneStrengths && a_value == 1.0f) ? ComputeSubrect{} :
+			                                                                                                 BuildFullComputeSubrect(a_width, a_height);
 			a_slot.maskCoverageFrame = a_frame;
 			a_slot.maskCoverageFeatureSlot = a_featureSlot;
 			a_slot.maskCoverageWidth = a_width;
@@ -2088,6 +2086,37 @@ namespace NeuralRendering
 			}
 		}
 
+		bool CanPrepareSceneSelection(const CharacterMaskPrepareArgs& args) const noexcept
+		{
+			return args.fuseSceneSelection && UsesSceneCharacterStrengths(args.settings) && !args.settings.providerBlending &&
+			       args.settings.debugView == CharacterDebugView::Off && args.settings.maskTestMode == CharacterMaskTestMode::Authored &&
+			       UsePixelAlignedCharacterMask(args.outputIsJittered, args.viewportCrop.input.Width(), args.viewportCrop.input.Height(),
+					   args.outputWidth, args.outputHeight, args.settings.depthAwareFeather ? args.settings.featherRadius : 0u) &&
+			       args.depthGuide && capturedCategoriesSrv_ && capturedDepthSrv_;
+		}
+
+		bool PrepareSceneSelection(const CharacterMaskPrepareArgs& args, Slot& slot, std::uint32_t sourceEyeWidth)
+		{
+			if (!CanPrepareSceneSelection(args))
+				return false;
+			SceneCategorySelection selection;
+			selection.categories = capturedCategoriesSrv_;
+			selection.authoredDepth = capturedDepthSrv_;
+			selection.currentDepth = args.depthGuide;
+			auto& constants = selection.constants;
+			constants.sourceMapping = { args.eyeIndex * sourceEyeWidth + args.viewportCrop.input.left,
+				args.viewportCrop.input.top, args.eyeIndex * sourceEyeWidth, 0u };
+			const auto& region = capturedSourceRects_[args.eyeIndex];
+			constants.authoredRegion = { region.baseX, region.baseY, region.width, region.height };
+			const auto strengths = GetCharacterMaskStrengths(args.settings);
+			std::copy_n(strengths.begin(), constants.reductions.size(), constants.reductions.begin());
+			constants.options = { strengths.back(), args.settings.visibilityDepthTest ? 1.0f : 0.0f, kVisibilityDepthThreshold, 0.0f };
+			const auto& depth = capturedGeometry_.depthLinearization;
+			constants.depthLinearization = { depth.x, depth.y, depth.z, depth.w };
+			slot.sceneCategories = std::move(selection);
+			return true;
+		}
+
 		bool Dispatch(
 			const CharacterMaskPrepareArgs& a_args,
 			ID3D11ShaderResourceView* a_authoredMaskSource,
@@ -2141,7 +2170,9 @@ namespace NeuralRendering
 			}
 #endif
 			MaskConstants constants{};
-			const auto dirtyRegion = UnionCharacterWorkRects(a_slot.previousMaskWorkSubrect, a_slot.maskWorkSubrect);
+			const float background = UsesSceneCharacterStrengths(a_args.settings) ? 1.0f : 0.0f;
+			const bool resetBackground = !a_slot.maskInitialized || a_slot.maskBackground != background;
+			const auto dirtyRegion = UnionCharacterWorkRects(resetBackground ? ComputeSubrect{} : a_slot.previousMaskWorkSubrect, a_slot.maskWorkSubrect);
 			constants.outputAndSourceSize[0] = a_args.outputWidth;
 			constants.outputAndSourceSize[1] = a_args.outputHeight;
 			constants.outputAndSourceSize[2] = a_sourceEyeWidth;
@@ -2211,6 +2242,11 @@ namespace NeuralRendering
 			constants.authoredRegion[2] = capturedRegion.width;
 			constants.authoredRegion[3] = capturedRegion.height;
 			constants.blendOptions[0] = UsesSceneCharacterStrengths(a_args.settings) ? 1u : 0u;
+			constants.blendOptions[1] = UsePixelAlignedCharacterMask(a_args.outputIsJittered,
+											a_args.viewportCrop.input.Width(), a_args.viewportCrop.input.Height(),
+											a_args.outputWidth, a_args.outputHeight, constants.options[2]) ?
+			                                1u :
+			                                0u;
 			const auto categoryStrengths = GetCharacterMaskStrengths(a_args.settings);
 			std::copy_n(categoryStrengths.begin(), std::size(constants.categoryStrengths), constants.categoryStrengths);
 			constants.featherOptions[3] = categoryStrengths.back();
@@ -2253,13 +2289,14 @@ namespace NeuralRendering
 			CharacterComputeStateGuard stateGuard(a_args.context);
 			if (!stateGuard.Captured())
 				return false;
-			if (!a_slot.maskInitialized) {
-				const std::array<float, 4> clearMask{};
+			if (resetBackground) {
+				const std::array<float, 4> clearMask{ background, background, background, background };
 				a_args.context->ClearUnorderedAccessViewFloat(
 					a_slot.maskUav.Get(), clearMask.data());
 				a_slot.maskInitialized = true;
 				a_slot.maskUniform = true;
-				a_slot.uniformMaskValue = 0.0f;
+				a_slot.uniformMaskValue = background;
+				a_slot.maskBackground = background;
 				if (activePreparationEvidence_)
 					activePreparationEvidence_->clearedPixels += static_cast<std::uint64_t>(a_args.outputWidth) * a_args.outputHeight;
 			}
@@ -2366,6 +2403,13 @@ namespace NeuralRendering
 		CharacterCropAdmission cropAdmission_;
 		std::array<CharacterCropResidence, 2> cropPairResidence_{};
 		mutable std::mutex mutex_;
+		struct FaceDetailFrame
+		{
+			std::uint32_t frame = std::numeric_limits<std::uint32_t>::max();
+			std::array<std::uint32_t, kFaceDetailMaximumActors> actors{};
+			std::array<FaceDetailRegions, 2> eyes{};
+		};
+		std::array<FaceDetailFrame, 2> faceDetailFrames_{};
 		CharacterCategoryFramePolicy categoryFramePolicy_{};
 		mutable std::mutex rejectionFrameMutex_;
 		std::atomic<std::uint32_t> rejectionFrame_{
@@ -2477,6 +2521,74 @@ namespace NeuralRendering
 			disabled.sceneStrengthsEnabled = false;
 			return disabled;
 		}
+	}
+
+	void CharacterRendering::ObserveFaceDetail(std::uint32_t frame, std::uint32_t actor, const CharacterActorBound& bound)
+	{
+		if (!state_ || frame == std::numeric_limits<std::uint32_t>::max() || !actor || !Util::IsFinite(bound.centerX) || !Util::IsFinite(bound.centerY) ||
+			!Util::IsFinite(bound.centerZ) || !Util::IsFinite(bound.radius) || bound.radius <= 0.0f)
+			return;
+		const auto eyePosition = GetProjectionAverageEyePosition();
+		const float dx = Util::Units::GameUnitsToMeters(bound.centerX - eyePosition.x);
+		const float dy = Util::Units::GameUnitsToMeters(bound.centerY - eyePosition.y);
+		const float dz = Util::Units::GameUnitsToMeters(bound.centerZ - eyePosition.z);
+		const float distanceSquared = dx * dx + dy * dy + dz * dz;
+		// Share one proximity decision across both eyes and reject distant heads before projection.
+		if (!Util::IsFinite(distanceSquared) || distanceSquared >= kFaceDetailMaximumDistanceMeters * kFaceDetailMaximumDistanceMeters)
+			return;
+		std::scoped_lock lock(state_->mutex_);
+		auto& observation = state_->faceDetailFrames_[frame % state_->faceDetailFrames_.size()];
+		if (observation.frame != frame) {
+			observation = {};
+			observation.frame = frame;
+		}
+		const auto count = observation.eyes[0].count;
+		if (count >= kFaceDetailMaximumActors || std::find(observation.actors.begin(), observation.actors.begin() + count, actor) != observation.actors.begin() + count)
+			return;
+		const float proximityWeight = CharacterRegionPolicy::ResolveDistanceWeight(
+			std::sqrt(distanceSquared), kFaceDetailMaximumDistanceMeters, kFaceDetailDistanceFadeMeters);
+		observation.actors[count] = actor;
+		const State::Observation sphere{ .center = { bound.centerX, bound.centerY, bound.centerZ }, .radius = bound.radius };
+		constexpr std::uint32_t projectionExtent = 16384;
+		const auto eyeCount = globals::game::isVR ? 2u : 1u;
+		for (std::uint32_t eye = 0; eye < eyeCount; ++eye) {
+			CharacterRect rect{};
+			const auto result = state_->ProjectGeometry(sphere, GetProjectionEyePosition(eye),
+				globals::game::frameBufferCached.GetCameraViewProjUnjittered(eye).Transpose(),
+				globals::game::frameBufferCached.GetCameraViewProj(eye).Transpose(), projectionExtent, projectionExtent, rect);
+			auto& regions = observation.eyes[eye];
+			if (result == CharacterProjectionResult::Visible && rect.IsValid())
+				regions.bounds[count] = { float(rect.minX) / projectionExtent, float(rect.minY) / projectionExtent,
+					float(rect.maxX) / projectionExtent, float(rect.maxY) / projectionExtent };
+			else if (result == CharacterProjectionResult::Uncertain)
+				regions.bounds[count] = { 0.0f, 0.0f, 1.0f, 1.0f };
+			regions.current = (count == 0 || regions.current) && result != CharacterProjectionResult::Uncertain;
+			regions.proximityWeights[count] = proximityWeight;
+			regions.count = count + 1;
+		}
+	}
+
+	FaceDetailRegions CharacterRendering::GetFaceDetailRegions(std::uint32_t frame, std::uint32_t eye, const UpscalingDLSS::ViewportCrop& crop) const
+	{
+		const auto eyeCount = globals::game::isVR ? 2u : 1u;
+		if (!state_ || frame == std::numeric_limits<std::uint32_t>::max() || eye >= eyeCount || !crop.input.IsValidFor(crop.fullInput))
+			return {};
+		std::scoped_lock lock(state_->mutex_);
+		const auto& observation = state_->faceDetailFrames_[frame % state_->faceDetailFrames_.size()];
+		if (observation.frame != frame)
+			return {};
+		for (std::uint32_t observedEye = 0; observedEye < eyeCount; ++observedEye)
+			if (!observation.eyes[observedEye].current || observation.eyes[observedEye].count != observation.eyes[0].count)
+				return {};
+		auto regions = observation.eyes[eye];
+		for (std::uint32_t i = 0; i < regions.count; ++i) {
+			auto& rect = regions.bounds[i];
+			for (unsigned corner = 0; corner < 2; ++corner) {
+				rect[corner * 2] = std::clamp((rect[corner * 2] * crop.fullInput.width - crop.input.left) / crop.input.Width(), 0.0f, 1.0f);
+				rect[corner * 2 + 1] = std::clamp((rect[corner * 2 + 1] * crop.fullInput.height - crop.input.top) / crop.input.Height(), 0.0f, 1.0f);
+			}
+		}
+		return regions;
 	}
 
 	bool CharacterRendering::ShouldAuthorActor(
@@ -3197,6 +3309,7 @@ namespace NeuralRendering
 				.captureJitterX = state_->capturedJitterX_,
 				.captureJitterY = state_->capturedJitterY_,
 				.outputIsJittered = a_args.outputIsJittered,
+				.fuseSceneSelection = a_args.fuseSceneSelection,
 				.sourceCaptureSerial = state_->earlyMaskCaptureSerial_,
 			};
 			if (retainedSource) {
@@ -3278,7 +3391,9 @@ namespace NeuralRendering
 				auto sourceArgs = a_args;
 				sourceArgs.frameId = sourceWorldFrame;
 				const bool sceneStrengths = UsesSceneCharacterStrengths(a_args.settings);
-				auto plan = sceneStrengths ? State::ProjectedPlan{} : state_->BuildPlan(sourceArgs);
+				const bool fuseScene = sceneStrengths && state_->CanPrepareSceneSelection(sourceArgs);
+				auto plan = fuseScene ? State::ProjectedPlan{} : state_->BuildPlan(sourceArgs);
+				slot.sceneStrengths = sceneStrengths;
 				const bool authoredMode =
 					UsesAuthoredMask(a_args.settings.maskTestMode);
 				const bool forcedEmpty =
@@ -3306,7 +3421,9 @@ namespace NeuralRendering
 					plan.eligibilitySignature = HashCombine(
 						plan.eligibilitySignature, 0x46554C4C455945ull);
 				}
-				if (fullOutputMask) {
+				const bool fullMaskResolve = fullOutputMask && (!sceneStrengths ||
+																   a_args.settings.maskTestMode != CharacterMaskTestMode::Authored || a_args.settings.debugView != CharacterDebugView::Off);
+				if (fullMaskResolve) {
 					plan.regions = { {
 						.minX = 0,
 						.minY = 0,
@@ -3357,7 +3474,9 @@ namespace NeuralRendering
 															plan.regions,
 															a_args.outputWidth,
 															a_args.outputHeight);
-				slot.maskWorkSubrect = requiredComputeSubrect;
+				slot.maskWorkSubrect = sceneStrengths && !fullMaskResolve ?
+				                           BuildCharacterComputeSubrect(plan.regions, a_args.outputWidth, a_args.outputHeight) :
+				                           requiredComputeSubrect;
 				if (selectionEmpty || fullOutputMask) {
 					// Empty selections and full-region processing must not retain
 					// a stale actor crop for the next restricted selection.
@@ -3367,8 +3486,8 @@ namespace NeuralRendering
 				slot.maskRoiCurrentFrame = authoredMode;
 				slot.maskRoiOccupiedTiles = 0;
 				slot.maskRoiRequiredSubrect = requiredComputeSubrect;
-				slot.maskRoiStatus = sceneStrengths ? "scene_full_region" : authoredMode ? "cpu_geometry_single" :
-				                                                                           "disabled";
+				slot.maskRoiStatus = sceneStrengths ? "scene_full_inference_region_mask" : authoredMode ? "cpu_geometry_single" :
+				                                                                                          "disabled";
 				const bool provenEmpty = selectionEmpty;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				auto& cropEye = state_->snapshot_.eyes[a_args.eyeIndex];
@@ -3505,7 +3624,8 @@ namespace NeuralRendering
 					slot.maskRoiStatus = "cpu_proven_empty";
 				if (forcedEmpty)
 					slot.maskRoiStatus = "diagnostic_zero";
-				if (provenEmpty || logicalEmptyCapture) {
+				slot.sceneCategories.reset();
+				if (provenEmpty || logicalEmptyCapture || (sceneStrengths && !fuseScene && plan.regions.empty())) {
 					float clearValue = sceneStrengths ? 1.0f : 0.0f;
 					switch (a_args.settings.maskTestMode) {
 					case CharacterMaskTestMode::ForceZero:
@@ -3527,6 +3647,8 @@ namespace NeuralRendering
 						slot, a_args.context, sourceWorldFrame,
 						a_args.featureSlot, a_args.outputWidth,
 						a_args.outputHeight, clearValue);
+				} else if (state_->PrepareSceneSelection(sourceArgs, slot, sourceEyeWidth)) {
+					slot.maskRoiStatus = "scene_fused_selection";
 				} else {
 					if (!a_args.depthGuide)
 						return fail("nonempty character selection requires current depth guides");
@@ -3563,7 +3685,7 @@ namespace NeuralRendering
 				eye.effectiveCategoryStrengths = GetCharacterCategoryStrengths(a_args.settings);
 				eye.evaluationWidth = a_args.outputWidth;
 				eye.evaluationHeight = a_args.outputHeight;
-				eye.actorEnclosureCountsAvailable = !sceneStrengths;
+				eye.actorEnclosureCountsAvailable = !fuseScene;
 				eye.visibleFaces = plan.visibleFaces;
 				eye.visibleCharacterRegions = plan.visibleCharacters;
 				eye.selectedCharacterRegions = plan.selectedCharacters;
@@ -3768,6 +3890,7 @@ namespace NeuralRendering
 					args.device != a_args.front().device || args.frameId != a_args.front().frameId ||
 					args.sourceWorldFrame != a_args.front().sourceWorldFrame || args.generation != a_args.front().generation ||
 					args.settings != a_args.front().settings || args.outputIsJittered != a_args.front().outputIsJittered ||
+					args.fuseSceneSelection != a_args.front().fuseSceneSelection ||
 					args.viewportCrop.fullInput != a_args.front().viewportCrop.fullInput ||
 					args.viewportCrop.fullOutput != a_args.front().viewportCrop.fullOutput ||
 					args.context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE ||
@@ -3790,7 +3913,7 @@ namespace NeuralRendering
 					slot.prepareKey.width != args.outputWidth || slot.prepareKey.height != args.outputHeight ||
 					slot.prepareKey.crop != args.viewportCrop ||
 					slot.prepareKey.settings != BuildSettingsKey(args.settings) ||
-					slot.prepareKey.outputIsJittered != args.outputIsJittered)
+					slot.prepareKey.outputIsJittered != args.outputIsJittered || slot.prepareKey.fuseSceneSelection != args.fuseSceneSelection)
 					return false;
 				if (!slot.requiresEvaluation && !state_->HasCurrentEmptyProof(slot))
 					return false;
@@ -3988,6 +4111,7 @@ namespace NeuralRendering
 			state_->observationFrame_ = std::numeric_limits<std::uint32_t>::max();
 			state_->InvalidateProjectionCache();
 			state_->actorAdmissions_.clear();
+			state_->faceDetailFrames_ = {};
 			for (auto& slot : state_->slots_)
 				State::RetireCoverageEvidence(slot);
 			state_->slots_ = {};
@@ -4092,7 +4216,7 @@ namespace NeuralRendering
 		try {
 			std::scoped_lock lock(state_->mutex_);
 			const auto slot = state_->lastSlotForEye_[a_eyeIndex];
-			return slot < state_->slots_.size() && state_->slots_[slot].prepared ?
+			return slot < state_->slots_.size() && state_->slots_[slot].prepared && !state_->slots_[slot].sceneCategories ?
 			           state_->slots_[slot].maskSrv :
 			           ComPtr<ID3D11ShaderResourceView>{};
 		} catch (...) {
@@ -4117,12 +4241,11 @@ namespace NeuralRendering
 			if (!slot)
 				return {};
 			const auto full = BuildFullComputeSubrect(a_width, a_height);
+			if (slot->sceneCategories)
+				return { {}, full, slot->computeSubrect, false, slot->sceneCategories };
 			// Keep the sampler guard and the mask's zero/full state in the same snapshot.
-			const auto support = slot->maskUniform ?
-			                         (slot->uniformMaskValue == 0.0f ? ComputeSubrect{} : full) :
-			                         (slot->maskWorkSubrect.Fits(a_width, a_height) ?
-											 ExpandCharacterWorkRect(slot->maskWorkSubrect, a_width, a_height, 1) :
-											 full);
+			const auto support = slot->sceneStrengths ? full : slot->maskUniform ? (slot->uniformMaskValue == 0.0f ? ComputeSubrect{} : full) :
+			                                                                       (slot->maskWorkSubrect.Fits(a_width, a_height) ? ExpandCharacterWorkRect(slot->maskWorkSubrect, a_width, a_height, 1) : full);
 			return { slot->maskSrv, support, slot->computeSubrect, slot->providerBlending };
 		} catch (...) {
 			return {};

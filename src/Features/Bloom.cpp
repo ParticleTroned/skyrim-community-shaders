@@ -8,11 +8,11 @@
 
 namespace
 {
-	constexpr float kEnhancementIntensityMax = 6.0f;
-	constexpr float kHaloRadiusMax = 14.0f;
-	constexpr float kBloomSaturationMax = 2.0f;
-	constexpr float kCompressionCeilingMax = 1.5f;
-	constexpr uint kPresetCount = 3;
+	constexpr float kEnhancementIntensityMax = Bloom::kEnhancementIntensityMax;
+	constexpr float kHaloRadiusMax = Bloom::kHaloRadiusMax;
+	constexpr float kBloomSaturationMax = Bloom::kBloomSaturationMax;
+	constexpr float kCompressionCeilingMax = Bloom::kCompressionCeilingMax;
+	constexpr uint kPresetCount = Bloom::kPresetCount;
 
 	void DrawTooltip(const char* a_text)
 	{
@@ -43,9 +43,10 @@ namespace
 	}
 }
 
-void Bloom::DrawProfileControls(Profile& a_profile)
+void Bloom::DrawProfileControls(Profile& a_profile, PresetSlots& a_presets)
 {
 	SanitizeProfile(a_profile);
+	SanitizePresets(a_presets);
 	ImGui::PushID(&a_profile);
 
 	const auto drawBloomSlider = [&]() {
@@ -84,12 +85,15 @@ void Bloom::DrawProfileControls(Profile& a_profile)
 
 		for (uint preset = 0; preset < kPresetCount; ++preset) {
 			ImGui::TableNextColumn();
-			[[maybe_unused]] auto presetStyle = Util::PresetButtonStyle(IsPreset(a_profile, preset));
+			[[maybe_unused]] auto presetStyle = Util::PresetButtonStyle(a_presets.selected == preset);
 			if (ImGui::Button(GetPresetName(preset)))
-				a_profile = GetPresetProfile(preset);
+				SelectPreset(a_profile, a_presets, preset);
 		}
 		ImGui::EndTable();
 	}
+	if (ImGui::Button("Reset Preset"))
+		ResetPreset(a_profile, a_presets);
+	DrawTooltip("Restore the selected bloom preset. Other preset slots and profile layers retain their edits.");
 
 	ImGui::PopID();
 	SanitizeProfile(a_profile);
@@ -166,6 +170,29 @@ Bloom::Profile Bloom::GetPresetProfile(uint a_preset)
 			return profile;
 		}
 	}
+}
+
+void Bloom::SanitizePresets(PresetSlots& a_presets)
+{
+	a_presets.selected = std::min(a_presets.selected, kPresetCount - 1);
+	for (auto& profile : a_presets.profiles)
+		SanitizeProfile(profile);
+}
+
+void Bloom::SelectPreset(Profile& a_profile, PresetSlots& a_presets, uint a_selected)
+{
+	SanitizePresets(a_presets);
+	SanitizeProfile(a_profile);
+	a_presets.profiles[a_presets.selected] = a_profile;
+	a_presets.selected = std::min(a_selected, kPresetCount - 1);
+	a_profile = a_presets.profiles[a_presets.selected];
+}
+
+void Bloom::ResetPreset(Profile& a_profile, PresetSlots& a_presets)
+{
+	SanitizePresets(a_presets);
+	a_profile = GetPresetProfile(a_presets.selected);
+	a_presets.profiles[a_presets.selected] = a_profile;
 }
 
 bool Bloom::IsPreset(const Profile& a_profile, uint a_preset)

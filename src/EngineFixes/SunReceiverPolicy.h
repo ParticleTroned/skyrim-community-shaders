@@ -1,12 +1,17 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <string_view>
 
 namespace SunShadowReceiver::Policy
 {
+	static_assert(std::atomic_ref<std::uint32_t>::is_always_lock_free);
+	static_assert(std::atomic_ref<std::uint32_t>::required_alignment <= alignof(std::uint32_t));
+	static_assert(std::atomic_ref<const std::uint32_t>::required_alignment <= alignof(std::uint32_t));
+
 	enum class Reason : std::uint32_t
 	{
 		candidate,
@@ -98,12 +103,20 @@ namespace SunShadowReceiver::Policy
 		return mask;
 	}
 
+	/** Read the native mask atomically without synchronizing unrelated engine state. */
+	inline std::uint32_t ReadMask(const std::uint32_t& mask) noexcept
+	{
+		return std::atomic_ref<const std::uint32_t>(mask).load(std::memory_order_relaxed);
+	}
+
 	/** Called only at native pass generation; observe mode never mutates the mask. */
 	inline bool Apply(std::uint32_t& mask, std::uintptr_t lightData, const Input& input, const Decision& decision, bool repair) noexcept
 	{
-		if (!repair || decision.reason != Reason::candidate || !lightData || lightData != input.lightData || mask != input.activeMask)
+		if (!repair || decision.reason != Reason::candidate || !lightData || lightData != input.lightData)
 			return false;
-		mask |= input.sunMask;
-		return true;
+		// A changed mask invalidates this decision; never retry it against newer state.
+		auto expected = input.activeMask;
+		return std::atomic_ref<std::uint32_t>(mask).compare_exchange_strong(
+			expected, input.activeMask | input.sunMask, std::memory_order_relaxed);
 	}
 }

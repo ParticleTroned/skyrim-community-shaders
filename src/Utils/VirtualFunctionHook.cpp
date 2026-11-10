@@ -29,6 +29,55 @@ namespace
 		long Commit() const { return DetourTransactionCommit(); }
 	};
 
+	using AttachFunction = Util::DetourAttachResult (*)(void**, void*);
+
+	struct DetourHookRecord
+	{
+		void* target;
+		void* hook;
+		void** originalStorage;
+		void* originalCall;
+	};
+
+	struct DetourHookState
+	{
+		std::mutex mutex;
+		std::vector<DetourHookRecord> hooks;
+	};
+
+	Util::DetourAttachResult InstallDetourHook(DetourHookState& a_state, std::uintptr_t a_target,
+		void** a_original, void* a_hook, AttachFunction a_attach = Util::AttachDetour)
+	{
+		auto* target = reinterpret_cast<void*>(a_target);
+		if (!target || !a_hook || target == a_hook)
+			return { ERROR_INVALID_PARAMETER };
+		std::scoped_lock lock(a_state.mutex);
+		for (const auto& record : a_state.hooks) {
+			if (record.target == target && record.hook == a_hook) {
+				if (record.originalStorage != a_original || (a_original && *a_original != record.originalCall))
+					return { ERROR_INVALID_DATA };
+				return {};
+			}
+			if (a_original && record.originalStorage == a_original)
+				return { ERROR_INVALID_DATA };
+		}
+		if (a_original && *a_original)
+			return { ERROR_INVALID_DATA };
+
+		// Bookkeeping must not allocate after the hook becomes callable.
+		a_state.hooks.reserve(a_state.hooks.size() + 1);
+		void* discardedOriginal = nullptr;
+		auto** original = a_original ? a_original : &discardedOriginal;
+		*original = target;
+		const auto result = a_attach(original, a_hook);
+		if (result.error != NO_ERROR) {
+			*original = nullptr;
+			return result;
+		}
+		a_state.hooks.push_back({ target, a_hook, a_original, *original });
+		return result;
+	}
+
 	struct HookRecord
 	{
 		void** originalStorage;
@@ -118,7 +167,6 @@ namespace
 		           0;
 	}
 
-	using AttachFunction = Util::DetourAttachResult (*)(void**, void*);
 	using SlotCountFunction = std::size_t (*)(void*);
 
 	Util::VirtualHookResult InstallHook(HookState& a_state, void* a_object, std::size_t a_slot,
@@ -235,6 +283,19 @@ namespace
 Util::DetourAttachResult Util::AttachDetour(void** a_original, void* a_hook)
 {
 	return detail::AttachDetourTransaction(a_original, a_hook, DetourOperations{});
+}
+
+Util::DetourAttachResult Util::InstallDetour(std::uintptr_t a_target, void** a_original, void* a_hook)
+{
+	try {
+		// Detours and their original-call storage remain live until process exit.
+		static auto& state = *new DetourHookState;
+		return InstallDetourHook(state, a_target, a_original, a_hook);
+	} catch (const std::bad_alloc&) {
+		return { ERROR_NOT_ENOUGH_MEMORY };
+	} catch (const std::system_error&) {
+		return { ERROR_LOCK_FAILED };
+	}
 }
 
 Util::VirtualHookResult Util::InstallNativeVirtualFunctionHook(std::uintptr_t a_table, std::size_t a_slot, void** a_original, void* a_hook)

@@ -31,8 +31,8 @@ SKSE64 plugin providing modular DirectX 11 graphics enhancements for Skyrim SE/A
 
 ### Windows-Only Requirements
 
--   Visual Studio Community 2022 with "Desktop development with C++" workload
--   CMake 3.21+, Git, vcpkg (the launcher discovers Visual Studio installations or honors `VCPKG_ROOT`), Windows SDK
+-   Visual Studio Community 2026 with "Desktop development with C++" workload (VS 2022 via the `ALL-VS2022` preset)
+-   CMake 4.2+, Git, vcpkg (the launcher discovers Visual Studio installations or honors `VCPKG_ROOT`), Windows SDK
 -   **NEVER CANCEL BUILDS**: 45-60 minutes build time, 15-30 minutes shader validation
 
 ### Linux/WSL Limitations
@@ -114,7 +114,7 @@ globals::d3d::*       // DirectX 11 device/context access
 2. Implement `DrawSettings()`, `LoadSettings()`, `SaveSettings()`
 3. Add shaders to `features/YourFeature/Shaders/`
 4. Register in `globals::features` namespace
-5. Use template in `template/` directory as starting point
+5. Use template in `docs/new-feature-template/` directory as starting point
 
 ### Common Development Commands
 

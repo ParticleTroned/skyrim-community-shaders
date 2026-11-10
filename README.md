@@ -23,6 +23,22 @@ includes both standard and Horizon Fix Water variants. Optional integrations
 still require their companion plugins. GitHub's source archives are for
 development, not installation.
 
+CSX bundles AMD FSR SDK 2.4.0 with FSR Upscaling 4.1.2. **AMD FSR runtime**
+lets the SDK select a compatible provider, including automatic driver upgrades,
+and displays the actual provider separately. Runtime availability is checked
+on the active device; it is not restricted by GPU model names. **AMD FSR3**
+remains an explicit selection. Existing FSR4 preferences select automatic
+runtime mode, while saved FSR3 choices remain unchanged.
+Runtime FSR3 and the independent FidelityFX-SDK-DX11 host implementation use
+version 3.1.6. Provider failures retain CSX's host fallback and session
+quarantine. Stereo contexts must report the same provider before dispatch.
+
+The public upscaling API exposes `FSRRuntime::kAutomatic`; `kFSR4` retains the
+same ABI value as a compatibility alias. DevBench accepts `fsrRuntime: "auto"`
+and the legacy `"fsr4"` spelling. Neither guarantees a particular provider
+version. `communityshaders.fsr_temporal_tuning` status reports the active provider identity
+and runtime support checks independently of temporal tuning overrides.
+
 Depth of field controls are under **Adaptive Balance > Global > Depth of field**.
 Scene and underwater overrides are global and default to off. Underwater fog
 blur correction has its own toggle; Adaptive Balance's Enabled control gates
@@ -31,11 +47,60 @@ supported legacy CSUtility/OSUtility settings access redirects to Adaptive
 Balance. See [utility compatibility](API.md#legacy-utility-settings)
 for the supported settings and remaining Open Shaders differences.
 
-**Adaptive Balance > Global > Lighting** also includes **Final godray
-brightness**, a global multiplier from 0 to 5 with a neutral default of 1.
-It scales the completed godray colour after gamma conversion and remains
-separate from profile godray intensity. Legacy `vlIntensity` settings map
-to this control; Adaptive Balance's Enabled switch gates both.
+**Adaptive Balance > Global > Godrays** owns exterior and interior godray
+intensity, opacity, saturation and custom colour, plus Atmospheric Clarity
+for broad volumetric haze. Existing Volumetric Lighting appearance settings
+migrate automatically; profile appearance adjustments retain their existing
+composition over these context bases. Adaptive Balance's Enabled switch
+bypasses all these adjustments while preserving saved values. Volumetric
+Lighting retains coverage, resolution and rendering quality controls.
+Legacy `godrayFinalBrightness` / `vlIntensity` values remain available for
+preset/API compatibility and have no rendering effect.
+
+Aurora brightness and colour curves are under **Adaptive Balance > Global >
+Lighting > Appearance controls > Auroras**, with detailed lighting enabled.
+The same controls are available in day/night and location profiles.
+Both controls default to 1; reducing
+Aurora Intensity dims sky objects in the game's aurora slot, including
+replacement models. Presets retain these values, and disabling Adaptive Balance
+restores neutral adjustments.
+
+If the CSX menu becomes too small, oversized or inaccessible, press
+**Ctrl+Shift+End** with the game focused. This fixed shortcut reopens the
+menu and resets its position, size, sidebar proportions, zoom and font
+sizing, including headset placement in VR. Graphics settings and shader
+caches are preserved. The same **Reset Menu** button is available under
+**General > Layout** and the VR menu settings. Theme changes remain
+unsaved until saved through the theme controls.
+
+**General > Layout > Global Scale** adjusts zoom; zero means 100%.
+Effective zoom is limited to fit the current display. **General > Fonts**
+controls automatic or fixed font sizing.
+
+Native shadow culling under **Light Limit Fix > Performance** defaults to on,
+including indoor torches. Separate sun, torch and NPC distance sliders default
+to **20 m, 15 m and 50 m**, each adjustable from **5 to 300 m**. Old automatic
+distances migrate to these defaults; subsequently saved slider choices remain.
+The advanced **Small actor part shadows** option defaults to on. It omits
+tiny skinned actor-part shadow draws using actor-position distance with
+hysteresis, while retaining stereo and projected-shadow safeguards. Its
+radius slider defaults to **11.424 cm** (radius, not diameter) and allows
+**0 to 50 cm**. Cutoff and return distance sliders default to
+**7.14 m / 6.426 m** before the fixed movement margin; the menu also shows
+the effective **14.45 m / 13.74 m** distance gates. Other safeguards may
+retain shadows beyond those gates.
+Both distances allow **0 to 300 m**. Setting any of the three sliders to
+**0 disables tiny-part culling** without changing the checkbox. With a
+positive cutoff, return cannot exceed cutoff. Saved explicit off choices
+remain off. The policy preserves native collection and leaves the existing
+distant-NPC policy independent.
+DevBench's `shadow_culling` action exposes `smallActorParts`,
+`actorPartRadiusCentimeters`, `actorPartDistanceMeters` and
+`actorPartReturnDistanceMeters` inside `shadowCulling`. Partial updates
+preserve omitted settings and reject an invalid resulting distance pair
+before applying changes.
+Texture Streaming defaults to **off**, with **On pressure** selected and
+continuous streaming off when enabled. Explicit saved enable choices remain.
 
 ## Requirements
 
@@ -176,6 +241,17 @@ The tools build in Release; production presets keep them optional and keep
 Tracy instrumentation disabled. Existing binaries remain at their original
 protocol until rebuilt, so retain their matched tools for older captures.
 
+Detailed `State::Draw` CPU zones are off by default in Tracy builds to
+limit trace volume. Enable **Tracy Per-Draw Zones** under Advanced >
+Diagnostics > Runtime Debug for short captures. With DevBench enabled, use
+`communityshaders.profiler` with
+`{"action":"tracy_per_draw_zones","enabled":true}`; omit `enabled` to
+inspect availability and the current preference. Save settings to persist
+the choice. Builds without Tracy report `available: false` and reject
+changes. This control leaves CSX pass profiling and frame annotations
+independent. Detailed captures can increase CPU overhead and memory use;
+this is a capture-volume control, not a measured gameplay speedup.
+
 When using custom preset you can call BuildRelease.bat with an parameter to specify which preset to configure eg:
 `.\BuildRelease.bat ALL-WITH-AUTO-DEPLOYMENT`
 
@@ -260,26 +336,56 @@ Streamline's source license and the separate DLSS/NGX and Reflex SDK terms are
 included with the packaged runtime.
 
 The build downloads the production x64 DLLs directly from
-[NVIDIA's Streamline 2.14.1 SDK release](https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.14.1)
+[NVIDIA's Streamline 2.14.16 SDK release](https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.14.16)
 and verifies the archive's pinned SHA-256 in
 [Streamline-Runtime.cmake](cmake/Streamline-Runtime.cmake). These runtime DLLs are
-not checked into this repository. The same archive supplies all five license
+not checked into this repository. The same archive supplies all seven license
 and notice files, copied without modification beside the DLLs under
 `Shaders/Upscaling/Streamline/` in both Core and AIO packages:
 
 -   `license.txt` — Streamline source license.
 -   `nvngx_dlss.license.txt` — NVIDIA RTX SDK terms for DLSS/NGX.
+-   `nis.license.txt` — NVIDIA Image Scaling notice.
 -   `reflex.license.txt` — NVIDIA Reflex SDK terms.
 -   `3rd-party-licenses.md` — Streamline third-party notices.
 -   `NVIDIA Nsight Graphics SDK License (Apache 2.0).txt` — Nsight Graphics SDK terms.
+-   `NVIDIA Nsight Perf SDK License (28Sept2022).pdf` — Nsight Perf SDK terms.
 
 The `StreamlineRuntime` CMake install component includes these notices with its
 DLLs. Source builds obtain the Streamline source license and third-party notices
 through the pinned [Streamline submodule](extern/Streamline-DX12).
 
-The public 2.14.1 SDK archive does not contain `sl.dlss_nr.dll`,
-`nvngx_dlssnr.dll`, or their implementation sources. This update does not package
-DLSS Neural Rendering or add support for it.
+Neural Rendering uses NVIDIA's separate `ngx_sdk_dlnr` package, also used by
+[RTX Remix 1.6.1](https://github.com/NVIDIAGameWorks/rtx-remix/releases/tag/remix-1.6.1).
+[NeuralRenderingSDKPin.cmake](cmake/NeuralRenderingSDKPin.cmake) pins its official
+download, archive SHA-256, reference runtime SHA-256 and original license.
+The SDK pin does not restrict installed runtime hashes. Every build and
+package excludes `nvngx_dlssnr.dll`; users supply a compatible runtime
+(310.8 or newer) under its license terms and install it separately under
+`Shaders/Upscaling/Streamline/`, then restart. Missing runtimes retain the
+existing disabled controls and installation notice. Core and AIO packages
+retain the unchanged `nvngx_dlssnr.license.txt` beside the Streamline files.
+NR requires NVIDIA driver **616.92 or newer**, matching the
+[Windows minimum in the pinned RTX Remix source](https://github.com/NVIDIAGameWorks/dxvk-remix/blob/0a6cd5b1ee814ec390c358e0c9c32ece8895ddc0/src/dxvk/dxvk_options.cpp#L42).
+CSX checks the rendering adapter before initializing NGX. Outdated drivers
+disable NR and show the installed and required versions in its settings.
+NGX searches the verified runtime's physical directory, including when the
+DLL is installed through MO2's virtual filesystem.
+Update through the NVIDIA app or nvidia.com/drivers, then restart the game.
+If the version cannot be detected, CSX displays the requirement and retains
+NGX's compatibility checks. Ordinary DLSS, FSR and shared FOV keep their
+existing requirements.
+Source builds obtain the original NR parameter definitions from the
+verified SDK cache. The
+complete license is also retained in
+[`extern/NeuralRenderingSDK/`](extern/NeuralRenderingSDK/).
+
+The NVIDIA runtime remains proprietary and subject to its own terms; the
+project's GPL and exceptions do not relicense it. NR uses the documented NGX
+D3D12 SDK with CSX's project ID. Unsupported hardware, drivers and SDK
+operations retain normal rendering. See the
+[NVIDIA SDK distribution guide](docs/development/nvidia-sdk-distribution.md)
+for packaging requirements and release obligations.
 
 ### Texture streaming reference
 
@@ -295,6 +401,16 @@ identifies the reference scope.
 is licensed under GPL-3.0-or-later with its
 [upstream exceptions](package/SKSE/Plugins/CommunityShaders/Licenses/SPS/EXCEPTIONS.md).
 These notices accompany future CSX packages.
+
+Point-light shadow culling preserves native object collection and lighting
+assignment. It omits only eligible shadow-map draws within a known point-light
+render scope. Unknown draws retain their shadows; sun-shadow culling remains
+independent.
+
+Pressure-only streaming uses sparse inventory learning when no reductions
+are needed. Disabling remembered sizes also skips that learning work.
+Pressure detection, pending operations and reduced-texture restoration
+remain serviced; discretionary scanning shares a bounded frame budget.
 
 ### SKSE Plugin API
 

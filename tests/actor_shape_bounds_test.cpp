@@ -115,9 +115,16 @@ namespace RE
 			output = massCenter;
 		}
 	};
+	struct bhkBlendCollisionObject;
 	struct bhkNiCollisionObject
 	{
+		virtual ~bhkNiCollisionObject() = default;
+		virtual bhkBlendCollisionObject* AsBhkBlendCollisionObject() { return nullptr; }
 		Borrowed<bhkEntity> body;
+	};
+	struct bhkBlendCollisionObject : bhkNiCollisionObject
+	{
+		bhkBlendCollisionObject* AsBhkBlendCollisionObject() override { return this; }
 	};
 }
 
@@ -129,6 +136,11 @@ To skyrim_cast(From* value)
 
 namespace Util
 {
+	struct ShapeCollisionCapsule
+	{
+		RE::NiPoint3 pointA, pointB;
+		float radius;
+	};
 	bool ExtractShapeBound(const RE::hkpShape* shape, float& radius);
 }
 
@@ -167,6 +179,9 @@ namespace
 		RE::NiPoint3 center{ 17, 19, 23 };
 		float radius = 29;
 		Check(!Util::GetShapeBound(object, center, radius), "invalid collision accepted");
+		Util::ShapeCollisionCapsule capsule{ { 17, 19, 23 }, { 29, 31, 37 }, 41 };
+		Check(!Util::GetShapeCollisionCapsule(object, capsule), "invalid collision capsule accepted");
+		Check(capsule.pointA.x == 17 && capsule.pointB.z == 37 && capsule.radius == 41, "failed capsule extraction changed outputs");
 		Check(center.x == 17 && center.y == 19 && center.z == 23 && radius == 29, "failed extraction changed outputs");
 	}
 	void ExpectCapsuleRejected(Fixture& fixture)
@@ -189,6 +204,11 @@ namespace
 		Check(Util::GetShapeBound(&f.object, center, radius), "transformed capsule rejected");
 		Check(Near(center.x, 16) && Near(center.y, 42) && Near(center.z, 70) && Near(radius, 6), "rotation, translation, scale or midpoint is wrong");
 		Check(f.wrapper.transformCalls == 1 && f.wrapper.massCenterCalls == 0 && f.shape.projectionCalls == 0, "capsule used center of mass or projections");
+		Util::ShapeCollisionCapsule capsule;
+		Check(Util::GetShapeCollisionCapsule(&f.object, capsule), "transformed collision capsule rejected");
+		Check(Near(capsule.pointA.x, 16) && Near(capsule.pointA.y, 42) && Near(capsule.pointA.z, 66) &&
+				  Near(capsule.pointB.z, 74) && Near(capsule.radius, 2),
+			"capsule endpoints or physical radius are wrong");
 		std::swap(f.shape.vertexA, f.shape.vertexB);
 		Check(Util::GetShapeBound(&f.object, center, radius) && Near(center.z, 70) && Near(radius, 6), "endpoint order changes bounds");
 	}
@@ -270,6 +290,49 @@ namespace
 		Check(!Util::ExtractShapeBound(&list, radius) && radius == 31, "unsupported list radius accepted or published");
 		Check(list.projectionCalls == 0 && f.wrapper.massCenterCalls == 0 && f.wrapper.transformCalls == 0, "rejected shape reached Havok accessors");
 	}
+	void BlendCollisionLists()
+	{
+		Fixture f;
+		RE::hkpListShape list;
+		list.center = { 1, 2, 3 };
+		list.halfExtents = { 2, 3, 6 };
+		f.rigid.collidable.shape = &list;
+		RE::bhkBlendCollisionObject blend;
+		blend.body.value = &f.wrapper;
+		f.wrapper.transform.rotation.col0 = { 0, 1, 0, 0 };
+		f.wrapper.transform.rotation.col1 = { -1, 0, 0, 0 };
+		f.wrapper.transform.translation = { 10, 20, 30, 0 };
+		RE::bhkWorld::scale = 2;
+		RE::NiPoint3 center;
+		float radius = 0;
+		Check(Util::GetShapeBound(&blend, center, radius), "blend collision list rejected");
+		Check(Near(center.x, 16) && Near(center.y, 42) && Near(center.z, 66) && Near(radius, 14),
+			"blend collision list has incorrect transformed bounds");
+		Check(list.projectionCalls == 6 && f.wrapper.transformCalls == 1 && f.wrapper.massCenterCalls == 0,
+			"blend collision list did not use projected geometry");
+		Util::ShapeCollisionCapsule capsule;
+		Check(Util::GetShapeCollisionCapsule(&blend, capsule) && Near(capsule.radius, radius) &&
+				  Near(capsule.pointA.x, center.x) && Near(capsule.pointA.y, center.y) && Near(capsule.pointA.z, center.z) &&
+				  Near(capsule.pointB.x, center.x) && Near(capsule.pointB.y, center.y) && Near(capsule.pointB.z, center.z),
+			"blend collision fallback differs from its enclosing sphere");
+
+		list.projectionCalls = 0;
+		ExpectRejected(&f.object);
+		radius = 31;
+		Check(!Util::ExtractShapeBound(&list, radius) && radius == 31, "context-free list radius accepted or published");
+		Check(list.projectionCalls == 0, "unsupported list reached projections");
+
+		for (float invalid : { -1.0f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() }) {
+			list.halfExtents = { 2, invalid, 6 };
+			ExpectRejected(&blend);
+		}
+		list.halfExtents = {};
+		ExpectRejected(&blend);
+		f.rigid.collidable.shape = nullptr;
+		ExpectRejected(&blend);
+		blend.body.value = nullptr;
+		ExpectRejected(&blend);
+	}
 	void NonCapsuleFallback()
 	{
 		Fixture f;
@@ -285,6 +348,11 @@ namespace
 		Check(Util::GetShapeBound(&f.object, center, radius), "fallback rejected");
 		Check(Near(center.x, 24) && Near(center.y, 63) && Near(center.z, 99) && Near(radius, 6), "non-capsule bound is not centered on transformed geometry");
 		Check(f.wrapper.massCenterCalls == 0 && f.wrapper.transformCalls == 1 && sphere.projectionCalls == 6, "non-capsule bound used center of mass or repeated projections");
+		Util::ShapeCollisionCapsule capsule;
+		Check(Util::GetShapeCollisionCapsule(&f.object, capsule) && Near(capsule.radius, radius) &&
+				  Near(capsule.pointA.x, center.x) && Near(capsule.pointA.y, center.y) && Near(capsule.pointA.z, center.z) &&
+				  Near(capsule.pointB.x, center.x) && Near(capsule.pointB.y, center.y) && Near(capsule.pointB.z, center.z),
+			"non-capsule fallback differs from its enclosing sphere");
 		f.wrapper.transform.translation = { std::numeric_limits<float>::quiet_NaN(), 0, 0, 0 };
 		ExpectRejected(&f.object);
 	}
@@ -371,6 +439,7 @@ int main()
 	CapsuleGeometry();
 	InvalidCapsules();
 	MissingAndUnsupportedShapes();
+	BlendCollisionLists();
 	NonCapsuleFallback();
 	NonCapsuleGeometry();
 	InvalidNonCapsules();

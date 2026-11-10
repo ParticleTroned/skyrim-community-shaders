@@ -1,5 +1,6 @@
 #include "MenuHeaderRenderer.h"
 #include "FeatureListRenderer.h"
+#include "Layout.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -34,31 +35,31 @@ namespace
 	};
 	HeaderContentAlignment headerContentAlignment;
 
-	float GetHeaderIconSize(float a_uiScale)
+	float GetHeaderIconSize()
 	{
-		return ImGui::GetFontSize() * ThemeManager::Constants::HEADER_BASE_ICON_MULTIPLIER * a_uiScale;
+		return ImGui::GetFontSize() * ThemeManager::Constants::HEADER_BASE_ICON_MULTIPLIER;
 	}
 
-	float GetHeaderActionIconSize(float a_uiScale)
+	float GetHeaderActionIconSize()
 	{
-		return GetHeaderIconSize(a_uiScale) * 1.5f * kHeaderActionIconScale;
+		return GetHeaderIconSize() * 1.5f * kHeaderActionIconScale;
 	}
 
-	float GetDockedActionIconSize(float a_uiScale, float a_titleBarHeight)
+	float GetDockedActionIconSize(float a_titleBarHeight)
 	{
-		const float desiredSize = ImGui::GetFontSize() * ThemeManager::Constants::DOCKED_ICON_SIZE_MULTIPLIER * a_uiScale * 1.5f;
+		const float desiredSize = ImGui::GetFontSize() * ThemeManager::Constants::DOCKED_ICON_SIZE_MULTIPLIER * 1.5f;
 		const float maxSize = std::max(1.0f, a_titleBarHeight - 2.0f * std::max(1.0f, ImGui::GetStyle().FramePadding.y * 0.35f));
 		return std::min(desiredSize, maxSize);
 	}
 
-	float GetSteamVRDockHandleSize(float a_uiScale)
+	float GetSteamVRDockHandleSize()
 	{
-		return GetHeaderActionIconSize(a_uiScale);
+		return GetHeaderActionIconSize();
 	}
 
 	float GetSteamVRResizeHandleSize(float a_uiScale)
 	{
-		const float baseHandleSize = std::max(ImGui::GetFontSize() * 1.15f, 18.0f) * a_uiScale;
+		const float baseHandleSize = std::max(ImGui::GetFontSize() * 1.15f, 18.0f * a_uiScale);
 		return baseHandleSize * 1.875f;
 	}
 
@@ -343,7 +344,7 @@ void MenuHeaderRenderer::RenderDockedIcons(const std::vector<ActionIcon>& action
 		return;
 	const auto titleBar = node->TabBar->BarRect;
 	const float titleBarHeight = titleBar.GetHeight();
-	const float iconSize = GetDockedActionIconSize(uiScale, titleBarHeight);
+	const float iconSize = GetDockedActionIconSize(titleBarHeight);
 	const float spacing = ThemeManager::Constants::DOCKED_ICON_SPACING * uiScale;
 	float x = titleBar.Max.x - ThemeManager::Constants::DOCKED_RIGHT_MARGIN * uiScale;
 	const float y = titleBar.Min.y + (titleBarHeight - iconSize) * .5f;
@@ -355,13 +356,13 @@ void MenuHeaderRenderer::RenderDockedIcons(const std::vector<ActionIcon>& action
 	}
 }
 
-void MenuHeaderRenderer::RenderSteamVRDockHandle(float uiScale, ImGuiID dockSpaceId)
+void MenuHeaderRenderer::RenderSteamVRDockHandle(ImGuiID dockSpaceId)
 {
 	ImGuiWindow* window = ImGui::GetCurrentWindow();
 	if (!window)
 		return;
 
-	const float handleSize = GetSteamVRDockHandleSize(uiScale);
+	const float handleSize = GetSteamVRDockHandleSize();
 	const ImVec2 buttonSize(handleSize, handleSize);
 
 	const bool headsetPointer = globals::game::isVR && globals::features::vr.IsMenuPointerInHeadset();
@@ -413,17 +414,17 @@ float MenuHeaderRenderer::GetFeaturePanelWidth()
 	return std::clamp(headerContentAlignment.right + rightPadding - ImGui::GetCursorScreenPos().x, 1.0f, std::max(1.0f, available));
 }
 
-void MenuHeaderRenderer::RenderSteamVRResizeHandles(float uiScale)
+void MenuHeaderRenderer::RenderSteamVRResizeHandles(float uiScale, ImVec2 minimumSize)
 {
-	RenderResizeHandles(uiScale, true);
+	RenderResizeHandles(uiScale, minimumSize, true);
 }
 
-void MenuHeaderRenderer::RenderResizeGrip(float uiScale, bool customResizeControls)
+void MenuHeaderRenderer::RenderResizeGrip(float uiScale, ImVec2 minimumSize, bool customResizeControls)
 {
-	RenderResizeHandles(uiScale, false, customResizeControls);
+	RenderResizeHandles(uiScale, minimumSize, false, customResizeControls);
 }
 
-void MenuHeaderRenderer::RenderResizeHandles(float uiScale, bool steamVRControls, bool customResizeControls)
+void MenuHeaderRenderer::RenderResizeHandles(float uiScale, ImVec2 minimumSize, bool steamVRControls, bool customResizeControls)
 {
 	if (globals::game::isVR && globals::features::vr.IsMenuPointerInHeadset()) {
 		if (g_menuResizeDragState.activeId != 0 && ImGui::GetActiveID() == g_menuResizeDragState.activeId)
@@ -438,26 +439,23 @@ void MenuHeaderRenderer::RenderResizeHandles(float uiScale, bool steamVRControls
 	const ImVec2 windowPos = window->Pos;
 	const ImVec2 windowSize = window->Size;
 	const float topLeftSize = GetSteamVRResizeHandleSize(uiScale);
-	const float bottomRightSize = steamVRControls ? topLeftSize * 1.2f : std::max(ImGui::GetFontSize() * 1.5f, 18.0f) * uiScale;
+	const float bottomRightSize = steamVRControls ? topLeftSize * 1.2f : std::max(ImGui::GetFontSize() * 1.5f, 18.0f * uiScale);
 	const float handleInset = GetSteamVRResizeHandleInset(uiScale);
-	const bool headsetControls = steamVRControls || customResizeControls;
 	const ImGuiViewport* viewport = ImGui::GetMainViewport();
-	const ImVec2 resizeBoundsMin = viewport ? viewport->WorkPos : ImVec2(0.0f, 0.0f);
-	const ImVec2 resizeBoundsMax = viewport ?
-	                                   ImVec2(viewport->WorkPos.x + viewport->WorkSize.x, viewport->WorkPos.y + viewport->WorkSize.y) :
-	                                   ImGui::GetIO().DisplaySize;
+	const ImVec2 canvasOrigin = viewport ? viewport->WorkPos : ImVec2(0.0f, 0.0f);
+	const ImVec2 canvasSize = viewport ? viewport->WorkSize : ImGui::GetIO().DisplaySize;
+	const float padding = MenuUI::Layout::CanvasPadding;
+	// Match canvas recovery so a held edge drag cannot fight the next frame's bounds repair.
+	const ImVec2 resizeBoundsMin{ canvasOrigin.x + padding, canvasOrigin.y + padding };
+	const ImVec2 resizeBoundsMax{ resizeBoundsMin.x + std::max(1.0f, canvasSize.x - padding * 2),
+		resizeBoundsMin.y + std::max(1.0f, canvasSize.y - padding * 2) };
 	auto drawResizeHandle = [&](const char* id, const ImVec2& min, bool topLeft, float handleSize) {
-		const ImVec2 themeMinimum = ImGui::GetStyle().WindowMinSize;
-		float minWidth = themeMinimum.x;
-		float minHeight = themeMinimum.y;
-		if (headsetControls) {
-			// Available space extends from the fixed opposite corner toward the dragged edge.
-			const ImVec2 available = topLeft ?
-			                             ImVec2(windowPos.x + windowSize.x - resizeBoundsMin.x, windowPos.y + windowSize.y - resizeBoundsMin.y) :
-			                             ImVec2(resizeBoundsMax.x - windowPos.x, resizeBoundsMax.y - windowPos.y);
-			minWidth = ClampResizeValue(420.0f * uiScale, themeMinimum.x, available.x);
-			minHeight = ClampResizeValue(320.0f * uiScale, themeMinimum.y, available.y);
-		}
+		// Direct SetWindowSize calls must honor the same usable minimum as native resizing.
+		const ImVec2 available = topLeft ?
+		                             ImVec2(windowPos.x + windowSize.x - resizeBoundsMin.x, windowPos.y + windowSize.y - resizeBoundsMin.y) :
+		                             ImVec2(resizeBoundsMax.x - windowPos.x, resizeBoundsMax.y - windowPos.y);
+		const float minWidth = std::min(minimumSize.x, available.x);
+		const float minHeight = std::min(minimumSize.y, available.y);
 		const ImGuiID itemId = window->GetID(id);
 		const ImRect bounds(min, ImVec2(min.x + handleSize, min.y + handleSize));
 		if (!ImGui::ItemAdd(bounds, itemId, nullptr, ImGuiItemFlags_NoNav))
@@ -543,10 +541,10 @@ void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showL
 
 	ImGuiStyle& style = ImGui::GetStyle();
 	const float currentFontSize = ImGui::GetFontSize();
-	const float actionIconSize = GetHeaderActionIconSize(uiScale);
-	const float textScaleFactor = ThemeManager::Constants::HEADER_BASE_TEXT_SCALE * uiScale;
+	const float actionIconSize = GetHeaderActionIconSize();
+	const float textScaleFactor = ThemeManager::Constants::HEADER_BASE_TEXT_SCALE;
 	const float paddingX = currentFontSize;
-	const float dockReserve = showSteamVRDockHandle ? GetSteamVRDockHandleSize(uiScale) + GetSteamVRHeaderRightInset(uiScale) + style.ItemSpacing.x : 0;
+	const float dockReserve = showSteamVRDockHandle ? GetSteamVRDockHandleSize() + GetSteamVRHeaderRightInset(uiScale) + style.ItemSpacing.x : 0;
 	const float paddingY = style.FramePadding.y * 2.0f;
 	const float iconSpacing = ThemeManager::Constants::UNDOCKED_ICON_ITEM_SPACING * uiScale;
 	const float paddingReduction = ThemeManager::Constants::UNDOCKED_ICON_PADDING_REDUCTION * uiScale;
@@ -620,8 +618,8 @@ void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showL
 		drawList->AddText({ badgeMin.x + currentFontSize * .6f, centerY - currentFontSize * .5f }, textColor, runtime);
 	}
 	if (showSteamVRDockHandle) {
-		ImGui::SetCursorScreenPos({ rightLimit - paddingX - GetSteamVRDockHandleSize(uiScale) - GetSteamVRHeaderRightInset(uiScale), actionsY - GetSteamVRDockHandleSize(uiScale) * .5f });
-		RenderSteamVRDockHandle(uiScale, steamVRDockSpaceId);
+		ImGui::SetCursorScreenPos({ rightLimit - paddingX - GetSteamVRDockHandleSize() - GetSteamVRHeaderRightInset(uiScale), actionsY - GetSteamVRDockHandleSize() * .5f });
+		RenderSteamVRDockHandle(steamVRDockSpaceId);
 	}
 
 	float iconX = iconStartX;

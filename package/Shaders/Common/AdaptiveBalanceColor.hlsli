@@ -3,11 +3,13 @@
 
 #include "Common/Color.hlsli"
 
+#if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
 namespace AdaptiveBalanceColor
 {
 	/// Grades the composed scene in linear light before fades and display encoding.
-	float3 Apply(float3 color, float contrast, float saturation, bool linearLighting)
+	float3 Apply(float3 color, float contrast, float saturation, bool linearLighting, float gammaOffset = 0.0)
 	{
+		color = Color::AdjustUtilityColor(color, 1.0, gammaOffset, linearLighting);
 		// Neutral profiles must retain the original path without a gamma round trip.
 		[branch] if (contrast != 1.0 || saturation != 1.0)
 		{
@@ -32,5 +34,6 @@ namespace AdaptiveBalanceColor
 		return color;
 	}
 }
+#endif
 
 #endif

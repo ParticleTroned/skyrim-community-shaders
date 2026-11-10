@@ -1,4 +1,7 @@
 #include "ProfilingRenderer.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Diagnostics/NvPerf.h"
+#endif
 #include "PerformanceTuningRenderer.h"
 #include "SettingsPage.h"
 
@@ -12,6 +15,7 @@
 #include <string_view>
 #include <unordered_map>
 
+#include "Features/PerformanceOverlay.h"
 #include "Features/Upscaling.h"
 #include "Globals.h"
 #include "RE/M/Misc.h"
@@ -19,6 +23,7 @@
 #include "Util.h"
 #include "Utils/FeatureProfiling.h"
 #include "Utils/OpenVRFrameTiming.h"
+#include "Utils/ProfilerTiming.h"
 #include "Utils/UI.h"
 
 static constexpr float kGraphHeadroomScale = 1.2f;
@@ -522,39 +527,14 @@ static uint32_t CollectDisplayTimingSamples(
 	return sampleCount;
 }
 
-static float GetSortedPercentile(const std::array<float, kDisplayedRollingFrameCount>& samples, uint32_t sampleCount, float percentile)
-{
-	if (sampleCount == 0)
-		return 0.0f;
-
-	const float idx = (percentile / 100.0f) * static_cast<float>(sampleCount - 1);
-	const uint32_t lo = static_cast<uint32_t>(idx);
-	const uint32_t hi = std::min(lo + 1, sampleCount - 1);
-	const float frac = idx - static_cast<float>(lo);
-	return samples[lo] * (1.0f - frac) + samples[hi] * frac;
-}
-
 static DisplayTimingStats ComputeDisplayTimingStats(
-	std::array<float, kDisplayedRollingFrameCount> samples,
+	const std::array<float, kDisplayedRollingFrameCount>& samples,
 	uint32_t sampleCount,
 	bool includePercentiles = true)
 {
-	DisplayTimingStats stats;
-	if (sampleCount == 0)
-		return stats;
-
-	float sum = 0.0f;
-	for (uint32_t i = 0; i < sampleCount; ++i)
-		sum += samples[i];
-
-	stats.avgMs = sum / static_cast<float>(sampleCount);
-	if (includePercentiles) {
-		std::sort(samples.begin(), samples.begin() + sampleCount);
-		stats.p95Ms = GetSortedPercentile(samples, sampleCount, 95.0f);
-		stats.p99Ms = GetSortedPercentile(samples, sampleCount, 99.0f);
-	}
-	stats.timeMs = stats.avgMs;
-	return stats;
+	const auto stats = Util::ProfilerTiming::CalculateStatistics(
+		{ samples.data(), sampleCount }, includePercentiles);
+	return { stats.average, stats.average, stats.p95, stats.p99 };
 }
 
 static bool TryGetDisplayTimingStats(const Profiler::TimerResult& result, bool cpuMode, DisplayTimingStats& stats)
@@ -675,6 +655,8 @@ void ProfilingRenderer::RenderTimingModeToggle()
 	if (newMode != timingMode) {
 		timingMode = newMode;
 		timeSinceLastUpdate = kStatsRefreshSeconds;
+		gpuGraph = ImGuiUtils::ProfilerGraph{ Profiler::kHistorySize };
+		gpuGraphGate.Reset();
 	}
 }
 
@@ -693,7 +675,7 @@ void ProfilingRenderer::SetupTimingTableColumns(float passColumnWidth, bool incl
 void ProfilingRenderer::RenderGraph()
 {
 	auto& profiler = (*globals::profiler);
-	const auto& results = profiler.GetResults();
+	const auto& results = profiler.GetResults(false);
 	bool cpuMode = (timingMode == TimingMode::CPU);
 
 	if (results.empty())
@@ -711,7 +693,7 @@ void ProfilingRenderer::RenderGraph()
 		if (sampleCount == 0)
 			continue;
 
-		const auto stats = ComputeDisplayTimingStats(samples, sampleCount);
+		const auto stats = ComputeDisplayTimingStats(samples, sampleCount, false);
 		float timeMs = stats.timeMs;
 
 		std::string groupName;
@@ -734,7 +716,8 @@ void ProfilingRenderer::RenderGraph()
 	if (tasks.empty())
 		return;
 
-	gpuGraph.LoadFrameData(tasks.data(), tasks.size());
+	if (globals::state && gpuGraphGate.ShouldSample(globals::state->frameCount, profiler.GetHistoryEpoch()))
+		gpuGraph.LoadFrameData(tasks.data(), tasks.size());
 
 	float maxFrameTimeSec = gpuGraph.GetPeakFrameTime() * kGraphHeadroomScale;
 	if (maxFrameTimeSec < kMainGraphMinFrameTimeSec)
@@ -783,7 +766,7 @@ ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData
 	data.attribution = attribution;
 	if (!globals::profiler || !globals::profiler->IsInitialized())
 		return data;
-	const auto& results = timingResults ? *timingResults : globals::profiler->GetResults();
+	const auto& results = timingResults ? *timingResults : globals::profiler->GetResults(false);
 	DisplayTimingSampleAccumulator totalSamples;
 	const bool compactLabel = featurePrefixes.size() == 1;
 	for (const auto& r : results) {
@@ -833,7 +816,7 @@ ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData
 	return data;
 }
 
-bool ProfilingRenderer::RenderFeatureTimingGraph(const std::string& featurePrefix, const FeatureTimingData& data, ImGuiUtils::ProfilerGraph& graph, int graphHeight)
+bool ProfilingRenderer::RenderFeatureTimingGraph(const std::string& featurePrefix, const FeatureTimingData& data, ImGuiUtils::ProfilerGraph& graph, Util::GraphSampleGate& gate, int graphHeight)
 {
 	(void)featurePrefix;
 
@@ -856,7 +839,8 @@ bool ProfilingRenderer::RenderFeatureTimingGraph(const std::string& featurePrefi
 	if (tasks.empty())
 		return false;
 
-	graph.LoadFrameData(tasks.data(), tasks.size());
+	if (globals::state && gate.ShouldSample(globals::state->frameCount, globals::profiler->GetHistoryEpoch()))
+		graph.LoadFrameData(tasks.data(), tasks.size());
 
 	float maxFrameTimeSec = graph.GetPeakFrameTime() * kGraphHeadroomScale;
 	if (maxFrameTimeSec < kFeatureGraphMinFrameTimeSec)
@@ -872,7 +856,7 @@ bool ProfilingRenderer::RenderFeatureTimingGraph(const std::string& featurePrefi
 	return true;
 }
 
-bool ProfilingRenderer::RenderTimingSection(const std::string& key, const FeatureTimingData& data, bool cpuMode, bool showTable)
+bool ProfilingRenderer::RenderTimingSection(const std::string& key, const FeatureTimingData& data, bool cpuMode, bool showTable, const FeatureTimingData* statistics)
 {
 	const bool shared = data.attribution == TimingAttribution::Shared;
 	if (data.entries.empty()) {
@@ -885,7 +869,8 @@ bool ProfilingRenderer::RenderTimingSection(const std::string& key, const Featur
 	if (!shared) {
 		auto& state = featureGraphs[key];
 		auto& graph = cpuMode ? state.cpuGraph : state.gpuGraph;
-		if (RenderFeatureTimingGraph(key, data, graph, 100))
+		auto& gate = cpuMode ? state.cpuGate : state.gpuGate;
+		if (RenderFeatureTimingGraph(key, data, graph, gate, 100))
 			ImGui::Spacing();
 	}
 
@@ -893,9 +878,10 @@ bool ProfilingRenderer::RenderTimingSection(const std::string& key, const Featur
 		ImGui::Text("Instrumented average: %.3f ms", data.totalAvg);
 
 	if (showTable || shared) {
+		const auto& table = statistics ? *statistics : data;
 		std::vector<std::string> passLabels;
-		passLabels.reserve(data.entries.size() + 1);
-		for (const auto& e : data.entries)
+		passLabels.reserve(table.entries.size() + 1);
+		for (const auto& e : table.entries)
 			passLabels.push_back(e.label);
 		if (!shared)
 			passLabels.emplace_back("Instrumented subtotal");
@@ -909,17 +895,17 @@ bool ProfilingRenderer::RenderTimingSection(const std::string& key, const Featur
 		SetupTimingTableColumns(0, false);
 		ImGui::TableHeadersRow();
 
-		for (const auto& e : data.entries) {
+		for (const auto& e : table.entries) {
 			ImGui::TableNextRow();
 			ImGui::TableNextColumn();
 			RenderColorMarker(GetGroupColor(e.colorKey));
 			ImGui::TextWrapped("%s", e.label.c_str());
 			ImGui::TableNextColumn();
-			TextHeat("%.3f", e.avgMs, data.maxAvg);
+			TextHeat("%.3f", e.avgMs, table.maxAvg);
 			ImGui::TableNextColumn();
-			TextHeat("%.3f", e.p95Ms, data.maxP95);
+			TextHeat("%.3f", e.p95Ms, table.maxP95);
 			ImGui::TableNextColumn();
-			TextHeat("%.3f", e.p99Ms, data.maxP99);
+			TextHeat("%.3f", e.p99Ms, table.maxP99);
 		}
 
 		if (!shared) {
@@ -929,11 +915,11 @@ bool ProfilingRenderer::RenderTimingSection(const std::string& key, const Featur
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::TextWrapped("Subtotal excludes nesting overlap. Each row is self time, excluding profiled descendants.");
 			ImGui::TableNextColumn();
-			ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "%.3f", data.totalAvg);
+			ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "%.3f", table.totalAvg);
 			ImGui::TableNextColumn();
-			ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "%.3f", data.totalP95);
+			ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "%.3f", table.totalP95);
 			ImGui::TableNextColumn();
-			ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "%.3f", data.totalP99);
+			ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "%.3f", table.totalP99);
 		}
 	}
 	return true;
@@ -945,11 +931,30 @@ bool ProfilingRenderer::RenderFeatureTimingData(const std::string& featurePrefix
 	ImGui::PushID(cpuMode ? "CPU" : "GPU");
 	const SKSE::stl::scope_exit restoreMode([] { ImGui::PopID(); });
 	const auto* view = Util::FeatureProfiling::Find(featurePrefix);
+	const auto renderSection = [&](const std::string& key, bool table, const auto& collect, uint64_t externalEpoch = 0) {
+		const auto live = collect(false);
+		if (!table)
+			return RenderTimingSection(key, live, cpuMode, false);
+		auto& cache = featureStatistics[key][cpuMode ? 1 : 0];
+		const double now = ImGui::GetTime();
+		const uint64_t epoch = globals::profiler->GetHistoryEpoch();
+		const bool samePasses = std::equal(live.entries.begin(), live.entries.end(),
+			cache.data.entries.begin(), cache.data.entries.end(),
+			[](const auto& left, const auto& right) { return left.colorKey == right.colorKey; });
+		if (cache.updatedAt < 0.0 || now < cache.updatedAt || now - cache.updatedAt >= kStatsRefreshSeconds ||
+			cache.historyEpoch != epoch || cache.externalEpoch != externalEpoch || !samePasses) {
+			cache.data = collect(true);
+			cache.updatedAt = now;
+			cache.historyEpoch = epoch;
+			cache.externalEpoch = externalEpoch;
+		}
+		return RenderTimingSection(key, live, cpuMode, true, &cache.data);
+	};
 	bool rendered = false;
 	if (!view || view->HasOwnedTimings(cpuMode)) {
 		MenuUI::SectionHeading(cpuMode ? "Feature CPU timings (ms)" : "Feature GPU timings (ms)");
-		const auto data = CollectFeatureTimingData(featurePrefix, cpuMode);
-		rendered = RenderTimingSection(featurePrefix, data, cpuMode, showTable);
+		rendered = renderSection(featurePrefix, showTable,
+			[&](bool statistics) { return CollectFeatureTimingData(featurePrefix, cpuMode, statistics); });
 	}
 	if (!cpuMode && featurePrefix == "NeuralRendering") {
 		MenuUI::SectionHeading("NR inference GPU timings (D3D12, ms)");
@@ -968,15 +973,15 @@ bool ProfilingRenderer::RenderFeatureTimingData(const std::string& featurePrefix
 			result.historyCount = timing.history.count;
 			results.push_back(std::move(result));
 		}
-		const auto data = CollectFeatureTimingData({ featurePrefix }, false, true, TimingAttribution::Shared, true, &results);
-		rendered = RenderTimingSection(featurePrefix + "::inference", data, false, true) || rendered;
+		rendered = renderSection(featurePrefix + "::inference", true, [&](bool statistics) { return CollectFeatureTimingData({ featurePrefix }, false, statistics, TimingAttribution::Shared, true, &results); }, globals::profiler->GetGpuCaptureEpoch()) || rendered;
 	}
 	if (view && !view->sharedPrefixes.empty()) {
 		MenuUI::SectionHeading(cpuMode ? "Shared CPU pass timings (ms)" : "Shared GPU pass timings (ms)");
 		MenuUI::DetailText(Util::FeatureProfiling::sharedCoverage);
 		std::vector<std::string> prefixes(view->sharedPrefixes.begin(), view->sharedPrefixes.end());
-		const auto data = CollectFeatureTimingData(prefixes, cpuMode, true, TimingAttribution::Shared);
-		rendered = RenderTimingSection(featurePrefix + "::shared", data, cpuMode, true) || rendered;
+		rendered = renderSection(featurePrefix + "::shared", true,
+					   [&](bool statistics) { return CollectFeatureTimingData(prefixes, cpuMode, statistics, TimingAttribution::Shared); }) ||
+		           rendered;
 	}
 	return rendered;
 }
@@ -1051,7 +1056,7 @@ bool ProfilingRenderer::HasFeatureTimers(const std::string& featurePrefix)
 		return false;
 
 	const auto* view = Util::FeatureProfiling::Find(featurePrefix);
-	for (const auto& result : globals::profiler->GetResults()) {
+	for (const auto& result : globals::profiler->GetResults(false)) {
 		if (!result.valid || !HasAnyLiveTimingMode(result))
 			continue;
 		const bool hasOwnedSamples = !view ||
@@ -1080,11 +1085,19 @@ bool ProfilingRenderer::RenderEnabledControl()
 
 void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle, bool showEnabledToggle)
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (showTable)
+		NvPerf::DrawSettings();
+#endif
 	if (!globals::profiler || !globals::profiler->IsInitialized()) {
 		ImGui::TextDisabled("Profiler is unavailable.");
 		return;
 	}
 	auto& profiler = (*globals::profiler);
+	if (statisticsHistoryEpoch != profiler.GetHistoryEpoch()) {
+		statisticsHistoryEpoch = profiler.GetHistoryEpoch();
+		timeSinceLastUpdate = kStatsRefreshSeconds;
+	}
 	const bool fullProfilerPage = showTable || showModeToggle;
 
 	if (fullProfilerPage) {
@@ -1101,6 +1114,9 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle, bo
 	}
 
 	profiler.RequestCapture();
+
+	if (fullProfilerPage)
+		globals::features::performanceOverlay.DrawRenderTargetProfiling();
 
 	bool cpuMode = (timingMode == TimingMode::CPU);
 	if (showModeToggle) {
@@ -1129,7 +1145,7 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle, bo
 		std::unordered_map<std::string, DisplayTimingSampleAccumulator> groupSampleTotals;
 		DisplayTimingSampleAccumulator totalSamples;
 
-		for (const auto& result : profiler.GetResults()) {
+		for (const auto& result : profiler.GetResults(false)) {
 			if (!result.valid || !HasLiveTimingMode(result, cpuMode))
 				continue;
 
@@ -1293,8 +1309,13 @@ void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)
 		mode = chosen;
 
 	mode = std::clamp(mode, static_cast<int>(FeatureTimingMode::Off), static_cast<int>(FeatureTimingMode::CPU));
-	if (chosen >= 0)
+	if (chosen >= 0 && featureMode != static_cast<FeatureTimingMode>(mode)) {
 		featureMode = static_cast<FeatureTimingMode>(mode);
+		if (auto it = featureGraphs.find(featurePrefix); it != featureGraphs.end()) {
+			it->second.gpuGate.Reset();
+			it->second.cpuGate.Reset();
+		}
+	}
 
 	if (featureMode == FeatureTimingMode::Off) {
 		ImGui::TextDisabled("Feature profiling is off.");
@@ -1321,7 +1342,7 @@ void ProfilingRenderer::RenderFeaturePerformanceSummary(const std::string& featu
 	RenderFeatureTimingData(featurePrefix, FeatureTimingMode::CPU, false);
 }
 
-ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanceTimingSummary(const std::vector<std::string>& featurePrefixes, bool requestCapture)
+ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CaptureFrameTimingSummary(bool requestCapture)
 {
 	PerformanceTimingSummary summary;
 	summary.frameCount = globals::state ? globals::state->frameCount : 0;
@@ -1334,6 +1355,24 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 		profiler.SetUserEnabled(true);
 	if (requestCapture)
 		profiler.RequestCapture();
+
+	if (globals::game::isVR) {
+		CaptureOpenVRGameTiming(summary);
+	} else {
+		summary.frameMs = GetAverageGameFrameMs(summary.frameSampleMs, summary.hasFrameSample);
+		CaptureFlatGameTiming(profiler, summary);
+	}
+	NormalizeGameFrameTiming(summary);
+	summary.valid = summary.hasFrameSample || summary.hasGameGpuSample || summary.hasGameCpuSample;
+	return summary;
+}
+
+ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanceTimingSummary(const std::vector<std::string>& featurePrefixes, bool requestCapture)
+{
+	auto summary = CaptureFrameTimingSummary(requestCapture);
+	if (!globals::profiler)
+		return summary;
+	auto& profiler = *globals::profiler;
 
 	struct TimingBucket
 	{
@@ -1359,7 +1398,7 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 	std::unordered_map<std::string, TimingBucket> timingBuckets;
 	DisplayTimingSampleAccumulator gpuTotalSamples;
 	DisplayTimingSampleAccumulator cpuTotalSamples;
-	for (const auto& result : profiler.GetResults()) {
+	for (const auto& result : profiler.GetResults(false)) {
 		if (!result.valid || !HasAnyLiveTimingMode(result))
 			continue;
 
@@ -1387,12 +1426,6 @@ ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CapturePerformanc
 		}
 	}
 
-	if (globals::game::isVR) {
-		CaptureOpenVRGameTiming(summary);
-	} else {
-		summary.frameMs = GetAverageGameFrameMs(summary.frameSampleMs, summary.hasFrameSample);
-		CaptureFlatGameTiming(profiler, summary);
-	}
 	if (gpuTotalSamples.HasSamples())
 		summary.gpuTotalMs = gpuTotalSamples.GetStats(false).avgMs;
 	if (cpuTotalSamples.HasSamples())

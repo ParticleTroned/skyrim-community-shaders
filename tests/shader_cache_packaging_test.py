@@ -215,6 +215,28 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 )
 
     @unittest.skipUnless(shutil.which("cmake"), "CMake is required to inspect cache archives")
+    def test_standard_only_archive_option_preserves_default_rejection(self) -> None:
+        self.assertEqual(BUILDER.compile_variants_for(BUILDER.SHIPPED_CACHE_PROFILE, False),
+                         (BUILDER.STANDARD_CACHE_VARIANT,))
+        self.assertEqual(BUILDER.compile_variants_for(BUILDER.SHIPPED_CACHE_PROFILE), BUILDER.CACHE_VARIANTS)
+        for horizon in (False, True):
+            with self.subTest(horizon=horizon), tempfile.TemporaryDirectory() as temporary:
+                workspace = Path(temporary)
+                root = workspace / "runtime"
+                self._managed_cache(root, "VR", horizon=horizon)
+                if horizon:
+                    with self.assertRaisesRegex(SystemExit, "excluded Horizon Fix"):
+                        BUILDER.prepare_cache_archive(root, workspace, "VR", "standard", "CSX 3.18-VR",
+                                                      shutil.which("cmake"), include_horizon_fix=False)
+                else:
+                    archive = BUILDER.prepare_cache_archive(root, workspace, "VR", "standard", "CSX 3.18-VR",
+                                                            shutil.which("cmake"), include_horizon_fix=False)
+                    self.assertTrue(archive.is_file())
+                    with self.assertRaisesRegex(SystemExit, "missing required compatibility variants"):
+                        BUILDER.validate_cache_archive(archive, shutil.which("cmake"), "VR", "CSX 3.18-VR",
+                                                       horizon_variants=True)
+
+    @unittest.skipUnless(shutil.which("cmake"), "CMake is required to inspect cache archives")
     def test_archive_rejects_horizon_declaration_without_records(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "runtime"
@@ -633,6 +655,37 @@ class ShaderCachePackagingTests(unittest.TestCase):
                 shader["configs"]["PSHADER"]["common_defines"],
             )
 
+    def test_profile_globals_reach_compiler_stages_without_capture_aliases(self) -> None:
+        import yaml
+        from hlslkit.compile_shaders import parse_shader_configs
+
+        for profile in (BUILDER.SHIPPED_CACHE_PROFILE, BUILDER.PATKA_CACHE_PROFILE):
+            with self.subTest(profile=profile.name), tempfile.TemporaryDirectory() as temporary:
+                original = self._sample_shader_config()
+                original["shaders"].append({"file": "Utility.hlsl", "configs": {
+                    "PSHADER": {"common_defines": [], "entries": [{"entry": "Utility:Pixel:0", "defines": []}]}}})
+                # Captures need not share YAML aliases with their top-level metadata.
+                for shader in original["shaders"]:
+                    for stage_name, stage in shader["configs"].items():
+                        stage["common_defines"] = [[stage_name, "UNIFIED_WATER=1"]]
+                        stage.setdefault("entries", [{"entry": "main:0", "defines": []}])
+                        for entry in stage["entries"]:
+                            entry["defines"].extend(["UNIFIED_WATER=0", "UNIFIED_WATER"])
+                configured = BUILDER.apply_cache_profile_defines(original, profile)
+                configured = BUILDER.apply_cache_profile_defines(configured, profile)
+                BUILDER.prepare_fxc_defines(configured)
+                path = Path(temporary) / "config.yaml"
+                path.write_text(yaml.safe_dump(configured), encoding="utf-8")
+                tasks = parse_shader_configs(str(path))
+                self.assertTrue(tasks)
+                for source, stage, entry, defines in tasks:
+                    selected = [value for value in defines if value.partition("=")[0] == "UNIFIED_WATER"]
+                    self.assertEqual(selected, [] if source == "Utility.hlsl" else ["UNIFIED_WATER="], (source, stage, entry))
+
+        nested = [["UNIFIED_WATER", ["OTHER=1"]]]
+        BUILDER.append_missing_defines(nested, ("UNIFIED_WATER", "OTHER=1", "NEW", "NEW"))
+        self.assertEqual(nested, [["UNIFIED_WATER", ["OTHER=1"]], "NEW"])
+
     def test_bundled_grass_defines_match_native_factory_without_leaking(self) -> None:
         for profile in (BUILDER.SHIPPED_CACHE_PROFILE, BUILDER.PATKA_CACHE_PROFILE):
             with self.subTest(profile=profile.name):
@@ -658,6 +711,44 @@ class ShaderCachePackagingTests(unittest.TestCase):
                     {key: [entry["entry"] for entry in stage["entries"]] for key, stage in grass_before.items()},
                     {key: [entry["entry"] for entry in stage["entries"]] for key, stage in grass_after.items()},
                 )
+
+    def test_reverse_depth_inputs_match_boot_setting_and_runtime_macro_values(self) -> None:
+        import yaml
+        from hlslkit.compile_shaders import parse_shader_configs
+
+        cases = (
+            ("VR", BUILDER.SHIPPED_CACHE_PROFILE, {"ReverseZ": True}, None),
+            ("VR", BUILDER.PATKA_CACHE_PROFILE, {"ReverseZ": True}, None),
+            ("SE", BUILDER.SHIPPED_CACHE_PROFILE, {"ReverseZ": True}, None),
+            ("VR", BUILDER.SHIPPED_CACHE_PROFILE, {"ReverseZ": True}, True),
+            ("SE", BUILDER.SHIPPED_CACHE_PROFILE, {"ReverseZ": True}, True),
+            ("VR", BUILDER.PATKA_CACHE_PROFILE, {"ReverseZ": True}, True),
+            ("VR", BUILDER.SHIPPED_CACHE_PROFILE, {"ReverseZ": False}, True),
+            ("SE", BUILDER.SHIPPED_CACHE_PROFILE, {}, True),
+        )
+        for runtime, profile, states, enabled in cases:
+            with self.subTest(runtime=runtime, profile=profile.name, states=states, enabled=enabled), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                config = yaml.safe_load(BUILDER.configs_for(REPO)[runtime].read_text(encoding="utf-8"))
+                config["common_defines"].append("REVERSE_Z=0")
+                first_stage = next(iter(config["shaders"][0]["configs"].values()))
+                first_stage["common_defines"].append("REVERSE_Z=1")
+                captured = root / "captured.yaml"
+                captured.write_text(yaml.safe_dump(config), encoding="utf-8")
+                filtered = BUILDER.filter_profile_defines(
+                    captured, root / "filtered.yaml", yaml, profile,
+                    feature_states=states,
+                    **({} if enabled is None else {"reverse_z_enabled": enabled}),
+                )
+                tasks = parse_shader_configs(str(filtered))
+                self.assertTrue(tasks)
+                BUILDER.compile_task_defines(tasks)
+                for source, stage, entry, defines in tasks:
+                    depth_defines = [value for value in defines if value.split("=", 1)[0] == "REVERSE_Z"]
+                    expected = []
+                    if enabled and states.get("ReverseZ", False):
+                        expected = ["REVERSE_Z=1" if source == "Utility.hlsl" else "REVERSE_Z="]
+                    self.assertEqual(depth_defines, expected, (source, stage, entry))
 
     def test_horizon_variants_layer_onto_the_shipped_profile(self) -> None:
         standard_config = BUILDER.apply_cache_profile_defines(

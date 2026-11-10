@@ -1,0 +1,107 @@
+#define LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS
+#include "Common/EyeAppearance.hlsli"
+#include "Common/FrameBuffer.hlsli"
+
+cbuffer Samples : register(b0)
+{
+	float4 colors[8];
+	float4 reflectionInputs;  // Base sample, wet sample, linear direct specular, wet roughness.
+	float4 reflectionWeights;  // Base weight, wet weight, diffuse visibility, rain suppression.
+	float4 fogInputs;
+	float4 FogColor;
+};
+RWTexture2D<float4> Result : register(u0);
+
+@SANITIZE@
+
+// Sampling is deterministic; the extracted production block owns weighting and composition.
+namespace DynamicCubemaps
+{
+	float3 GetDynamicCubemapSpecularIrradiance(float2 uv, float3 normal, float3 vertexNormal,
+		float3 viewDirection, float roughness)
+	{
+		return (normal.y > 0.5 ? reflectionInputs.y : reflectionInputs.x).xxx;
+	}
+	float3 GetDynamicCubemapSpecularIrradiance(float2 uv, float3 normal, float3 vertexNormal,
+		float3 viewDirection, float roughness, sh2 visibility)
+	{
+		return GetDynamicCubemapSpecularIrradiance(uv, normal, vertexNormal, viewDirection, roughness);
+	}
+}
+float3 GetWetnessCubemapContribution(float2 uv, float3 normal, float3 vertexNormal,
+	float3 viewDirection, float roughness, float3 reflectance, float postRain, float clarity)
+{
+	return reflectance * reflectionInputs.y;
+}
+float3 GetWetnessCubemapContribution(float2 uv, float3 normal, float3 vertexNormal,
+	float3 viewDirection, float roughness, float3 reflectance, float postRain, float clarity, sh2 visibility)
+{
+	return GetWetnessCubemapContribution(uv, normal, vertexNormal, viewDirection, roughness, reflectance, postRain, clarity);
+}
+namespace Skylighting
+{
+	void ApplySkylighting(inout float3 color, inout float3 ambient, inout float3 albedo, float visibility)
+	{
+		color *= visibility;
+		ambient *= visibility;
+	}
+}
+
+[numthreads(8, 1, 1)] void main(uint3 id : SV_DispatchThreadID)
+{
+#if defined(FORWARD_FOG_TEST)
+	float4 color = colors[id.x % 4];
+#else
+	float4 color = colors[id.x];
+#endif
+	struct Input { float4 FogParam; };
+	Input input;
+	input.FogParam = fogInputs;
+	float3 specularColor = reflectionInputs.z.xxx;
+	float3 envColor = 0;
+	float3 diffuseColor = 0;
+	float3 reflectionDiffuseColor = 0;
+	float3 directionalAmbientColor = 0.2;
+	struct LobeWeights { float3 diffuse; float3 specular; };
+	LobeWeights indirectLobeWeights;
+	indirectLobeWeights.diffuse = 0;
+	indirectLobeWeights.specular = reflectionWeights.x.xxx;
+	struct Material { float Roughness; };
+	Material material;
+	material.Roughness = 0.5;
+	bool dynamicCubemap = true;
+	float2 screenUV = 0;
+	float3 worldNormal = float3(0, 0, 1);
+	float3 vertexNormal = worldNormal;
+	float3 viewDirection = worldNormal;
+	float3 wetIndirectNormal = float3(0, 1, 0);
+	float3 wetnessNormal = wetIndirectNormal;
+	float waterRoughnessSpecular = reflectionInputs.w;
+	float3 wetnessReflectance = reflectionWeights.y.xxx;
+	float wetRainCubemapSuppression = reflectionWeights.w;
+	float postRainBlend = 0;
+	float postRainCubemapGlareReductionFromClarity = 0;
+	sh2 skylightingSH = (sh2)0;
+	float skylightingDiffuse = reflectionWeights.z;
+	float3 vertexColor = 1;
+@COMPOSITION@
+#if defined(FORWARD_FOG_TEST)
+	float4 composedColor = color;
+	{
+		float3 fogColor = AdaptiveBalanceAppearance::ApplyFog(Color::Fog(input.FogParam.xyz));
+		if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::AdditiveLighting) != 0)
+			fogColor = 0.0;
+		float4 FogNearColor = FogColor;
+		float fogFactor = input.FogParam.w;
+		if (FrameBuffer::FrameParams.y && FrameBuffer::FrameParams.z) {
+@OPAQUE_FOG@
+		}
+	}
+#endif
+@FOG@
+#if defined(FORWARD_FOG_TEST)
+	Result[id.xy] = id.x < 4 ? color : composedColor;
+#else
+	Result[id.xy] = float4(color.xyz, specularColor.x);
+#endif
+}

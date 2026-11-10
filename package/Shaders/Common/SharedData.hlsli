@@ -1,6 +1,8 @@
 #ifndef __SHARED_DATA_DEPENDENCY_HLSL__
 #define __SHARED_DATA_DEPENDENCY_HLSL__
 
+#include "Common/ReverseZ.hlsli"
+
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
 #include "Common/VR.hlsli"
@@ -29,7 +31,7 @@ namespace SharedData
 		float PBRMetalHighlightScale;   // Global scale for direct PBR metal highlights (1.0 = default)
 		uint HasDirectionalShadows;     // Exterior or Interior Sun directional shadow availability
 		float VolumetricLightingSaturation;
-		float GodrayFinalBrightness;
+		float VolumetricLightingReserved;
 		float SSSHumanMaleIntensity;
 		float SSSHumanMaleSaturation;
 		float SSSHumanMaleBrightness;
@@ -48,6 +50,7 @@ namespace SharedData
 		float4 VRFoveationCenterOffsets;  // xy=left eye offset, zw=right eye offset
 
 		float4 VolumetricLightingCustomColor;  // rgb=custom color, w=contribution
+		float4 VolumetricLightingClarity;      // x=haze suppression, y=shaft intensity, zw=reserved
 	};
 
 	struct GrassLightingSettings
@@ -347,7 +350,41 @@ namespace SharedData
 		float godraySaturation;
 		float eyeSpecularBrightness;
 		float eyeBrightness;
-		float padding;
+		float auroraIntensity;
+		float auroraCurve;
+		float3 padding;
+		float sceneGammaOffset;
+		float ambientGammaOffset;
+		float directionalGammaOffset;
+		float pointLightGammaOffset;
+		float linearPointLightSaturation;
+		float linearPointLightGammaOffset;
+		float spotlightSaturation;
+		float spotlightGammaOffset;
+		float linearSpotlightSaturation;
+		float linearSpotlightGammaOffset;
+		float omnidirectionalBulbSaturation;
+		float omnidirectionalBulbGammaOffset;
+		float linearOmnidirectionalBulbSaturation;
+		float linearOmnidirectionalBulbGammaOffset;
+		float emissiveSaturation;
+		float emissiveGammaOffset;
+		float glowmapSaturation;
+		float glowmapGammaOffset;
+		float effectLightingSaturation;
+		float effectLightingGammaOffset;
+		float effectSaturation;
+		float effectGammaOffset;
+		float skyStaticSaturation;
+		float skyStaticGammaOffset;
+		float sunGlareSaturation;
+		float sunGlareGammaOffset;
+		float fogSaturation;
+		float volumetricIntensity;
+		float volumetricSaturation;
+		float nonlinearPointLightSaturation;
+		uint pointLightColorEnabled;
+		float utilityPadding;
 	};
 
 	struct AdaptiveBalanceSettings
@@ -419,7 +456,7 @@ namespace SharedData
 		uint Enabled;
 		float TerrainCullDistance;
 		float BlendStrength;
-		float pad0;
+		uint LandscapeSeams;
 	};
 
 	struct TruePBRSettings
@@ -490,6 +527,89 @@ namespace SharedData
 		float pad;
 	};
 
+#	if defined(SNOW_COVER) && defined(PSHADER)
+	struct SnowCoverSettings
+	{
+		float Month;
+		float TimeSnowing;
+		float SnowingDensity;
+		float SeasonalAltitude;
+
+		uint EnableExpensiveFoliage;
+		float SnowHeightOffset;
+		uint2 pad;
+
+		float RooftopSnow;
+		float RooftopHeight;
+		float RooftopExposure;
+		uint rooftopPad;
+
+		uint EnableGlints;
+		uint EnableRooftops;
+		uint EnableFoliageTint;
+		uint EnableBoundsCulling;
+
+		uint EnableSnowCover;
+		uint AffectGrassTint;
+		uint AffectTreeTint;
+		float FoliageHeightOffset;
+
+		float UVScale;
+		float peakMainAngle;
+		float peakAltAngle;
+		float minAngle;
+
+		float maxAngle;
+		float mainSpec;
+		float altSpec;
+		float mapZscale;
+
+		float2 mapScale;
+		float2 mapOffset;
+
+		float4 Glint;
+		float4 MainTint;
+		float4 AltTint;
+
+		float BlendSmoothness;
+		float WeatherFadeStart;
+		float WeatherFadeEnd;
+		float ObjectFadeStart;
+
+		float ObjectFadeEnd;
+		float ObjectFadeAmount;
+		uint2 pad2;
+
+		uint FireMeltCount;
+		float FireMeltStrength;
+		float FireMeltRadiusScale;
+		uint pad3;
+		float4 FireMeltSpheres[8];
+	};
+#		if defined(WETTERNESS)
+	struct SnowMeltSample
+	{
+		float4 state;
+		uint fireCount;
+		float fireStrength;
+		float fireRadiusScale;
+		uint padding;
+		float4 fires[8];
+		float4 lightDryingAge;
+		float4 heavyDryingAge;
+	};
+	struct SnowMeltSettings
+	{
+		uint count;
+		uint enabled;
+		uint2 padding;
+		float4 lightDryingHours;
+		float4 heavyDryingHours;
+		SnowMeltSample samples[32];
+	};
+#		endif
+#	endif
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -514,6 +634,12 @@ namespace SharedData
 		UnifiedWaterSettings unifiedWaterSettings;
 		WaterAppearanceSettings waterAppearanceSettings;
 		BloomSettings bloomSettings;
+#	if defined(SNOW_COVER) && defined(PSHADER)
+		SnowCoverSettings snowCoverSettings;
+#		if defined(WETTERNESS)
+		SnowMeltSettings snowMeltSettings;
+#		endif
+#	endif
 	};
 
 	static const uint LOD_BLENDING_FLAG_DISABLE_TERRAIN_VERTEX_COLORS = 1u;
@@ -548,12 +674,20 @@ namespace SharedData
 
 	float GetScreenDepth(float depth)
 	{
+#	ifdef REVERSE_Z
+		return CameraData.w / (CameraData.y + depth * CameraData.z);
+#	else
 		return (CameraData.w / (-depth * CameraData.z + CameraData.x));
+#	endif
 	}
 
 	float4 GetScreenDepths(float4 depths)
 	{
+#	ifdef REVERSE_Z
+		return CameraData.w / (CameraData.y + depths * CameraData.z);
+#	else
 		return (CameraData.w / (-depths * CameraData.z + CameraData.x));
+#	endif
 	}
 
 	float GetScreenDepth(float2 uv, uint a_eyeIndex = 0)

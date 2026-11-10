@@ -19,6 +19,7 @@
 
 #include "Features/CSEditor.h"
 #include "Features/DynamicCubemaps.h"
+#include "Features/FurShells.h"
 #include "Features/IBL.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/Skylighting.h"
@@ -680,6 +681,11 @@ bool Deferred::CopySceneDepth()
 	// Water also consumes this copy, including pixels outside the active scaled area.
 	context->CopyResource(depthCopy.texture, depth.texture);
 	finalSceneDepthFrame = globals::state->frameCount;
+	if (globals::state->inWorld && globals::shaderCache && globals::shaderCache->IsEnabled()) {
+		// Forward screen-space consumers must share the completed depth used by compute passes.
+		ID3D11ShaderResourceView* srv = depthCopy.depthSRV;
+		context->PSSetShaderResources(17, 1, &srv);
+	}
 	return true;
 }
 
@@ -750,9 +756,9 @@ void Deferred::DeferredPasses()
 			masks.SRV,
 			dynamicCubemaps.loaded || REL::Module::IsVR() ? Util::GetCurrentSceneDepthSRV(false) : nullptr,
 			dynamicCubemaps.loaded ? reflectance.SRV : nullptr,
-			dynamicCubemaps.loaded ? dynamicCubemaps.envTexture->srv.get() : nullptr,
-			dynamicCubemaps.loaded ? dynamicCubemaps.envReflectionsTexture->srv.get() : nullptr,
-			dynamicCubemaps.loaded && skylighting.IsRuntimeActive() ? skylighting.texProbeArray->srv.get() : nullptr,
+			dynamicCubemaps.loaded ? dynamicCubemaps.GetPublishedCubemap() : nullptr,
+			dynamicCubemaps.loaded ? dynamicCubemaps.GetPublishedCubemap(true) : nullptr,
+			dynamicCubemaps.loaded && skylighting.IsRuntimeActive() && skylighting.texProbeArray ? skylighting.texProbeArray->srv.get() : nullptr,
 			masks2.SRV,
 			ssgi_ao,
 			ssgi_hq_spec ? nullptr : ssgi_y,
@@ -1035,6 +1041,10 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 		if (terrainBlending.loaded && terrainBlending.settings.Enabled) {
 			terrainBlending.RenderTerrainBlendingPasses();
 		}
+
+		auto& fur = globals::features::furShells;
+		if (fur.loaded && fur.settings.Enabled)
+			fur.OnBeforeBlendedDecals();
 
 		const auto& upscaling = globals::features::upscaling;
 		if (deferred && deferred->deferredPass && deferred->IsCharacterCategoryEnabled() && !deferred->IsCharacterCategoryCaptureReady())

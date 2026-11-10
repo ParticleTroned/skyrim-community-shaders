@@ -1,6 +1,8 @@
 #include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
 #include "Features/Upscaling/NeuralRendering/ConfigurationSerialization.h"
 #include "Features/Upscaling/NeuralRendering/PipelinePolicy.h"
+#include "Features/Upscaling/NeuralRendering/ReconstructionTuning.h"
+#include "Features/Upscaling/NeuralRendering/Runtime.h"
 #include <tuple>
 
 #include <algorithm>
@@ -8,13 +10,30 @@
 #include <cmath>
 #include <cstdint>
 #include <format>
+#include <iostream>
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <source_location>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
+
+namespace NeuralRendering
+{
+	Runtime& Runtime::Instance()
+	{
+		static Runtime instance;
+		return instance;
+	}
+	struct Runtime::Backend
+	{};
+	Runtime::Runtime() = default;
+	Runtime::~Runtime() = default;
+	TuningLimits Runtime::GetTuningLimits(std::uint32_t) const { return {}; }
+	bool Runtime::SupportsNetworkSelection() const { return false; }
+}
 
 using json = nlohmann::json;
 
@@ -23,11 +42,179 @@ using json = nlohmann::json;
 
 int main()
 {
-	const auto require = [](bool value) {
-		if (!value)
+	const auto require = [](bool value, const std::source_location& location = std::source_location::current()) {
+		if (!value) {
+			std::cerr << "Neural Rendering request validation failed at line " << location.line() << '\n';
 			throw std::runtime_error("Neural Rendering request validation invariant");
+		}
 	};
+	for (const auto* field : { "experimentalShadowTransferPercent", "faceDetailProtectionPercent", "experimentalFaceDetailProtectionPercent", "experimentalFootprintSubdivisions" }) {
+		for (const auto& value : { json(0), json(1), json(2), json(3), json(4), json(50), json(100), json(101),
+				 json(-1), json(1.5), json(true), json(nullptr), json("2"), json::array(), json::object() }) {
+			NeuralRenderingConfigurationRequest request;
+			json error;
+			const bool integer = value.is_number_integer() && value.get<std::int64_t>() >= 0;
+			const bool expected = integer && (std::string_view(field) != "experimentalFootprintSubdivisions" ? value <= 100 : value == 1 || value == 2 || value == 4);
+			require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { field, value } }, request, error) == expected);
+			if (expected)
+				require(request.HasAnyControl());
+		}
+	}
+	{
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "faceDetailProtectionPercent", 75 },
+														  { "experimentalFaceDetailProtectionPercent", 75 } },
+			request, error));
+		require(error.at("errorCode") == "nr_face_detail_protection_invalid");
+	}
+	for (const auto* field : { "experimentalPerChannelClamping", "experimentalDepthSampleMotion" }) {
+		for (const auto& value : { json(false), json(true), json(0), json(1), json("true"), json(nullptr) }) {
+			NeuralRenderingConfigurationRequest request;
+			json error;
+			require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { field, value } }, request, error) == value.is_boolean());
+			if (value.is_boolean())
+				require(request.HasAnyControl());
+		}
+	}
+	for (bool enabled : { false, true }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "guidedReconstruction", enabled } }, request, error));
+		require(request.HasAnyControl() && request.guidedReconstruction == enabled);
+	}
+	for (auto invalid : { json(1), json(0.0), json("true"), json(nullptr), json::array(), json::object() }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "guidedReconstruction", invalid } }, request, error));
+		require(error.at("errorCode") == "nr_guided_reconstruction_invalid");
+	}
+	for (bool enabled : { false, true }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "peripheralCompression", enabled } }, request, error));
+		require(request.HasAnyControl() && request.peripheralCompression == enabled);
+	}
+	for (auto invalid : { json(1), json(0.0), json("true"), json(nullptr), json::array(), json::object() }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "peripheralCompression", invalid } }, request, error));
+		require(error.at("errorCode") == "nr_peripheral_compression_invalid");
+	}
+	for (unsigned percent : { 0u, 1u, 20u, 99u, 100u }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "peripheralCompressionPercent", percent } }, request, error));
+		require(request.HasAnyControl() && request.peripheralCompressionPercent == percent);
+	}
+	for (auto invalid : { json(-1), json(101), json(1.5), json(true), json(nullptr), json("20") }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "peripheralCompressionPercent", invalid } }, request, error));
+	}
+	{
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "peripheralCompressionPercent", 20 }, { "peripheralCompression", true } }, request, error));
+	}
+	for (bool enabled : { false, true }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "pauseInCombat", enabled } }, request, error));
+		require(request.HasAnyControl() && request.pauseInCombat == enabled);
+	}
+	for (auto invalid : { json(1), json(0.0), json("true"), json(nullptr), json::array(), json::object() }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "pauseInCombat", invalid } }, request, error));
+		require(error.at("errorCode") == "nr_pause_in_combat_invalid");
+	}
+	static_assert(NeuralRendering::GetTuningLimitsForVersion(310, 8).intensity == 1.0f);
+	static_assert(NeuralRendering::GetTuningLimitsForVersion(310, 8).localStructureStrength == 2.0f);
+	static_assert(NeuralRendering::GetTuningLimitsForVersion(310, 9).localStructureStrength == 1.0f);
+	static_assert(NeuralRendering::GetTuningLimitsForVersion(310, 9).skinStructureStrength == 1.0f);
+	static_assert(NeuralRendering::GetTuningLimitsForVersion(310, 9).localToneStrength == 2.0f);
+	static_assert(NeuralRendering::GetTuningLimitsForVersion(310, 90).localStructureStrength == 2.0f);
+	static_assert(NeuralRendering::GetTuningLimitsForVersion(311, 9).localStructureStrength == 2.0f);
+	static_assert(NeuralRendering::GetTuningLimitsForVersion(0, 0).intensity == 2.0f);
+	for (unsigned minor : { 8u, 9u, 10u }) {
+		const auto limits = NeuralRendering::GetTuningLimitsForVersion(310, minor);
+		for (const auto& [field, maximum] : {
+				 std::pair{ "intensity", limits.intensity }, std::pair{ "localToneStrength", limits.localToneStrength },
+				 std::pair{ "localStructureStrength", limits.localStructureStrength }, std::pair{ "skinStructureStrength", limits.skinStructureStrength } }) {
+			for (double value : { -0.01, 0.0, 0.5, 1.0, 1.01, 1.5, 2.0, 2.01 }) {
+				NeuralRenderingConfigurationRequest request;
+				json error;
+				const bool accepted = TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { field, value } }, request, error, limits);
+				require(accepted == (value >= 0 && value <= maximum));
+				if (!accepted)
+					require(error.at("errorCode") == "nr_tuning_out_of_range" && error.at("maximum") == maximum && error.at("field") == field);
+			}
+		}
+	}
 	const auto descriptor = json::parse(kNeuralRenderingDescriptor);
+	auto registeredDescriptor = descriptor;
+	SetRegisteredNeuralActions(registeredDescriptor);
+	const auto& actions = registeredDescriptor.at("inputSchema").at("properties").at("action").at("enum");
+	require(std::find(actions.begin(), actions.end(), "nr_reconstruction_compare") != actions.end());
+	require(std::find(actions.begin(), actions.end(), "nr_peripheral_compare") != actions.end());
+	const auto& declaredActions = descriptor.at("inputSchema").at("properties").at("action").at("enum");
+	require(std::find(declaredActions.begin(), declaredActions.end(), "nr_peripheral_compare") != declaredActions.end());
+	require(descriptor.at("inputSchema").at("properties").at("guidedReconstruction").at("default") == true);
+	require(descriptor.at("inputSchema").at("properties").at("peripheralCompressionPercent").at("default") == 100);
+	require(descriptor.at("inputSchema").at("properties").at("pauseInCombat").at("default") == true);
+	for (const auto& value : { json(0), json(1u), json(2), json(-1), json(3), json(1.5), json(true), json("2"), json(nullptr), json(UINT64_MAX) }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		const bool accepted = TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "style", value } }, request, error);
+		const bool valid = value.is_number_integer() && value >= 0 && value <= 2;
+		require(accepted == valid);
+		if (accepted)
+			require(request.style == value.get<std::uint32_t>() && request.HasImageTuningOverrides());
+		else
+			require(error.at("errorCode") == (value.is_number_integer() ? "nr_style_out_of_range" : "nr_style_type_invalid"));
+	}
+	require(descriptor.at("inputSchema").at("properties").at("style").at("maximum") == 2);
+	for (const auto& value : { json(0), json(1u), json(2), json(-1), json(3), json(1.5), json(true), json("2"), json(nullptr), json(UINT64_MAX) }) {
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		const bool accepted = TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "network", value } }, request, error);
+		const bool valid = value.is_number_integer() && value >= 0 && value <= 2;
+		require(accepted == valid);
+		if (accepted)
+			require(request.network == value.get<std::uint32_t>() && request.HasAnyControl() && !request.HasImageTuningOverrides());
+		else
+			require(error.at("errorCode") == "nr_network_invalid");
+	}
+	require(descriptor.at("inputSchema").at("properties").at("network").at("maximum") == 2);
+	require(descriptor.at("outputSchema").at("properties").at("neuralRendering").at("properties").at("networkSelection").at("properties").contains("featurePresets"));
+	for (const auto network : { 0u, 1u, 2u }) {
+		for (bool explicitSelection : { false, true }) {
+			NeuralRenderingConfigurationRequest request;
+			json error;
+			json args{ { "action", "nr_configure" }, { "localStructureStrength", 1.6 } };
+			if (explicitSelection)
+				args["network"] = network;
+			require(TryParseNeuralRenderingConfiguration(args, request, error,
+						NeuralRendering::GetTuningLimitsForVersion(310, 9), network, true) == (network == 1u));
+		}
+	}
+	{
+		NeuralRenderingConfigurationRequest request;
+		json error;
+		require(!TryParseNeuralRenderingConfiguration({ { "action", "nr_configure" }, { "network", 2u }, { "localStructureStrength", 1.6 } },
+			request, error, NeuralRendering::GetTuningLimitsForVersion(310, 9), 1u, true));
+	}
+	const auto& limitsSchema = descriptor.at("outputSchema").at("properties").at("neuralRendering").at("properties").at("tuningLimits").at("properties");
+	require(limitsSchema.at("localToneStrength").at("const") == 2);
+	for (const auto* field : { "intensity", "localStructureStrength", "skinStructureStrength" }) {
+		require(limitsSchema.at(field).at("enum") == json::array({ 1, 2 }));
+		const auto description = descriptor.at("inputSchema").at("properties").at(field).at("description").get<std::string>();
+		if (std::string_view(field) == "intensity")
+			require(description.find("310.9") != std::string::npos);
+		else
+			require(description.find("preset B") != std::string::npos && description.find("preset A") != std::string::npos);
+	}
 	const auto& performanceSchema = descriptor.at("outputSchema").at("properties").at("neuralRendering").at("properties").at("performance").at("properties");
 	require(performanceSchema.contains("lastFeatureParallel") && performanceSchema.contains("lastEvaluationGpuMicroseconds") &&
 			performanceSchema.contains("parallelCommandSubmissions"));

@@ -11,7 +11,7 @@ namespace Util
 	{
 		if (values.empty())
 			return 0.0f;
-		return std::accumulate(values.begin(), values.end(), 0.0f) / values.size();
+		return std::accumulate(values.begin(), values.end(), 0.0f) / static_cast<float>(values.size());
 	}
 
 	/** Median of the samples, averaging the two middle values for even counts. */

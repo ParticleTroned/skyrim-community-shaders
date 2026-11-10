@@ -17,6 +17,39 @@ def read(name):
 
 
 class PreparedSelectionContract(unittest.TestCase):
+    def test_prepared_spatial_fusion_retains_restricted_routes(self):
+        source = read("src/Features/Upscaling.cpp")
+        start = source.index("FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorEyeComposite(")
+        composite = source[start:source.index("FidelityFX::UpscaleResult Upscaling::DispatchFoveatedVendorUpscaling(", start)]
+        gate = composite[composite.index("const bool fusePreparedCenter ="):composite.index("bool peripheryBindingsBound")]
+        for guard in ("!isolateCharacterOutput", "RequiresFoveatedMask(", "neuralRenderingSingleSubrectScale == 1.0f",
+                      "neuralRenderingCentralAreaPercent == 100", "!UsesCharacterVisualIsolation(settings)",
+                      "preparedCenter->resource", "preparedCenter->desc.Width == centerRect.outputWidth",
+                      "preparedCenter->desc.Height == centerRect.outputHeight",
+                      "eyePlan.output.minX == centerRect.outputOffsetX", "eyePlan.output.minY == centerRect.outputOffsetY",
+                      "eyePlan.output.Width() == centerRect.outputWidth", "eyePlan.output.Height() == centerRect.outputHeight"):
+            self.assertIn(guard, gate)
+        self.assertIn("!params.usePeripheryTAA && !params.visualizeMask && (!params.centerAlreadyPrepared || fusePreparedCenter)", gate)
+        self.assertRegex(gate, r"if \(!params.centerAlreadyPrepared\) \{\s*const auto centerResult = DispatchSingleFoveatedVendorEye")
+        self.assertIn("params.centerAlreadyPrepared ? preparedCenter->srv.get() : centerOutput->srv.get()", gate)
+        selection = composite[:composite.index("const bool fusePreparedCenter =")]
+        self.assertIn("neuralResult && neuralResult->applied, GetNeuralRenderingArrangement()", selection)
+        self.assertIn("if (useSubmitNeuralFloatOutput && !isolateCharacterOutput)", selection)
+        self.assertIn("preparedCenter = submitNeuralFloatColorOut[eyeIndex].get()", selection)
+        self.assertIn("const bool skipPeripheryUnderlay", composite)
+        self.assertIn("eyePlan.output.CoversExtent(", composite)
+        self.assertIn("neuralResult->dlssEvaluated", composite)
+        self.assertIn("RestrictVisibleOutputToComputeSubrect(", composite)
+        self.assertIn("ResolveSubmitCharacterCompositeInputs(", composite)
+        self.assertEqual(composite.count("CaptureNeuralStage("), 1)
+        self.assertEqual(composite.count("RecordNeuralStageWork("), 1)
+        start = source.index("bool Upscaling::DispatchFoveatedSpatialComposite(")
+        spatial = source[start:source.index("FidelityFX::UpscaleResult Upscaling::DispatchVendorEyeRegion(", start)]
+        for forbidden_alias in ("outputIdentity == peripheryIdentity", "outputIdentity == centerIdentity"):
+            self.assertLess(spatial.index(forbidden_alias), spatial.index("context->CSSetShaderResources("))
+        self.assertIn("ScopeExit(", spatial)
+        self.assertIn('MarkSubmitStageDeviceLostIfDeviceRemoved("foveated spatial composite")', spatial)
+
     def test_each_neural_override_participates_in_change_detection(self):
         import re
 
@@ -44,6 +77,8 @@ class PreparedSelectionContract(unittest.TestCase):
         self.assertEqual(upscaling.count("&characterComposite.maskSupport"), 2)
         self.assertIn("&selection.maskSupport", upscaling)
         self.assertIn("&characterSelections[eye].maskSupport", upscaling)
+        self.assertIn("UsesCharacterVisualIsolation(a_settings, a_sourceWorldFrame)", upscaling)
+        self.assertIn("IsCharacterMaskActive(BuildCharacterSettings(a_settings, a_sourceWorldFrame))", upscaling)
 
 
     def test_scaled_c_selection_requires_transaction_completion(self):
@@ -59,11 +94,19 @@ class PreparedSelectionContract(unittest.TestCase):
         self.assertNotIn("CopyResource(", target)
         self.assertNotIn("Dispatch(", target)
         start = source.index("NeuralStereoEvaluationSummary EvaluatePreparedNeuralStereo(")
+        preparation = source[start:source.index("\n\t}", start)]
+        self.assertLess(preparation.index("FinalizePreparedNeuralStereoInputs("),
+                        preparation.index("PrepareNeuralStereoOutputTargets("))
+        self.assertLess(preparation.index("PrepareNeuralStereoOutputTargets("),
+                        preparation.index("EvaluateFinalizedNeuralStereo("))
+        start = source.index("bool PrepareNeuralStereoOutputTargets(")
+        targets = source[start:source.index("\n\t}", start)]
+        self.assertLess(targets.index("ModelResolution::Required("),
+                        targets.index("PrepareReducedResolutionNeuralOutputTarget("))
+        start = source.index("NeuralStereoEvaluationSummary EvaluateFinalizedNeuralStereo(")
         evaluation = source[start:source.index("\n\t}", start)]
-        self.assertLess(evaluation.index("FinalizePreparedNeuralStereoInputs("),
-                        evaluation.index("ModelResolution::Required("))
-        self.assertLess(evaluation.index("PrepareReducedResolutionNeuralOutputTarget("),
-                        evaluation.index("Renderer::Instance().ApplyStereo("))
+        self.assertLess(evaluation.index("Renderer::Instance().ApplyStereo("),
+                        evaluation.index("outcome.WasOutputSelected("))
         self.assertIn("args.modelOutputSelection ? outcome.WasOutputSelected(args.featureSlot)", evaluation)
         self.assertIn("a_upscaling.PrepareReducedResolutionNeuralOutput(eye, args)", evaluation)
         start = source.index("bool BindPreparedActorBlending(")
@@ -101,14 +144,14 @@ class PreparedSelectionContract(unittest.TestCase):
         bridge = read("src/Features/Upscaling/VRRenderScaleDevBenchBridge.cpp")
         descriptor = json.loads(re.search(r'kNeuralRenderingDescriptor = R"nr\((.*?)\)nr"', bridge, re.S).group(1))
         properties = descriptor["outputSchema"]["properties"]["neuralRendering"]["properties"]
-        self.assertEqual(properties["apiVersion"]["const"], 11)
+        self.assertEqual(properties["apiVersion"]["const"], 12)
         last_request = properties["modelResolution"]["properties"]["lastRequest"]["properties"]
         self.assertEqual(last_request["selectedOutput"]["type"], "boolean")
         self.assertIn("actors and packed crops", last_request["sharedInputs"]["description"])
         transport = properties["sourceTransport"]["properties"]
         self.assertEqual(transport["schemaVersion"]["const"], 4)
         self.assertEqual(transport["lastModelOutputSelected"]["type"], "boolean")
-        self.assertIn("API-v11 NR runtime", descriptor["description"])
+        self.assertIn("D3D12 NGX API", descriptor["description"])
         self.assertIn("latest request's completed-selection flag", descriptor["description"])
         runtime = properties["characterRendering"]["properties"]["runtime"]["properties"]
         early_bounds = runtime["earlyMaskBounds"]["description"]
@@ -118,7 +161,7 @@ class PreparedSelectionContract(unittest.TestCase):
         compatibility_fence = runtime["eyes"]["items"]["properties"]["maskRoiReadbackFenceValue"]["description"]
         self.assertIn("always zero", compatibility_fence)
         self.assertIn("D3D11 query completion separately", compatibility_fence)
-        self.assertIn('{ "apiVersion", 11 }', bridge)
+        self.assertIn('{ "apiVersion", 12 }', bridge)
         self.assertIn('{ "selectedOutput", snapshot.modelOutputSelected }', bridge)
         renderer = read("src/Features/Upscaling/NeuralRendering/Renderer.cpp")
         start = renderer.index("void Renderer::State::SetRequestTelemetryLocked(")
@@ -223,7 +266,7 @@ class PreparedSelectionContract(unittest.TestCase):
         self.assertIn("work.constants.packedCoverageGuard = 1u;", adapter)
         self.assertIn("DispatchReconstruction<3>(args, batch)", adapter)
         self.assertIn("DispatchReconstruction<4>(args, batch)", adapter)
-        self.assertIn("DispatchReconstruction<5>(args, batch)", adapter)
+        self.assertIn("DispatchReconstruction<8, 3>(args, batch)", adapter)
         reconstruct = read("features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl")
         self.assertIn("#ifdef PACKED_CROP_COVERAGE_GUARD", reconstruct)
         self.assertRegex(reconstruct, r"if \(PackedPadding != 0u && PackedCoverage\[0\] != 0u\) \{\s*Result\[pixel\] = source;\s*return;")
@@ -235,8 +278,8 @@ class PreparedSelectionContract(unittest.TestCase):
         self.assertIn("readback.frame == a_args.sourceWorldFrame", early)
         self.assertIn("readback.categories == GetEnabledCharacterCategoryMask(a_args.settings)", early)
         self.assertTrue(
-            'slot.maskRoiStatus = sceneStrengths ? "scene_full_region" : authoredMode ? "cpu_geometry_single" : "disabled";' in " ".join(source.split()),
-            "Scene adjustments must report full-region planning separately from actor enclosures",
+            'slot.maskRoiStatus = sceneStrengths ? "scene_full_inference_region_mask" : authoredMode ? "cpu_geometry_single" : "disabled";' in " ".join(source.split()),
+            "Scene adjustments must retain full inference with regional mask work",
         )
         self.assertTrue("const bool cpuProvenEmpty = !sceneStrengths && authoredMode &&" in source,
                         "An empty actor selection cannot bypass ordinary scene NR")

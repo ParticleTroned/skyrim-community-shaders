@@ -67,6 +67,8 @@ public:
 	bool enableVerboseJsonLogging = false;
 
 	bool TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land);
+	/** Identify terrain by registered material ownership for optional seam blending. */
+	bool IsPBRLandscapeGeometry(RE::BSGeometry* geometry) const;
 	/** Preserve authored grass maps before the engine interns the material. */
 	void SetupGrassMaterial(RE::BSLightingShaderProperty* source, RE::BSLightingShaderProperty* grass);
 	/** Identify authored grass without dereferencing an unregistered PBR material. */

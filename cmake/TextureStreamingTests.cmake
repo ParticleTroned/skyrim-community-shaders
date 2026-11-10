@@ -1,6 +1,79 @@
 add_controller_test(texture_streaming_policy_test TextureStreamingPolicy tests/texture_streaming_policy_test.cpp)
 target_compile_definitions(texture_streaming_policy_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(texture_streaming_policy_test PRIVATE nlohmann_json::nlohmann_json)
+
+add_controller_test(shadow_culling_bounds_test ShadowCullingBounds tests/shadow_culling_bounds_test.cpp)
+target_link_libraries(shadow_culling_bounds_test PRIVATE nlohmann_json::nlohmann_json)
+
+set(_shadow_culling_draw_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/shadow-culling-draw")
+set(_shadow_culling_draw_headers
+    "${_shadow_culling_draw_dir}/shadow_culling_state.h"
+    "${_shadow_culling_draw_dir}/shadow_culling_caster.h"
+    "${_shadow_culling_draw_dir}/shadow_culling_collection.h"
+    "${_shadow_culling_draw_dir}/shadow_culling_draw.h"
+    "${_shadow_culling_draw_dir}/shadow_culling_history.h"
+    "${_shadow_culling_draw_dir}/shadow_culling_capture.h"
+    "${_shadow_culling_draw_dir}/shadow_culling_update.h")
+add_custom_command(OUTPUT ${_shadow_culling_draw_headers}
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_shadow_culling_draw_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_shadow_culling_draw.cmake"
+    DEPENDS src/Features/LightLimitFix/ShadowCulling.cpp tests/extract_source_region.cmake
+        tests/extract_shadow_culling_draw.cmake VERBATIM)
+add_custom_target(shadow_culling_draw_sources DEPENDS ${_shadow_culling_draw_headers})
+foreach(_shadow_draw_variant IN ITEMS plain devbench)
+    add_controller_test(shadow_culling_draw_${_shadow_draw_variant}_test ShadowCullingDraw_${_shadow_draw_variant} tests/shadow_culling_draw_test.cpp)
+    add_dependencies(shadow_culling_draw_${_shadow_draw_variant}_test shadow_culling_draw_sources)
+    target_include_directories(shadow_culling_draw_${_shadow_draw_variant}_test PRIVATE "${_shadow_culling_draw_dir}")
+    target_link_libraries(shadow_culling_draw_${_shadow_draw_variant}_test PRIVATE nlohmann_json::nlohmann_json)
+    if(MSVC)
+        target_compile_options(shadow_culling_draw_${_shadow_draw_variant}_test PRIVATE "$<$<CONFIG:Release>:/fp:fast>")
+    endif()
+endforeach()
+target_compile_definitions(shadow_culling_draw_devbench_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
+add_controller_test(shadow_culling_caster_test ShadowCullingCaster tests/shadow_culling_caster_test.cpp)
+add_dependencies(shadow_culling_caster_test shadow_culling_draw_sources)
+target_include_directories(shadow_culling_caster_test PRIVATE "${_shadow_culling_draw_dir}")
+add_controller_test(shadow_culling_lifetime_test ShadowCullingLifetime tests/shadow_culling_lifetime_test.cpp)
+add_dependencies(shadow_culling_lifetime_test shadow_culling_draw_sources)
+target_include_directories(shadow_culling_lifetime_test PRIVATE "${_shadow_culling_draw_dir}" "${PROJECT_SOURCE_DIR}/extern/CommonLibSSE-NG/include")
+target_link_libraries(shadow_culling_lifetime_test PRIVATE nlohmann_json::nlohmann_json)
+set_tests_properties(ShadowCullingLifetime PROPERTIES TIMEOUT 30)
+
+set(_streaming_maintenance_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/streaming-maintenance")
+set(_streaming_tick_header "${_streaming_maintenance_dir}/streaming_tick_under_test.h")
+set(_streaming_select_header "${_streaming_maintenance_dir}/streaming_select_under_test.h")
+add_custom_command(OUTPUT "${_streaming_tick_header}" "${_streaming_select_header}"
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_streaming_maintenance_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_texture_streaming_maintenance.cmake"
+    DEPENDS src/Features/TextureStreaming.cpp tests/extract_source_region.cmake
+        tests/extract_texture_streaming_maintenance.cmake VERBATIM)
+add_controller_test(texture_streaming_maintenance_test TextureStreamingMaintenance tests/texture_streaming_maintenance_test.cpp)
+target_sources(texture_streaming_maintenance_test PRIVATE "${_streaming_tick_header}")
+target_include_directories(texture_streaming_maintenance_test PRIVATE "${_streaming_maintenance_dir}")
+add_controller_test(texture_streaming_selection_test TextureStreamingSelection tests/texture_streaming_selection_test.cpp)
+target_sources(texture_streaming_selection_test PRIVATE "${_streaming_select_header}")
+target_include_directories(texture_streaming_selection_test PRIVATE "${_streaming_maintenance_dir}")
+target_link_libraries(texture_streaming_selection_test PRIVATE nlohmann_json::nlohmann_json)
+
+set(_streaming_traversal_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/streaming-traversal")
+set(_streaming_traversal_headers)
+foreach(_header children pointer array preview_roots)
+    list(APPEND _streaming_traversal_headers "${_streaming_traversal_dir}/streaming_${_header}_under_test.h")
+endforeach()
+add_custom_command(OUTPUT ${_streaming_traversal_headers}
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_streaming_traversal_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_texture_streaming_traversal.cmake"
+    DEPENDS src/Features/TextureStreaming.cpp src/Features/TextureStreaming/Preview.cpp src/Utils/Game.h
+        extern/CommonLibSSE-NG/include/RE/N/NiTArray.h
+        tests/extract_source_region.cmake tests/extract_texture_streaming_traversal.cmake
+    VERBATIM)
+add_controller_test(texture_streaming_traversal_test TextureStreamingTraversal tests/texture_streaming_traversal_test.cpp)
+target_sources(texture_streaming_traversal_test PRIVATE ${_streaming_traversal_headers})
+target_include_directories(texture_streaming_traversal_test PRIVATE "${_streaming_traversal_dir}")
+
 add_d3d_shader_test(texture_streaming_gpu_test TextureStreamingWARP tests/texture_streaming_gpu_test.cpp)
 target_sources(texture_streaming_gpu_test PRIVATE
     src/Features/TextureStreaming/TextureData.cpp
@@ -25,7 +98,7 @@ target_include_directories(texture_streaming_gate_test PRIVATE "${_streaming_gat
 
 set(_streaming_categories_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/streaming-categories")
 set(_streaming_categories_headers)
-foreach(_header material demand settings ui flags features sections mode geometry_types startup conflict landscape_lookup)
+foreach(_header material demand settings ui flags features sections mode geometry_types startup conflict landscape_lookup invalidation)
     list(APPEND _streaming_categories_headers "${_streaming_categories_dir}/streaming_${_header}_under_test.h")
 endforeach()
 add_custom_command(OUTPUT ${_streaming_categories_headers}
@@ -104,12 +177,14 @@ target_link_libraries(sps_followups_policy_test PRIVATE nlohmann_json::nlohmann_
 
 set(_shadow_startup_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/shadow-startup")
 set(_shadow_startup_header "${_shadow_startup_dir}/shadow_startup_under_test.h")
-add_custom_command(OUTPUT "${_shadow_startup_header}"
+set(_shadow_eligibility_header "${_shadow_startup_dir}/shadow_eligibility_under_test.h")
+set(_shadow_controls_header "${_shadow_startup_dir}/shadow_controls_under_test.h")
+add_custom_command(OUTPUT "${_shadow_startup_header}" "${_shadow_eligibility_header}" "${_shadow_controls_header}"
     COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
         "-DOUTPUT_DIRECTORY=${_shadow_startup_dir}" -P
         "${PROJECT_SOURCE_DIR}/tests/extract_sps_followups.cmake"
-    DEPENDS src/Features/LightLimitFix/ShadowCulling.cpp tests/extract_source_region.cmake
+    DEPENDS src/Features/LightLimitFix/ShadowCulling.cpp src/Features/LightLimitFix.h tests/extract_source_region.cmake
         tests/extract_sps_followups.cmake
     VERBATIM)
-target_sources(sps_followups_policy_test PRIVATE "${_shadow_startup_header}")
+target_sources(sps_followups_policy_test PRIVATE "${_shadow_startup_header}" "${_shadow_eligibility_header}" "${_shadow_controls_header}")
 target_include_directories(sps_followups_policy_test PRIVATE "${_shadow_startup_dir}")

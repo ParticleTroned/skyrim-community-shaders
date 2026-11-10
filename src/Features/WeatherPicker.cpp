@@ -207,6 +207,14 @@ void WeatherPicker::ResetWindowLayout()
 	resetWindowSize = true;
 }
 
+bool WeatherPicker::CanInteractWithDetails() const
+{
+	auto* menu = Menu::GetSingleton();
+	return !menu->IsPreviewFlying() &&
+	       (menu->ShouldSwallowInput() ||
+			   (globals::game::ui && globals::game::ui->IsMenuOpen(RE::CursorMenu::MENU_NAME)));
+}
+
 void WeatherPicker::RenderWeatherDetailsWindow(bool* open)
 {
 	if (!open || !*open)
@@ -216,9 +224,7 @@ void WeatherPicker::RenderWeatherDetailsWindow(bool* open)
 	if (!player || !player->parentCell)
 		return;
 
-	const bool allowInputs =
-		Menu::GetSingleton()->ShouldSwallowInput() ||
-		(globals::game::ui && globals::game::ui->IsMenuOpen(RE::CursorMenu::MENU_NAME));
+	const bool allowInputs = CanInteractWithDetails();
 
 	// Set initial position if not already set
 	const float scale = Util::GetUIScale();

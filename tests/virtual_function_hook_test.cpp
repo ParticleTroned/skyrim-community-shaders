@@ -2,10 +2,12 @@
 #include "Utils/VirtualFunctionHook.cpp"
 
 #include <array>
+#include <barrier>
 #include <iostream>
 #include <source_location>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 namespace
 {
@@ -109,6 +111,107 @@ namespace
 	{
 		SetLastError(ERROR_ACCESS_DENIED);
 		return FALSE;
+	}
+
+	unsigned directAttachCalls = 0;
+	Util::DetourAttachResult CountDetour(void** a_original, void* a_hook)
+	{
+		++directAttachCalls;
+		return SimulateDetour(a_original, a_hook);
+	}
+
+	void TestDirectDetourRepeats()
+	{
+		DetourHookState state;
+		const auto target = reinterpret_cast<std::uintptr_t>(OriginalMethod);
+		auto* hook = reinterpret_cast<void*>(FirstHook);
+		void* original = nullptr;
+		directAttachCalls = 0;
+		Require(InstallDetourHook(state, target, &original, hook, CountDetour).error == NO_ERROR);
+		Require(InstallDetourHook(state, target, &original, hook, CountDetour).error == NO_ERROR);
+		Require(directAttachCalls == 1 && original == reinterpret_cast<void*>(TailMethod));
+		Require(reinterpret_cast<FakeMethod>(original)(nullptr) == 99);
+
+		void* otherOriginal = nullptr;
+		Require(InstallDetourHook(state, target, &otherOriginal, reinterpret_cast<void*>(SecondHook), CountDetour).error == NO_ERROR);
+		Require(directAttachCalls == 2 && otherOriginal == reinterpret_cast<void*>(TailMethod));
+		Require(InstallDetourHook(state, target, &original, hook, CountDetour).error == NO_ERROR);
+		Require(directAttachCalls == 2 && original == reinterpret_cast<void*>(TailMethod));
+
+		const auto otherTarget = reinterpret_cast<std::uintptr_t>(TailMethod);
+		Require(InstallDetourHook(state, otherTarget, nullptr, hook, CountDetour).error == NO_ERROR);
+		Require(InstallDetourHook(state, otherTarget, nullptr, hook, CountDetour).error == NO_ERROR);
+		Require(directAttachCalls == 3 && state.hooks.size() == 3);
+	}
+
+	void TestDirectDetourFailureRetry()
+	{
+		DetourHookState state;
+		const auto target = reinterpret_cast<std::uintptr_t>(OriginalMethod);
+		auto* hook = reinterpret_cast<void*>(FirstHook);
+		void* original = nullptr;
+		const auto busy = InstallDetourHook(state, target, &original, hook, BusyDetour);
+		Require(busy.error == ERROR_INVALID_OPERATION && !busy.fallbackAllowed);
+		Require(original == nullptr && state.hooks.empty());
+		const auto failed = InstallDetourHook(state, target, &original, hook, DenyDetour);
+		Require(failed.error == ERROR_INVALID_BLOCK && failed.fallbackAllowed);
+		Require(original == nullptr && state.hooks.empty());
+		Require(InstallDetourHook(state, target, &original, hook, SimulateDetour).error == NO_ERROR);
+		Require(original == reinterpret_cast<void*>(TailMethod) && state.hooks.size() == 1);
+
+		DetourHookState ignored;
+		Require(InstallDetourHook(ignored, target, nullptr, hook, BusyDetour).error == ERROR_INVALID_OPERATION);
+		Require(ignored.hooks.empty());
+		Require(InstallDetourHook(ignored, target, nullptr, hook, SimulateDetour).error == NO_ERROR);
+		Require(ignored.hooks.size() == 1);
+	}
+
+	void TestDirectDetourRejectsConflictingStorage()
+	{
+		DetourHookState state;
+		const auto target = reinterpret_cast<std::uintptr_t>(OriginalMethod);
+		auto* hook = reinterpret_cast<void*>(FirstHook);
+		void* original = nullptr;
+		Require(InstallDetourHook(state, 0, &original, hook, SimulateDetour).error == ERROR_INVALID_PARAMETER);
+		Require(InstallDetourHook(state, target, &original, nullptr, SimulateDetour).error == ERROR_INVALID_PARAMETER);
+		Require(InstallDetourHook(state, target, &original, reinterpret_cast<void*>(target), SimulateDetour).error == ERROR_INVALID_PARAMETER);
+		Require(original == nullptr && state.hooks.empty());
+
+		original = reinterpret_cast<void*>(OriginalMethod);
+		Require(InstallDetourHook(state, target, &original, hook, SimulateDetour).error == ERROR_INVALID_DATA);
+		Require(original == reinterpret_cast<void*>(OriginalMethod) && state.hooks.empty());
+		original = nullptr;
+		Require(InstallDetourHook(state, target, &original, hook, SimulateDetour).error == NO_ERROR);
+		void* otherOriginal = nullptr;
+		Require(InstallDetourHook(state, target, &otherOriginal, hook, SimulateDetour).error == ERROR_INVALID_DATA);
+		Require(otherOriginal == nullptr);
+		Require(InstallDetourHook(state, target, nullptr, hook, SimulateDetour).error == ERROR_INVALID_DATA);
+		Require(InstallDetourHook(state, target, &original, reinterpret_cast<void*>(SecondHook), SimulateDetour).error == ERROR_INVALID_DATA);
+		Require(InstallDetourHook(state, reinterpret_cast<std::uintptr_t>(TailMethod), &original, hook, SimulateDetour).error == ERROR_INVALID_DATA);
+		Require(original == reinterpret_cast<void*>(TailMethod) && state.hooks.size() == 1);
+
+		original = reinterpret_cast<void*>(OriginalMethod);
+		Require(InstallDetourHook(state, target, &original, hook, SimulateDetour).error == ERROR_INVALID_DATA);
+		Require(original == reinterpret_cast<void*>(OriginalMethod) && state.hooks.size() == 1);
+	}
+
+	void TestConcurrentDirectDetourRepeats()
+	{
+		DetourHookState state;
+		void* original = nullptr;
+		directAttachCalls = 0;
+		std::barrier start(2);
+		const auto install = [&] {
+			start.arrive_and_wait();
+			return InstallDetourHook(state, reinterpret_cast<std::uintptr_t>(OriginalMethod),
+				&original, reinterpret_cast<void*>(FirstHook), CountDetour);
+		};
+		Util::DetourAttachResult otherResult;
+		std::jthread other([&] { otherResult = install(); });
+		const auto result = install();
+		other.join();
+		Require(result.error == NO_ERROR && otherResult.error == NO_ERROR);
+		Require(directAttachCalls == 1 && state.hooks.size() == 1 && original == reinterpret_cast<void*>(TailMethod));
 	}
 
 	void TestNativeDetourAndBusyTransaction()
@@ -269,6 +372,10 @@ int main()
 {
 	try {
 		TestTransactionOwnership();
+		TestDirectDetourRepeats();
+		TestDirectDetourFailureRetry();
+		TestDirectDetourRejectsConflictingStorage();
+		TestConcurrentDirectDetourRepeats();
 		TestNativeDetourAndBusyTransaction();
 		TestFallbackChaining(false);
 		TestFallbackChaining(true);

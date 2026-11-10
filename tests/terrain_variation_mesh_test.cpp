@@ -1,5 +1,6 @@
 #include "Features/TerrainVariationPolicy.h"
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -199,6 +200,7 @@ struct TerrainVariation
 	std::unordered_set<std::string> landscapeDiffusePaths;
 	bool landscapeDiffusePathsAvailable = false;
 	std::unordered_map<const char*, CachedTexture> meshTextureCache;
+	std::atomic<uint64_t> meshTextureGeneration{ 0 };
 	bool IsMeshSupportEnabled() const { return loaded && settings.enableMeshSupport != 0; }
 	bool IsLandscapeDiffuseTexture(const RE::BSFixedString&);
 	void DataLoaded();

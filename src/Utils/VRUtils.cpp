@@ -226,6 +226,31 @@ namespace Util
 		return vr::k_unTrackedDeviceIndexInvalid;
 	}
 
+	bool TryGetRuntimeControllerState(vr::TrackedDeviceIndex_t a_index, vr::VRControllerState_t& a_state)
+	{
+		if (!REL::Module::IsVR() || a_index >= vr::k_unMaxTrackedDeviceCount)
+			return false;
+
+		const auto module = REX::W32::GetModuleHandleA("openvr_api.dll");
+		if (!module)
+			return false;
+		const auto getGenericInterface = reinterpret_cast<decltype(&vr::VR_GetGenericInterface)>(REX::W32::GetProcAddress(module, "VR_GetGenericInterface"));
+		if (!getGenericInterface)
+			return false;
+
+		// Input proxies can dispatch menu callbacks on the caller's thread.
+		// Resolve the runtime export directly so render-thread reads remain passive.
+		vr::EVRInitError error = vr::VRInitError_None;
+		auto* system = static_cast<vr::IVRSystem*>(getGenericInterface(vr::IVRSystem_Version, &error));
+		if (!system || error != vr::VRInitError_None)
+			return false;
+		vr::VRControllerState_t state{};
+		if (!system->GetControllerState(a_index, &state, sizeof(state)))
+			return false;
+		a_state = state;
+		return true;
+	}
+
 	bool GetControllerWorldMatrix(vr::TrackedDeviceIndex_t index, float out[3][4])
 	{
 		if (index >= vr::k_unMaxTrackedDeviceCount || !out)

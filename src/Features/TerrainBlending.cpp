@@ -1,5 +1,6 @@
 #include "TerrainBlending.h"
 #include "Menu/SettingsPage.h"
+#include "ReverseZ.h"
 #include "Utils/UI.h"
 
 #include "Deferred.h"
@@ -19,13 +20,15 @@
 #include <cstdint>
 #include <intrin.h>
 #include <sstream>
+#include <stdexcept>
 #include <unordered_set>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TerrainBlending::Settings,
 	Enabled,
 	TerrainCullDistance,
-	BlendStrength)
+	BlendStrength,
+	LandscapeSeams)
 
 namespace
 {
@@ -523,10 +526,18 @@ void TerrainBlending::DrawSettings()
 	}
 
 	ImGui::Spacing();
+	bool seams = settings.LandscapeSeams != 0;
+	if (Util::Widgets::Checkbox("Landscape Seam Blending", &seams))
+		settings.LandscapeSeams = seams ? 1u : 0u;
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextWrapped("Softens visible borders between neighbouring terrain textures. Off keeps ordinary transitions. Requires True PBR; adds rendering and terrain-loading work.");
+	}
+
+	ImGui::Spacing();
 	if (ImGui::TreeNodeEx("Performance Options")) {
 		Util::Widgets::SliderFloat("Terrain Depth Culling Distance", &settings.TerrainCullDistance, 0.0f, 8192.0f, "%.0f units");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Terrain farther than this distance skips TB depth rendering. Set to 0 to disable culling.");
+			ImGui::Text("Limits the distance used to prepare terrain blending. Lower values save work but can reduce distant blending. 0 keeps the full distance.");
 		}
 		ImGui::TreePop();
 	}
@@ -580,7 +591,11 @@ void TerrainBlending::RestorePerformanceCostMeasurementState(const json& a_state
 
 void TerrainBlending::LoadSettings(json& o_json)
 {
-	settings = o_json;
+	if (const auto it = o_json.find("LandscapeSeams"); it != o_json.end() &&
+													   (!it->is_number_integer() || (*it != 0 && *it != 1)))
+		throw std::invalid_argument("TerrainBlending.LandscapeSeams must be 0 or 1");
+	const auto candidate = o_json.get<Settings>();
+	settings = candidate;
 }
 
 void TerrainBlending::SaveSettings(json& o_json)
@@ -847,6 +862,7 @@ void TerrainBlending::SetupResources()
 		terrainDepth.depthSRV = nullptr;
 	}
 	if (terrainDepth.views[0]) {
+		globals::features::reverseZ.UnregisterSceneDepthView(terrainDepth.views[0]);
 		terrainDepth.views[0]->Release();
 		terrainDepth.views[0] = nullptr;
 	}
@@ -878,6 +894,7 @@ void TerrainBlending::SetupResources()
 		mainDepth.views[0]->GetDesc(&dsvDesc);
 		DX::ThrowIfFailed(device->CreateDepthStencilView(terrainDepth.texture, &dsvDesc, &terrainDepth.views[0]));
 		Util::SetResourceName(terrainDepth.views[0], "TerrainBlending::TerrainDepth DSV");
+		globals::features::reverseZ.RegisterSceneDepthView(terrainDepth.views[0]);
 	}
 
 	{
@@ -900,13 +917,15 @@ void TerrainBlending::SetupResources()
 		uavDesc.Format = texDesc.Format;
 		blendedDepthTexture->CreateUAV(uavDesc);
 
-		texDesc.Format = DXGI_FORMAT_R16_UNORM;
-		srvDesc.Format = texDesc.Format;
-		uavDesc.Format = texDesc.Format;
+		if (!globals::features::reverseZ.IsActive()) {
+			texDesc.Format = DXGI_FORMAT_R16_UNORM;
+			srvDesc.Format = texDesc.Format;
+			uavDesc.Format = texDesc.Format;
 
-		blendedDepthTexture16 = new Texture2D(texDesc, "TerrainBlending::BlendedDepth16");
-		blendedDepthTexture16->CreateSRV(srvDesc);
-		blendedDepthTexture16->CreateUAV(uavDesc);
+			blendedDepthTexture16 = new Texture2D(texDesc, "TerrainBlending::BlendedDepth16");
+			blendedDepthTexture16->CreateSRV(srvDesc);
+			blendedDepthTexture16->CreateUAV(uavDesc);
+		}
 
 		texDesc.Format = DXGI_FORMAT_R32_FLOAT;
 		srvDesc.Format = texDesc.Format;
@@ -1006,7 +1025,7 @@ void TerrainBlending::BlendPrepassDepths()
 	auto context = globals::d3d::context;
 	if (!context || !depthBlendCB || !depthSRVBackup || !terrainDepth.texture || !terrainDepth.depthSRV ||
 		!blendedDepthTexture || !blendedDepthTexture->uav ||
-		!blendedDepthTexture16 || !blendedDepthTexture16->uav ||
+		(!globals::features::reverseZ.IsActive() && (!blendedDepthTexture16 || !blendedDepthTexture16->uav)) ||
 		!mainDepthCopy || !mainDepthCopy->uav) {
 		return;
 	}
@@ -1021,8 +1040,8 @@ void TerrainBlending::BlendPrepassDepths()
 	// TB depth products are sampled during replay with scene pixel coordinates.
 	const bool submitStageSceneDomain = globals::features::upscaling.loaded && globals::features::upscaling.IsSubmitStageUpscalingActive();
 	const auto blendSize = Util::ConvertToDynamic(globals::state->screenSize, submitStageSceneDomain);
-	const uint32_t maxBlendWidth = std::min({ terrainDepthDesc.Width, blendedDepthTexture->desc.Width, blendedDepthTexture16->desc.Width, mainDepthCopy->desc.Width });
-	const uint32_t maxBlendHeight = std::min({ terrainDepthDesc.Height, blendedDepthTexture->desc.Height, blendedDepthTexture16->desc.Height, mainDepthCopy->desc.Height });
+	const uint32_t maxBlendWidth = std::min({ terrainDepthDesc.Width, blendedDepthTexture->desc.Width, (blendedDepthTexture16 ? blendedDepthTexture16->desc.Width : blendedDepthTexture->desc.Width), mainDepthCopy->desc.Width });
+	const uint32_t maxBlendHeight = std::min({ terrainDepthDesc.Height, blendedDepthTexture->desc.Height, (blendedDepthTexture16 ? blendedDepthTexture16->desc.Height : blendedDepthTexture->desc.Height), mainDepthCopy->desc.Height });
 	const uint32_t blendWidth = GetDepthBlendExtent(blendSize.x, maxBlendWidth);
 	const uint32_t blendHeight = GetDepthBlendExtent(blendSize.y, maxBlendHeight);
 	if (!blendWidth || !blendHeight)
@@ -1039,7 +1058,7 @@ void TerrainBlending::BlendPrepassDepths()
 		ID3D11ShaderResourceView* views[2] = { depthSRVBackup, terrainDepth.depthSRV };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-		ID3D11UnorderedAccessView* uavs[3] = { blendedDepthTexture->uav.get(), blendedDepthTexture16->uav.get(), mainDepthCopy->uav.get() };
+		ID3D11UnorderedAccessView* uavs[3] = { blendedDepthTexture->uav.get(), (blendedDepthTexture16 ? blendedDepthTexture16->uav.get() : nullptr), mainDepthCopy->uav.get() };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 		auto buffer = depthBlendCB->CB();

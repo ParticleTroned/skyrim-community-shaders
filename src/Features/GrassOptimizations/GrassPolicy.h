@@ -11,7 +11,10 @@
 namespace GrassPolicy
 {
 	inline constexpr uint32_t kRecordBytes = 32;
+	inline constexpr uint32_t kSurvivorIndexBytes = sizeof(float);
+	inline constexpr uint32_t kSurvivorBytes = kSurvivorIndexBytes + 6 * sizeof(float);
 	inline constexpr uint32_t kMaxBatchInstances = 262144;
+	static_assert(kMaxBatchInstances <= (1u << 24));
 	inline constexpr uint32_t kMaxBatchSlices = 8192;
 	inline constexpr uint32_t kMaxFrameSources = 4096;
 	inline constexpr uint64_t kMaxResidentRecordBytes = 128ull * 1024 * 1024;
@@ -39,6 +42,16 @@ namespace GrassPolicy
 	}
 	/** @brief The native descriptor stores mesh stride in four-byte units in its low nibble. */
 	constexpr uint32_t MeshStride(uint64_t descriptor) { return uint32_t(descriptor & 0xF) * 4; }
+	/** @brief Density and distance costs follow the drawable mesh selected for each LOD slot. */
+	inline float MeshWeight(uint32_t indexCount) { return std::sqrt(std::max(1.0f, indexCount / 24.0f)); }
+	/** @brief Estimate extra billboard area from authored bounds without texture readbacks. */
+	inline float BillboardCoverageScale(float sourceRadius, float billboardRadius, float bias)
+	{
+		if (!std::isfinite(sourceRadius) || !std::isfinite(billboardRadius) || sourceRadius <= 0 || billboardRadius <= sourceRadius)
+			return 1.0f;
+		const float ratio = sourceRadius / billboardRadius;
+		return std::lerp(1.0f, ratio * ratio, bias);
+	}
 	/** @brief Unsupported batch sizes retain native rendering before scratch allocation. */
 	constexpr bool BatchCapacityValid(uint64_t instances, uint64_t slices)
 	{
@@ -57,6 +70,50 @@ namespace GrassPolicy
 			return std::nullopt;
 		return CullCapacity{ std::max(current.instances, std::bit_ceil(static_cast<uint32_t>(instances))),
 			std::max(current.slots, static_cast<uint32_t>(slots)) };
+	}
+	inline constexpr uint32_t kCullResultTrimFrames = 300;
+	inline constexpr uint64_t kMinCullResultTrimBytes = 64 * 1024;
+	/** @brief Reclaim sustained excess output capacity, retaining headroom for camera turns. */
+	struct CullCapacityRetention
+	{
+		uint64_t lastFrame = UINT64_MAX;
+		uint32_t lowDemandFrames = 0;
+		CullCapacity peak{};
+
+		/** @brief Suggest trimming after consecutive low-demand frames; zero capacity releases idle output. */
+		std::optional<CullCapacity> Observe(CullCapacity current, CullCapacity needed, uint32_t frame)
+		{
+			if (lastFrame == frame)
+				return std::nullopt;
+			const bool consecutive = lastFrame <= UINT32_MAX && frame - uint32_t(lastFrame) == 1;
+			lastFrame = frame;
+			const uint64_t available = uint64_t(current.instances) * current.slots;
+			const bool low = available * kSurvivorBytes >= kMinCullResultTrimBytes &&
+			                 uint64_t(needed.instances) * needed.slots <= available / 4;
+			if (!consecutive || !low) {
+				lowDemandFrames = 0;
+				peak = {};
+			}
+			if (!low)
+				return std::nullopt;
+			peak.instances = std::max(peak.instances, needed.instances);
+			peak.slots = std::max(peak.slots, needed.slots);
+			lowDemandFrames = std::min(lowDemandFrames + 1, kCullResultTrimFrames);
+			if (lowDemandFrames < kCullResultTrimFrames)
+				return std::nullopt;
+			const auto target = peak.instances ? CullCapacity{ std::min(current.instances, std::max(256u, peak.instances * 2)), peak.slots } : CullCapacity{};
+			if (uint64_t(target.instances) * target.slots > available / 2) {
+				lowDemandFrames = 0;
+				peak = {};
+				return std::nullopt;
+			}
+			return target;
+		}
+	};
+	/** @brief Replacement allocations coexist with retained buffers until the new bundle is complete. */
+	constexpr bool ReplacementFitsBudget(uint64_t resident, uint64_t replacement, uint64_t budget)
+	{
+		return resident <= budget && replacement <= budget - resident;
 	}
 	/** @brief Float offset of the native wind vector in flat or stereo geometry constants. */
 	constexpr uint32_t WindVectorOffset(bool vr) { return (vr ? 33u : 17u) * 4; }
@@ -146,13 +203,19 @@ namespace GrassPolicy
 		float RenderDistanceOverride = 0.0f;
 		float EdgeFadeStart = 0.85f;
 		float SimpleShadingPixelSize = 0.0f;
-		float CollisionDistance = 2048.0f;
+		float CollisionDistance = 4096.0f;
 		bool EnableMeshLOD = false;
 		bool EnableMidLOD = true;
 		bool EnableFarLOD = true;
 		float MidLODPixelSize = 8.0f;
 		float FarLODPixelSize = 4.0f;
 		float MeshLODBandPixels = 3.0f;
+		bool FarLODOptimization = false;
+		float FarLODMinPixelSize = 1.0f;
+		float FarLODMinDensity = 0.02f;
+		float FarLODMaxDensity = 0.2f;
+		float FarLODCoverageBias = 1.0f;
+		bool ProportionalDensityFade = false;
 		bool EnableOcclusionCulling = true;
 		float OcclusionBias = 0.001f;
 
@@ -163,6 +226,9 @@ namespace GrassPolicy
 			       FullDetailPixelSize > MinPixelSize && range(MinDensity, 0.0f, 1.0f) &&
 			       range(MidLODPixelSize, 0.01f, 128.0f) && range(FarLODPixelSize, 0.01f, MidLODPixelSize) &&
 			       range(MeshLODBandPixels, 0.01f, 32.0f) && range(OcclusionBias, 0.0f, 0.05f) &&
+			       range(FarLODMinPixelSize, 0.0f, 64.0f) && (!FarLODOptimization || FarLODMinPixelSize < FarLODPixelSize) &&
+			       range(FarLODMinDensity, 0.0f, 1.0f) && range(FarLODMaxDensity, FarLODMinDensity, 1.0f) &&
+			       range(FarLODCoverageBias, 0.0f, 1.0f) &&
 			       range(MeshCostBias, 0.0f, 1.0f) && range(CostBiasStartDistance, 0.0f, 20000.0f) &&
 			       range(InvisibleFadeCull, 0.0f, 1.0f) && range(RenderDistanceOverride, 0.0f, 100000.0f) &&
 			       range(EdgeFadeStart, 0.0f, 1.0f) && range(SimpleShadingPixelSize, 0.0f, 32.0f) &&

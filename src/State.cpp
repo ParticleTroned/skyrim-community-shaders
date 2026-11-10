@@ -1,4 +1,11 @@
 #include "State.h"
+#include "Features/ReverseZ.h"
+#include "Features/UnifiedWater.h"
+#if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
+#	include "Diagnostics/NvPerf.h"
+#endif
+#include "Features/TerrainBlending.h"
+#include "Features/TerrainSeams.h"
 #include "Features/TextureStreaming.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Diagnostics/EngineStutterMonitor.h"
@@ -14,7 +21,6 @@
 
 #include <algorithm>
 #include <array>
-#include <codecvt>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -26,15 +32,19 @@
 #include <pystring/pystring.h>
 
 #include "Deferred.h"
+#include "EngineFixes/LODBlendRingFix.h"
 #include "FeatureIssues.h"
 #include "Features/AdaptiveBrightness.h"
 #include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/FoveatedCommon.h"
+#include "Features/GrassCollision.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
+#include "Features/LightLimitFix/LightAttach.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/SnowCover.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
@@ -58,6 +68,7 @@
 #include "Utils/FileSystem.h"
 #include "Utils/SettingsOverlay.h"
 #include "Utils/SphericalHarmonics.h"
+#include "Utils/TracyZones.h"
 #include "Utils/WorldLoadTransitionPolicy.h"
 #include "WeatherManager.h"
 #include "WeatherVariableRegistry.h"
@@ -461,7 +472,10 @@ namespace
 
 void State::Draw()
 {
-	ZoneScoped;
+#ifdef TRACY_SUPPORT
+	const bool emitTracyDrawZones = Util::TracyZones::PerDrawZonesEnabled();
+#endif
+	CS_DRAW_ZONE(stateDrawZone, "State::Draw", emitTracyDrawZones);
 	const bool stateDrawDiagActive = ShouldRecordStateDrawPhaseDiag();
 	const uint32_t stateDrawDiagFrame = stateDrawDiagActive ? frameCount : 0;
 	if (stateDrawDiagActive)
@@ -494,7 +508,8 @@ void State::Draw()
 		}
 		{
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::PerfModeRelatch, stateDrawDiagFrame, stateDrawDiagActive);
-			globals::features::upscaling.ApplyPendingPerfModeRenderTargetRecreate("State::Draw");
+			if (globals::game::isVR && globals::features::upscaling.HasPendingPerfModeRenderTargetWork())
+				globals::features::upscaling.ApplyPendingPerfModeRenderTargetRecreate("State::Draw");
 			shaderCache->ServicePendingDisable();
 		}
 
@@ -505,44 +520,46 @@ void State::Draw()
 			globals::features::lightLimitFix.Reset();
 			globals::features::interiorSun.isInteriorWithSun = false;
 			globals::features::wetterness.ResetRuntimeStateAfterGameLoad();
+			globals::features::snowCover.ResetRuntimeStateAfterGameLoad();
+			globals::features::grassCollision.ResetRuntimeStateAfterGameLoad();
 			pendingPostLoadRuntimeReset = false;
 			logger::info("Applied deferred post-load runtime reset");
 		}
 
 		if (csEditor.loaded || weatherPicker.loaded) {
-			ZoneScopedN("WeatherManager::UpdateFeatures");
+			CS_DRAW_ZONE(weatherZone, "WeatherManager::UpdateFeatures", emitTracyDrawZones);
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::WeatherUpdateFeatures, stateDrawDiagFrame, stateDrawDiagActive);
 			WeatherManager::GetSingleton()->UpdateFeatures();
 		}
 
 		if (terrainBlending.loaded && terrainBlending.settings.Enabled) {
-			ZoneScopedN("TerrainBlending::TerrainShaderHacks");
+			CS_DRAW_ZONE(terrainBlendingZone, "TerrainBlending::TerrainShaderHacks", emitTracyDrawZones);
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::TerrainShaderHacks, stateDrawDiagFrame, stateDrawDiagActive);
 			terrainBlending.TerrainShaderHacks();
 		}
 
 		if (cloudShadows.loaded) {
-			ZoneScopedN("CloudShadows::SkyShaderHacks");
+			CS_DRAW_ZONE(cloudShadowsZone, "CloudShadows::SkyShaderHacks", emitTracyDrawZones);
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::CloudShadowShaderHacks, stateDrawDiagFrame, stateDrawDiagActive);
 			cloudShadows.SkyShaderHacks();
 		}
 
 		if (terrainHelper.loaded) {
-			ZoneScopedN("TerrainHelper::SetShaderResources");
+			CS_DRAW_ZONE(terrainHelperZone, "TerrainHelper::SetShaderResources", emitTracyDrawZones);
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::TerrainHelperResources, stateDrawDiagFrame, stateDrawDiagActive);
 			terrainHelper.SetShaderResouces(context);
 		}
 
 		if (truePBR.loaded) {
-			ZoneScopedN("TruePBR::SetShaderResources");
+			CS_DRAW_ZONE(truePBRZone, "TruePBR::SetShaderResources", emitTracyDrawZones);
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::TruePBRResources, stateDrawDiagFrame, stateDrawDiagActive);
 			truePBR.SetShaderResouces(context);
 		}
 
 		if (volumetricShadows.loaded) {
-			ZoneScopedN("VolumetricShadows::SetShaderResources");
+			CS_DRAW_ZONE(volumetricShadowsZone, "VolumetricShadows::SetShaderResources", emitTracyDrawZones);
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::VolumetricShadowResources, stateDrawDiagFrame, stateDrawDiagActive);
-			volumetricShadows.SetShaderResources(context);
+			volumetricShadows.SetShaderResources(context, selectedCustomPixelShaderType);
 		}
 
 		if (permutationData != permutationDataPrevious) {
@@ -560,6 +577,14 @@ void State::Draw()
 					else
 						deferred->CopyShadowData();
 				}
+			}
+		}
+
+		if (currentShader && globals::profiler->IsRenderTargetCaptureActive()) {
+			if (auto* shadowState = globals::game::shadowState) {
+				const uint32_t depthStencil = globals::game::isVR ? shadowState->GetVRRuntimeData().depthStencil : shadowState->GetRuntimeData().depthStencil;
+				const uint32_t renderTarget = static_cast<uint32_t>(globals::game::isVR ? shadowState->GetVRRuntimeData().renderTargets[0] : shadowState->GetRuntimeData().renderTargets[0]);
+				globals::profiler->CountRenderTargetDraw(depthStencil, renderTarget);
 			}
 		}
 
@@ -681,6 +706,7 @@ void State::NotifyOrdinarySave(uint32_t a_currentFrame)
 
 void State::BeginSaveLoadSafeMode(uint32_t a_currentFrame)
 {
+	LightLimitFixDetail::LightAttach::Invalidate();
 	std::lock_guard lock(saveLoadSafeModeMutex);
 	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
 	worldLoadTransitionStartFrame.store(currentFrame, std::memory_order_release);
@@ -697,6 +723,7 @@ void State::BeginSaveLoadSafeMode(uint32_t a_currentFrame)
 
 void State::ExtendSaveLoadSafeMode(uint32_t a_currentFrame, uint32_t a_frameCount)
 {
+	LightLimitFixDetail::LightAttach::Invalidate();
 	std::lock_guard lock(saveLoadSafeModeMutex);
 	const uint32_t currentFrame = a_currentFrame != 0 ? a_currentFrame : std::max(frameCount, 1u);
 	if (worldLoadTransitionStartFrame.load(std::memory_order_acquire) == 0)
@@ -772,6 +799,7 @@ void State::UpdateSaveLoadSafeMode()
 	const bool ordinarySaveRecoveryUnsafe = !engineStateKnown ||
 	                                        engineLoadingOrInitializing || IsMainOrLoadingMenuOpen() || pendingPostLoadRuntimeReset;
 	if (ordinarySaveRecoveryUnsafe) {
+		LightLimitFixDetail::LightAttach::Invalidate();
 		RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource::Other);
 	} else if (engineSaving && !engineSavingWasActive) {
 		RecordSaveLoadRenderRecoverySource(SaveLoadRenderRecoverySource::OrdinarySave);
@@ -849,9 +877,14 @@ void State::UpdateSaveLoadSafeMode()
 
 void State::Reset()
 {
+	selectedCustomPixelShaderType = RE::BSShader::Type::None;
 	if (globals::game::isVR)
 		globals::profiler->EndFrame(frameCount);
 	Feature::ForEachLoadedFeature("Reset", [](Feature* feature) { feature->Reset(); });
+	const auto& terrain = globals::features::terrainBlending;
+	const auto& pbr = globals::features::truePBR;
+	TerrainSeams::GetInstance().Update(terrain.loaded && terrain.settings.Enabled && terrain.settings.LandscapeSeams &&
+									   pbr.loaded && pbr.settings.Enabled && globals::shaderCache->IsEnabled());
 	if (!globals::game::ui->GameIsPaused())
 		timer += RE::GetSecondsSinceLastFrame();
 
@@ -875,6 +908,7 @@ void State::Reset()
 	frameCount++;
 	frameCountAtomic.store(frameCount, std::memory_order_relaxed);
 	UpdateSaveLoadSafeMode();
+	LODBlendRingFix::GetInstance().Update();
 
 	globals::shaderCache->TickActiveShaderCapture(globals::menu && globals::menu->IsEnabled);
 	globals::shaderCache->ProcessPendingClear();
@@ -890,7 +924,11 @@ void State::Reset()
 
 	// Disable "improved" snow shader, unsupported
 	if (!globals::game::isVR) {
-		RE::GetINISetting("bEnableImprovedSnow:Display")->data.b = false;
+		static RE::Setting* improvedSnow = nullptr;
+		if (!improvedSnow)
+			improvedSnow = RE::GetINISetting("bEnableImprovedSnow:Display");
+		if (improvedSnow)
+			improvedSnow->data.b = false;
 	}
 
 	activeReflections = false;
@@ -1350,6 +1388,14 @@ void State::Load(
 		}
 	}
 
+	// Retire legacy distances before a separate-field override can merge with them.
+	try {
+		if (auto lighting = settings.find("Light Limit Fix"); lighting != settings.end())
+			LightLimitFixDetail::ShadowCulling::MigrateLegacyOverride(*lighting);
+	} catch (const std::exception& error) {
+		logger::warn("Shadow-culling migration deferred to feature validation: {}", error.what());
+	}
+
 	// Step 3: Discover and prepare overrides (applied after user settings, so overrides take priority)
 	auto overrideManager = SettingsOverrideManager::GetSingleton();
 	size_t overridesDiscovered = overrideManager->DiscoverOverrides();
@@ -1498,6 +1544,9 @@ void State::SaveToJson(
 	advanced["Background Compiler Threads"] = shaderCache->backgroundCompilationThreadCount;
 	advanced["Use FileWatcher"] = shaderCache->UseFileWatcher();
 	advanced["Frame Annotations"] = frameAnnotations;
+#ifdef TRACY_SUPPORT
+	advanced["Tracy Per-Draw Zones"] = Util::TracyZones::PerDrawZonesEnabled();
+#endif
 	advanced["Refraction Scale"] = refractionScale;
 	advanced["PBR Metal Reflection Scale"] = pbrMetalReflectionScale;
 	advanced["PBR Metal Highlight Scale"] = pbrMetalHighlightScale;
@@ -1561,6 +1610,7 @@ void State::LoadFromJson(
 {
 	PerformanceTuningRenderer::NotifyConfigurationChanging();
 	std::lock_guard<std::mutex> lock(m_mutex);
+	SettingsMigrations::MigrateReverseZStartup(settings);
 	if (a_loadFeatureSettings)
 		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(settings);
 	const auto shaderCache = globals::shaderCache;
@@ -1571,6 +1621,9 @@ void State::LoadFromJson(
 	}
 
 	globals::features::truePBR.enableVerboseJsonLogging = false;
+#ifdef TRACY_SUPPORT
+	Util::TracyZones::SetPerDrawZones(false);
+#endif
 	if (settings.contains("Advanced") && settings["Advanced"].is_object()) {
 		json& advanced = settings["Advanced"];
 		// The compilation pool is constructed at the responsive hardware-derived
@@ -1598,6 +1651,10 @@ void State::LoadFromJson(
 			frameAnnotations = advanced["Frame Annotations"];
 			useFrameAnnotations = frameAnnotations;
 		}
+#ifdef TRACY_SUPPORT
+		if (advanced.contains("Tracy Per-Draw Zones") && advanced["Tracy Per-Draw Zones"].is_boolean())
+			Util::TracyZones::SetPerDrawZones(advanced["Tracy Per-Draw Zones"].get<bool>());
+#endif
 		if (advanced.contains("Refraction Scale") && advanced["Refraction Scale"].is_number())
 			refractionScale = std::clamp(advanced["Refraction Scale"].get<float>(), 0.0f, 2.0f);
 		if (advanced.contains("PBR Metal Reflection Scale") && advanced["PBR Metal Reflection Scale"].is_number())
@@ -1822,6 +1879,10 @@ void State::SetDefines(std::string a_defines)
 			continue;
 		}
 		auto name = pystring::strip(token[0]);
+		if (name == "REVERSE_Z" || name.starts_with("CSX_DEPTH_ORDER_TEST_")) {
+			logger::warn("Depth convention defines are renderer-owned; ignoring {}", name);
+			continue;
+		}
 		std::string definition;
 		if (token.size() == 2) {
 			definition = pystring::strip(token[1]);
@@ -1850,6 +1911,8 @@ std::shared_ptr<const State::ShaderDefinesSnapshot> State::GetShaderDefinesSnaps
 
 bool State::ShaderEnabled(const RE::BSShader::Type a_type)
 {
+	if (globals::features::reverseZ.IsActive() && SIE::ShaderCache::IsSupportedShader(a_type))
+		return true;
 	if (a_type > RE::BSShader::Type::None && a_type < RE::BSShader::Type::Total) {
 		return enabledClasses[magic_enum::enum_integer(a_type) - 1];
 	}
@@ -1901,7 +1964,7 @@ void State::CheckTypedUAVLoadSupport()
 	};
 	static const FormatEntry kFormats[] = {
 		{ DXGI_FORMAT_R11G11B10_FLOAT, "R11G11B10_FLOAT", "Dynamic Cubemaps (envCapture/Raw/Position) — non-HDR" },
-		{ DXGI_FORMAT_R16G16B16A16_FLOAT, "R16G16B16A16_FLOAT", "Dynamic Cubemaps (HDR), Skylighting outProbeArray, Grass Collision (collisionTexture)" },
+		{ DXGI_FORMAT_R16G16B16A16_FLOAT, "R16G16B16A16_FLOAT", "Dynamic Cubemaps (HDR), Skylighting outProbeArray" },
 		{ DXGI_FORMAT_R16G16_UNORM, "R16G16_UNORM", "Terrain Shadows (RWTexShadowHeights)" },
 		{ DXGI_FORMAT_R16G16_FLOAT, "R16G16_FLOAT", "VR Stereo Blend (kMOTION_VECTOR reprojection)" },
 		{ DXGI_FORMAT_R8G8B8A8_UNORM, "R8G8B8A8_UNORM", "HDR Display UI brightness (uiTexture)" },
@@ -1967,7 +2030,7 @@ void State::SetupResources()
 	permutationCB = new ConstantBuffer(ConstantBufferDesc<PermutationCB>());
 	sharedDataCB = new ConstantBuffer(ConstantBufferDesc<SharedDataCB>());
 
-	const auto featureDataSize = GetFeatureBufferData(false).second;
+	const auto featureDataSize = GetFeatureBufferCapacity();
 	featureDataCB = new ConstantBuffer(ConstantBufferDesc((uint32_t)featureDataSize));
 
 	// Grab main texture to get resolution
@@ -2026,7 +2089,8 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::AnisoLighting |
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::BaseObjectIsSnow |
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::Snow |
-										(uint32_t)SIE::ShaderCache::LightingShaderFlags::TruePbr);
+										(uint32_t)SIE::ShaderCache::LightingShaderFlags::TruePbr |
+										(uint32_t)SIE::ShaderCache::LightingShaderFlags::LandscapeSeams);
 
 				a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::AmbientSpecular |
 									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::ShadowDir |
@@ -2075,13 +2139,36 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 				}
 			}
 			break;
+		case RE::BSShader::Type::Grass:
+			{
+				const auto noCollision = uint32_t(SIE::ShaderCache::GrassShaderFlags::NoCollision);
+				const auto basicCollision = uint32_t(SIE::ShaderCache::GrassShaderFlags::BasicCollision);
+				a_vertexDescriptor &= ~(noCollision | basicCollision);
+				a_pixelDescriptor &= ~(noCollision | basicCollision);
+				const auto mode = globals::features::grassCollision.GetVertexMode();
+				if (mode == GrassCollisionMode::Mode::Disabled)
+					a_vertexDescriptor |= noCollision;
+				else if (mode == GrassCollisionMode::Mode::Basic)
+					a_vertexDescriptor |= basicCollision;
+			}
+			break;
 		case RE::BSShader::Type::Water:
 			{
+				// Keep resource readiness in the descriptor so queued compiles retain their variant.
+				const auto nativeWater = (uint32_t)SIE::ShaderCache::WaterShaderFlags::NativeWater;
+				a_vertexDescriptor &= ~nativeWater;
+				a_pixelDescriptor &= ~nativeWater;
+				if (globals::features::unifiedWater.RequiresVanillaWaterShaders()) {
+					a_vertexDescriptor |= nativeWater;
+					a_pixelDescriptor |= nativeWater;
+				}
 				auto flags = ~((uint32_t)SIE::ShaderCache::WaterShaderFlags::Reflections |
 							   (uint32_t)SIE::ShaderCache::WaterShaderFlags::Cubemap |
 							   (uint32_t)SIE::ShaderCache::WaterShaderFlags::Interior);
 				a_vertexDescriptor &= flags;
 				a_pixelDescriptor &= flags;
+				// Pixel displacement reads the original wading bit from the permutation buffer.
+				a_pixelDescriptor &= ~static_cast<uint32_t>(SIE::ShaderCache::WaterShaderFlags::Wading);
 			}
 			break;
 		case RE::BSShader::Type::Effect:
@@ -2109,6 +2196,8 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 			}
 			break;
 		}
+	} else if (a_shader.shaderType.get() == RE::BSShader::Type::Utility) {
+		a_vertexDescriptor &= ~static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::TruePbr);
 	}
 }
 
@@ -2134,6 +2223,9 @@ void State::RefreshDrawAnnotations()
 
 void State::BeginDrawEvent(std::string_view title)
 {
+#if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
+	NvPerf::PushRange(title);
+#endif
 	// Keep high-frequency draw annotations available to RenderDoc/PIX without
 	// creating a dynamic Tracy source location for every geometry draw.
 	if (pPerf.Get()) {
@@ -2144,12 +2236,18 @@ void State::BeginDrawEvent(std::string_view title)
 
 void State::EndDrawEvent()
 {
+#if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
+	NvPerf::PopRange();
+#endif
 	if (pPerf.Get())
 		pPerf->EndEvent();
 }
 
 void State::BeginPerfEvent(std::string_view title)
 {
+#if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
+	NvPerf::PushRange(title);
+#endif
 #ifdef TRACY_ENABLE
 	// Use dynamic source location so Tracy displays the title as the zone name
 	// rather than the static function name "BeginPerfEvent".
@@ -2170,6 +2268,9 @@ void State::BeginPerfEvent(std::string_view title)
 
 void State::EndPerfEvent()
 {
+#if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
+	NvPerf::PopRange();
+#endif
 #ifdef TRACY_ENABLE
 	if (!s_tracyPerfZones.empty()) {
 		TracyCZoneEnd(s_tracyPerfZones.back());
@@ -2192,8 +2293,7 @@ void State::SetPerfMarker(std::string_view title)
 
 void State::SetAdapterDescription(const std::wstring& description)
 {
-	std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-	adapterDescription = converter.to_bytes(description);
+	adapterDescription = stl::utf16_to_utf8(description).value_or("<GPU name conversion failed>");
 }
 
 void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] bool a_prepass)
@@ -2278,7 +2378,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		const auto& volumetricShadows = globals::features::volumetricShadows;
 		data.VolumetricShadowsEnabled = volumetricShadows.loaded && volumetricShadows.settings.Enabled;
 		const auto godrayProfile = a_inWorld ? globals::features::volumetricLighting.GetRuntimeGodrayProfile() : VolumetricLighting::GodrayProfile{};
-		data.GodrayFinalBrightness = a_inWorld ? globals::features::adaptiveBrightness.GetEffectiveGodrayFinalBrightness() : AdaptiveBalanceGodray::kDefault;
+		data.VolumetricLightingClarity = { a_inWorld ? globals::features::adaptiveBrightness.GetEffectiveVolumetricClarity() : AdaptiveBalanceGodray::kClarityDefault, godrayProfile.ShaftIntensity, 0, 0 };
 		data.VolumetricLightingOpacity = godrayProfile.Opacity;
 		data.VolumetricLightingSaturation = godrayProfile.Saturation;
 		data.VolumetricLightingCustomColor = {
@@ -2431,6 +2531,24 @@ void State::UpdateLightingShaderPermutation(RE::BSRenderPass* a_pass)
 	if (alphaProperty && alphaProperty->GetAlphaBlending() &&
 		alphaProperty->GetDestBlendMode() == RE::NiAlphaProperty::AlphaFunction::kOne) {
 		permutationData.ExtraShaderDescriptor |= additiveLighting;
+	}
+}
+
+void State::UpdateEffectShaderPermutation(RE::BSRenderPass* a_pass)
+{
+	constexpr auto isAurora = static_cast<uint32_t>(ExtraShaderDescriptors::IsAurora);
+	permutationData.ExtraShaderDescriptor &= ~isAurora;
+	if (!a_pass || !a_pass->geometry ||
+		!(currentVertexDescriptor & static_cast<uint32_t>(SIE::ShaderCache::EffectShaderFlags::SkyObject)))
+		return;
+	const auto sky = globals::game::sky;
+	if (!sky || !sky->auroraRoot)
+		return;
+	for (const RE::NiAVObject* node = a_pass->geometry; node; node = node->parent) {
+		if (node == sky->auroraRoot.get()) {
+			permutationData.ExtraShaderDescriptor |= isAurora;
+			return;
+		}
 	}
 }
 

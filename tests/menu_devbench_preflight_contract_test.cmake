@@ -14,6 +14,42 @@ if(NOT _descriptor_match)
     message(FATAL_ERROR "Menu DevBench descriptor was not found")
 endif()
 set(_descriptor "${CMAKE_MATCH_1}")
+
+string(JSON _preset_mode GET "${_descriptor}" inputSchema properties presetMode enum)
+string(JSON _preset_collection GET "${_descriptor}" inputSchema properties presetCollection enum)
+string(JSON _preset_state GET "${_descriptor}" outputSchema properties adaptiveBalancePresets type)
+if(NOT _preset_state STREQUAL "object")
+    message(FATAL_ERROR "Menu UI status must describe the selected Adaptive Balance preset mode and collection")
+endif()
+foreach(_folder_contract IN ITEMS
+    [=[document["inputSchema"]["properties"]["presetExportFolder"]]=]
+    [=[presetStatus["exportFolder"]]=]
+    [=[presetStatus["usesDefaultFolder"]]=]
+    [[Presets::SetExportFolder(candidate, *exportFolder, error)]]
+)
+    string(FIND "${_bridge}" "${_folder_contract}" _folder_contract_position)
+    if(_folder_contract_position LESS 0)
+        message(FATAL_ERROR "Missing preset export folder contract: ${_folder_contract}")
+    endif()
+endforeach()
+foreach(_mode IN ITEMS export import)
+    if(NOT _preset_mode MATCHES "\"${_mode}\"")
+        message(FATAL_ERROR "Missing preset mode ${_mode}")
+    endif()
+endforeach()
+foreach(_collection IN ITEMS full base locations worldspace region city)
+    if(NOT _preset_collection MATCHES "\"${_collection}\"")
+        message(FATAL_ERROR "Missing preset collection ${_collection}")
+    endif()
+endforeach()
+string(FIND "${_bridge}" [[if (action == "ui_status" ||]] _ui_status_start)
+string(SUBSTRING "${_bridge}" ${_ui_status_start} -1 _ui_status_tail)
+string(FIND "${_ui_status_tail}" [[if (action != "set_grass_collision_strength"]] _ui_status_end)
+string(SUBSTRING "${_ui_status_tail}" 0 ${_ui_status_end} _ui_status_handler)
+string(FIND "${_ui_status_handler}" [[{ "adaptiveBalancePresets",]] _preset_state_position)
+if(_preset_state_position LESS 0)
+    message(FATAL_ERROR "ui_status must return adaptiveBalancePresets after either UI or automation navigation")
+endif()
 string(JSON _preparation_ok_type GET "${_descriptor}" outputSchema properties ok type)
 if(NOT _preparation_ok_type STREQUAL "boolean")
     message(FATAL_ERROR "Preparation success marker must be a boolean")
@@ -222,6 +258,8 @@ foreach(_removed_surface IN ITEMS
     endif()
 endforeach()
 
+# Shared depth ordering does not select a scene backend; its shader tests
+# cover standard rendering and the standalone reversed-order permutation.
 file(
     GLOB _retired_scene_paths
     "${PROJECT_ROOT}/src/Features/VRHybridCulling*"
@@ -229,7 +267,6 @@ file(
 )
 list(
     APPEND _retired_scene_paths
-    "${PROJECT_ROOT}/package/Shaders/Common/DepthOrder.hlsli"
     "${PROJECT_ROOT}/src/Features/VRDepthCullingTelemetry.h"
     "${PROJECT_ROOT}/src/Features/VRNativeVisibilityTelemetry.h"
     "${PROJECT_ROOT}/src/MenuDepthCullingDiagnostics.h"
@@ -265,7 +302,6 @@ foreach(_source_path IN LISTS _runtime_sources)
             VRNativeVisibilityTelemetry
             MenuDepthCullingDiagnostics
             VRDepthCullingTelemetry.h
-            DepthOrder.hlsli
             DepthCullingMethod
             kSceneHiZMode
             IsGrassHiZAvailable
@@ -695,7 +731,9 @@ endif()
 foreach(reset_contract IN ITEMS
     "action != \"reset_menu_layout\""
     "} else if (action == \"reset_menu_layout\")"
-    "globals::features::vr.ResetMenuLayout();"
+    "menu->RequestLayoutReset();"
+    "menuLayoutResetPending"
+    "document[\"outputSchema\"][\"properties\"][\"status\"][\"properties\"][\"menuLayoutResetPending\"]"
     "document[\"inputSchema\"][\"properties\"][\"action\"][\"enum\"].push_back(\"reset_menu_layout\")"
 )
     string(FIND "${_bridge}" "${reset_contract}" reset_contract_position)

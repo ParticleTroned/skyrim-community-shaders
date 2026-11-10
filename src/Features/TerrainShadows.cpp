@@ -10,6 +10,19 @@
 #include "Util.h"
 #include "Utils/Game.h"
 
+namespace
+{
+	// Heightmaps are keyed by the worldspace that provides the land data.
+	RE::TESWorldSpace* GetLandWorldspace()
+	{
+		auto* tes = globals::game::tes;
+		auto* worldspace = tes ? tes->GetRuntimeData2().worldSpace : nullptr;
+		while (worldspace && worldspace->parentWorld && worldspace->parentUseFlags.any(RE::TESWorldSpace::ParentUseFlag::kUseLandData))
+			worldspace = worldspace->parentWorld;
+		return worldspace;
+	}
+}
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TerrainShadows::Settings,
 	EnableTerrainShadow)
@@ -195,10 +208,8 @@ ID3D11ComputeShader* TerrainShadows::GetShadowUpdateProgram()
 
 bool TerrainShadows::IsHeightMapReady()
 {
-	if (auto tes = RE::TES::GetSingleton())
-		if (auto worldspace = tes->GetRuntimeData2().worldSpace)
-			return cachedHeightmap && cachedHeightmap->worldspace == worldspace->GetFormEditorID();
-	return false;
+	auto* worldspace = GetLandWorldspace();
+	return worldspace && cachedHeightmap && cachedHeightmap->worldspace == worldspace->GetFormEditorID();
 }
 
 TerrainShadows::PerFrame TerrainShadows::GetCommonBufferData()
@@ -227,14 +238,7 @@ TerrainShadows::PerFrame TerrainShadows::GetCommonBufferData()
 
 void TerrainShadows::LoadHeightmap()
 {
-	auto tes = globals::game::tes;
-	if (!tes)
-		return;
-
-	auto worldspace = tes->GetRuntimeData2().worldSpace;
-	while (worldspace && worldspace->parentWorld && worldspace->parentUseFlags.any(RE::TESWorldSpace::ParentUseFlag::kUseLandData))
-		worldspace = worldspace->parentWorld;
-
+	auto* worldspace = GetLandWorldspace();
 	if (!worldspace)
 		return;
 
@@ -364,11 +368,14 @@ bool TerrainShadows::UpdateShadow(bool a_refreshImmediately)
 		context->CSSetShaderResources(60, (uint)srvs.size(), srvs.data());
 	}
 
-	auto accumulator = *globals::game::currentAccumulator.get();
-	auto shadowSceneNode = accumulator->GetRuntimeData().activeShadowSceneNode;
+	// Early prepasses require the world scene before the world accumulator is current.
+	auto* shadowSceneNode = globals::game::smState ? globals::game::smState->shadowSceneNode[0] : nullptr;
 	if (!shadowSceneNode)
 		return false;
-	auto sunLight = skyrim_cast<RE::NiDirectionalLight*>(shadowSceneNode->GetRuntimeData().sunLight->light.get());
+	auto* sceneSunLight = shadowSceneNode->GetRuntimeData().sunLight;
+	if (!sceneSunLight)
+		return false;
+	auto sunLight = skyrim_cast<RE::NiDirectionalLight*>(sceneSunLight->light.get());
 	if (!sunLight)
 		return false;
 
@@ -409,7 +416,7 @@ bool TerrainShadows::UpdateShadow(bool a_refreshImmediately)
 		invScale.z = cachedHeightmap->zRange.y - cachedHeightmap->zRange.x;
 		float2 dirLightPxDir = { dirLightDir.x / invScale.x * width, dirLightDir.y / invScale.y * height };
 		if (dirLightPxDir.x == 0.f && dirLightPxDir.y == 0.f)
-			dirLightPxDir = { 1.f, 0.f };
+			dirLightPxDir = float2(1.f, 0.f);
 
 		if (abs(dirLightPxDir.x) >= abs(dirLightPxDir.y)) {
 			edgePxCoord = dirLightPxDir.x > 0 ? 0 : (width - 1);

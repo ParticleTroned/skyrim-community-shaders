@@ -1,6 +1,7 @@
-captured_shader_variants: 3605
-# Lighting pixel keys are normalized; the captured count retains source provenance.
-normalized_shader_variants: 3135
+captured_shader_variants: 3631
+# Inventory includes normalized Lighting keys and explicit feature variants.
+# The captured count retains source provenance.
+normalized_shader_variants: 3198
 common_defines:
     - D3DCOMPILE_DEBUG
     - D3DCOMPILE_SKIP_OPTIMIZATION
@@ -1159,7 +1160,26 @@ shaders:
     - file: DistantTree.hlsl
       configs:
           PSHADER:
-              common_defines: *id012
+              common_defines:
+                  - CLOUD_SHADOWS
+                  - D3DCOMPILE_DEBUG
+                  - D3DCOMPILE_SKIP_OPTIMIZATION
+                  - DYNAMIC_CUBEMAPS
+                  - IBL
+                  - ISL
+                  - LIGHT_LIMIT_FIX
+                  - LOD_BLENDING
+                  - PSHADER
+                  - SCREEN_SPACE_SHADOWS
+                  - SKYLIGHTING
+                  - SSS
+                  - TERRAIN_BLENDING
+                  - TERRAIN_SHADOWS
+                  - UNIFIED_WATER
+                  - VOLUMETRIC_SHADOWS
+                  - VR
+                  - WATER_EFFECTS
+                  - SNOW_COVER
               entries:
                   - entry: DistantTree:Pixel:0
                     defines: *id001
@@ -1190,7 +1210,26 @@ shaders:
                         - DO_ALPHA_TEST
                         - RENDER_DEPTH
           VSHADER:
-              common_defines: *id013
+              common_defines:
+                  - CLOUD_SHADOWS
+                  - D3DCOMPILE_DEBUG
+                  - D3DCOMPILE_SKIP_OPTIMIZATION
+                  - DYNAMIC_CUBEMAPS
+                  - IBL
+                  - ISL
+                  - LIGHT_LIMIT_FIX
+                  - LOD_BLENDING
+                  - SCREEN_SPACE_SHADOWS
+                  - SKYLIGHTING
+                  - SSS
+                  - TERRAIN_BLENDING
+                  - TERRAIN_SHADOWS
+                  - UNIFIED_WATER
+                  - VOLUMETRIC_SHADOWS
+                  - VR
+                  - VSHADER
+                  - WATER_EFFECTS
+                  - SNOW_COVER
               entries:
                   - entry: DistantTree:Vertex:0
                     defines: *id001
@@ -12222,6 +12261,7 @@ shaders:
                   - VR
                   - WATER_EFFECTS
                   - WETTERNESS
+                  - SNOW_COVER
               entries:
                   - entry: Lighting:Pixel:1
                     defines: []
@@ -12579,6 +12619,34 @@ shaders:
                         - LOD_LAND_BLEND
                         - MULTI_TEXTURE
                         - TRUE_PBR
+                  - entry: Lighting:Pixel:13000041
+                    defines:
+                        - LANDSCAPE
+                        - LANDSCAPE_SEAMS
+                        - LOD_LAND_BLEND
+                        - MULTI_TEXTURE
+                  - entry: Lighting:Pixel:13000049
+                    defines:
+                        - LANDSCAPE
+                        - LANDSCAPE_SEAMS
+                        - LOD_LAND_BLEND
+                        - MULTI_TEXTURE
+                        - TRUE_PBR
+                  - entry: Lighting:Pixel:13000051
+                    defines:
+                        - DEFERRED
+                        - LANDSCAPE
+                        - LANDSCAPE_SEAMS
+                        - LOD_LAND_BLEND
+                        - MULTI_TEXTURE
+                  - entry: Lighting:Pixel:13000059
+                    defines:
+                        - DEFERRED
+                        - LANDSCAPE
+                        - LANDSCAPE_SEAMS
+                        - LOD_LAND_BLEND
+                        - MULTI_TEXTURE
+                        - TRUE_PBR
                   - entry: Lighting:Pixel:13010009
                     defines:
                         - ANISO_LIGHTING
@@ -12593,6 +12661,25 @@ shaders:
                         - DEFERRED
                         - GLINT
                         - LANDSCAPE
+                        - LOD_LAND_BLEND
+                        - MULTI_TEXTURE
+                        - TRUE_PBR
+                  - entry: Lighting:Pixel:13010049
+                    defines:
+                        - ANISO_LIGHTING
+                        - GLINT
+                        - LANDSCAPE
+                        - LANDSCAPE_SEAMS
+                        - LOD_LAND_BLEND
+                        - MULTI_TEXTURE
+                        - TRUE_PBR
+                  - entry: Lighting:Pixel:13010059
+                    defines:
+                        - ANISO_LIGHTING
+                        - DEFERRED
+                        - GLINT
+                        - LANDSCAPE
+                        - LANDSCAPE_SEAMS
                         - LOD_LAND_BLEND
                         - MULTI_TEXTURE
                         - TRUE_PBR
@@ -12950,6 +13037,30 @@ shaders:
                         - LANDSCAPE
                         - MULTI_TEXTURE
                         - TRUE_PBR
+                  - entry: Lighting:Pixel:8000041
+                    defines:
+                        - LANDSCAPE
+                        - LANDSCAPE_SEAMS
+                        - MULTI_TEXTURE
+                  - entry: Lighting:Pixel:8000049
+                    defines:
+                        - LANDSCAPE
+                        - LANDSCAPE_SEAMS
+                        - MULTI_TEXTURE
+                        - TRUE_PBR
+                  - entry: Lighting:Pixel:8000051
+                    defines:
+                        - DEFERRED
+                        - LANDSCAPE
+                        - LANDSCAPE_SEAMS
+                        - MULTI_TEXTURE
+                  - entry: Lighting:Pixel:8000059
+                    defines:
+                        - DEFERRED
+                        - LANDSCAPE
+                        - LANDSCAPE_SEAMS
+                        - MULTI_TEXTURE
+                        - TRUE_PBR
                   - entry: Lighting:Pixel:8001
                     defines:
                         - PROJECTED_UV
@@ -12970,6 +13081,23 @@ shaders:
                         - DEFERRED
                         - GLINT
                         - LANDSCAPE
+                        - MULTI_TEXTURE
+                        - TRUE_PBR
+                  - entry: Lighting:Pixel:8010049
+                    defines:
+                        - ANISO_LIGHTING
+                        - GLINT
+                        - LANDSCAPE
+                        - LANDSCAPE_SEAMS
+                        - MULTI_TEXTURE
+                        - TRUE_PBR
+                  - entry: Lighting:Pixel:8010059
+                    defines:
+                        - ANISO_LIGHTING
+                        - DEFERRED
+                        - GLINT
+                        - LANDSCAPE
+                        - LANDSCAPE_SEAMS
                         - MULTI_TEXTURE
                         - TRUE_PBR
                   - entry: Lighting:Pixel:8011
@@ -13588,6 +13716,167 @@ shaders:
                         - PROJECTED_UV
                         - TRUE_PBR
                         - WORLD_MAP
+                  - entry: Lighting:Pixel:41000011
+                    defines:
+                        - DEFERRED
+                        - ENVMAP
+                        - FUR_SHELLS
+                  - entry: Lighting:Pixel:C1000011
+                    defines:
+                        - DEFERRED
+                        - ENVMAP
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
+                  - entry: Lighting:Pixel:41100001
+                    defines:
+                        - DO_ALPHA_TEST
+                        - ENVMAP
+                        - FUR_SHELLS
+                  - entry: Lighting:Pixel:C1100001
+                    defines:
+                        - DO_ALPHA_TEST
+                        - ENVMAP
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
+                  - entry: Lighting:Pixel:41100011
+                    defines:
+                        - DEFERRED
+                        - DO_ALPHA_TEST
+                        - ENVMAP
+                        - FUR_SHELLS
+                  - entry: Lighting:Pixel:C1100011
+                    defines:
+                        - DEFERRED
+                        - DO_ALPHA_TEST
+                        - ENVMAP
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
+                  - entry: Lighting:Pixel:44000011
+                    defines:
+                        - DEFERRED
+                        - FACEGEN
+                        - FUR_SHELLS
+                  - entry: Lighting:Pixel:C4000011
+                    defines:
+                        - DEFERRED
+                        - FACEGEN
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
+                  - entry: Lighting:Pixel:45000011
+                    defines:
+                        - DEFERRED
+                        - FACEGEN_RGB_TINT
+                        - FUR_SHELLS
+                  - entry: Lighting:Pixel:C5000011
+                    defines:
+                        - DEFERRED
+                        - FACEGEN_RGB_TINT
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
+                  - entry: Lighting:Pixel:40100017
+                    defines:
+                        - DEFERRED
+                        - DO_ALPHA_TEST
+                        - MODELSPACENORMALS
+                        - SKINNED
+                        - FUR_SHELLS
+                  - entry: Lighting:Pixel:C0100017
+                    defines:
+                        - DEFERRED
+                        - DO_ALPHA_TEST
+                        - MODELSPACENORMALS
+                        - SKINNED
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
+                  - entry: Lighting:Pixel:40000019
+                    defines:
+                        - DEFERRED
+                        - TRUE_PBR
+                        - FUR_SHELLS
+                  - entry: Lighting:Pixel:C0000019
+                    defines:
+                        - DEFERRED
+                        - TRUE_PBR
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
+                  - entry: Lighting:Pixel:40000001
+                    defines:
+                        - FUR_SHELLS
+                  - entry: Lighting:Pixel:40000009
+                    defines:
+                        - FUR_SHELLS
+                        - TRUE_PBR
+                  - entry: Lighting:Pixel:40000011
+                    defines:
+                        - DEFERRED
+                        - FUR_SHELLS
+                  - entry: Lighting:Pixel:40100001
+                    defines:
+                        - DO_ALPHA_TEST
+                        - FUR_SHELLS
+                  - entry: Lighting:Pixel:40100009
+                    defines:
+                        - DO_ALPHA_TEST
+                        - FUR_SHELLS
+                        - TRUE_PBR
+                  - entry: Lighting:Pixel:40100011
+                    defines:
+                        - DEFERRED
+                        - DO_ALPHA_TEST
+                        - FUR_SHELLS
+                  - entry: Lighting:Pixel:40100019
+                    defines:
+                        - DEFERRED
+                        - DO_ALPHA_TEST
+                        - FUR_SHELLS
+                        - TRUE_PBR
+                  - entry: Lighting:Pixel:41000001
+                    defines:
+                        - ENVMAP
+                        - FUR_SHELLS
+                  - entry: Lighting:Pixel:C0000001
+                    defines:
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
+                  - entry: Lighting:Pixel:C0000009
+                    defines:
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
+                        - TRUE_PBR
+                  - entry: Lighting:Pixel:C0000011
+                    defines:
+                        - DEFERRED
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
+                  - entry: Lighting:Pixel:C0100001
+                    defines:
+                        - DO_ALPHA_TEST
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
+                  - entry: Lighting:Pixel:C0100009
+                    defines:
+                        - DO_ALPHA_TEST
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
+                        - TRUE_PBR
+                  - entry: Lighting:Pixel:C0100011
+                    defines:
+                        - DEFERRED
+                        - DO_ALPHA_TEST
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
+                  - entry: Lighting:Pixel:C0100019
+                    defines:
+                        - DEFERRED
+                        - DO_ALPHA_TEST
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
+                        - TRUE_PBR
+                  - entry: Lighting:Pixel:C1000001
+                    defines:
+                        - ENVMAP
+                        - FUR_SHELLS
+                        - FUR_SHELLS_DEPTH
           VSHADER:
               common_defines:
                   - CLOUD_SHADOWS
@@ -13615,6 +13904,7 @@ shaders:
                   - VSHADER
                   - WATER_EFFECTS
                   - WETTERNESS
+                  - SNOW_COVER
               entries:
                   - entry: Lighting:Vertex:0
                     defines: *id001
@@ -13743,6 +14033,48 @@ shaders:
                         - PROJECTED_UV
                         - TREE_ANIM
                         - VC
+                  - entry: Lighting:Vertex:41000001
+                    defines:
+                        - ENVMAP
+                        - FUR_SHELLS
+                        - VC
+                  - entry: Lighting:Vertex:41000003
+                    defines:
+                        - ENVMAP
+                        - FUR_SHELLS
+                        - SKINNED
+                        - VC
+                  - entry: Lighting:Vertex:40000007
+                    defines:
+                        - MODELSPACENORMALS
+                        - SKINNED
+                        - VC
+                        - FUR_SHELLS
+                  - entry: Lighting:Vertex:40000000
+                    defines:
+                        - FUR_SHELLS
+                  - entry: Lighting:Vertex:40000001
+                    defines:
+                        - FUR_SHELLS
+                        - VC
+                  - entry: Lighting:Vertex:40000002
+                    defines:
+                        - FUR_SHELLS
+                        - SKINNED
+                  - entry: Lighting:Vertex:40000003
+                    defines:
+                        - FUR_SHELLS
+                        - SKINNED
+                        - VC
+                  - entry: Lighting:Vertex:41000000
+                    defines:
+                        - ENVMAP
+                        - FUR_SHELLS
+                  - entry: Lighting:Vertex:41000002
+                    defines:
+                        - ENVMAP
+                        - FUR_SHELLS
+                        - SKINNED
     - file: Particle.hlsl
       configs:
           PSHADER:
@@ -13808,6 +14140,7 @@ shaders:
                   - VOLUMETRIC_SHADOWS
                   - VR
                   - WATER_EFFECTS
+                  - SNOW_COVER
               entries:
                   - entry: Grass:Pixel:10007
                     defines: *id015
@@ -13840,6 +14173,7 @@ shaders:
                   - VR
                   - VSHADER
                   - WATER_EFFECTS
+                  - SNOW_COVER
               entries:
                   - entry: Grass:Vertex:10007
                     defines: *id015
@@ -13849,6 +14183,22 @@ shaders:
                     defines: *id001
                   - entry: Grass:Vertex:8
                     defines: *id014
+                  - entry: Grass:Vertex:807
+                    defines:
+                        - GRASS_COLLISION_BASIC
+                  - entry: Grass:Vertex:808
+                    defines:
+                        - GRASS_COLLISION_BASIC
+                        - RENDER_DEPTH
+                  - entry: Grass:Vertex:10807
+                    defines:
+                        - GRASS_COLLISION_BASIC
+                        - DO_ALPHA_TEST
+                  - entry: Grass:Vertex:10808
+                    defines:
+                        - GRASS_COLLISION_BASIC
+                        - DO_ALPHA_TEST
+                        - RENDER_DEPTH
     - file: Sky.hlsl
       configs:
           PSHADER:
@@ -13962,6 +14312,58 @@ shaders:
                   - SHADOWSPLITCOUNT=3
                   - VR
               entries:
+                  - entry: Utility:Pixel:42000002
+                    defines:
+                        - RENDER_BASE_TEXTURE
+                        - TEXTURE
+                        - TRUE_PBR
+                  - entry: Utility:Pixel:42000003
+                    defines:
+                        - RENDER_BASE_TEXTURE
+                        - TEXTURE
+                        - TRUE_PBR
+                        - VC
+                  - entry: Utility:Pixel:42000082
+                    defines:
+                        - ALPHA_TEST
+                        - RENDER_BASE_TEXTURE
+                        - TEXTURE
+                        - TRUE_PBR
+                  - entry: Utility:Pixel:42000083
+                    defines:
+                        - ALPHA_TEST
+                        - RENDER_BASE_TEXTURE
+                        - TEXTURE
+                        - TRUE_PBR
+                        - VC
+                  - entry: Utility:Pixel:46000002
+                    defines:
+                        - RENDER_BASE_TEXTURE
+                        - TEXTURE
+                        - TREE_ANIM
+                        - TRUE_PBR
+                  - entry: Utility:Pixel:46000003
+                    defines:
+                        - RENDER_BASE_TEXTURE
+                        - TEXTURE
+                        - TREE_ANIM
+                        - TRUE_PBR
+                        - VC
+                  - entry: Utility:Pixel:46000082
+                    defines:
+                        - ALPHA_TEST
+                        - RENDER_BASE_TEXTURE
+                        - TEXTURE
+                        - TREE_ANIM
+                        - TRUE_PBR
+                  - entry: Utility:Pixel:46000083
+                    defines:
+                        - ALPHA_TEST
+                        - RENDER_BASE_TEXTURE
+                        - TEXTURE
+                        - TREE_ANIM
+                        - TRUE_PBR
+                        - VC
                   - entry: Utility:Pixel:10000003
                     defines: &id526
                         - LOCALMAP_FOGOFWAR

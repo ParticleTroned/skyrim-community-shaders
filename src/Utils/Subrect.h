@@ -21,7 +21,7 @@ namespace Util::Subrect
 		uint32_t h = 1;
 	};
 
-	/** Resolves and sanitizes a normalized crop against an arbitrary pixel size. */
+	/** Rounds and clamps crop boundaries to pixels, with a one-pixel minimum on nonempty images. */
 	PixelRegion ResolvePixelRegion(const UVRegion& uv, uint32_t width, uint32_t height);
 
 	struct Preset

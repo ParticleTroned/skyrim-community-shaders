@@ -13,6 +13,23 @@ def read(name):
 
 
 class CurrentContextContract(unittest.TestCase):
+    def test_face_protection_alias_and_saved_status(self):
+        bridge = read("src/Features/Upscaling/VRRenderScaleDevBenchBridge.cpp")
+        schema = json.loads(re.search(r'kNeuralRenderingDescriptor = R"nr\((.*?)\)nr"', bridge, re.S).group(1))
+        canonical = "faceDetailProtectionPercent"
+        legacy = "experimentalFaceDetailProtectionPercent"
+        inputs = schema["inputSchema"]
+        configure = next(rule for rule in inputs["allOf"]
+                         if rule.get("if", {}).get("properties", {}).get("action", {}).get("const") == "nr_configure")
+        self.assertEqual(configure["then"]["not"], {"required": [canonical, legacy]})
+        for field in (canonical, legacy):
+            control = inputs["properties"][field]
+            self.assertEqual((control["type"], control["minimum"], control["maximum"]), ("integer", 0, 100))
+            self.assertIn(field, configure["then"]["propertyNames"]["enum"])
+        settings = schema["outputSchema"]["properties"]["neuralRendering"]["properties"]["settings"]
+        control = settings["properties"][canonical]
+        self.assertEqual((control["type"], control["minimum"], control["maximum"]), ("integer", 0, 100))
+
     def test_registered_schema(self):
         bridge = read("src/Features/Upscaling/VRRenderScaleDevBenchBridge.cpp")
         raw = re.search(r'kNeuralRenderingDescriptor = R"nr\((.*?)\)nr"', bridge, re.S).group(1)
@@ -31,7 +48,7 @@ class CurrentContextContract(unittest.TestCase):
         self.assertIn("experimentalCurrentContext", configure["then"]["propertyNames"]["enum"])
         self.assertIn("default false", schema["description"])
         for field, minimum, maximum, default in (
-            ("modelResolutionPercent", 30, 100, 100),
+            ("modelResolutionPercent", 30, 100, 90),
             ("centralAreaPercent", 25, 100, 100),
             ("centralFeatherPixels", 0, 256, 64),
         ):

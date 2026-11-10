@@ -92,6 +92,7 @@ namespace
 	uint32_t historyDestructions = 0;
 	uint32_t neuralResets = 0;
 	uint32_t unsafeAbandons = 0;
+	uint32_t textureDescriptionQueries = 0;
 
 	void Require(bool condition)
 	{
@@ -200,10 +201,27 @@ std::unique_ptr<Texture2D> MakeTexture(uint32_t width, uint32_t height, DXGI_FOR
 
 bool TryGetTexture2DDesc(ID3D11Resource* source, D3D11_TEXTURE2D_DESC& desc)
 {
+	++textureDescriptionQueries;
 	if (!source)
 		return false;
 	desc = source->desc;
 	return true;
+}
+
+namespace UpscalingTextures
+{
+	struct TextureSourceDescription
+	{
+		ID3D11Resource* source = nullptr;
+		D3D11_TEXTURE2D_DESC desc{};
+		bool Capture(ID3D11Resource* value)
+		{
+			source = value;
+			return TryGetTexture2DDesc(value, desc);
+		}
+		bool Matches(ID3D11Resource* value) const { return source && source == value; }
+		const D3D11_TEXTURE2D_DESC& Desc() const { return desc; }
+	};
 }
 
 auto CreateNamedTexture2D(uint32_t width, uint32_t height, DXGI_FORMAT format, bool, bool, bool, const char*)
@@ -288,13 +306,17 @@ public:
 	void MarkSubmitStageDeviceLostIfDeviceRemoved(const char*) {}
 	void DestroyPeripheryTAAResources() { ++historyDestructions; }
 	void AbandonFoveatedResourcesUnsafe() { ++unsafeAbandons; }
-	auto CreateTextureFromSource(ID3D11Resource*, uint32_t width, uint32_t height, bool, bool, bool, const char*, bool, bool, DXGI_FORMAT format)
+	auto CreateTextureFromSource(ID3D11Resource* source, uint32_t width, uint32_t height, bool, bool, bool, const char*, bool, bool, DXGI_FORMAT format,
+		const UpscalingTextures::TextureSourceDescription* description)
 	{
+		Require(description && description->Matches(source));
 		return MakeTexture(width, height, format);
 	}
-	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>&, ID3D11Resource*, uint32_t, uint32_t, bool, bool, bool, bool, const char*, DXGI_FORMAT = DXGI_FORMAT_UNKNOWN);
+	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>&, ID3D11Resource*, uint32_t, uint32_t, bool, bool, bool, bool, const char*, DXGI_FORMAT = DXGI_FORMAT_UNKNOWN,
+		const UpscalingTextures::TextureSourceDescription* = nullptr);
 	bool EnsureFoveatedDispatchShaders(bool, bool, const char*, const char*);
-	bool EnsurePeripheryTAAResources(uint32_t, uint32_t, ID3D11Resource*);
+	bool EnsurePeripheryTAAResources(uint32_t, uint32_t, ID3D11Resource*,
+		const UpscalingTextures::TextureSourceDescription* = nullptr);
 	bool EnsurePeripheryTAATileBuffer(uint32_t, uint32_t);
 };
 
@@ -437,8 +459,33 @@ namespace
 		}
 		Upscaling upscaling;
 		upscaling.reuseOnly = false;
+		auto queries = textureDescriptionQueries;
 		Require(upscaling.EnsurePeripheryTAAResources(100, 80, &source));
+		Require(textureDescriptionQueries == queries + 1);
 		Require(upscaling.peripheryTAAHistoryReadIndex == 0 && !upscaling.peripheryTAAHistory.HasHistory());
+		upscaling.peripheryTAAHistory.Commit({ 50, 1, 3, 100, 80, 100, 80 });
+		upscaling.peripheryTAAHistoryReadIndex = 1;
+		queries = textureDescriptionQueries;
+		const auto creations = textureCreations;
+		Require(upscaling.EnsurePeripheryTAAResources(100, 80, &source));
+		Require(textureDescriptionQueries == queries + 1 && textureCreations == creations);
+		Require(upscaling.peripheryTAAHistory.HasHistory() && upscaling.peripheryTAAHistoryReadIndex == 1);
+		for (auto* history : { &upscaling.peripheryTAAHistoryColor,
+				 &upscaling.peripheryTAAVelocityHistory, &upscaling.peripheryTAALockHistory }) {
+			(*history)[0][0]->resource.reset();
+			upscaling.peripheryTAAHistory.Commit({ 50, 1, 3, 100, 80, 100, 80 });
+			upscaling.peripheryTAAHistoryReadIndex = 1;
+			upscaling.submitStageFoveatedPeripheryTAAFrame = 50;
+			upscaling.submitStageFoveatedPeripheryTAAEyeReady = { true, true };
+			queries = textureDescriptionQueries;
+			const auto beforeRecreation = textureCreations;
+			Require(upscaling.EnsurePeripheryTAAResources(100, 80, &source));
+			Require(textureDescriptionQueries == queries + 1 && textureCreations == beforeRecreation + 1 &&
+				(*history)[0][0]->resource);
+			Require(!upscaling.peripheryTAAHistory.HasHistory() && upscaling.peripheryTAAHistoryReadIndex == 0 &&
+				upscaling.submitStageFoveatedPeripheryTAAFrame == std::numeric_limits<uint32_t>::max() &&
+				!upscaling.submitStageFoveatedPeripheryTAAEyeReady[0] && !upscaling.submitStageFoveatedPeripheryTAAEyeReady[1]);
+		}
 	}
 
 	void TestTileBuffers()

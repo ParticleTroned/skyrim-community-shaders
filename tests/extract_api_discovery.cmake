@@ -16,18 +16,20 @@ function(extract_discovery_region source start end output)
     string(SUBSTRING "${_remaining}" 0 ${_end} _extracted)
     set(${output} "${_extracted}" PARENT_SCOPE)
 endfunction()
-extract_discovery_region("${_source}" "bool RegisterCommunityShadersAPIMessageListener()" "void ResetRuntimeStateAfterGameLoad()" _registration)
-extract_discovery_region("${_source}" "bool Load()" "globals::OnInit();" _load)
-string(FIND "${_load}" "CSX::Api::InitializeServiceRegistryProvider();" _init)
-string(SUBSTRING "${_load}" ${_init} -1 _load_registration)
+extract_discovery_region("${_source}" "void RegisterCommunityShadersAPIMessageListener()" "void ResetRuntimeStateAfterGameLoad()" _registration)
+extract_discovery_region("${_source}" "bool Load()\n{" "globals::OnInit();" _load)
+string(FIND "${_load}" "auto messaging = SKSE::GetMessagingInterface();" _messaging)
+if(_messaging EQUAL -1)
+    message(FATAL_ERROR "API discovery test cannot find the Load messaging guard")
+endif()
+string(SUBSTRING "${_load}" ${_messaging} -1 _load_registration)
 extract_discovery_region("${_source}" "case SKSE::MessagingInterface::kPostLoad:" "// Establish the API owner" _postload)
-string(
-    FIND "${_postload}"
-    "if (!RegisterCommunityShadersAPIMessageListener())"
-    _refresh
-)
+string(FIND "${_postload}" "RegisterCommunityShadersAPIMessageListener();" _refresh)
+if(_refresh EQUAL -1)
+    message(FATAL_ERROR "API discovery test cannot find the PostLoad listener refresh")
+endif()
 string(SUBSTRING "${_postload}" ${_refresh} -1 _refresh_registration)
 file(
     WRITE "${OUTPUT_DIRECTORY}/api_discovery_under_test.h"
-    "${_registration}\nbool RegisterDuringLoad() { auto messaging = SKSE::GetMessagingInterface();\n${_load_registration}\nreturn true; }\nvoid RefreshDuringPostLoad() { do {\n${_refresh_registration}\n} while (false); }\n"
+    "${_registration}\nbool RegisterDuringLoad() {\n${_load_registration}\nreturn true; }\nvoid RefreshDuringPostLoad() {\n${_refresh_registration}\n}\n"
 )

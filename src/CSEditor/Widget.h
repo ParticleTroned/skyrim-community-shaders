@@ -102,7 +102,8 @@ public:
 		return "Generated";
 	}
 
-	void CacheFormData()
+	/// Cache owned names and save keys; the optional batch index is not retained.
+	void CacheFormData(Util::FormEditorIDIndex* editorIDs = nullptr)
 	{
 		if (!form) {
 			cachedEditorID = "Invalid";
@@ -115,7 +116,7 @@ public:
 		cachedSaveKey = Util::GetFormFileKey(form);
 
 		// Try to resolve EditorID via shared utility
-		std::string editorId = Util::GetFormEditorID(form);
+		std::string editorId = Util::GetFormEditorID(form, editorIDs);
 		if (!editorId.empty()) {
 			cachedEditorID = editorId;
 			isFallbackEditorID = false;

@@ -422,14 +422,80 @@ namespace
 		}
 		Pass(f.profiler, "Cpu::Unpaired");
 		f.context.pending = false;
+		Pass(f.profiler, "Cpu::LateUnpaired");
 		f.profiler.EndFrame(4);
 		Check(f.profiler.GetBoundedCaptureProgress().submittedFrames == 0, "late GPU readiness claimed a CPU fallback as a paired frame");
 		Check(Find(f.profiler.GetImmediateCpuResults(), "Cpu::Unpaired").activeCpu, "unpaired CPU result was lost");
+		Check(Find(f.profiler.GetImmediateCpuResults(), "Cpu::LateUnpaired").activeCpu, "late unpaired CPU result was lost");
 		Pass(f.profiler, "Capture::Paired");
 		f.profiler.EndFrame(5);
 		f.Drain(6);
 		const auto* results = f.profiler.GetBoundedCaptureResults(id);
 		Check(results && results->size() == 1 && results->front().name == "Capture::Paired", "bounded results contain an unpaired fallback");
+	}
+
+	void RefusedGpuFrameStaysClosed()
+	{
+		enum class FirstScope
+		{
+			Pass,
+			Detail,
+			RenderTarget
+		};
+		for (const auto mode : { Mode::GPU, Mode::Both }) {
+			for (const auto first : { FirstScope::Pass, FirstScope::Detail, FirstScope::RenderTarget }) {
+				Fixture f;
+				f.context.pending = true;
+				f.Arm(mode);
+				for (uint32_t frame = 1; frame <= Profiler::kFrameLatency; ++frame) {
+					Pass(f.profiler, "Frame::Early");
+					Pass(f.profiler, "Frame::Late");
+					f.profiler.RequestCapture(mode);
+					if (frame == Profiler::kFrameLatency && first == FirstScope::RenderTarget)
+						f.profiler.RequestRenderTargetCapture(true);
+					f.profiler.EndFrame(frame);
+				}
+				const auto writes = f.context.writes;
+				const auto evidence = std::make_shared<Util::PassTimingCapture>();
+				if (first == FirstScope::Pass) {
+					const bool started = f.profiler.BeginPass("Frame::Early", false);
+					Check(started == (mode == Mode::Both), "refused first pass ignored CPU selection");
+					if (started)
+						f.profiler.EndPass(false);
+				} else if (first == FirstScope::Detail) {
+					Check(!f.profiler.BeginDetailPass("Frame::Detail", evidence), "pending detail acquired GPU timing");
+				} else {
+					f.profiler.CountRenderTargetDraw(0, 0);
+				}
+				const auto reads = f.context.reads;
+				f.context.pending = false;
+				const auto lateEvidence = std::make_shared<Util::PassTimingCapture>();
+				const bool started = f.profiler.BeginPass("Frame::Late", false, lateEvidence);
+				Check(started == (mode == Mode::Both), "late readiness reopened a refused GPU frame");
+				if (started)
+					f.profiler.EndPass(false);
+				Check(lateEvidence->Read().gpuState == Util::PassTimingState::Unavailable, "refused late pass retained GPU evidence");
+				Check(!f.profiler.BeginDetailPass("Frame::LateDetail", std::make_shared<Util::PassTimingCapture>()), "late detail reopened a refused GPU frame");
+				f.profiler.CountRenderTargetDraw(0, 0);
+				Check(f.context.reads == reads && f.context.writes == writes, "refused frame retried GPU queries mid-frame");
+				f.profiler.RequestCapture(mode);
+				f.profiler.EndFrame(4);
+				Check(f.context.reads > reads && f.context.writes == writes, "refused frame did not drain without new GPU work");
+				if (mode == Mode::Both)
+					Check(Find(f.profiler.GetImmediateCpuResults(), "Frame::Late").activeCpu, "refusal lost independent CPU timing");
+				else
+					Check(f.profiler.GetCpuPublicationCount() == 0, "GPU-only refusal published CPU timing");
+				Pass(f.profiler, "Frame::Early");
+				Pass(f.profiler, "Frame::Late");
+				f.profiler.EndFrame(5);
+				f.Drain(6);
+				for (const auto name : { "Frame::Early", "Frame::Late" }) {
+					const auto& timer = Find(f.profiler.GetResults(), name);
+					Check(timer.historyCount == 4, "refusal fabricated a GPU history sample or prevented recovery");
+					Near(timer.avgMs, 1, "partial GPU frame biased timing history");
+				}
+			}
+		}
 	}
 
 	void InvalidGpuAndOpenScopeReset()
@@ -483,6 +549,7 @@ int main()
 		BoundedInvalidTimings();
 		RequestsRemovalAndReinitialization();
 		LateGpuReadinessDoesNotClaimCpuFallback();
+		RefusedGpuFrameStaysClosed();
 		InvalidGpuAndOpenScopeReset();
 		std::cout << "Profiler capture regression cases passed\n";
 		return 0;

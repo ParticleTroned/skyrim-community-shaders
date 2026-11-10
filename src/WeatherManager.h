@@ -1,7 +1,9 @@
 #pragma once
 
 #include "WeatherVariableRegistry.h"
+#include <cstdint>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 
@@ -29,7 +31,7 @@ public:
 	// Load all per-weather settings from disk into cache
 	void LoadPerWeatherSettingsFromDisk();
 
-	// Per-frame update - notify features of weather changes
+	/** Reuse unchanged inputs within a frame; explicit edits and native weather changes bypass reuse. */
 	void UpdateFeatures();
 
 	// Replace the in-memory feature settings for a weather without writing to disk.
@@ -89,6 +91,17 @@ private:
 	CurrentWeathers lastKnownWeather;
 	std::map<std::string, std::set<std::string>> activeWeatherVariables;
 	bool evaluationInvalidated = false;
+	struct UpdateInputs
+	{
+		uint32_t frame;
+		const RE::Sky* sky;
+		RE::TESWeather* current;
+		RE::TESWeather* previous;
+		RE::TESWeather* cachedPrevious;
+		uint32_t transitionBits;
+		bool operator==(const UpdateInputs&) const = default;
+	};
+	std::optional<UpdateInputs> lastUpdateInputs;
 
 	// Cached last weather - sky->lastWeather can be cleared before currentWeatherPct reaches 1.0
 	RE::TESWeather* cachedLastWeather = nullptr;

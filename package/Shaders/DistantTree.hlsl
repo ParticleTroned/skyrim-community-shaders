@@ -11,6 +11,7 @@
 #	undef IBL
 #endif
 
+#if defined(VSHADER)
 struct VS_INPUT
 {
 	float3 Position: POSITION0;
@@ -19,10 +20,11 @@ struct VS_INPUT
 	float4 InstanceData2: TEXCOORD5;
 	float4 InstanceData3: TEXCOORD6;
 	float4 InstanceData4: TEXCOORD7;
-#if defined(VR)
+#	if defined(VR)
 	uint InstanceID: SV_INSTANCEID;
-#endif  // VR
+#	endif  // VR
 };
+#endif
 
 struct VS_OUTPUT
 {
@@ -183,6 +185,12 @@ const static float DepthOffsets[16] = {
 #		include "IBL/IBL.hlsli"
 #	endif
 
+#	if defined(SNOW_COVER)
+#		define BASIC_SNOW_COVER
+#		define SampColorSampler SampDiffuse
+#		include "SnowCover/SnowCover.hlsli"
+#	endif
+
 #	define LinearSampler SampDiffuse
 
 #	include "Common/ShadowSampling.hlsli"
@@ -245,6 +253,10 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
 	float3 normal = -normalize(cross(ddx, ddy));
 
+#			if defined(SNOW_COVER)
+	SnowCover::ApplyDistantTreeSnow(baseColor.xyz, normal, input.WorldPosition.xyz, input.TexCoord.xy, eyeIndex, TexDiffuse);
+#			endif
+
 	float3 directionalAmbientColor = max(0, Color::Ambient(SharedData::GetAmbient(normal)));
 #			if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {
@@ -277,6 +289,10 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 ddx = ddx_coarse(input.WorldPosition.xyz);
 	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
 	float3 normal = normalize(cross(ddx, ddy));
+
+#			if defined(SNOW_COVER)
+	SnowCover::ApplyDistantTreeSnow(baseColor.xyz, normal, input.WorldPosition.xyz, input.TexCoord.xy, eyeIndex, TexDiffuse);
+#			endif
 
 	float3 directionalAmbientColor = Color::Ambient(SharedData::GetAmbient(normal));
 #			if defined(IBL)

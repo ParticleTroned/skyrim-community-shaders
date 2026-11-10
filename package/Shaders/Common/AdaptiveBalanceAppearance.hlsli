@@ -30,9 +30,25 @@ namespace AdaptiveBalanceAppearance
 		return color;
 	}
 
+#	if defined(LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS)
+	/// Grade aurora-slot sky objects while preserving neutral draws and previews.
+	float3 ApplyAurora(float3 color)
+	{
+#		if !defined(MOTIONVECTORS_NORMALS)
+		// SkyObject belongs to the vertex descriptor; pixel draws use the CPU-authored aurora flag.
+		[branch] if (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsAurora)
+			color = ApplyColor(color, SharedData::adaptiveBalanceSettings.appearance.auroraIntensity,
+				SharedData::adaptiveBalanceSettings.appearance.auroraCurve, 1.0, 1.0.xxx);
+#		endif
+		return color;
+	}
+#	endif
+
 	/// Grade the selected ambient lighting before multiplying material albedo.
 	float3 ApplyAmbientSaturation(float3 color, bool linearSpace = false)
 	{
+		color = Color::AdjustUtilityColor(color, 1.0,
+			SharedData::adaptiveBalanceSettings.appearance.ambientGammaOffset, linearSpace || ENABLE_LL_COLOR_ADJUSTMENTS);
 		const float saturation = SharedData::adaptiveBalanceSettings.appearance.ambientSaturation;
 		[branch] if (Color::IsSceneColorDraw() && saturation != 1.0)
 		{
@@ -47,7 +63,7 @@ namespace AdaptiveBalanceAppearance
 	float3 ApplyFog(float3 color)
 	{
 		return ApplyColor(color, SharedData::adaptiveBalanceSettings.appearance.fogBrightness,
-			1.0, 1.0, SharedData::adaptiveBalanceSettings.appearance.fogTint);
+			1.0, SharedData::adaptiveBalanceSettings.appearance.fogSaturation, SharedData::adaptiveBalanceSettings.appearance.fogTint);
 	}
 }
 
@@ -58,9 +74,19 @@ namespace Color
 	{
 		color = AdaptiveBalanceAppearance::ApplyColor(color, 1.0,
 			SharedData::adaptiveBalanceSettings.appearance.directionalCurve, 1.0, 1.0.xxx, false);
-		color = Light(color * attenuation, isLinear);
+		const float gammaOffset = SharedData::adaptiveBalanceSettings.appearance.directionalGammaOffset;
+		[branch] if (IsSceneColorDraw() && gammaOffset != 0.0)
+		{
+			color = AdjustUtilityColor(Light(color, isLinear), 1.0, gammaOffset);
+			// Grade the unoccluded light; keep the renderer's existing shadow response.
+			color *= ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear ?
+			             pow(abs(attenuation), SharedData::linearLightingSettings.lightGamma) :
+			             attenuation;
+		}
+		else color = Light(color * attenuation, isLinear);
 		const bool grade = IsSceneColorDraw() &&
-		                   (SharedData::adaptiveBalanceSettings.appearance.directionalCurve != 1.0 ||
+		                   (SharedData::adaptiveBalanceSettings.appearance.directionalGammaOffset != 0.0 ||
+							   SharedData::adaptiveBalanceSettings.appearance.directionalCurve != 1.0 ||
 							   SharedData::adaptiveBalanceSettings.appearance.directionalSaturation != 1.0 ||
 							   any(SharedData::adaptiveBalanceSettings.appearance.directionalTint != 1.0));
 		if (grade)
@@ -68,8 +94,9 @@ namespace Color
 		color = AdaptiveBalanceAppearance::ApplyColor(color, 1.0, 1.0,
 			SharedData::adaptiveBalanceSettings.appearance.directionalSaturation,
 			SharedData::adaptiveBalanceSettings.appearance.directionalTint, false);
-		color = color * ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f) *
-		        SharedData::adaptiveBalanceSettings.directionalLightMult;
+		color *= ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f);
+		if (IsSceneColorDraw())
+			color *= SharedData::adaptiveBalanceSettings.directionalLightMult;
 		return grade ? AdaptiveBalanceColorBounds::Output(color) : color;
 	}
 

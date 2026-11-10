@@ -75,4 +75,23 @@ namespace VRDepthCullingTelemetryPolicy
 		// after observing stale values of separate reset/writer atomics.
 		std::atomic_uint32_t state{ 0 };
 	};
+
+	/** Share one admission across all stages of a sample, including enablement changes. */
+	class WriterScope
+	{
+	public:
+		explicit WriterScope(WriterGate& a_gate) noexcept : gate(a_gate), active(gate.TryEnter()) {}
+		WriterScope(const WriterScope&) = delete;
+		WriterScope& operator=(const WriterScope&) = delete;
+		~WriterScope()
+		{
+			if (active)
+				gate.Leave();
+		}
+		[[nodiscard]] bool IsActive() const noexcept { return active; }
+
+	private:
+		WriterGate& gate;
+		const bool active;
+	};
 }

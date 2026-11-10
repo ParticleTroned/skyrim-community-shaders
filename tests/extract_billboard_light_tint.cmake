@@ -16,7 +16,7 @@ extract_between(
 )
 extract_between(
     "${_source}" "RE::NiColorA BuildEffectMaterialEmissiveTint("
-    "void SetEngineLightFlags(" "billboard_tint_material_under_test.h"
+    "bool TryGetShadowMaskChannel(" "billboard_tint_material_under_test.h"
 )
 extract_between(
     "${_source}" "struct VertexColor" "struct VertexPosition"

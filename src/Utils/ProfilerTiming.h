@@ -10,6 +10,40 @@ namespace Util::ProfilerTiming
 {
 	inline constexpr double kMaxSampleMs = 1000.0;
 
+	struct Statistics
+	{
+		float average = 0.0f;
+		float p95 = 0.0f;
+		float p99 = 0.0f;
+	};
+
+	/** Preserve sample order for the mean and share one sort for both percentiles. */
+	inline Statistics CalculateStatistics(std::span<const float> samples, bool includePercentiles = true)
+	{
+		Statistics result;
+		if (samples.empty())
+			return result;
+		float sum = 0.0f;
+		for (const float sample : samples)
+			sum += sample;
+		result.average = sum / static_cast<float>(samples.size());
+		if (includePercentiles) {
+			thread_local std::vector<float> sorted;
+			sorted.assign(samples.begin(), samples.end());
+			std::sort(sorted.begin(), sorted.end());
+			const auto percentile = [&](float p) {
+				const float index = (p / 100.0f) * static_cast<float>(sorted.size() - 1);
+				const auto lo = static_cast<size_t>(index);
+				const auto hi = std::min(lo + 1, sorted.size() - 1);
+				const float fraction = index - static_cast<float>(lo);
+				return sorted[lo] * (1.0f - fraction) + sorted[hi] * fraction;
+			};
+			result.p95 = percentile(95.0f);
+			result.p99 = percentile(99.0f);
+		}
+		return result;
+	}
+
 	/** Reject unavailable queries and implausible samples independently in each domain. */
 	inline bool IsValidSample(double ms)
 	{

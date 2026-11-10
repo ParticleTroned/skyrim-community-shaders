@@ -4,7 +4,9 @@
 #include "Utils/UI.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstring>
 
 #include "Utils/Finite.h"
 
@@ -30,6 +32,7 @@ void SkySync::DrawSettings()
 											 { "path", "Sky path", "Choose how the sun and moon move and light the scene.", "Sun and moon trajectories", true, true, "Choose movement and light" },
 											 { "lighting", "Lighting", "Refine horizon lighting and shadow length.", "Horizon fading and shadows", true, true, nullptr },
 											 { "timing", "Timing", "Adjust the visible sunrise and sunset.", "Sunrise and sunset offsets", true, true, "Refine time transitions" },
+											 { "worldspaces", "Worldspaces", "Leave selected realms to the game's own lighting.", "Worldspace exclusions", true, true, nullptr },
 										 });
 
 	if (page.Is("path")) {
@@ -40,7 +43,7 @@ void SkySync::DrawSettings()
 
 		Util::Widgets::Checkbox("Enable weather lens flare", &settings.EnableSunLensFlare);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Show the active weather's lens-flare sprites. Has no visible effect if that weather provides none.");
+			ImGui::TextUnformatted("Shows the bright glow and streaks around the sun supplied by the current weather. Off hides them. Some weather has no flare.");
 		}
 
 		if (settings.UseAlternateSunPath) {
@@ -81,6 +84,8 @@ void SkySync::DrawSettings()
 		ImGui::Spacing();
 		ImGui::Spacing();
 	}
+	if (page.Is("worldspaces"))
+		DrawWorldspaceSettings();
 	if (page.Is("timing")) {
 		ImGui::TextWrapped("Moves the visual sun path during sunrise/sunset. Moon lighting follows the climate's night timings.");
 		Util::Widgets::SliderFloat("Sunrise Begin (Hours)", &settings.SunriseBeginOffset, -5.0f, 5.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
@@ -102,9 +107,125 @@ void SkySync::DrawSettings()
 	}
 }
 
+void SkySync::DrawWorldspaceSettings()
+{
+	ImGui::TextWrapped("Sky Sync leaves lighting and weather lens flares to the game in these worldspaces. Changes take effect on the next sky update.");
+	static std::array<char, MaxWorldspaceEditorIDLength + 1> editorID{};
+	static bool invalidList = false;
+	auto addWorldspace = [&](const char* a_editorID) {
+		auto worldspaces = settings.DisabledWorldspaces;
+		if (std::ranges::none_of(worldspaces, [&](const auto& entry) { return _stricmp(entry.c_str(), a_editorID) == 0; }))
+			worldspaces.emplace_back(a_editorID);
+		invalidList = !SetDisabledWorldspaces(worldspaces);
+		if (!invalidList)
+			editorID.fill('\0');
+	};
+	Util::Widgets::InputText("Worldspace Editor ID", editorID.data(), editorID.size());
+	if (ImGui::Button("Add worldspace"))
+		addWorldspace(editorID.data());
+	if (const auto worldspace = GetCurrentWorldspace()) {
+		if (const char* currentID = worldspace->GetFormEditorID(); currentID && *currentID) {
+			ImGui::Text("Current worldspace: %s", currentID);
+			if (ImGui::Button("Add current worldspace"))
+				addWorldspace(currentID);
+		}
+	}
+	if (invalidList)
+		ImGui::TextWrapped("List unchanged. Use at most %zu entries, each with 1-%zu bytes and no control characters.", MaxDisabledWorldspaces, MaxWorldspaceEditorIDLength);
+
+	std::optional<size_t> removeIndex;
+	if (ImGui::BeginTable("DisabledWorldspaces", 2, ImGuiTableFlags_SizingStretchProp)) {
+		const SKSE::stl::scope_exit endTable([] { ImGui::EndTable(); });
+		for (size_t i = 0; i < settings.DisabledWorldspaces.size(); ++i) {
+			ImGui::PushID(static_cast<int>(i));
+			const SKSE::stl::scope_exit popID([] { ImGui::PopID(); });
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted(settings.DisabledWorldspaces[i].c_str());
+			ImGui::TableNextColumn();
+			if (ImGui::Button("Remove"))
+				removeIndex = i;
+		}
+	}
+	if (removeIndex) {
+		auto worldspaces = settings.DisabledWorldspaces;
+		worldspaces.erase(worldspaces.begin() + *removeIndex);
+		invalidList = !SetDisabledWorldspaces(worldspaces);
+	}
+}
+
+bool SkySync::SetDisabledWorldspaces(const json& a_worldspaces)
+{
+	if (!a_worldspaces.is_array() || a_worldspaces.size() > MaxDisabledWorldspaces)
+		return false;
+	std::vector<std::string> worldspaces;
+	worldspaces.reserve(a_worldspaces.size());
+	for (const auto& value : a_worldspaces) {
+		if (!value.is_string())
+			return false;
+		const auto& editorID = value.get_ref<const std::string&>();
+		if (editorID.empty() || editorID.size() > MaxWorldspaceEditorIDLength ||
+			std::ranges::any_of(editorID, [](unsigned char c) { return c < 0x20 || c == 0x7f; }))
+			return false;
+		if (std::ranges::none_of(worldspaces, [&](const auto& entry) { return _stricmp(entry.c_str(), editorID.c_str()) == 0; }))
+			worldspaces.push_back(editorID);
+	}
+	if (worldspaces != settings.DisabledWorldspaces) {
+		settings.DisabledWorldspaces = std::move(worldspaces);
+		worldspaceCacheValid = false;
+	}
+	return true;
+}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+json SkySync::GetWorldspaceStatus() const
+{
+	return { { "disabledWorldspaces", settings.DisabledWorldspaces }, { "lastWorldspaceEditorID", cachedWorldspaceEditorID },
+		{ "lastWorldspaceDisabled", worldspaceDisabled }, { "updatePending", !worldspaceCacheValid } };
+}
+#endif
+
+RE::TESWorldSpace* SkySync::GetCurrentWorldspace()
+{
+	const auto player = RE::PlayerCharacter::GetSingleton();
+	const auto cell = player ? player->GetParentCell() : nullptr;
+	return cell ? cell->GetRuntimeData().worldSpace : nullptr;
+}
+
+void SkySync::UpdateWorldspace()
+{
+	if (!loaded || !settings.Enabled) {
+		worldspaceCacheValid = false;
+		return;
+	}
+	const auto worldspace = GetCurrentWorldspace();
+	if (worldspaceCacheValid && worldspace == cachedWorldspace)
+		return;
+	const char* editorID = worldspace ? worldspace->GetFormEditorID() : nullptr;
+	const bool disabled = editorID && std::ranges::any_of(settings.DisabledWorldspaces, [&](const auto& entry) { return _stricmp(entry.c_str(), editorID) == 0; });
+	if (worldspace != cachedWorldspace || disabled != worldspaceDisabled) {
+		ResetRuntimeState();
+		currentCell = nullptr;
+		currentSkyRotation = D3D11_FLOAT32_MAX;
+	}
+	cachedWorldspace = worldspace;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	cachedWorldspaceEditorID = editorID ? editorID : "";
+#endif
+	worldspaceDisabled = disabled;
+	worldspaceCacheValid = true;
+}
+
 void SkySync::LoadSettings(json& o_json)
 {
+	const auto previousWorldspaces = settings.DisabledWorldspaces;
 	settings = o_json;
+	// Validate the list before converting it so settings cannot allocate an unbounded vector.
+	if (const auto worldspaces = o_json.find("DisabledWorldspaces"); worldspaces != o_json.end() && !SetDisabledWorldspaces(*worldspaces)) {
+		settings.DisabledWorldspaces = previousWorldspaces;
+		logger::warn("[Sky Sync] Invalid DisabledWorldspaces; retaining the previous list");
+	}
+	worldspaceCacheValid = false;
 	const Settings defaults{};
 	settings.MoonLightSource = std::clamp(settings.MoonLightSource, static_cast<int32_t>(MoonLightSource::Brightest), static_cast<int32_t>(MoonLightSource::Secunda));
 	settings.SunPath = std::clamp(settings.SunPath, static_cast<int32_t>(SunPath::Southern), static_cast<int32_t>(SunPath::Custom));
@@ -124,11 +245,13 @@ void SkySync::LoadSettings(json& o_json)
 void SkySync::SaveSettings(json& o_json)
 {
 	o_json = settings;
+	o_json["DisabledWorldspaces"] = settings.DisabledWorldspaces;
 }
 
 void SkySync::RestoreDefaultSettings()
 {
 	settings = {};
+	worldspaceCacheValid = false;
 	ResetRuntimeState();
 	SetSunAngle();
 }
@@ -197,11 +320,9 @@ void SkySync::DataLoaded()
 
 void SkySync::DisableOnConflict(std::string_view conflictName)
 {
-	failedLoadedMessage = fmt::format("Disabled as {} has been detected, both cannot be used together", conflictName);
-	loaded = false;
+	DisableForConflict(conflictName);
 	settings.Enabled = false;
 	ResetRuntimeState();
-	logger::warn("[Sky Sync] {}", failedLoadedMessage);
 }
 
 void SkySync::ResetRuntimeState()
@@ -250,7 +371,7 @@ float SkySync::ClimateTimings::SunlightDimming(float time, float fadeHours) cons
 
 void SkySync::ApplyWeatherLensFlareSetting(const RE::Sky* sky)
 {
-	if (!sky || !settings.Enabled || settings.EnableSunLensFlare) {
+	if (!sky || !loaded || !settings.Enabled || worldspaceDisabled || settings.EnableSunLensFlare) {
 		RestoreWeatherLensFlares();
 		return;
 	}
@@ -292,6 +413,7 @@ void SkySync::Sky_Update::thunk(RE::Sky* sky)
 	auto& skySync = globals::features::skySync;
 	// Remove our previous scale before the engine refreshes or reuses its light colour.
 	skySync.RestoreSunlight();
+	skySync.UpdateWorldspace();
 	skySync.ApplyWeatherLensFlareSetting(sky);
 	func(sky);
 	skySync.Update(sky);
@@ -299,7 +421,7 @@ void SkySync::Sky_Update::thunk(RE::Sky* sky)
 
 void SkySync::Update(const RE::Sky* sky)
 {
-	if (!loaded || !settings.Enabled) {
+	if (!loaded || !settings.Enabled || worldspaceDisabled) {
 		ResetRuntimeState();
 		return;
 	}
@@ -327,7 +449,7 @@ void SkySync::Update(const RE::Sky* sky)
 			shadowFader.Reset();
 	}
 
-	// Exterior worldspaces always run; interior cells require the sunlight-shadows flag.
+	// Interior cells also require the sunlight-shadows flag.
 	if (cell && cell->IsInteriorCell() && !cell->cellFlags.all(static_cast<RE::TESObjectCELL::Flag>(CellFlagExt::kSunlightShadows))) {
 		ResetRuntimeState();
 		return;

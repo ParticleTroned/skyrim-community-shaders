@@ -21,6 +21,9 @@ namespace CSX::ScreenshotStorage
 namespace CSX::Screenshot
 {
 	struct ManifestChildNode;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	struct ProviderBurst;
+#endif
 
 	struct ManifestJob
 	{
@@ -32,6 +35,9 @@ namespace CSX::Screenshot
 		std::shared_ptr<ScreenshotStorage::DirectoryLease> directoryLease;
 		nlohmann::json header = nlohmann::json::object();
 		std::shared_ptr<const ManifestChildNode> children;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::shared_ptr<const ProviderBurst> providerBurst;
+#endif
 	};
 
 	/** Advance request event identity only after the real journal commits. */

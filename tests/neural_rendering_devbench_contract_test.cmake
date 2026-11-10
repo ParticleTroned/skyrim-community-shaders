@@ -74,6 +74,8 @@ set(
     _character_mask_shader_path
     "${PROJECT_ROOT}/package/Shaders/DLSS5CharacterMaskCS.hlsl"
 )
+set(_neural_visibility_shader_path
+    "${PROJECT_ROOT}/package/Shaders/Common/NeuralRenderingVisibility.hlsli")
 set(
     _character_capture_shader_path
     "${PROJECT_ROOT}/package/Shaders/DLSS5CharacterCaptureCS.hlsl"
@@ -144,6 +146,7 @@ foreach(_required_path IN ITEMS
     "${_character_mask_work_policy_path}"
     "${_character_category_shader_path}"
     "${_character_mask_shader_path}"
+    "${_neural_visibility_shader_path}"
     "${_character_capture_shader_path}"
     "${_lighting_shader_path}"
     "${_grass_shader_path}"
@@ -189,6 +192,7 @@ file(READ "${_character_actor_policy_path}" _character_actor_policy)
 file(READ "${_character_mask_work_policy_path}" _character_mask_work_policy)
 file(READ "${_character_category_shader_path}" _character_category_shader)
 file(READ "${_character_mask_shader_path}" _character_mask_shader)
+file(READ "${_neural_visibility_shader_path}" _neural_visibility_shader)
 file(READ "${_character_capture_shader_path}" _character_capture_shader)
 file(READ "${_lighting_shader_path}" _lighting_shader)
 file(READ "${_grass_shader_path}" _grass_shader)
@@ -330,7 +334,10 @@ foreach(_mask_roi_dispatch_contract IN ITEMS
     [[fullSurfaceDispatch || gpuSupport ? 0u : dirtyRegion.baseX]]
     [[fullSurfaceDispatch ?]]
     [[dirtyRegion.width]]
-    [[if (!a_slot.maskInitialized)]]
+    [[const bool resetBackground = !a_slot.maskInitialized || a_slot.maskBackground != background;]]
+    [[if (resetBackground)]]
+    [[a_slot.maskBackground = background;]]
+    [[a_slot.maskInitialized = true;]]
     [[a_slot.previousMaskWorkSubrect = a_slot.maskWorkSubrect;]]
 )
     string(FIND "${_source_contract_text}" "${_mask_roi_dispatch_contract}"
@@ -367,8 +374,8 @@ foreach(_dynamic_compute_roi_contract IN ITEMS
     [[bounds = CharacterRegionPolicy::Union(bounds, region);]]
     [[a_args.computeSubrect = result.computeSubrect;]]
     [[MapComputeSubrect(]]
-    [[parameters->Set("DLSSNR.ColorSubrectBaseX", colorSubrect.baseX);]]
-    [[parameters->Set("DLSSNR.OutputSubrectWidth", outputSubrect.width);]]
+    [[parameters->Set(NVSDK_NGX_Parameter_DLSSNR_ColorSubrectBaseX, colorSubrect.baseX);]]
+    [[parameters->Set(NVSDK_NGX_Parameter_DLSSNR_OutputSubrectWidth, outputSubrect.width);]]
     [[CopyTextureSubrect(]]
     [[Add(pixelCount, resources[index].roi.inferenceContext.Area());]]
     [[RestrictVisibleOutputToComputeSubrect(]]
@@ -698,8 +705,9 @@ endforeach()
 
 foreach(_upscaled_center_composite_contract IN ITEMS
     [[if (params.centerAlreadyPrepared)]]
-    [[const bool useSubmitNeuralFloatOutput = NeuralRendering::UsesSubmitNeuralFloatBridge( params.dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter, neuralResult && neuralResult->applied, GetNeuralRenderingArrangement())]]
-    [[centerSRV = submitNeuralFloatColorOut[eyeIndex]->srv.get()]]
+    [[const bool useSubmitNeuralFloatOutput = params.centerAlreadyPrepared && NeuralRendering::UsesSubmitNeuralFloatBridge( params.dlssViewportRole == Streamline::DLSSViewportRole::SubmitStageFoveatedCenter, neuralResult && neuralResult->applied, GetNeuralRenderingArrangement())]]
+    [[preparedCenter = submitNeuralFloatColorOut[eyeIndex].get()]]
+    [[ID3D11ShaderResourceView* centerSRV = preparedCenter->srv.get()]]
     [[ResolveSubmitCharacterCompositeInputs(]]
     [[DispatchFoveatedBlendPass( centerSRV, outputColorUAV]]
 )
@@ -722,7 +730,7 @@ foreach(_final_ldr_float_contract IN ITEMS
     [[DispatchSubmitStageColorRegion( neuralFinalLdrColorIn[eye]->srv.get(), submitNeuralFloatColorIn[eye]->uav.get()]]
     [[args.colorInput = submitNeuralFloatColorIn[eye]->resource.get()]]
     [[args.colorOutput = GetSubmitNeuralFloatEvaluationOutput(eye, directCommit)]]
-    [[CommitSubmitNeuralFloatOutput( eye, directCommit, neuralArgs[eye].computeSubrect)]]
+    [[CommitSubmitNeuralFloatOutput( eye, directCommit, finalizedArgs[eye].computeSubrect)]]
     [[DispatchFoveatedBlendPass( submitNeuralFloatColorOut[eye]->srv.get()]]
     [[uint32_t finalLdrColorMode = 1u]]
     [[switch (targetUavDescs[0].Format)]]
@@ -977,7 +985,21 @@ endif()
 string(JSON _finish_type GET "${_descriptor_json}" inputSchema properties maskSetupFinished type)
 string(JSON _finish_true GET "${_descriptor_json}" inputSchema properties maskSetupFinished const)
 string(JSON _rule_count LENGTH "${_descriptor_json}" inputSchema allOf)
-math(EXPR _finish_rule "${_rule_count} - 1")
+set(_finish_rule -1)
+math(EXPR _last_rule "${_rule_count} - 1")
+foreach(_rule_index RANGE 0 ${_last_rule})
+    string(JSON _trigger ERROR_VARIABLE _trigger_error
+        GET "${_descriptor_json}" inputSchema allOf ${_rule_index} if required 0)
+    if(NOT _trigger_error AND _trigger STREQUAL "maskSetupFinished")
+        if(NOT _finish_rule EQUAL -1)
+            message(FATAL_ERROR "Mask confirmation must have one conditional contract")
+        endif()
+        set(_finish_rule ${_rule_index})
+    endif()
+endforeach()
+if(_finish_rule EQUAL -1)
+    message(FATAL_ERROR "Mask confirmation conditional contract is missing")
+endif()
 string(JSON _finish_action GET "${_descriptor_json}" inputSchema allOf ${_finish_rule} then properties action const)
 string(JSON _finish_fields LENGTH "${_descriptor_json}" inputSchema allOf ${_finish_rule} then propertyNames enum)
 if(NOT _finish_type STREQUAL "boolean" OR NOT _finish_true OR
@@ -1012,7 +1034,7 @@ if(NOT _descriptor_two_value_maximum EQUAL 1)
 endif()
 
 foreach(_status_contract IN ITEMS
-    [[{ "apiVersion", 11 }]]
+    [[{ "apiVersion", 12 }]]
     [[{ "implementationMatrix", NeuralImplementationMatrixJson() }]]
     [[{ "insertionPointMatrix", NeuralInsertionPointMatrixJson() }]]
     [[{ "selectedInsertionPoint", NeuralInsertionPointJson(insertionPoint) }]]
@@ -1068,7 +1090,9 @@ foreach(_status_contract IN ITEMS
     [[{ "currentFrame", temporalAdmission.currentFrame }]]
     [[{ "lastWorldRenderFrame", temporalAdmission.lastWorldRenderFrame }]]
     [[{ "lastCompletedWorldRenderFrame", temporalAdmission.lastCompletedWorldRenderFrame }]]
-    [[nr_status returns the API-v11 NR runtime]]
+    [[nr_status returns the legacy NR runtime]]
+    [[SDK initialization and feature discovery are not attempted.]]
+    [["api":{"const":"NGX_D3D12_DIRECT_PROVIDER"]]
     [[nr_status exposes lifetimeDiagnostics: a bounded 64-record CPU history]]
     [[NeuralRendering::LifetimeDiagnosticsJson(NeuralRendering::Renderer::Instance().GetLifetimeDiagnostics()]]
     [[{ "neuralRendering", NeuralRenderingStatusJson(a_upscaling) }]]
@@ -1171,6 +1195,14 @@ foreach(_status_contract IN ITEMS
     [[{ "matchesPreparedCharacterMask", featureTimingMatchesPreparedMask }]]
     [[{ "developerModeRequired", false }]]
     [[{ "streamlineLogLevelAffectsAdmission", false }]]
+    [[{ "admissionPolicy", "version_and_provider_initialization" }]]
+    [[{ "identityClassification", NeuralRendering::ToString(snapshot.runtimeIdentity.releaseMatch) }]]
+    [[{ "signatureStatus", "not_checked" }]]
+    [[{ "referenceSha256", NeuralRendering::Runtime::Reference().sha256 }]]
+    [[{ "nativeAbiEvidence", NeuralRendering::ToString(snapshot.runtimeIdentity.initialization) }]]
+    [[{ "driverRequirements", NeuralRendering::Evidence::DriverRequirementsJson(snapshot.runtimeDriverRequirements) }]]
+    [[{ "api", snapshot.runtimeInitializationRoute.first }]]
+    [[{ "sdkDiscoveryDetail", snapshot.runtimeInitializationRoute.second }]]
     [[{ "allowUnlistedPatchedOrUnsignedRuntime", true }]]
     [[{ "reason", "D3D11 profile components and asynchronous D3D12 Feature 18 samples are exposed separately; no uncorrelated sum is reported" }]]
     [[{ "foveation", FoveationStatusJson(a_upscaling) }]]
@@ -1396,7 +1428,7 @@ foreach(_continuity_decision IN ITEMS menuContinuityAllowed replayMenuContinuity
 endforeach()
 
 foreach(_live_menu_layer_contract IN ITEMS
-    [[return IsKnownGameMenuContextActive() || (vrMenuFrameTransaction.frame == currentFrame &&]]
+    [[return IsKnownGameMenuContextActive() || (IsVRMenuTransportContractPresent() && IsVRActivationPromptContextActive()) || (vrMenuFrameTransaction.frame == currentFrame &&]]
     [[vrMenuFrameTransaction.menuLayerRequired ||]]
     [[vrMenuFrameTransaction.mapLayerRequired ||]]
     [[vrMenuFrameTransaction.recognizedOperations != 0 ||]]
@@ -1615,7 +1647,8 @@ foreach(_source_contract IN ITEMS
     [[character category capture arrived after a newer observation frame]]
     [[capturedFrame_ != sourceWorldFrame]]
     [[const bool logicalEmptyCapture = state_->capturedCategoriesEmpty_;]]
-    [[if (provenEmpty || logicalEmptyCapture) {]]
+    [[if (provenEmpty || logicalEmptyCapture || (sceneStrengths && !fuseScene && plan.regions.empty())) {]]
+    [[float clearValue = sceneStrengths ? 1.0f : 0.0f;]]
     [[state_->ClearMask(]]
     [[slot.requiresEvaluation =]]
     [[const bool cpuProvenEmpty =]]
@@ -1841,151 +1874,35 @@ string(SUBSTRING "${_runtime_source}" ${_runtime_reset_begin}
 string(SUBSTRING "${_runtime_source}" ${_runtime_shutdown_begin}
     ${_runtime_shutdown_length} _runtime_shutdown)
 
-foreach(_runtime_cache_contract IN ITEMS
-    [[RuntimeExports runtimeExports_{};]]
-    [[ParameterCoreExports parameterCoreExports_{};]]
-    [[reinterpret_cast<InitD3D12>(runtimeExports_.initialize)]]
-    [[reinterpret_cast<CreateFeature>(runtimeExports_.createFeature)]]
-    [[reinterpret_cast<EvaluateFeature>(runtimeExports_.evaluateFeature)]]
-    [[reinterpret_cast<ReleaseFeature>(runtimeExports_.releaseFeature)]]
-    [[reinterpret_cast<ShutdownD3D12>(runtimeExports_.shutdown)]]
-    [[parameterCoreExports_.destroyParameters]]
-    [[InterlockedCompareExchangePointer(]]
-    [[HMODULE retainedCallerModule = nullptr;]]
-    [[active->retainedCallerModule]]
-    [[ReadImportSlot(g_pathProxySlot)]]
-    [[GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS]]
-    [[GET_MODULE_HANDLE_EX_FLAG_PIN]]
-	[[ImportSlotExchangeResult]]
-	[[exchange.protectionRestored]]
-	[[exchange.rolledBack]]
-    [[runtimeExports_ = {]]
-    [[.initialize = requiredExports[0],]]
-    [[parameterCoreExports_ = {]]
-    [[.allocateParameters = reinterpret_cast<void*>(]]
+foreach(_legacy_contract IN ITEMS
+    [[backend_->provider.Initialize(]]
+    [[backend_->provider.AllocateParameters(]]
+    [[backend_->provider.PopulateParameters(]]
+    [[backend_->provider.DestroyParameters(]]
+    [[backend_->provider.ShutdownDevice(]]
+    [[backend_->provider.scratchSize(]]
+    [[backend_->provider.create(]]
+    [[backend_->provider.evaluate(]]
+    [[backend_->provider.release(]]
 )
-    string(FIND
-        "${_runtime_header}\n${_runtime_source}"
-        "${_runtime_cache_contract}"
-        _runtime_cache_position
-    )
-    if(_runtime_cache_position EQUAL -1)
-        message(FATAL_ERROR
-            "NR runtime cached-export contract is missing: ${_runtime_cache_contract}"
-        )
+    string(FIND "${_runtime_source}" "${_legacy_contract}" _position)
+    if(_position EQUAL -1)
+        message(FATAL_ERROR "Legacy NR ownership contract is missing: ${_legacy_contract}")
     endif()
 endforeach()
-
-string(FIND "${_runtime_source}"
-    [[bool InstallRuntimeCallerPathHook(]] _hook_install_begin)
-string(FIND "${_runtime_source}"
-    [[bool UninstallRuntimeCallerPathHook(]] _hook_install_end)
-if(_hook_install_begin EQUAL -1 OR _hook_install_end EQUAL -1 OR
-    NOT _hook_install_begin LESS _hook_install_end)
-    message(FATAL_ERROR "NR caller-path hook installation could not be isolated")
-endif()
-math(EXPR _hook_install_length "${_hook_install_end} - ${_hook_install_begin}")
-string(SUBSTRING "${_runtime_source}" ${_hook_install_begin}
-    ${_hook_install_length} _hook_install)
-string(FIND "${_hook_install}"
-    [[&invocation->retainedCallerModule]] _hook_pin_position)
-string(FIND "${_hook_install}"
-    [[ProtectAndExchangeImportSlot(]] _hook_exchange_position)
-if(_hook_pin_position EQUAL -1 OR _hook_exchange_position EQUAL -1 OR
-    NOT _hook_pin_position LESS _hook_exchange_position)
-    message(FATAL_ERROR
-        "NR caller module must be pinned before the vendor IAT is changed"
-    )
-endif()
-string(FIND "${_runtime_source}" [[callerModulePinned]] _late_hook_pin)
-if(NOT _late_hook_pin EQUAL -1)
-    message(FATAL_ERROR
-        "NR caller-path safety must not rely on a fallible teardown-time pin"
-    )
-endif()
-
-string(REGEX MATCHALL
-    "InstallRuntimeCallerPathHook\\("
-    _runtime_hook_installs
-    "${_runtime_source}"
-)
-list(LENGTH _runtime_hook_installs _runtime_hook_install_count)
-if(NOT _runtime_hook_install_count EQUAL 2)
-    message(FATAL_ERROR
-        "NR caller-path hook must have one definition and one lifetime install"
-    )
-endif()
-string(FIND "${_runtime_source}" "RuntimeCallerPathScope" _old_runtime_scope)
-if(NOT _old_runtime_scope EQUAL -1)
-    message(FATAL_ERROR "NR runtime must not reinstall its IAT proxy per NGX call")
-endif()
-
-foreach(_initialize_contract IN ITEMS
-    [[InstallRuntimeCallerPathHook(]]
-    [[RuntimeCallerPathCall pathProxy(runtime);]]
-	[[lastPathProxyInstalled_ = pathProxy.IsInstalled();]]
-    [[initialize(]]
-    [[UninstallRuntimeCallerPathHook(runtime)]]
-)
-    string(FIND "${_runtime_initialize}" "${_initialize_contract}"
-        _initialize_contract_position)
-    if(_initialize_contract_position EQUAL -1)
-        message(FATAL_ERROR
-            "NR initialization hook contract is missing: ${_initialize_contract}"
-        )
+foreach(_forbidden IN ITEMS [[CSX_NR_RUNTIME_SHA256]] [[GetProcAddress(]] [[LoadLibraryExW(]]
+        [[VirtualProtect(]] [[RuntimeCallerPath]] [[spoofedPath]]
+        [[NVSDK_NGX_GetApplicationId]] [[NVSDK_NGX_GetAPIVersion]]
+        [[NVSDK_NGX_D3D12_Init_with_ProjectID(]]
+        [[NVSDK_NGX_D3D12_GetCapabilityParameters(]]
+        [[NVSDK_NGX_D3D12_AllocateParameters(]]
+        [[NVSDK_NGX_D3D12_DestroyParameters(]]
+        [[NVSDK_NGX_D3D12_Shutdown1(]])
+    string(FIND "${_runtime_source}" "${_forbidden}" _position)
+    if(NOT _position EQUAL -1)
+        message(FATAL_ERROR "NR runtime must delegate loading and allocator ownership to its legacy provider: ${_forbidden}")
     endif()
 endforeach()
-string(FIND "${_runtime_initialize}" "InstallRuntimeCallerPathHook("
-    _initialize_install_position)
-string(FIND "${_runtime_initialize}" "const auto initializeResult = initialize("
-    _initialize_call_position)
-if(NOT _initialize_install_position LESS _initialize_call_position)
-    message(FATAL_ERROR "NR caller-path hook must precede NGX initialization")
-endif()
-
-foreach(_execute_contract IN ITEMS
-    [[RuntimeCallerPathCall pathProxy(runtime);]]
-    [[runtimeExports_.createFeature]]
-    [[runtimeExports_.evaluateFeature]]
-)
-    string(FIND "${_runtime_execute}" "${_execute_contract}"
-        _execute_contract_position)
-    if(_execute_contract_position EQUAL -1)
-        message(FATAL_ERROR
-            "NR Execute cached-hook contract is missing: ${_execute_contract}"
-        )
-    endif()
-endforeach()
-foreach(_execute_forbidden IN ITEMS
-    [[InstallRuntimeCallerPathHook(]]
-    [[UninstallRuntimeCallerPathHook(]]
-    [[GetProcAddress(]]
-)
-    string(FIND "${_runtime_execute}" "${_execute_forbidden}"
-        _execute_forbidden_position)
-    if(NOT _execute_forbidden_position EQUAL -1)
-        message(FATAL_ERROR
-            "NR Execute must not perform runtime hook/export setup: ${_execute_forbidden}"
-        )
-    endif()
-endforeach()
-
-foreach(_reset_contract IN ITEMS
-    [[RuntimeCallerPathCall pathProxy(runtime);]]
-    [[runtimeExports_.releaseFeature]]
-)
-    string(FIND "${_runtime_reset}" "${_reset_contract}"
-        _reset_contract_position)
-    if(_reset_contract_position EQUAL -1)
-        message(FATAL_ERROR
-            "NR feature-reset cached-hook contract is missing: ${_reset_contract}"
-        )
-    endif()
-endforeach()
-string(FIND "${_runtime_reset}" "GetProcAddress(" _reset_get_proc)
-if(NOT _reset_get_proc EQUAL -1)
-    message(FATAL_ERROR "NR feature reset must use its cached release export")
-endif()
 
 string(FIND "${_runtime_source}" "bool Runtime::ReleasePassResources()"
     _runtime_warm_release_begin)
@@ -2001,7 +1918,7 @@ foreach(_warm_release_contract IN ITEMS
     [[std::scoped_lock lock(mutex_);]]
     [[abandonRequested_.load(std::memory_order_acquire) || abandoned_]]
     [[status_ != RuntimeStatus::Initialized || failureStage_ != RuntimeFailureStage::None]]
-    [[!device_ || !module_ || !coreModule_ || !parameters_]]
+    [[!device_ || !backend_ || !parameters_]]
     [[if (!ResetFeaturesLocked(true) || abandonRequested_.load(std::memory_order_acquire))]]
 )
     string(FIND "${_runtime_warm_release}" "${_warm_release_contract}"
@@ -2035,26 +1952,16 @@ if(NOT _warm_release_fail_fast)
     message(FATAL_ERROR "NR warm release must preserve the first failed native release")
 endif()
 
-string(FIND "${_runtime_shutdown}" "shutdown(static_cast<ID3D12Device*>(device_))"
-    _runtime_shutdown_call)
-string(FIND "${_runtime_shutdown}" "UninstallRuntimeCallerPathHook(runtime)"
-    _runtime_uninstall_call)
-string(FIND "${_runtime_shutdown}" "FreeLibrary(runtime)"
-    _runtime_free_call)
-if(_runtime_shutdown_call EQUAL -1 OR _runtime_uninstall_call EQUAL -1 OR
-    _runtime_free_call EQUAL -1 OR
-    NOT _runtime_shutdown_call LESS _runtime_uninstall_call OR
-    NOT _runtime_uninstall_call LESS _runtime_free_call)
-    message(FATAL_ERROR
-        "NR shutdown must call NGX shutdown, restore its IAT, then unload"
-    )
+string(FIND "${_runtime_shutdown}" "backend_->provider.ShutdownDevice(" _provider_shutdown)
+string(FIND "${_runtime_shutdown}" "backend_->provider.DestroyParameters(" _parameter_destruction)
+string(FIND "${_runtime_shutdown}" "backend_.reset()" _backend_release)
+if(_provider_shutdown EQUAL -1 OR _parameter_destruction EQUAL -1 OR
+    NOT _parameter_destruction LESS _provider_shutdown OR NOT _provider_shutdown LESS _backend_release)
+    message(FATAL_ERROR "NR must destroy parameter maps before provider shutdown and module release")
 endif()
-string(FIND "${_runtime_source}" [[void Runtime::AbandonLocked() noexcept]]
-    _runtime_abandon_contract)
-string(FIND "${_runtime_source}" [[pathProxyRestored = UninstallRuntimeCallerPathHook(]]
-    _runtime_abandon_restore)
-if(_runtime_abandon_contract EQUAL -1 OR _runtime_abandon_restore EQUAL -1)
-    message(FATAL_ERROR "Unsafe NR abandon must attempt IAT restoration")
+string(FIND "${_runtime_source}" "(void)backend_.release();" _unsafe_retain)
+if(_unsafe_retain EQUAL -1)
+    message(FATAL_ERROR "Unsafe NR teardown must retain provider and scratch ownership")
 endif()
 
 foreach(_readback_contract IN ITEMS
@@ -2111,8 +2018,8 @@ foreach(_strict_zero_contract IN ITEMS
 endforeach()
 foreach(_geometry_roi_contract IN ITEMS
     [[ResolveStableCharacterComputeSubrect(requiredComputeSubrect, a_args.outputWidth,]]
-    [[slot.maskRoiStatus = sceneStrengths ? "scene_full_region" : authoredMode ? "cpu_geometry_single" :]]
-    [[eye.actorEnclosureCountsAvailable = !sceneStrengths;]]
+    [[slot.maskRoiStatus = sceneStrengths ? "scene_full_inference_region_mask" : authoredMode ? "cpu_geometry_single" :]]
+    [[eye.actorEnclosureCountsAvailable = !fuseScene;]]
     [[slot.prepareKey.sourceWorldFrame != args.sourceWorldFrame]]
     [[slot.prepareKey.generation != args.generation]]
     [[slot.prepareKey.settings != BuildSettingsKey(args.settings)]]
@@ -2361,12 +2268,14 @@ foreach(_mask_shader_contract IN ITEMS
     [[AuthoredFacePixels);]]
     [[CountCategory(centerCategory, VisibleFacePixels);]]
     [[const bool visibilityRejectionEnabled = VisibilityOptions.y >= 0.5;]]
-    [[return currentDepth + tolerance >= authoredDepth;]]
+    [[#include "Common/NeuralRenderingVisibility.hlsli"]]
+    [[return NeuralRenderingVisibility::Visible(currentDepth, authoredDepth, VisibilityOptions.x);]]
     [[CharacterCategoryMask::DecodeCategory(]]
     [[IsAuthoredSurfaceVisible(]]
     [[sourcePixel, centerDepth, centerAuthoredRawDepth)]]
     [[const float centerDistanceWeight =]]
-    [[GetDistanceWeight(sourcePixel, centerAuthoredRawDepth);]]
+    [[const float centerDistanceWeight = needsCenterSurface ?]]
+    [[GetDistanceWeight(sourcePixel, centerAuthoredRawDepth) :]]
     [[const bool centerWithinDistance = centerDistanceWeight > 0.0;]]
     [[centerStrength * centerDistanceWeight]]
     [[neighborDistanceWeight <= 0.0]]
@@ -2390,6 +2299,15 @@ foreach(_mask_shader_contract IN ITEMS
         message(FATAL_ERROR
             "Character mask depth/provenance contract is missing: ${_mask_shader_contract}"
         )
+    endif()
+endforeach()
+foreach(_visibility_contract IN ITEMS
+    [[const float tolerance = max(1.0, max(abs(authoredDepth), abs(currentDepth)) * threshold);]]
+    [[return currentDepth + tolerance >= authoredDepth;]]
+)
+    string(FIND "${_neural_visibility_shader}" "${_visibility_contract}" _visibility_position)
+    if(_visibility_position EQUAL -1)
+        message(FATAL_ERROR "Shared NR depth visibility contract is missing: ${_visibility_contract}")
     endif()
 endforeach()
 foreach(_distance_fade_upload_contract IN ITEMS
@@ -2422,7 +2340,7 @@ endforeach()
 
 string(FIND "${_character_mask_shader}" "bool IsAuthoredSurfaceVisible("
     _visibility_function_begin)
-string(FIND "${_character_mask_shader}" "void CountCategory("
+string(FIND "${_character_mask_shader}" "float ReconstructEyeDistance("
     _visibility_function_end)
 if(_visibility_function_begin EQUAL -1 OR _visibility_function_end EQUAL -1 OR
     NOT _visibility_function_begin LESS _visibility_function_end)
@@ -2441,8 +2359,7 @@ foreach(_visibility_contract IN ITEMS
     [[if (visibilityRejectionEnabled || distanceCullEnabled)]]
     [[authoredRawDepth = ReadAuthoredDepth(localSourcePixel);]]
     [[const float authoredDepth = LinearizeDepth(authoredRawDepth);]]
-    [[const float tolerance = max(]]
-    [[return currentDepth + tolerance >= authoredDepth;]]
+    [[return NeuralRenderingVisibility::Visible(currentDepth, authoredDepth, VisibilityOptions.x);]]
 )
     string(FIND "${_visibility_function}" "${_visibility_contract}"
         _visibility_position)
@@ -3016,9 +2933,9 @@ string(REGEX MATCHALL
     "${_upscaling}"
 )
 list(LENGTH _center_blend_telemetry_sites _center_blend_telemetry_site_count)
-if(NOT _center_blend_telemetry_site_count EQUAL 4)
+if(NOT _center_blend_telemetry_site_count EQUAL 5)
     message(FATAL_ERROR
-        "Both normal-centre blend boundaries must record one attempt and one success"
+        "Direct blends and either prepared composition path must retain attempts and shared success accounting"
     )
 endif()
 
@@ -3489,7 +3406,7 @@ foreach(_character_contract IN ITEMS
 	[[{ "providerBlending", snapshot.providerBlending }]]
 	[[{ "useAutoMask", snapshot.useAutoMask }]]
 	[[{ "feature18UseAutoMask", rendererSnapshot.useAutoMask }]]
-	[[{ "feature18ControlMaskPresent", rendererSnapshot.controlMaskPresent && !rendererSnapshot.providerBlending }]]
+	[[{ "feature18ControlMaskPresent", rendererSnapshot.nativeControlMask }]]
 	[[{ "feature18ProviderBlending", rendererSnapshot.providerBlending }]]
 	[[{ "feature18InvocationMatchesEvidenceFrame", rendererSnapshot.frameId == observedFrame }]]
 	[[{ "controlMaskCopies", snapshot.counters.controlMaskCopies }]]
@@ -3571,7 +3488,7 @@ foreach(_region_contract IN ITEMS
     [[if (args.featureSlot >= kLogicalFeatureSlotCount)]]
     [[resources[index].historyKey.regionIdentity = 0;]]
     [[std::array<Slot*, kEyeCount> slots{};]]
-    [[.logicalEyeCount = logicalEyeCount,]]
+    [[.logicalEyeCount = startupIndex ? 1u : logicalEyeCount,]]
 )
     string(FIND "${_region_batch}" "${_region_contract}" _region_contract_position)
     if(_region_contract_position EQUAL -1)
@@ -3587,7 +3504,7 @@ foreach(_region_stage IN ITEMS
     [[activeStage_ = RendererStage::ColorInputCopy;]]
     [[activeStage_ = RendererStage::ControlMaskCopy;]]
     [[Runtime::Instance().Execute(]]
-    [[if (!interop_.EndD3D12())]]
+    [[if (!interop_.EndD3D12(!startupIndex))]]
     [[activeStage_ = RendererStage::OutputCommit;]]
 )
     string(FIND "${_region_batch}" "${_region_stage}" _region_stage_position)
@@ -3666,10 +3583,18 @@ string(JSON _nvidia_type GET "${_descriptor_json}"
 if(NOT _nvidia_type STREQUAL "boolean")
     message(FATAL_ERROR "NR status must expose active rendering GPU compatibility")
 endif()
-foreach(_guard IN ITEMS "nr_unsupported_gpu" "nr_upscaling_incompatible" "requestedSettings.neuralRenderingFovOnly != previousSettings.neuralRenderingFovOnly")
+foreach(_guard IN ITEMS "nr_unsupported_gpu" "nr_driver_update_required" "nr_upscaling_incompatible" "requestedSettings.neuralRenderingFovOnly != previousSettings.neuralRenderingFovOnly")
     string(FIND "${_bridge}" "${_guard}" _guard_position)
     if(_guard_position EQUAL -1)
         message(FATAL_ERROR "NR configure must preserve GPU and FOV admission: ${_guard}")
+    endif()
+endforeach()
+
+foreach(_field IN ITEMS installedRelease minimumRelease needsUpdate queryResult message)
+    string(JSON _driver_field_type TYPE "${_descriptor_json}"
+        outputSchema properties neuralRendering properties runtime properties driverSupport properties ${_field})
+    if(NOT _driver_field_type STREQUAL "OBJECT")
+        message(FATAL_ERROR "NR must advertise independent driver detection: ${_field}")
     endif()
 endforeach()
 
@@ -3677,3 +3602,27 @@ string(FIND "${_transition}" "a_origin != VRUpscalingTransitionOrigin::RecoveryR
 if(_recovery_exception EQUAL -1 OR _recovery_exception GREATER _dependency_guard)
     message(FATAL_ERROR "NR admission must preserve internal native-target recovery")
 endif()
+
+foreach(_field IN ITEMS exactReleaseMatch evidence signatureStatus installationOrigin referenceSha256 referencePackage referenceSource nativeAbiEvidence loadedFileIdentity)
+    string(JSON _identity_field_type TYPE "${_descriptor_json}"
+        outputSchema properties neuralRendering properties runtime properties providerIdentity properties ${_field})
+    if(NOT _identity_field_type STREQUAL "OBJECT")
+        message(FATAL_ERROR "NR must advertise independent provider identity evidence: ${_field}")
+    endif()
+endforeach()
+string(JSON _signature_status GET "${_descriptor_json}"
+    outputSchema properties neuralRendering properties runtime properties providerIdentity properties signatureStatus const)
+if(NOT _signature_status STREQUAL "not_checked")
+    message(FATAL_ERROR "Reference hashes must not be presented as signature verification")
+endif()
+string(JSON _initialization_failure GET "${_descriptor_json}"
+    outputSchema properties neuralRendering properties runtime properties providerIdentity properties nativeAbiEvidence enum 1)
+if(NOT _initialization_failure STREQUAL "legacy_initialization_failed")
+    message(FATAL_ERROR "NR must distinguish a failed legacy initialization from untested ABI evidence")
+endif()
+foreach(_late_runtime_query IN ITEMS "Runtime::Instance().DriverRequirements()" "Runtime::Instance().GetInitializationRoute()")
+    string(FIND "${_bridge}" "${_late_runtime_query}" _late_query_position)
+    if(NOT _late_query_position EQUAL -1)
+        message(FATAL_ERROR "NR diagnostics must use the captured provider lifecycle: ${_late_runtime_query}")
+    endif()
+endforeach()

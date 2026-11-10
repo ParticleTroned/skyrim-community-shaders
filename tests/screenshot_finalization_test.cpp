@@ -794,7 +794,7 @@ struct ScreenshotFinalizationTest
 		unsigned notifications = 0;
 		test.Record().referenceCompletion = [&](const json& status) {
 			Require(status.at("done") == true && status.at("ok") == false && status.at("runId") == 7 &&
-						status.at("state") == terminalState && status.at("manifestPath").is_null(),
+						status.at("state").get_ref<const std::string&>() == terminalState && status.at("manifestPath").is_null(),
 				"provider notification did not preserve the terminal run identity");
 			++notifications;
 		};

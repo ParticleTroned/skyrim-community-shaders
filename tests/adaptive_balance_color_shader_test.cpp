@@ -1,6 +1,7 @@
 #ifndef NOMINMAX
 #	define NOMINMAX
 #endif
+#include "Diagnostics/PerformanceCostExperiments.h"
 #include "Utils/ShaderInclude.h"
 #include "adaptive_balance_test_settings.h"
 #include "d3d11_shader_test.h"
@@ -13,8 +14,18 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <string_view>
 #include <utility>
+
+using uint = unsigned int;
+struct float3
+{
+	float x, y, z;
+};
+inline void to_json(nlohmann::json& output, const float3& value) { output = { value.x, value.y, value.z }; }
+inline void from_json(const nlohmann::json& input, float3& value) { value = { input.at(0).get<float>(), input.at(1).get<float>(), input.at(2).get<float>() }; }
+#include "Features/AdaptiveBalanceAppearance.h"
 
 namespace
 {
@@ -83,7 +94,7 @@ namespace
 		ComPtr<ID3D11UnorderedAccessView> uav;
 		std::unique_ptr<ConstantBuffer> feature, inputs, permutation, frame;
 
-		Fixture(ID3D11Device* device, bool vr, ShaderMode mode = ShaderMode::Scene, const std::vector<const char*>& extraDefines = {})
+		Fixture(ID3D11Device* device, bool vr, ShaderMode mode = ShaderMode::Scene, const std::vector<const char*>& extraDefines = {}, uint32_t referenceFlags = 0)
 		{
 			const bool lights = mode == ShaderMode::PointLights || mode == ShaderMode::SceneLights;
 			std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" } };
@@ -99,6 +110,9 @@ namespace
 				defines.push_back({ "FIRE_TEST", "1" });
 			for (const auto* define : extraDefines)
 				defines.push_back({ define, "1" });
+			const auto referenceValue = std::to_string(referenceFlags);
+			if (referenceFlags)
+				defines.push_back({ "CSX_PERF_REFERENCE_FLAGS", referenceValue.c_str() });
 			auto code = Compile(mode == ShaderMode::ReflectionComposition ? FORWARD_COMPOSITION_TEST_SHADER :
 																			L"tests/adaptive_balance_color.hlsl",
 				defines, "cs_5_0");
@@ -892,10 +906,10 @@ namespace
 		return checked;
 	}
 
-	unsigned VerifyUtilityControls(ID3D11Device* device, ID3D11DeviceContext* context, bool vr)
+	unsigned VerifyUtilityControls(ID3D11Device* device, ID3D11DeviceContext* context, bool vr, bool reference = false)
 	{
 		Fixture appearance(device, vr, ShaderMode::Appearance);
-		Fixture lights(device, vr, ShaderMode::PointLights);
+		Fixture lights(device, vr, ShaderMode::PointLights, {}, reference ? CSX_PERF_POINT_LIGHT_COMPOSITION : 0);
 		struct LightControl
 		{
 			size_t saturation;
@@ -960,8 +974,9 @@ namespace
 								lights.feature->SetMember("SharedData::adaptiveBalanceSettings", "appearance", values);
 								const auto bypassed = lights.DrawLights(context, linear, authoredLinear, kind, false, 1, false, 1, pointLightColors, scene);
 								RequireAppearanceIdentity(bypassed);
-								values[86] = std::bit_cast<float>(uint32_t{ 1 });
-								lights.feature->SetMember("SharedData::adaptiveBalanceSettings", "appearance", values);
+								auto upload = std::bit_cast<AdaptiveBalanceAppearanceSettings>(values);
+								AdaptiveBalanceAppearance::PreparePointLightColors(upload, !reference);
+								lights.feature->SetMember("SharedData::adaptiveBalanceSettings", "appearance", upload);
 								const auto output = lights.DrawLights(context, linear, authoredLinear, kind, false, 1, false, 1, pointLightColors, scene);
 								if (scene != 0 && authoredLinear == control.linear && (control.kind == 0 || kind == control.kind)) {
 									if (gamma)
@@ -973,6 +988,28 @@ namespace
 								}
 								checked += 16;
 							}
+					for (const auto& controls : { Pixel{ 0.5f, -0.75f, 0.25f, 0.75f }, Pixel{ 2, 0.75f, 2, 0.75f } }) {
+						auto composed = AdaptiveBalanceAppearanceSettings{};
+						composed.nonlinearPointLightSaturation = composed.linearPointLightSaturation = controls[0];
+						composed.pointLightGammaOffset = composed.linearPointLightGammaOffset = controls[1];
+						composed.spotlightSaturation = composed.linearSpotlightSaturation = controls[2];
+						composed.omnidirectionalBulbSaturation = composed.linearOmnidirectionalBulbSaturation = controls[2];
+						composed.spotlightGammaOffset = composed.linearSpotlightGammaOffset = controls[3];
+						composed.omnidirectionalBulbGammaOffset = composed.linearOmnidirectionalBulbGammaOffset = controls[3];
+						auto expectedSettings = AdaptiveBalanceAppearanceSettings{};
+						expectedSettings.nonlinearPointLightSaturation = expectedSettings.linearPointLightSaturation = std::clamp(controls[0] * controls[2], 0.0f, 2.0f);
+						expectedSettings.pointLightGammaOffset = expectedSettings.linearPointLightGammaOffset = std::clamp(controls[1] + controls[3], -1.0f, 1.0f);
+						AdaptiveBalanceAppearance::PreparePointLightColors(composed, !reference);
+						AdaptiveBalanceAppearance::PreparePointLightColors(expectedSettings, !reference);
+						for (uint32_t kind : { 1u, 2u }) {
+							lights.feature->SetMember("SharedData::adaptiveBalanceSettings", "appearance", composed);
+							const auto actual = lights.DrawLights(context, linear, authoredLinear, kind, false, 1, false, 1, pointLightColors, scene);
+							lights.feature->SetMember("SharedData::adaptiveBalanceSettings", "appearance", expectedSettings);
+							const auto expected = lights.DrawLights(context, linear, authoredLinear, kind, false, 1, false, 1, pointLightColors, scene);
+							CompareAppearance(actual, expected, "Composed light colour differs from bounded base grading");
+							checked += 16;
+						}
+					}
 					values = AdaptiveBalanceTest::NeutralAppearance();
 					values[authoredLinear ? 78 : 76] = 0.0f;
 					const Pixel material{ 0.25f, 0.5f, 1.0f, 1.0f };
@@ -1369,6 +1406,7 @@ int main(int argc, char** argv)
 			lightSamples += VerifyLightDrawScopes(device.Get(), context.Get(), vr);
 			appearanceSamples += VerifyAppearanceModes(device.Get(), context.Get(), vr);
 			appearanceSamples += VerifyUtilityControls(device.Get(), context.Get(), vr);
+			appearanceSamples += VerifyUtilityControls(device.Get(), context.Get(), vr, true);
 			appearanceSamples += VerifyEyeAppearance(device.Get(), context.Get(), vr);
 			appearanceSamples += VerifyAuroraAppearance(device.Get(), context.Get(), vr);
 			fireSamples += VerifyFireModes(device.Get(), context.Get(), vr);

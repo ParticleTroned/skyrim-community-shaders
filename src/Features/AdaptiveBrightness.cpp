@@ -1,6 +1,7 @@
 #include "AdaptiveBrightness.h"
 #include "Menu/SettingsPage.h"
 
+#include "Diagnostics/PerformanceCostExperiments.h"
 #include "Globals.h"
 #include "InverseSquareLighting.h"
 #include "LocationContext.h"
@@ -3950,7 +3951,8 @@ AdaptiveBrightness::PerFrameData AdaptiveBrightness::GetCommonBufferData() const
 	data.fireSaturation = effectiveSettings.fireSaturation;
 	data.fireCurve = effectiveSettings.fireCurve;
 	data.appearance = effectiveSettings.appearance;
-	data.appearance.pointLightColorEnabled = AdaptiveBalanceAppearance::UsesClassifiedPointLights(data.appearance);
+	AdaptiveBalanceAppearance::PreparePointLightColors(data.appearance,
+		!CSX::Diagnostics::PerformanceCosts::ReferenceEnabled(CSX::Diagnostics::PerformanceCosts::Point::PointLightComposition));
 	data.linearPointLightMult = effectiveSettings.linearPointLightMult;
 	data.spotlightMult = effectiveSettings.spotlightMult;
 	data.linearSpotlightMult = effectiveSettings.linearSpotlightMult;

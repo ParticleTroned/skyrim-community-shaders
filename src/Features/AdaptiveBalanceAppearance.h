@@ -203,6 +203,27 @@ namespace AdaptiveBalanceAppearance
 		       settings.linearOmnidirectionalBulbGammaOffset != 0.0f;
 	}
 
+	/** Composes light-type colour controls on the upload copy, preserving authored profiles. */
+	inline void PreparePointLightColors(Settings& settings, bool a_compose = true)
+	{
+		settings.pointLightColorEnabled = UsesClassifiedPointLights(settings);
+		if (!settings.pointLightColorEnabled || !a_compose)
+			return;
+
+		const auto compose = [](float saturation, float gamma, float& subtypeSaturation, float& subtypeGamma) {
+			subtypeSaturation = std::clamp(saturation * subtypeSaturation, 0.0f, 2.0f);
+			subtypeGamma = std::clamp(gamma + subtypeGamma, -1.0f, 1.0f);
+		};
+		compose(settings.nonlinearPointLightSaturation, settings.pointLightGammaOffset,
+			settings.spotlightSaturation, settings.spotlightGammaOffset);
+		compose(settings.nonlinearPointLightSaturation, settings.pointLightGammaOffset,
+			settings.omnidirectionalBulbSaturation, settings.omnidirectionalBulbGammaOffset);
+		compose(settings.linearPointLightSaturation, settings.linearPointLightGammaOffset,
+			settings.linearSpotlightSaturation, settings.linearSpotlightGammaOffset);
+		compose(settings.linearPointLightSaturation, settings.linearPointLightGammaOffset,
+			settings.linearOmnidirectionalBulbSaturation, settings.linearOmnidirectionalBulbGammaOffset);
+	}
+
 	/** Bounds user input before it reaches profile arithmetic or rendering. */
 	inline void Sanitize(Settings& settings)
 	{

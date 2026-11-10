@@ -34,6 +34,8 @@ add_d3d_shader_test(
     AdaptiveBalanceColorShader
     tests/adaptive_balance_color_shader_test.cpp
 )
+target_link_libraries(adaptive_balance_color_shader_test PRIVATE nlohmann_json::nlohmann_json)
+set_tests_properties(AdaptiveBalanceColorShader PROPERTIES TIMEOUT 180)
 
 set(_forward_composition_dir
     "${CMAKE_CURRENT_BINARY_DIR}/generated/forward-reflection-composition"

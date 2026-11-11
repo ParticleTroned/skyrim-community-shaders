@@ -52826,17 +52826,18 @@ bool Upscaling::IsFrameGenerationDx12PathActive() const
 
 bool Upscaling::ShouldPrepareFrameGeneration() const
 {
+	if (!IsFrameGenerationDx12PathActive() || !settings.frameGenerationMode ||
+		!fidelityFX.IsFrameGenerationRuntimeReady() || streamline.IsFrameGenerationQuarantinedByReflex())
+		return false;
+	if (settings.frameGenerationAllowInMenus)
+		return true;
+
 	auto* ui = globals::game::ui;
 	auto* state = globals::state;
 	const bool pausedMenuOpen = ui && ui->GameIsPaused();
 	const bool mainOrLoadingMenuOpen = state && state->IsMainOrLoadingMenuOpen(ui);
-	const bool menuOpen = pausedMenuOpen || mainOrLoadingMenuOpen;
-
-	return IsFrameGenerationDx12PathActive() &&
-	       settings.frameGenerationMode &&
-	       fidelityFX.IsFrameGenerationRuntimeReady() &&
-	       !streamline.IsFrameGenerationQuarantinedByReflex() &&
-	       (settings.frameGenerationAllowInMenus || !menuOpen);
+	return !pausedMenuOpen && !mainOrLoadingMenuOpen &&
+	       !(IsCommunityShadersMenuOpen() && !globals::menu->IsPreviewFlying());
 }
 
 bool Upscaling::ShouldUseFrameGenerationThisFrame() const

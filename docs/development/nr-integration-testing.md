@@ -22,7 +22,7 @@ rebase preserves the earlier implementation and follow-up fixes in each PR.
 
 | Order | Implementation                                                                                 | Feature branch                                                                                                                         | Included head                              |
 | ----- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| 1     | [RGB-guided reconstruction (#1053)](https://github.com/alandtse/open-shaders/pull/1053)        | [Guided reconstruction](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-guided-reconstruction-20261031)   | `c6bb4fc542ced474843afeb464361f299ea5bd2d` |
+| 1     | [RGB-guided reconstruction (#1053)](https://github.com/alandtse/open-shaders/pull/1053)        | [Guided reconstruction](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-guided-reconstruction-20261031)   | `295eb3282b4fa08eb64bb16219482b600e479e9b` |
 | 2     | [Peripheral compression (#1054)](https://github.com/alandtse/open-shaders/pull/1054)           | [Peripheral compression](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-peripheral-compression-20261031) | `513c420770779ded80c77545a27bde68c16a8b6d` |
 | 3     | [Pause NR during combat (#1055)](https://github.com/alandtse/open-shaders/pull/1055)           | [Combat pause](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-combat-pause-20261031)                     | `c3450c81fb50bed0f056d11e403f3c5970ea6b26` |
 | 4     | [Reduced-model material selection (#1056)](https://github.com/alandtse/open-shaders/pull/1056) | [Scene selection](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-scene-selection-20261031)               | `5161e9a019933317cf3a676a1417240ae6045fb9` |
@@ -82,6 +82,15 @@ the original source pixel and alpha.
    Model Scale, compression and reconstruction controls. Start with a normal
    full-scene context and the baseline below.
 
+Guided Upsample and RGB Guidance default to on. Supported reduced or compressed
+model grids automatically use RGB guidance, including compression at Model Scale
+1.0. Native-size grids need no reconstruction; an unavailable RGB shader retains
+the existing bilinear fallback.
+
+Saved reconstruction choices are preserved. An earlier test build may have saved
+`modelRgbGuidedUpsample: false`; enable RGB Guidance once to adopt the new default
+in that configuration. Guided Upsample must also be enabled.
+
 **No NR DLL is committed or redistributed by these PRs or this integration
 build.** The build checks files and archives before uploading the
 compiler distribution artifacts, and checks the final test package again.
@@ -110,7 +119,9 @@ Start with NR enabled, Model Scale 1, compression 0, combat pause off, all
 materials selected, and no actor crop, calibration, mirrored-eye or diagnostic
 input transforms. Keep **Use resolution-scaled NR motion** enabled, diagnostic
 options off, and conversion, exposure and composite modes at their production
-settings. In VR, start with Separate eyes, then repeat the combined cases with
+settings. First check the default RGB reconstruction on a reduced or compressed
+grid, then compare explicit brightness guidance and bilinear overrides. In VR,
+start with Separate eyes, then repeat the combined cases with
 Parallel eyes and Side by side. Alternate eyes intentionally retains
 the ordinary sampling route and is not the mode for testing compression.
 

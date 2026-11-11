@@ -183,7 +183,7 @@ jobs:
                     runtimes = @('SE', 'AE', 'VR')
                     devBenchBridge = $true
                     changesInOrder = @(
-                      @{ feature = 'Guided model reconstruction'; originalCommit = 'edf95c6253b53aa45e541e6c0b5e730457dc2e68'; prHead = 'c6bb4fc542ced474843afeb464361f299ea5bd2d' }
+                      @{ feature = 'Guided model reconstruction'; originalCommit = 'edf95c6253b53aa45e541e6c0b5e730457dc2e68'; prHead = '295eb3282b4fa08eb64bb16219482b600e479e9b' }
                       @{ feature = 'Peripheral compression'; originalCommit = 'd7d640ac48553310db01d0a8af6d56e70ffe24c6'; prHead = '513c420770779ded80c77545a27bde68c16a8b6d' }
                       @{ feature = 'Combat pause'; originalCommit = 'e83a0a72bbdb830757b9da03236809c6952c2553'; prHead = 'c3450c81fb50bed0f056d11e403f3c5970ea6b26' }
                       @{ feature = 'Scene selection'; originalCommit = '0a7b11ac2aacbe19bcfc28115548c270adf85088'; prHead = '5161e9a019933317cf3a676a1417240ae6045fb9' }

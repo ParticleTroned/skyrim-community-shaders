@@ -786,6 +786,17 @@ set(FEATURE_PATHS_SLASH ${FEATURE_PATHS})
 list(TRANSFORM FEATURE_PATHS_SLASH APPEND /)
 
 # Install payload for the isolated AIO staging package.
+set(CSX_PROJECT_LICENSE_DESTINATION SKSE/Plugins/CommunityShaders/Licenses)
+set(CSX_PROJECT_LICENSE_FILES
+    "${CMAKE_SOURCE_DIR}/COPYING"
+    "${CMAKE_SOURCE_DIR}/COPYING.LESSER"
+    "${CMAKE_SOURCE_DIR}/EXCEPTIONS.md"
+)
+install(
+    FILES ${CSX_PROJECT_LICENSE_FILES}
+    DESTINATION ${CSX_PROJECT_LICENSE_DESTINATION}
+    COMPONENT SKSE
+)
 install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION SKSE/Plugins COMPONENT SKSE)
 install(
     FILES "${CSX_PROVENANCE_FINAL_MANIFEST}"
@@ -871,6 +882,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         list(FILTER _tmp EXCLUDE REGEX "/Shaders/")
         list(APPEND _AIO_PACKAGE_FILES ${_tmp})
     endforeach()
+    list(APPEND _AIO_PACKAGE_FILES ${CSX_PROJECT_LICENSE_FILES})
 
     # Prepare AIO by copying files only when different. This avoids updating
     # timestamps for unchanged files and prevents downstream incremental
@@ -921,6 +933,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     list(FILTER _AIO_PACKAGE_SOURCE_FILES EXCLUDE REGEX "/Tests/")
     list(FILTER _AIO_PACKAGE_SOURCE_FILES EXCLUDE REGEX "/Shaders/")
     append_copy_if_different(_prepare_aio_cmds _AIO_PACKAGE_SOURCE_FILES "${CMAKE_SOURCE_DIR}/package" "${AIO_DIR}")
+    append_copy_if_different(_prepare_aio_cmds CSX_PROJECT_LICENSE_FILES "${CMAKE_SOURCE_DIR}" "${AIO_DIR}/${CSX_PROJECT_LICENSE_DESTINATION}")
 
     # Copy feature folders (only files, preserve existing files in AIO).
     # Shader files are excluded because copy_shaders.stamp owns Shaders/.
@@ -1372,6 +1385,12 @@ if(ZIP_TO_DIST)
             ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/package
             "${ZIP_DIR}"
         COMMAND
+            ${CMAKE_COMMAND} -E make_directory
+            "${ZIP_DIR}/${CSX_PROJECT_LICENSE_DESTINATION}"
+        COMMAND
+            ${CMAKE_COMMAND} -E copy_if_different ${CSX_PROJECT_LICENSE_FILES}
+            "${ZIP_DIR}/${CSX_PROJECT_LICENSE_DESTINATION}/"
+        COMMAND
             ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${PROJECT_NAME}>
             "${ZIP_DIR}/SKSE/Plugins/"
         COMMAND
@@ -1503,6 +1522,7 @@ file(
 # knows the actual output path of the target at build time)
 list(APPEND CORE_SOURCES "$<TARGET_FILE:${PROJECT_NAME}>")
 list(APPEND CORE_SOURCES "${CSX_PROVENANCE_FINAL_MANIFEST}")
+list(APPEND CORE_SOURCES ${CSX_PROJECT_LICENSE_FILES})
 
 set(CORE_FEATURE_PATHS "${CMAKE_SOURCE_DIR}/package/")
 

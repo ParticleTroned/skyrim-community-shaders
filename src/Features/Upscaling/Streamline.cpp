@@ -14,6 +14,7 @@
 #include <string_view>
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Diagnostics/GpuCrashDiagnostics.h"
 #	include <atomic>
 #	include <cstring>
 #	include <mutex>
@@ -3336,7 +3337,22 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 		UpscalingTelemetry::SaturatingIncrement(attempts);
 	}
 #endif
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	sl::Result evalResult;
+	{
+		uint64_t diagnosticPass = 0;
+		if (CSX::Diagnostics::GpuCrash::IsEnabled()) {
+			char diagnosticLabel[160];
+			snprintf(diagnosticLabel, sizeof(diagnosticLabel), "DLSS::Evaluate eye=%u viewport=%u input=%ux%u output=%ux%u", eyeIndex, static_cast<uint32_t>(vp),
+				extentIn.width, extentIn.height, extentOut.width, extentOut.height);
+			diagnosticPass = CSX::Diagnostics::GpuCrash::BeginPass(diagnosticLabel);
+		}
+		const SKSE::stl::scope_exit finishDiagnostic([&]() noexcept { CSX::Diagnostics::GpuCrash::EndPass(diagnosticPass); });
+		evalResult = slEvaluateFeature(sl::kFeatureDLSS, *frameToken, inputs, _countof(inputs), context);
+	}
+#else
 	sl::Result evalResult = slEvaluateFeature(sl::kFeatureDLSS, *frameToken, inputs, _countof(inputs), context);
+#endif
 	const bool evaluationSucceeded = DLSSResultPolicy::IsEvaluationSuccessful(evalResult);
 	if (evaluationSucceeded) {
 		*cropHistory = UpscalingDLSS::MakeSuccessfulCropHistory(

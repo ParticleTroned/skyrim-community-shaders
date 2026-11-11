@@ -147,6 +147,17 @@ option(
 )
 option(TRACY_SUPPORT "Enable support for tracy profiler" OFF)
 option(NVPERF_SUPPORT "Build developer-only NVIDIA D3D11 hardware counters" OFF)
+option(
+    CSX_GPU_CRASH_LOGGING
+    "Enable GPU crash diagnostics at startup in developer builds"
+    OFF
+)
+if(CSX_GPU_CRASH_LOGGING AND NOT DEVBENCH_BRIDGE)
+    message(
+        FATAL_ERROR
+        "CSX_GPU_CRASH_LOGGING requires DEVBENCH_BRIDGE=ON; crash diagnostics are developer-only"
+    )
+endif()
 set(NVPERF_SDK_ROOT
     ""
     CACHE PATH
@@ -194,6 +205,7 @@ message("\tZip to dist: ${ZIP_TO_DIST}")
 message("\tAIO Zip to dist: ${AIO_ZIP_TO_DIST}")
 message("\tSkip runtime downloads: ${SKIP_RUNTIME_DOWNLOADS}")
 message("\tTracy profiler: ${TRACY_SUPPORT}")
+message("\tGPU crash logging: ${CSX_GPU_CRASH_LOGGING}")
 message("\tShader tests: ${BUILD_SHADER_TESTS}")
 message("\tController tests: ${BUILD_CONTROLLER_TESTS}")
 message(
@@ -271,6 +283,7 @@ add_custom_target(
         "CSX_RELEASE_VERSION=${CSX_RELEASE_VERSION}" --build-option
         "TRACY_SUPPORT=${TRACY_SUPPORT}" --build-option
         "NVPERF_SUPPORT=${NVPERF_SUPPORT}" --build-option
+        "CSX_GPU_CRASH_LOGGING=${CSX_GPU_CRASH_LOGGING}" --build-option
         "ENABLE_SKYRIM_AE=${ENABLE_SKYRIM_AE}" --build-option
         "ENABLE_SKYRIM_SE=${ENABLE_SKYRIM_SE}" --build-option
         "ENABLE_SKYRIM_VR=${ENABLE_SKYRIM_VR}" --build-option
@@ -414,6 +427,14 @@ target_link_libraries(
 if(DEVBENCH_BRIDGE)
     target_link_libraries(${PROJECT_NAME} PRIVATE DevBench::API advapi32)
     target_compile_definitions(${PROJECT_NAME} PRIVATE DEVBENCH_BRIDGE_ENABLED)
+endif()
+if(CSX_GPU_CRASH_LOGGING)
+    set_property(
+        SOURCE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/Diagnostics/GpuCrashDiagnostics.cpp"
+        APPEND
+        PROPERTY COMPILE_DEFINITIONS CSX_GPU_CRASH_LOGGING_BOOT_ENABLED=1
+    )
 endif()
 
 include(NvPerf)
@@ -3382,6 +3403,18 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(
         GrassDrawLifecycle
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+    )
+    add_test(
+        NAME GpuCrashDiagnostics
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/gpu_crash_diagnostics_test.py"
+    )
+    set_tests_properties(
+        GpuCrashDiagnostics
         PROPERTIES
             LABELS "ControllerTests"
             ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"

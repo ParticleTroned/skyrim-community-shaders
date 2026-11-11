@@ -10,6 +10,7 @@
 #include "Features/TextureStreaming.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Diagnostics/EngineStutterMonitor.h"
+#	include "Diagnostics/GpuCrashDiagnostics.h"
 #endif
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -76,6 +77,9 @@
 
 #ifdef TRACY_ENABLE
 static thread_local std::vector<TracyCZoneCtx> s_tracyPerfZones;
+#endif
+#ifdef DEVBENCH_BRIDGE_ENABLED
+static thread_local std::vector<uint64_t> s_gpuCrashPerfZones;
 #endif
 
 namespace
@@ -911,6 +915,9 @@ void State::Reset()
 	std::memset(&permutationDataPrevious, 0xFF, sizeof(PermutationCB));
 	frameCount++;
 	frameCountAtomic.store(frameCount, std::memory_order_relaxed);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	CSX::Diagnostics::GpuCrash::Checkpoint("Frame::Reset");
+#endif
 	UpdateSaveLoadSafeMode();
 	LODBlendRingFix::GetInstance().Update();
 
@@ -2259,6 +2266,10 @@ void State::EndDrawEvent()
 
 void State::BeginPerfEvent(std::string_view title)
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (CSX::Diagnostics::GpuCrash::IsEnabled())
+		s_gpuCrashPerfZones.push_back(CSX::Diagnostics::GpuCrash::BeginPass(title));
+#endif
 #if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
 	NvPerf::PushRange(title);
 #endif
@@ -2282,6 +2293,12 @@ void State::BeginPerfEvent(std::string_view title)
 
 void State::EndPerfEvent()
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (!s_gpuCrashPerfZones.empty()) {
+		CSX::Diagnostics::GpuCrash::EndPass(s_gpuCrashPerfZones.back());
+		s_gpuCrashPerfZones.pop_back();
+	}
+#endif
 #if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
 	NvPerf::PopRange();
 #endif

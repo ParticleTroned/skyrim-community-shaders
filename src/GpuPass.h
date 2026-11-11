@@ -33,6 +33,7 @@ struct ScopedGpuPass
 private:
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	std::optional<CSX::Diagnostics::Stutters::Scope> stutterScope;
+	uint64_t crashDiagnosticPass = 0;
 #endif
 #ifdef TRACY_ENABLE
 	std::optional<tracy::ScopedZone> cpuZone;

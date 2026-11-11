@@ -75,6 +75,7 @@
 #include <cfloat>
 #include <tuple>
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Diagnostics/GpuCrashDiagnostics.h"
 #	include <chrono>
 #endif
 #include <cmath>
@@ -57454,6 +57455,10 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	if (!deviceReportedLoss && !IsD3DDeviceRemovedResult(a_result))
 		return;
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	CSX::Diagnostics::GpuCrash::ReportFailure(loggedResult,
+		a_context && *a_context ? a_context : "submit-stage device loss");
+#endif
 	VRVendorRelatchPolicy::InvalidateStartupNativeFallbackRetry(
 		vrStartupRenderScaleNativeFallbackState);
 	const bool alreadyMarked = submitStageDeviceLost.exchange(true, std::memory_order_acq_rel);

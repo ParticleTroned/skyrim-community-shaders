@@ -34,6 +34,7 @@
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Diagnostics/D3DTextureLifetimeTracker.h"
 #	include "Diagnostics/EngineStutterMonitor.h"
+#	include "Diagnostics/GpuCrashDiagnostics.h"
 #	include "Diagnostics/AssetLoadHooks.h"
 #	include "Features/Upscaling/VRRenderScaleDevBenchBridge.h"
 #endif
@@ -1174,11 +1175,37 @@ namespace WaterBlendHistory
 
 struct IDXGISwapChain_Present
 {
+	static void LogFirstPresentFailure(HRESULT result)
+	{
+		static std::atomic_flag reported = ATOMIC_FLAG_INIT;
+		if (SUCCEEDED(result) || reported.test_and_set(std::memory_order_relaxed))
+			return;
+
+		const auto* state = globals::state;
+		auto* primaryDevice = globals::d3d::device;
+		const HRESULT deviceReason = primaryDevice ? primaryDevice->GetDeviceRemovedReason() : E_POINTER;
+		const auto transition = globals::game::isVR ?
+		                            globals::features::upscaling.GetVRRenderScaleTransitionSnapshot() :
+		                            Upscaling::VRRenderScaleTransitionSnapshot{};
+		logger::info("[Present] First failure HRESULT=0x{:08X} primaryDeviceAvailable={} primaryDeviceRemovedReason=0x{:08X} frame={} transitionState={} targetEpoch={} transitionRevision={}",
+			static_cast<std::uint32_t>(result), primaryDevice != nullptr, static_cast<std::uint32_t>(deviceReason),
+			state ? state->frameCount : 0,
+			globals::game::isVR ? Upscaling::GetVRRenderScaleTransitionStateName(transition.state) : "not-applicable",
+			transition.targetEpoch, transition.revision);
+		// A native device-loss abort can follow before the next periodic log flush.
+		if (auto log = spdlog::default_logger())
+			log->flush();
+	}
+
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
 		// Flat-screen status probes must not draw or advance frame accounting.
-		if (!globals::game::isVR && (Flags & DXGI_PRESENT_TEST) != 0)
-			return func(This, SyncInterval, Flags);
+		if (!globals::game::isVR && (Flags & DXGI_PRESENT_TEST) != 0) {
+			const HRESULT result = func(This, SyncInterval, Flags);
+			if (FAILED(result))
+				LogFirstPresentFailure(result);
+			return result;
+		}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	if defined(NVPERF_ENABLED)
@@ -1227,6 +1254,14 @@ struct IDXGISwapChain_Present
 #endif
 			retval = func(This, SyncInterval, Flags);
 		}
+		if (FAILED(retval))
+			LogFirstPresentFailure(retval);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (FAILED(retval))
+			CSX::Diagnostics::GpuCrash::ReportFailure(retval, "DXGI::Present");
+		else
+			CSX::Diagnostics::GpuCrash::Checkpoint("DXGI::Present returned");
+#endif
 		if (flatPresent)
 			globals::profiler->CompleteFlatPresent(retval);
 		const uint64_t afterPresentTicks = frameDiagActive ? ReadFrameDiagCounterTicks() : 0;
@@ -1729,6 +1764,9 @@ namespace Hooks
 			if (GetModuleHandleW(L"renderdoc.dll"))
 				stl::detour_vfunc<3, ID3D11Device_CreateBuffer>(globals::d3d::device);
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			CSX::Diagnostics::GpuCrash::Initialize(globals::d3d::device, globals::d3d::context);
+#endif
 			globals::InstallD3DHooks(globals::d3d::context);
 			globals::features::reverseZ.InstallRuntimeHooks();
 			CSX::Api::InitializeAcceptedDrawService(globals::d3d::context);
@@ -2174,6 +2212,10 @@ namespace Hooks
 
 	static void DrawFeatureRenderPass(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags, void (*a_draw)(RE::BSRenderPass*, uint32_t, bool, uint32_t))
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (a_pass && a_pass->shader)
+			CSX::Diagnostics::GpuCrash::RecordDraw(a_pass->shader->fxpFilename, a_technique, reinterpret_cast<uintptr_t>(a_pass->geometry));
+#endif
 		auto draw = [&] {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			ProfileGrassRenderPass(a_pass, [&] { globals::features::grassOptimizations.GetRenderer().DrawRenderPass(a_pass, a_technique, a_alphaTest, a_renderFlags, a_draw); });
@@ -2452,6 +2494,10 @@ namespace Hooks
 				if (reverseVolumetricRequired && !vl.AdmitDepthDispatch(replacementSelected, beginsGeneration))
 					return;
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				const auto diagnosticPass = CSX::Diagnostics::GpuCrash::BeginPass(computeName ? computeName : "NativeCompute::Unknown");
+				const SKSE::stl::scope_exit finishDiagnostic([&]() noexcept { CSX::Diagnostics::GpuCrash::EndPass(diagnosticPass); });
+#endif
 				if (profileName) {
 					CS_GPU_PASS_DYNAMIC(profileName);
 					func(renderer, shader, threadGroupCountX, threadGroupCountY, threadGroupCountZ);

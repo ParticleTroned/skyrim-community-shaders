@@ -247,7 +247,7 @@ namespace
 		}
 
 		Pixels DrawFire(ID3D11DeviceContext* context, bool linearLighting, uint32_t paletteFlags, uint32_t sceneFlags,
-			float intensity, float saturation, float curve, const Pixels& colors = fireColors)
+			float intensity, float saturation, float curve, const Pixels& colors = fireColors, uint32_t vertexFlags = 0)
 		{
 			feature->SetMember("SharedData::linearLightingSettings", "enableLinearLighting", uint32_t(linearLighting));
 			feature->SetMember("SharedData::adaptiveBalanceSettings", "fireIntensity", intensity);
@@ -255,6 +255,7 @@ namespace
 			feature->SetMember("SharedData::adaptiveBalanceSettings", "fireCurve", curve);
 			inputs->SetVariable("colors", colors);
 			permutation->SetVariable("Permutation::PixelShaderDescriptor", paletteFlags);
+			permutation->SetVariable("Permutation::VertexShaderDescriptor", vertexFlags);
 			permutation->SetVariable("Permutation::ExtraShaderDescriptor", sceneFlags);
 			return Dispatch(context);
 		}
@@ -1063,6 +1064,8 @@ namespace
 	constexpr uint32_t grayscaleColor = 1u << 19;
 	constexpr uint32_t grayscaleAlpha = 1u << 20;
 	constexpr uint32_t bothPaletteFlags = grayscaleColor | grayscaleAlpha;
+	constexpr uint32_t ignoreTextureAlpha = 1u << 21;
+	constexpr uint32_t skyObject = 1u << 24;
 
 	bool IdenticalRGB(const Pixel& a, const Pixel& b)
 	{
@@ -1166,17 +1169,29 @@ namespace
 		{
 			std::vector<const char*> defines;
 			Detection detection;
+			bool skyGlow = false;
+			bool plainGlow = false;
 		};
 		const std::array cases{
-			FireCase{ { "ADDBLEND", "SOFT" }, Detection::Palette },
+			FireCase{ { "ADDBLEND", "SOFT" }, Detection::Palette, true },
 			FireCase{ { "ADDBLEND", "PARTICLES", "TEXCOORD_INDEX", "INDEXED_TEXTURE" }, Detection::Always },
-			FireCase{ { "ADDBLEND", "SOFT", "PARTICLES", "TEXCOORD_INDEX", "INDEXED_TEXTURE" }, Detection::Palette },
+			FireCase{ { "ADDBLEND", "SOFT", "PARTICLES", "TEXCOORD_INDEX", "INDEXED_TEXTURE" }, Detection::Palette, true },
 			FireCase{ { "SOFT" }, Detection::Never },
 			FireCase{ { "PARTICLES", "TEXCOORD_INDEX", "INDEXED_TEXTURE" }, Detection::Never },
-			FireCase{ { "ADDBLEND", "TEXCOORD_INDEX", "INDEXED_TEXTURE" }, Detection::Never },
-			FireCase{ { "ADDBLEND", "PARTICLES", "INDEXED_TEXTURE" }, Detection::Never },
-			FireCase{ { "ADDBLEND", "PARTICLES", "TEXCOORD_INDEX" }, Detection::Never },
-			FireCase{ { "ADDBLEND" }, Detection::Never },
+			FireCase{ { "ADDBLEND", "TEXCOORD_INDEX", "INDEXED_TEXTURE" }, Detection::Palette, true },
+			FireCase{ { "ADDBLEND", "PARTICLES", "INDEXED_TEXTURE" }, Detection::Palette, true },
+			FireCase{ { "ADDBLEND", "PARTICLES", "TEXCOORD_INDEX" }, Detection::Palette, true },
+			FireCase{ { "ADDBLEND" }, Detection::Palette, true },
+			FireCase{ { "ADDBLEND", "TEXTURE" }, Detection::Palette, true },
+			FireCase{ { "ADDBLEND", "SOFT", "TEXTURE" }, Detection::Palette, true, true },
+			FireCase{ { "ADDBLEND", "SOFT", "TEXTURE", "LIGHTING" }, Detection::Never },
+			FireCase{ { "ADDBLEND", "SOFT", "TEXTURE", "MEMBRANE" }, Detection::Never },
+			FireCase{ { "ADDBLEND", "SOFT", "TEXTURE", "BLOOD" }, Detection::Never },
+			FireCase{ { "ADDBLEND", "SOFT", "TEXTURE", "PROJECTED_UV" }, Detection::Never },
+			FireCase{ { "ADDBLEND", "PARTICLES", "TEXCOORD_INDEX", "INDEXED_TEXTURE", "LIGHTING" }, Detection::Never },
+			FireCase{ { "ADDBLEND", "PARTICLES", "TEXCOORD_INDEX", "INDEXED_TEXTURE", "MEMBRANE" }, Detection::Never },
+			FireCase{ { "ADDBLEND", "PARTICLES", "TEXCOORD_INDEX", "INDEXED_TEXTURE", "BLOOD" }, Detection::Never },
+			FireCase{ { "ADDBLEND", "PARTICLES", "TEXCOORD_INDEX", "INDEXED_TEXTURE", "PROJECTED_UV" }, Detection::Never },
 			FireCase{ { "ADDBLEND", "SOFT", "MOTIONVECTORS_NORMALS" }, Detection::Never },
 			FireCase{ { "ADDBLEND", "PARTICLES", "TEXCOORD_INDEX", "INDEXED_TEXTURE", "MOTIONVECTORS_NORMALS" }, Detection::Never },
 			FireCase{ {}, Detection::Never }
@@ -1186,13 +1201,14 @@ namespace
 			const auto& test = cases[index];
 			Fixture fixture(device, vr, ShaderMode::Fire, test.defines);
 			for (bool linearLighting : { false, true }) {
-				for (uint32_t palette : { 0u, grayscaleColor, grayscaleAlpha, bothPaletteFlags }) {
+				for (uint32_t palette : { 0u, grayscaleColor, grayscaleAlpha, bothPaletteFlags, ignoreTextureAlpha }) {
 					const bool fire = test.detection == Detection::Always || (test.detection == Detection::Palette && palette == bothPaletteFlags);
+					const bool glow = test.plainGlow && palette == 0;
 					for (uint32_t scene : { 0u, 1u, 2u }) {
 						const auto result = fixture.DrawFire(context, linearLighting, palette, scene, 2, 0.5f, 2);
 						try {
 							for (size_t i = 0; i < fireColors.size(); ++i) {
-								Require(result[i][3] == 2.0f + 8.0f * fire + 16.0f * (scene != 0), "Fire detector or scene scope disagrees with the truth table");
+								Require(result[i][3] == 2.0f + 8.0f * fire + 16.0f * (scene != 0) + 32.0f * glow, "Effect classification or scene scope disagrees with the truth table");
 								if (!fire || scene == 0)
 									Require(IdenticalRGB(result[i], fireColors[i]), "Fire controls changed a non-fire or out-of-world draw");
 							}
@@ -1207,6 +1223,14 @@ namespace
 						checkedSamples += unsigned(fireColors.size());
 					}
 				}
+			}
+			for (uint32_t palette : { 0u, grayscaleColor, grayscaleAlpha, bothPaletteFlags, ignoreTextureAlpha }) {
+				const bool fire = test.detection == Detection::Always || (test.detection == Detection::Palette && palette == bothPaletteFlags);
+				const bool glow = test.skyGlow && !fire;
+				const auto result = fixture.DrawFire(context, false, palette, 1, 2, 0.5f, 2, fireColors, skyObject);
+				for (const auto& pixel : result)
+					Require(pixel[3] == 18.0f + 8.0f * fire + 32.0f * glow, "Sky glow classification or fire precedence disagrees with the truth table");
+				checkedSamples += unsigned(fireColors.size());
 			}
 			if (index < 2)
 				checkedSamples += VerifyFireControls(fixture, context);

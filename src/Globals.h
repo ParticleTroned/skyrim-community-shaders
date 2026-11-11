@@ -49,7 +49,6 @@ class Profiler;
 struct CSEditor;
 struct CSUtility;
 struct Wind;
-struct FeatureOverwrites;
 #if defined(ENABLE_EFFECTS11)
 struct Effects11;
 #endif
@@ -58,6 +57,7 @@ struct HDRDisplay;
 struct PostProcessing;
 struct ScreenshotFeature;
 struct SnowCover;
+struct SnowDeformation;
 struct Skin;
 struct SceneManager;
 struct ReverseZ;
@@ -65,6 +65,7 @@ struct ReverseZ;
 class State;
 class Deferred;
 struct TruePBR;
+struct DeveloperTools;
 class RenderDoc;
 class RemoteControl;
 class Menu;
@@ -155,16 +156,18 @@ namespace globals
 #if defined(ENABLE_EFFECTS11)
 		extern Effects11 effects11;
 #endif
+		extern DeveloperTools developerTools;
+		// Developer Tools components, not features: driven by developerTools.
 		extern RenderDoc renderDoc;
 		extern RemoteControl remoteControl;
 		extern ScreenshotFeature screenshotFeature;
 		extern CSEditor csEditor;
 		extern CSUtility csUtility;
 		extern Wind wind;
-		extern FeatureOverwrites featureOverwrites;
 		extern ExponentialHeightFog exponentialHeightFog;
 		extern TruePBR truePBR;
 		extern SnowCover snowCover;
+		extern SnowDeformation snowDeformation;
 		extern Skin skin;
 		extern ReverseZ reverseZ;
 		extern PostProcessing postProcessing;

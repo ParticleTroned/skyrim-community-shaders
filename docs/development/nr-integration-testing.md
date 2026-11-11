@@ -2,7 +2,7 @@
 
 This branch combines the four independent Neural Rendering changes for testing
 against Open Shaders `dev` at
-`a975fd4091d6c468f9073c7ae648ec5996676dff`. It includes the complete feature code
+`72441aa923f4f582449c4b06ab4190a6fd894d70`. It includes the complete feature code
 and the merge resolutions needed to use the features together. Keep the
 upstream PRs in draft until runtime testing is complete.
 
@@ -17,14 +17,15 @@ target `alandtse/open-shaders:dev`.
 
 The integration merges these branch heads in the same order as their upstream
 PRs were opened. Each feature branch independently incorporates the upstream
-`dev` commit above; the PRs are not stacked on each other.
+`dev` commit above; the PRs are not stacked on each other. The November 11
+rebase preserves the earlier implementation and follow-up fixes in each PR.
 
 | Order | Implementation                                                                                 | Feature branch                                                                                                                         | Included head                              |
 | ----- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| 1     | [RGB-guided reconstruction (#1053)](https://github.com/alandtse/open-shaders/pull/1053)        | [Guided reconstruction](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-guided-reconstruction-20261031)   | `3038a54688b37542d26fb8ff00561b2af7b0ed16` |
-| 2     | [Peripheral compression (#1054)](https://github.com/alandtse/open-shaders/pull/1054)           | [Peripheral compression](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-peripheral-compression-20261031) | `95f1a62463d8cb19277fc5e0e271712d2dc0137d` |
-| 3     | [Pause NR during combat (#1055)](https://github.com/alandtse/open-shaders/pull/1055)           | [Combat pause](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-combat-pause-20261031)                     | `545ca0a3631b51972d78f35ba58ba8cbd53b900a` |
-| 4     | [Reduced-model material selection (#1056)](https://github.com/alandtse/open-shaders/pull/1056) | [Scene selection](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-scene-selection-20261031)               | `c4dd3bd5294f35348d0f42eba4cd0f0ecb4d5f71` |
+| 1     | [RGB-guided reconstruction (#1053)](https://github.com/alandtse/open-shaders/pull/1053)        | [Guided reconstruction](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-guided-reconstruction-20261031)   | `c6bb4fc542ced474843afeb464361f299ea5bd2d` |
+| 2     | [Peripheral compression (#1054)](https://github.com/alandtse/open-shaders/pull/1054)           | [Peripheral compression](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-peripheral-compression-20261031) | `513c420770779ded80c77545a27bde68c16a8b6d` |
+| 3     | [Pause NR during combat (#1055)](https://github.com/alandtse/open-shaders/pull/1055)           | [Combat pause](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-combat-pause-20261031)                     | `c3450c81fb50bed0f056d11e403f3c5970ea6b26` |
+| 4     | [Reduced-model material selection (#1056)](https://github.com/alandtse/open-shaders/pull/1056) | [Scene selection](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-scene-selection-20261031)               | `422c87c05296a4f76e9b63a2cb9dfad979466ae8` |
 
 The refresh uses `main-VR` at
 `75799ca034562ea124b9aa19e94e531a639a9ec3` as its source baseline. It brings
@@ -47,6 +48,9 @@ feature PR:
     crop; the optional mode is frozen before that crop is planned.
 -   Material strengths apply in source coordinates after reconstruction, including
     compression-only grids. Native full-size models keep provider protection.
+-   Current-dev colour-strength and ordinary crop-motion compensation remain in
+    place. Compressed crops keep strict history resets because the upstream
+    motion compensation does not apply to reduced model inputs.
 
 The original rectangular NR coverage, source-space feather and final foveated
 upscaler fill/blend remain in use. Follow Foveation uses the current per-eye
@@ -72,7 +76,7 @@ the original source pixel and alpha.
 4. Supply your NR runtime locally at
    `Data/Shaders/Upscaling/Streamline/nvngx_dlssnr.dll`, using a validated build
    accepted by the existing NR runtime checks. See the
-   [upstream NR guide](https://github.com/alandtse/open-shaders/blob/a975fd4091d6c468f9073c7ae648ec5996676dff/docs/development/neural-rendering.md#enable)
+   [upstream NR guide](https://github.com/alandtse/open-shaders/blob/72441aa923f4f582449c4b06ab4190a6fd894d70/docs/development/neural-rendering.md#enable)
    for version requirements.
 5. Enable Neural Rendering in the Upscaling panel. Enable Developer Mode for
    Model Scale, compression and reconstruction controls. Start with a normal
@@ -140,19 +144,22 @@ compositor.
 
 ## Evidence and remaining validation
 
-Focused local checks passed for the refreshed implementations:
+Focused local checks passed for the November 11 rebase:
 
--   61 production-header Catch2 policy and interaction cases passed, with
-    3,977,437 assertions covering actual-grid RGB admission, density/alignment
-    fallback, combat recovery and material provider/compositor behavior.
--   39 actual shader-test entry points compiled under strict flags, including finite
+-   Production-header Catch2 checks passed independently for all four PRs,
+    covering actual-grid RGB admission, density/alignment fallback, combat
+    recovery and material provider/compositor behavior.
+-   The combined portable Catch2 suites passed 61 cases and 3,977,443 assertions.
+    The ROI and runtime-decision suites require the Windows SDK and run in the
+    integration workflow's C++ test job.
+-   19 combined shader-test entry points compiled under strict flags, including finite
     half-float output, shared subcell coverage and forward/reverse-Z donor
     selection, with the pinned ShaderTestFramework.
 -   32 LowRes and four CategoryAlpha permutations compiled with Linux DXC,
     covering reconstruction, compression, flat/VR and forward/reverse depth.
 -   Translation synchronization/orphan checks, formatting and diff checks, plus
-    compatibility review of upstream scene settings, runtime capabilities and
-    current rectangular gaze/FOV behavior.
+    compatibility review of upstream colour strength, crop-motion compensation,
+    runtime capabilities and current rectangular gaze/FOV behavior.
 
 The Linux DXC checks are preliminary Shader Model 6 compilation checks without
 GPU execution. LowRes checks omit `COMPUTESHADER` because of the existing

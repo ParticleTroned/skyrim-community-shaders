@@ -210,6 +210,9 @@ struct NeuralRendering::Impl
 	struct Eye
 	{
 		std::unique_ptr<WrappedResource> color, depth, motion, output;
+		/** @brief The eye's motion shifted by the crop's move since the model last ran; the game's motion stays untouched for the gain reuse. */
+		std::unique_ptr<WrappedResource> cropMotion;
+		bool cropMotionActive = false;
 		/** @brief The model's own inputs and output at the reduced model size; created only while the model runs below the eye size. */
 		std::unique_ptr<WrappedResource> lowColor, lowDepth, lowMotion, lowOutput;
 		/** @brief DLSSNR.UIAlpha built from the Masks2 category lane; created only while the material strength is on. */
@@ -225,7 +228,7 @@ struct NeuralRendering::Impl
 	winrt::com_ptr<ID3D11DeviceContext1> context;
 	winrt::com_ptr<ID3DDeviceContextState> isolated;
 	winrt::com_ptr<ID3D11SamplerState> linearSampler;
-	Util::LazyShader<ID3D11ComputeShader> prepareColor, prepareToneData, compositeColor, materialAlphaShader, storeGain, reuseGain, downsampleLow, expandLow;
+	Util::LazyShader<ID3D11ComputeShader> prepareColor, prepareToneData, compositeColor, materialAlphaShader, storeGain, reuseGain, downsampleLow, expandLow, offsetMotion;
 	std::array<Util::LazyShader<ID3D11ComputeShader>, 2> expandRgb;
 	NR::Reconstruction::Mode reconstructionMode = NR::Reconstruction::Mode::Native;
 	bool reconstructionFallback = false;
@@ -254,13 +257,15 @@ struct NeuralRendering::Impl
 		uint32_t regionOverlayEnabled = 0;
 		float regionOutlineThickness = kRegionOutlineThicknessPixels;
 		uint32_t regionActorBaseX = 0, regionActorBaseY = 0, regionActorWidth = 0, regionActorHeight = 0;
-		uint32_t materialSelectionEnabled = 0, materialEdgeSoftness = 0;
+		float colorStrength = 0.0f;
+		uint32_t materialSelectionEnabled = 0;
 		// Per-category tone multipliers, Skin..Landscape in .x; the 16-byte rows mirror
 		// ColorTransferCS.hlsl's float4 CategoryStrength[5].
 		float4 categoryStrength[5]{};
 		uint32_t materialMapEnabled = 0, materialMapMode = 0, materialMapFilter = 0, materialMapStrengthBound = 0;
 		float4 materialStrengthsA{};
 		float4 materialStrengthsB{};
+		uint32_t materialEdgeSoftness = 0;
 	};
 	static_assert(offsetof(ColorTransferData, dynamicRangeProtect) == 64);
 	static_assert(offsetof(ColorTransferData, toneLowStrength) == 80);
@@ -272,14 +277,15 @@ struct NeuralRendering::Impl
 	static_assert(offsetof(ColorTransferData, regionOutlineThickness) == 116);
 	static_assert(offsetof(ColorTransferData, regionActorBaseX) == 120);
 	static_assert(offsetof(ColorTransferData, regionActorHeight) == 132);
-	static_assert(offsetof(ColorTransferData, materialSelectionEnabled) == 136);
-	static_assert(offsetof(ColorTransferData, materialEdgeSoftness) == 140);
+	static_assert(offsetof(ColorTransferData, colorStrength) == 136);
+	static_assert(offsetof(ColorTransferData, materialSelectionEnabled) == 140);
 	static_assert(offsetof(ColorTransferData, categoryStrength) == 144);
 	static_assert(offsetof(ColorTransferData, materialMapEnabled) == 224);
 	static_assert(offsetof(ColorTransferData, materialMapStrengthBound) == 236);
 	static_assert(offsetof(ColorTransferData, materialStrengthsA) == 240);
 	static_assert(offsetof(ColorTransferData, materialStrengthsB) == 256);
-	static_assert(sizeof(ColorTransferData) == 272);
+	static_assert(offsetof(ColorTransferData, materialEdgeSoftness) == 272);
+	static_assert(sizeof(ColorTransferData) == 288);
 	// ModeValues.hlsli carries these numbers for ColorTransferCS.hlsl's tint.
 	static_assert(static_cast<uint32_t>(NR::MaterialMap::Mode::kCategory) == 0);
 	static_assert(static_cast<uint32_t>(NR::MaterialMap::Mode::kStrength) == 1);
@@ -309,6 +315,16 @@ struct NeuralRendering::Impl
 	};
 	static_assert(sizeof(LowResData) == 32);
 	std::unique_ptr<ConstantBuffer> lowResBuffer;
+	/** @brief Cbuffer MotionOffsetCS.hlsl reads. */
+	struct alignas(16) MotionOffsetData
+	{
+		uint32_t width, height;
+		float shiftX, shiftY;
+	};
+	static_assert(sizeof(MotionOffsetData) == 16);
+	std::unique_ptr<ConstantBuffer> motionOffsetBuffer;
+	/** @brief Crop each eye's model last evaluated with; empty until it has, and while no crop applies. */
+	std::array<Util::Subrect::PixelRegion, 2> modelCrop{};
 	struct alignas(16) PeripheralData
 	{
 		NR::PeripheralMapping mapping;
@@ -385,6 +401,8 @@ struct NeuralRendering::Impl
 	float manualExposure = 1.0f, differenceStrength = 1.0f, splitPosition = 0.5f;
 	float shadowProtect = 0.0f, highlightProtect = 0.0f;
 	float toneLowStrength = 1.0f, toneRadius = 1.0f, toneHighStrength = 1.0f;
+	/** @brief Share of the model's colour shift the composite applies, from the tuning. */
+	float colorStrength = 0.0f;
 	/** @brief Per-category tone multipliers from the tuning, consumed by TransferColor's cbuffer. */
 	std::array<float, 5> categoryToneStrength{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
 	bool useResolutionMotionScale = true;
@@ -437,6 +455,7 @@ struct NeuralRendering::Impl
 		categoryAlphaBuffer = std::make_unique<ConstantBuffer>(ConstantBufferDesc<CategoryAlphaData>(), "NeuralRendering::CategoryAlpha CB");
 		gainReuseBuffer = std::make_unique<ConstantBuffer>(ConstantBufferDesc<GainReuseData>(), "NeuralRendering::GainReuse CB");
 		lowResBuffer = std::make_unique<ConstantBuffer>(ConstantBufferDesc<LowResData>(), "NeuralRendering::LowRes CB");
+		motionOffsetBuffer = std::make_unique<ConstantBuffer>(ConstantBufferDesc<MotionOffsetData>(), "NeuralRendering::MotionOffset CB");
 		runtime.Initialize(interop.Device(), RuntimeDirectory(runtimeVariant), globals::state->IsDeveloperMode(), allowUnverifiedRuntime);
 		ready = true;
 	}
@@ -460,6 +479,7 @@ struct NeuralRendering::Impl
 		format = DXGI_FORMAT_UNKNOWN;
 		lastFrame = UINT32_MAX;
 		lastRegion = {};
+		modelCrop = {};
 		cadence = {};
 		reuseFrame = {};
 		staggerActive = false;
@@ -546,6 +566,7 @@ struct NeuralRendering::Impl
 			eye.color = interop.CreateTexture(w, h, DXGI_FORMAT_R16G16B16A16_FLOAT, name + " HDRInput");
 			eye.depth = interop.CreateTexture(gw, gh, DXGI_FORMAT_R32_FLOAT, name + " Depth");
 			eye.motion = interop.CreateTexture(gw, gh, DXGI_FORMAT_R16G16_FLOAT, name + " Motion");
+			eye.cropMotion = interop.CreateTexture(gw, gh, DXGI_FORMAT_R16G16_FLOAT, name + " CropMotion");
 			eye.output = interop.CreateTexture(w, h, DXGI_FORMAT_R16G16B16A16_FLOAT, name + " HDROutput");
 			if (lw) {
 				eye.lowColor = interop.CreateTexture(lw, lh, DXGI_FORMAT_R16G16B16A16_FLOAT, name + " LowHDRInput");
@@ -619,7 +640,8 @@ struct NeuralRendering::Impl
 
 	void Transition(ID3D12GraphicsCommandList* commands, Eye& eye, bool enter, bool low = false)
 	{
-		TransitionResources(commands, { (low ? eye.lowColor : eye.color)->resource.get(), (low ? eye.lowDepth : eye.depth)->resource.get(), (low ? eye.lowMotion : eye.motion)->resource.get(), (low ? eye.lowOutput : eye.output)->resource.get(), eye.materialAlpha ? eye.materialAlpha->resource.get() : nullptr },
+		const auto& motion = low ? eye.lowMotion : (eye.cropMotionActive ? eye.cropMotion : eye.motion);
+		TransitionResources(commands, { (low ? eye.lowColor : eye.color)->resource.get(), (low ? eye.lowDepth : eye.depth)->resource.get(), motion->resource.get(), (low ? eye.lowOutput : eye.output)->resource.get(), eye.materialAlpha ? eye.materialAlpha->resource.get() : nullptr },
 			enter);
 	}
 
@@ -711,7 +733,7 @@ struct NeuralRendering::Impl
 		srv.Texture2D.MipLevels = 1;
 		D3D11_UNORDERED_ACCESS_VIEW_DESC uav{};
 		uav.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-		desc.Format = srv.Format = uav.Format = DXGI_FORMAT_R16G16_FLOAT;
+		desc.Format = srv.Format = uav.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 		eye.gainHistory = std::make_unique<Texture2D>(desc, std::format("NeuralRendering::Eye{} GainHistory", i).c_str());
 		eye.gainHistory->CreateSRV(srv);
 		eye.gainHistory->CreateUAV(uav);
@@ -740,6 +762,7 @@ struct NeuralRendering::Impl
 	{
 		ColorTransferData data{ width, height, i * width };
 		SetRegion(data, i);
+		data.colorStrength = colorStrength;
 		colorBuffer->Update(data);
 		GainReuseData reuse{ Util::GetCameraData(), globals::features::reverseZ.IsActive() ? 1u : 0u, crossEye ? 1u : 0u };
 		if (crossEye) {
@@ -798,6 +821,46 @@ struct NeuralRendering::Impl
 		context->CSSetShader(shader, nullptr, 0);
 		context->Dispatch((width + 7) / 8, (height + 7) / 8, 1);
 		context->ClearState();
+	}
+
+	/**
+	 * @brief Writes the eye's motion plus the crop's origin move since the model last ran, so the model's crop-local
+	 *        history follows the scene when the crop moves. NGX motion points from the current to the previous
+	 *        position, so the shift is the current origin minus the previous one, in the units the model reads.
+	 */
+	void ApplyCropMotion(uint32_t i, const NR::Tuning& tuning, uint64_t frameNumber)
+	{
+		auto& eye = eyes[i];
+		eye.cropMotionActive = false;
+		if (!region.active || !eye.cropMotion)
+			return;
+		float shiftX, shiftY;
+		if (!Util::Region::CropOriginShift(Util::Region::ClampToFrame(region.eye[i], width, height), modelCrop[i], shiftX, shiftY) ||
+			(shiftX == 0.0f && shiftY == 0.0f))
+			return;
+		float scaleX = useResolutionMotionScale ? static_cast<float>(width) : 1.0f;
+		float scaleY = useResolutionMotionScale ? static_cast<float>(height) : 1.0f;
+		const uint64_t previous = cadence.lastModelFrame[i];
+		if (previous != NR::Cadence::kNoModelFrame && frameNumber - previous > 1 && tuning.skipFrameGapMode == 0) {
+			scaleX *= 2.0f;
+			scaleY *= 2.0f;
+		}
+		CS_GPU_PASS("Upscaling::NRCropMotion");
+		auto* shader = offsetMotion.Get(L"Data/Shaders/Upscaling/NeuralRendering/MotionOffsetCS.hlsl",
+			{}, "cs_5_0", "Offset", "NeuralRendering::MotionOffset CS");
+		if (!shader)
+			throw std::runtime_error("NR motion-offset shader unavailable");
+		motionOffsetBuffer->Update(MotionOffsetData{ guideWidth, guideHeight, shiftX / scaleX, shiftY / scaleY });
+		auto buffer = motionOffsetBuffer->CB();
+		context->CSSetConstantBuffers(0, 1, &buffer);
+		ID3D11ShaderResourceView* input = eye.motion->srv;
+		context->CSSetShaderResources(0, 1, &input);
+		ID3D11UnorderedAccessView* output = eye.cropMotion->uav;
+		context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
+		context->CSSetShader(shader, nullptr, 0);
+		context->Dispatch((guideWidth + 7) / 8, (guideHeight + 7) / 8, 1);
+		context->ClearState();
+		eye.cropMotionActive = true;
 	}
 
 	/** @brief Preflights optional sampling resources before selecting the compressed model size. */
@@ -1059,6 +1122,7 @@ struct NeuralRendering::Impl
 		data.toneLowStrength = toneLowStrength;
 		data.toneRadius = toneRadius;
 		data.toneHighStrength = toneHighStrength;
+		data.colorStrength = colorStrength;
 		for (size_t category = 0; category < categoryToneStrength.size(); ++category)
 			data.categoryStrength[category].x = categoryToneStrength[category];
 		data.hasToneData = !prepare && NeedsToneData();
@@ -1311,6 +1375,11 @@ struct NeuralRendering::Impl
 			}
 		}
 		context->ClearState();
+		for (uint32_t i = 0; i < eyeCount; ++i) {
+			eyes[i].cropMotionActive = false;
+			if (!eyes[i].frame.reset && !sbs && !lowRes && !(diagnostic.options & NR::Diagnostics::ZeroMotion))
+				ApplyCropMotion(i, tuning, static_cast<uint64_t>(diagnostic.number));
+		}
 		if (lowRes) {
 			for (uint32_t i = 0; i < eyeCount; ++i)
 				DownsampleModelInputs(i);
@@ -1430,7 +1499,7 @@ struct NeuralRendering::Impl
 					};
 					const auto& modelColor = lowRes ? eye.lowColor : eye.color;
 					const auto& modelDepth = lowRes ? eye.lowDepth : eye.depth;
-					const auto& modelMotion = lowRes ? eye.lowMotion : eye.motion;
+					const auto& modelMotion = lowRes ? eye.lowMotion : (eye.cropMotionActive ? eye.cropMotion : eye.motion);
 					const auto& modelOutput = lowRes ? eye.lowOutput : eye.output;
 					success = runtime.Evaluate(eyeCommands, i, modelColor->resource.get(), modelDepth->resource.get(),
 						modelMotion->resource.get(), modelOutput->resource.get(), protection,
@@ -1439,6 +1508,7 @@ struct NeuralRendering::Impl
 				diagnostic.result[i] = eye.frame.result;
 				if (success)
 					diagnostic.evaluated |= 1u << i;
+				modelCrop[i] = success && !sbs && !lowRes ? Util::Region::ClampToFrame(region.eye[i], width, height) : Util::Region::kEmptyRegion;
 				if (eye.frame.created) {
 					diagnostic.created |= 1u << i;
 					diagnostic.reset[i] |= NR::Diagnostics::FeatureCreated;
@@ -1997,7 +2067,7 @@ namespace
 				const auto mode = static_cast<NR::EyeMode>(i);
 				const bool experimental = mode == NR::EyeMode::kSideBySide;
 				ImGui::BeginDisabled(experimental && !developerMode);
-				if (ImGui::Selectable(labels[i], mode == current)) {
+				if (Util::RoundedSelectable(labels[i], mode == current)) {
 					NR::SetEyeMode(tuning, mode);
 					changed = true;
 				}
@@ -2251,7 +2321,7 @@ void NeuralRendering::DrawSettings(bool& enabled, NR::Context::Profiles& context
 		}
 		if (ImGui::BeginCombo(T(TKEY("runtime_variant"), "Runtime Build"), RuntimeBuildLabel(builds[selected]).c_str())) {
 			for (size_t i = 0; i < builds.size(); ++i) {
-				if (ImGui::Selectable(RuntimeBuildLabel(builds[i]).c_str(), i == selected) && i != selected) {
+				if (Util::RoundedSelectable(RuntimeBuildLabel(builds[i]).c_str(), i == selected) && i != selected) {
 					tuning.runtimeVariant = builds[i].variant;
 					changed = true;
 					resetHistory = true;
@@ -2341,11 +2411,15 @@ void NeuralRendering::DrawSettings(bool& enabled, NR::Context::Profiles& context
 	changed |= ImGui::SliderFloat(T(TKEY("skin_structure"), "Skin Structure Strength"), &tuning.skinStructureStrength, NR::Tuning::kAutomaticSkinStructure, NR::Tuning::kMaxStrength,
 		tuning.skinStructureStrength == NR::Tuning::kAutomaticSkinStructure ? T(TKEY("skin_auto"), "Auto") : "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	recreateTuning |= ImGui::IsItemDeactivatedAfterEdit();
+	changed |= ImGui::SliderFloat(T(TKEY("color_strength"), "Colour Strength"), &tuning.colorStrength, NR::Tuning::kMinColorStrength, NR::Tuning::kMaxColorStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted(T(TKEY("color_strength_tooltip"),
+			"How much of Neural Rendering's colour shift is applied on top of its brightness edit. 0 keeps the game's own colours; 1 takes the model's shift in full. Also scaled by the Category Tone Strengths. High values can tint skin and flicker."));
 	if (ImGui::CollapsingHeader(T(TKEY("category_tone"), "Category Tone Strengths"))) {
 		ImGui::PushID("categoryTone");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted(T(TKEY("category_tone_tooltip"),
-				"Scales Neural Rendering's tone edit per material: 0 leaves a material's brightness untouched, 1 is the normal edit, and 2 doubles it. Materials the deferred buffer does not label are unaffected."));
+				"Scales Neural Rendering's tone edit and colour shift per material: 0 leaves a material's brightness and colour untouched, 1 is the normal edit, and 2 doubles the tone edit. Materials the deferred buffer does not label are unaffected."));
 		changed |= ImGui::SliderFloat(T(TKEY("category_skin"), "Skin"), &tuning.skinToneStrength, NR::Tuning::kMinStrength, NR::Tuning::kMaxStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		changed |= ImGui::SliderFloat(T(TKEY("category_hair"), "Hair"), &tuning.hairToneStrength, NR::Tuning::kMinStrength, NR::Tuning::kMaxStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		changed |= ImGui::SliderFloat(T(TKEY("category_eyes"), "Eyes"), &tuning.eyeToneStrength, NR::Tuning::kMinStrength, NR::Tuning::kMaxStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp);
@@ -2357,15 +2431,15 @@ void NeuralRendering::DrawSettings(bool& enabled, NR::Context::Profiles& context
 	const bool cropDisabled = !tuning.regionOfInterest;
 	if (DrawContextProfiles(contexts, cropDisabled))
 		resetHistory = true;
-	if (ImGui::Button(T(TKEY("restore_defaults"), "Restore NR Defaults"))) {
+	if (Util::Button(T(TKEY("restore_defaults"), "Restore NR Defaults"))) {
 		tuning = {};
 		contexts = {};
 		changed = recreateTuning = true;
 	}
 	ImGui::SameLine();
-	if (ImGui::Button(T(TKEY("reset_history"), "Reset NR History")))
+	if (Util::Button(T(TKEY("reset_history"), "Reset NR History")))
 		resetHistory = true;
-	if (enabled && ImGui::Button(T(TKEY("retry"), "Retry NR")))
+	if (enabled && Util::Button(T(TKEY("retry"), "Retry NR")))
 		RequestRetry();
 	if (globals::state->IsDeveloperMode() && ImGui::TreeNodeEx(T(TKEY("developer"), "Developer"), ImGuiTreeNodeFlags_None)) {
 		ImGui::SeparatorText(T(TKEY("developer_model"), "Model input"));
@@ -2390,7 +2464,7 @@ void NeuralRendering::DrawSettings(bool& enabled, NR::Context::Profiles& context
 				"How much margin the crop keeps around the tracked character. Padded keeps the normal margin; Tight evaluates the character's own outline with no margin, for checking what the crop covers."));
 		ImGui::EndDisabled();
 		// The sweep forces its own centred crops, so it stays usable without a tracked actor.
-		if (ImGui::Button(T(TKEY("crop_calibrate"), "Calibrate Crop Cost")))
+		if (Util::Button(T(TKEY("crop_calibrate"), "Calibrate Crop Cost")))
 			RequestCalibration();
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted(T(TKEY("crop_calibrate_tooltip"),
@@ -2781,7 +2855,8 @@ void NeuralRendering::DrawBeforeUpscaling(bool enabled, const NR::Context::Profi
 		else if (foveaClip)
 			source = RegionSource::kFovea;
 		regionSource.store(static_cast<uint32_t>(source), std::memory_order_relaxed);
-		if (Util::Region::ShouldResetForRegion(NR::ActorRegion::kResetPolicy, work.region, work.lastRegion, NR::ActorRegion::kHistoryTolerancePixels))
+		const auto regionPolicy = work.sbsEnabled || work.peripheralPlan.Active() ? NR::ActorRegion::kResetPolicy : NR::ActorRegion::kCompensatedResetPolicy;
+		if (Util::Region::ShouldResetForRegion(regionPolicy, work.region, work.lastRegion, NR::ActorRegion::kHistoryTolerancePixels))
 			reset |= NR::Diagnostics::RegionChanged;
 		work.lastRegion = work.region;
 		if (diagnostic.options & NR::Diagnostics::DisableTone)
@@ -2792,6 +2867,7 @@ void NeuralRendering::DrawBeforeUpscaling(bool enabled, const NR::Context::Profi
 			boundedTuning.skinStructureStrength = NR::Tuning::kAutomaticSkinStructure;
 		work.toneLowStrength = boundedTuning.localToneStrength;
 		work.toneHighStrength = boundedTuning.localStructureStrength;
+		work.colorStrength = boundedTuning.colorStrength;
 		work.categoryToneStrength = { boundedTuning.skinToneStrength, boundedTuning.hairToneStrength,
 			boundedTuning.eyeToneStrength, boundedTuning.foliageToneStrength, boundedTuning.landscapeToneStrength };
 		work.regionOverlay = boundedTuning.regionOverlay;

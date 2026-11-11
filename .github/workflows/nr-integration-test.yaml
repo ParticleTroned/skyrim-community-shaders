@@ -137,6 +137,9 @@ jobs:
                     'Shaders/Upscaling/NeuralRendering/CategoryAlphaCS.hlsl'
                     'Shaders/Upscaling/NeuralRendering/ColorTransferCS.hlsl'
                     'Shaders/Upscaling/NeuralRendering/ColorTransfer.hlsli'
+                    'Shaders/Upscaling/NeuralRendering/ColorContract.hlsli'
+                    'Shaders/Upscaling/NeuralRendering/MotionOffsetCS.hlsl'
+                    'Shaders/Upscaling/NeuralRendering/GainReuseCS.hlsl'
                     'Shaders/Common/NeuralRenderingFinite.hlsli'
                     'Shaders/Common/NeuralRenderingReconstruction.hlsli'
                     'Shaders/Common/NeuralRenderingPeripheral.hlsli'
@@ -173,17 +176,17 @@ jobs:
                   $manifest = [ordered]@{
                     repository = $env:INTEGRATION_REPOSITORY
                     integrationCommit = $env:INTEGRATION_SHA
-                    upstreamDevCommit = 'a975fd4091d6c468f9073c7ae648ec5996676dff'
+                    upstreamDevCommit = '72441aa923f4f582449c4b06ab4190a6fd894d70'
                     sourceMainVrCommit = '75799ca034562ea124b9aa19e94e531a639a9ec3'
                     workflowRun = "https://github.com/$env:INTEGRATION_REPOSITORY/actions/runs/$env:INTEGRATION_RUN_ID"
                     preset = 'ALL'
                     runtimes = @('SE', 'AE', 'VR')
                     devBenchBridge = $true
                     changesInOrder = @(
-                      @{ feature = 'Guided model reconstruction'; originalCommit = 'edf95c6253b53aa45e541e6c0b5e730457dc2e68'; prHead = '3038a54688b37542d26fb8ff00561b2af7b0ed16' }
-                      @{ feature = 'Peripheral compression'; originalCommit = 'd7d640ac48553310db01d0a8af6d56e70ffe24c6'; prHead = '95f1a62463d8cb19277fc5e0e271712d2dc0137d' }
-                      @{ feature = 'Combat pause'; originalCommit = 'e83a0a72bbdb830757b9da03236809c6952c2553'; prHead = '545ca0a3631b51972d78f35ba58ba8cbd53b900a' }
-                      @{ feature = 'Scene selection'; originalCommit = '0a7b11ac2aacbe19bcfc28115548c270adf85088'; prHead = 'c4dd3bd5294f35348d0f42eba4cd0f0ecb4d5f71' }
+                      @{ feature = 'Guided model reconstruction'; originalCommit = 'edf95c6253b53aa45e541e6c0b5e730457dc2e68'; prHead = 'c6bb4fc542ced474843afeb464361f299ea5bd2d' }
+                      @{ feature = 'Peripheral compression'; originalCommit = 'd7d640ac48553310db01d0a8af6d56e70ffe24c6'; prHead = '513c420770779ded80c77545a27bde68c16a8b6d' }
+                      @{ feature = 'Combat pause'; originalCommit = 'e83a0a72bbdb830757b9da03236809c6952c2553'; prHead = 'c3450c81fb50bed0f056d11e403f3c5970ea6b26' }
+                      @{ feature = 'Scene selection'; originalCommit = '0a7b11ac2aacbe19bcfc28115548c270adf85088'; prHead = '422c87c05296a4f76e9b63a2cb9dfad979466ae8' }
                     )
                     inputAio = $archive.Name
                     inputAioSha256 = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()

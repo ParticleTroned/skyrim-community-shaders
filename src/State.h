@@ -426,6 +426,7 @@ public:
 		       (ui && (ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME)));
 	}
 
+	/** Uploads shared data, retaining water samples only within their frame and eye-0 origin. */
 	void UpdateSharedData(bool a_inWorld, bool a_prepass);
 	void UpdateFeatureData(bool a_inWorld);
 	/**
@@ -607,6 +608,14 @@ public:
 	}
 
 private:
+	/** Uses current world samples or the no-water sentinel for the shared upload. */
+	void UpdateWaterData(SharedDataCB& a_data, bool a_inWorld);
+	// Render-thread samples are camera-relative and cannot outlive their frame or eye-0 origin.
+	decltype(SharedDataCB::WaterData) worldWaterData{};
+	RE::NiPoint3 worldWaterDataOrigin{};
+	uint32_t worldWaterDataFrame = 0;
+	bool worldWaterDataValid = false;
+
 	// Keep event deadlines, render provenance and persistence publication indivisible.
 	mutable std::mutex saveLoadSafeModeMutex;
 	enum class SaveLoadRenderRecoverySource : uint64_t

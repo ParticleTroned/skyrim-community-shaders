@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -2327,6 +2328,34 @@ void State::SetAdapterDescription(const std::wstring& description)
 	adapterDescription = stl::utf16_to_utf8(description).value_or("<GPU name conversion failed>");
 }
 
+void State::UpdateWaterData(SharedDataCB& a_data, bool a_inWorld)
+{
+	const bool hasOrigin = globals::game::shadowState != nullptr;
+	const auto origin = hasOrigin ? Util::GetEyePosition(0) : RE::NiPoint3{};
+	if (a_inWorld) {
+		worldWaterDataValid = false;
+		if (hasOrigin && std::isfinite(origin.x) && std::isfinite(origin.y) && std::isfinite(origin.z)) {
+			for (int i = -2; i <= 2; ++i) {
+				for (int k = -2; k <= 2; ++k) {
+					const int waterTile = (i + 2) + ((k + 2) * 5);
+					worldWaterData[waterTile] = Util::TryGetWaterData(static_cast<float>(i) * 4096.0f, static_cast<float>(k) * 4096.0f);
+				}
+			}
+			worldWaterDataOrigin = origin;
+			worldWaterDataFrame = frameCount;
+			worldWaterDataValid = true;
+		}
+	}
+
+	if (hasOrigin && worldWaterDataValid && worldWaterDataFrame == frameCount &&
+		worldWaterDataOrigin.x == origin.x && worldWaterDataOrigin.y == origin.y && worldWaterDataOrigin.z == origin.z) {
+		std::copy(std::begin(worldWaterData), std::end(worldWaterData), a_data.WaterData);
+	} else {
+		// Zero is a valid eye-height water plane, so unavailable samples must use the sentinel.
+		std::fill(std::begin(a_data.WaterData), std::end(a_data.WaterData), float4(1.0f, 1.0f, 1.0f, -std::numeric_limits<float>::max()));
+	}
+}
+
 void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] bool a_prepass)
 {
 	{
@@ -2358,14 +2387,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.FrameCount = frameCount * temporal;
 		data.FrameCountAlwaysActive = frameCount;
 
-		if (a_inWorld) {
-			for (int i = -2; i <= 2; i++) {
-				for (int k = -2; k <= 2; k++) {
-					int waterTile = (i + 2) + ((k + 2) * 5);
-					data.WaterData[waterTile] = Util::TryGetWaterData((float)i * 4096.0f, (float)k * 4096.0f);
-				}
-			}
-		}
+		UpdateWaterData(data, a_inWorld);
 
 		// Fallback water height for the VR analytical mask when tile 12 returns the sentinel.
 		// Uses player->GetWaterHeight() (reads relevantWaterHeight from LOADED_REF_DATA,

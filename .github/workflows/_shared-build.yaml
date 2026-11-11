@@ -71,6 +71,10 @@ on:
                 description: "Optional suffix to invalidate the build cache"
                 type: string
                 default: ""
+            verify-no-nr-runtime:
+                description: "Reject NR runtime DLLs before artifact uploads"
+                type: boolean
+                default: false
             changed-files-json:
                 description: "JSON array of changed paths for incremental shader validation; empty => full validation"
                 type: string
@@ -178,6 +182,11 @@ jobs:
                   } else {
                     Write-Host "CMakeLists.txt version matches tag."
                   }
+
+            - name: Verify dist artifacts contain no NR runtime
+              if: inputs.verify-no-nr-runtime
+              shell: pwsh
+              run: ./tools/verify-no-nr-runtime.ps1 -Path dist
 
             - name: Upload dist artifacts
               if: success() && matrix.compiler.primary
@@ -464,8 +473,14 @@ jobs:
               run: |
                   ctest --test-dir build/ALL -C Release --output-on-failure -R ShaderTests --timeout 300
 
+            - name: Verify failure artifacts contain no NR runtime
+              id: verify-test-artifacts
+              if: failure() && steps.check-hlsl.outputs.skip != 'true' && inputs.verify-no-nr-runtime
+              shell: pwsh
+              run: ./tools/verify-no-nr-runtime.ps1 -Path build/ALL/Testing -AllowMissing
+
             - name: Upload test results on failure
-              if: failure() && steps.check-hlsl.outputs.skip != 'true'
+              if: failure() && steps.check-hlsl.outputs.skip != 'true' && (!inputs.verify-no-nr-runtime || steps.verify-test-artifacts.outcome == 'success')
               uses: actions/upload-artifact@v7
               with:
                   name: shader-test-results
@@ -536,8 +551,14 @@ jobs:
                   python -m pip install --quiet pyyaml
                   python -m unittest discover -s tests -p "test_*.py"
 
+            - name: Verify failure artifacts contain no NR runtime
+              id: verify-test-artifacts
+              if: failure() && steps.check-cpp.outputs.skip != 'true' && inputs.verify-no-nr-runtime
+              shell: pwsh
+              run: ./tools/verify-no-nr-runtime.ps1 -Path build/ALL/Testing -AllowMissing
+
             - name: Upload test results on failure
-              if: failure() && steps.check-cpp.outputs.skip != 'true'
+              if: failure() && steps.check-cpp.outputs.skip != 'true' && (!inputs.verify-no-nr-runtime || steps.verify-test-artifacts.outcome == 'success')
               uses: actions/upload-artifact@v7
               with:
                   name: cpp-test-results

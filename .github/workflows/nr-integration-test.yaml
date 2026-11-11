@@ -1,0 +1,224 @@
+name: NR integration test build
+
+on:
+    push:
+        branches: [build/os-dev-nr-integration-20261031]
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: nr-integration-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    nr-shader-preflight:
+        name: Validate NR supplementary shaders (${{ matrix.runtime }})
+        if: github.repository == 'ParticleTroned/skyrim-community-shaders' && github.ref == 'refs/heads/build/os-dev-nr-integration-20261031'
+        runs-on: windows-2025-vs2026
+        strategy:
+            fail-fast: false
+            matrix:
+                runtime: [SE, VR]
+        steps:
+            - uses: actions/checkout@v6
+              with:
+                  ref: ${{ github.sha }}
+                  persist-credentials: false
+            - uses: actions/setup-python@v6
+              with:
+                  python-version: "3.11"
+            - name: Install shader validation dependency
+              run: python -m pip install git+https://github.com/alandtse/hlslkit.git@d0ed83ab12fc48b9ee03ddf61b21e80bfa5c3778
+            - name: Compile NR requests with production FXC flags
+              shell: python
+              env:
+                  NR_PREFLIGHT_RUNTIME: ${{ matrix.runtime }}
+              run: |
+                  import importlib.util
+                  import os
+                  import shutil
+                  import sys
+                  from pathlib import Path
+                  from unittest.mock import patch
+
+                  sys.path.insert(0, str(Path('tools').resolve()))
+                  spec = importlib.util.spec_from_file_location('shader_cache', 'tools/build-shader-cache.py')
+                  builder = importlib.util.module_from_spec(spec)
+                  spec.loader.exec_module(builder)
+
+                  fxc = shutil.which('fxc.exe')
+                  if not fxc:
+                      sdk = Path(os.environ['ProgramFiles(x86)']) / 'Windows Kits/10/bin'
+                      candidates = sorted(sdk.glob('*/x64/fxc.exe'), reverse=True)
+                      if not candidates:
+                          raise RuntimeError('Windows SDK FXC is required for NR preflight.')
+                      fxc = str(candidates[0])
+
+                  runtime = os.environ['NR_PREFLIGHT_RUNTIME']
+                  stage = Path('build/nr-preflight/Shaders')
+                  builder.stage_merged_shaders(stage)
+                  requests = {
+                      relative: request
+                      for relative, request in builder.extra_shader_requests(builder.REPO, runtime).items()
+                      if request['source'].startswith('Upscaling/NeuralRendering/')
+                  }
+                  if not requests:
+                      raise RuntimeError(f'No NR supplementary requests found for {runtime}.')
+                  print(f'{runtime}: validating {len(requests)} NR requests with {fxc}', flush=True)
+                  with patch.object(builder, 'extra_shader_requests', return_value=requests):
+                      builder.compile_extra_shaders(
+                          Path('build/nr-preflight') / runtime, stage, runtime, fxc, os.cpu_count() or 4)
+
+    build:
+        needs: nr-shader-preflight
+        if: github.repository == 'ParticleTroned/skyrim-community-shaders' && github.ref == 'refs/heads/build/os-dev-nr-integration-20261031'
+        uses: ./.github/workflows/_shared-build.yaml
+        with:
+            ref: ${{ github.sha }}
+            repository: ${{ github.repository }}
+            cmake-preset: ALL
+            run-cpp: true
+            run-shader-validation: true
+            run-shader-tests: true
+            run-cpp-tests: true
+            release-parity-validation: true
+            cache-artifacts: false
+            upload-compiled-shaders: false
+            verify-no-nr-runtime: true
+            cache-key-suffix: -nr-integration
+
+    package:
+        name: Verify and package integration test build
+        needs: build
+        runs-on: windows-2025-vs2026
+        steps:
+            - uses: actions/checkout@v6
+              with:
+                  ref: ${{ github.sha }}
+                  persist-credentials: false
+            - uses: actions/download-artifact@v7
+              with:
+                  name: dist-artifacts
+                  path: integration-dist
+            - name: Verify complete AIO and record provenance
+              shell: pwsh
+              env:
+                  INTEGRATION_SHA: ${{ github.sha }}
+                  INTEGRATION_REPOSITORY: ${{ github.repository }}
+                  INTEGRATION_RUN_ID: ${{ github.run_id }}
+              run: |
+                  $ErrorActionPreference = 'Stop'
+                  $archives = @(Get-ChildItem integration-dist -File -Filter 'CommunityShaders_AIO-*' |
+                    Where-Object { $_.Extension -in '.7z', '.zip' })
+                  if ($archives.Count -ne 1) { throw "Expected exactly one AIO, found $($archives.Count)." }
+                  $archive = $archives[0]
+                  $stage = Join-Path $env:GITHUB_WORKSPACE 'nr-integration-package'
+                  New-Item -ItemType Directory -Path $stage | Out-Null
+                  if ($archive.Extension -eq '.zip') {
+                    Expand-Archive -LiteralPath $archive.FullName -DestinationPath $stage
+                  } else {
+                    & 7z x $archive.FullName "-o$stage" -y | Out-Null
+                    if ($LASTEXITCODE -ne 0) { throw 'AIO extraction failed.' }
+                  }
+
+                  function Require-Payload([string] $relative) {
+                    $file = Get-Item -LiteralPath (Join-Path $stage $relative)
+                    if ($file.PSIsContainer -or $file.Length -eq 0) { throw "Empty or invalid payload: $relative" }
+                    return $file.FullName
+                  }
+                  $dll = Require-Payload 'SKSE/Plugins/CommunityShaders.dll'
+                  $null = Require-Payload 'SKSE/Plugins/CommunityShaders.pdb'
+
+                  $payloadHashes = [ordered]@{}
+                  $changedPayload = @(
+                    'Shaders/Upscaling/NeuralRendering/LowResCS.hlsl'
+                    'Shaders/Upscaling/NeuralRendering/CategoryAlphaCS.hlsl'
+                    'Shaders/Upscaling/NeuralRendering/ColorTransferCS.hlsl'
+                    'Shaders/Upscaling/NeuralRendering/ColorTransfer.hlsli'
+                    'Shaders/Upscaling/NeuralRendering/ColorContract.hlsli'
+                    'Shaders/Upscaling/NeuralRendering/MotionOffsetCS.hlsl'
+                    'Shaders/Upscaling/NeuralRendering/GainReuseCS.hlsl'
+                    'Shaders/Common/NeuralRenderingFinite.hlsli'
+                    'Shaders/Common/NeuralRenderingReconstruction.hlsli'
+                    'Shaders/Common/NeuralRenderingPeripheral.hlsli'
+                    'Shaders/Common/NeuralRenderingPeripheralPreparation.hlsli'
+                    'Shaders/Common/NeuralRenderingMaterial.hlsli'
+                    'SKSE/Plugins/CommunityShaders/Translations/en.json'
+                    'SKSE/Plugins/CommunityShaders/Licenses/NeuralRendering/PeripheralCompression.txt'
+                  )
+                  foreach ($relative in $changedPayload) {
+                    $packaged = Require-Payload $relative
+                    $source = if ($relative.StartsWith('Shaders/Upscaling/')) {
+                      Join-Path $env:GITHUB_WORKSPACE "features/Upscaling/$relative"
+                    } else {
+                      Join-Path $env:GITHUB_WORKSPACE "package/$relative"
+                    }
+                    $actual = (Get-FileHash -LiteralPath $packaged -Algorithm SHA256).Hash
+                    $expected = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
+                    if ($actual -ne $expected) { throw "AIO payload does not match integration commit: $relative" }
+                    $payloadHashes[$relative] = $actual.ToLowerInvariant()
+                  }
+
+                  foreach ($folder in @('Streamline', 'StreamlineDX12')) {
+                    foreach ($file in @('nvngx_dlss.dll', 'sl.common.dll', 'sl.dlss.dll', 'sl.interposer.dll', 'sl.pcl.dll', 'sl.reflex.dll')) {
+                      $null = Require-Payload "Shaders/Upscaling/$folder/$file"
+                    }
+                  }
+                  foreach ($file in @('nvngx_dlssg.dll', 'sl.dlss_g.dll')) {
+                    $null = Require-Payload "Shaders/Upscaling/StreamlineDX12/$file"
+                  }
+                  foreach ($file in @('amd_fidelityfx_framegeneration_dx12.dll', 'amd_fidelityfx_loader_dx12.dll', 'amd_fidelityfx_upscaler_dx12.dll')) {
+                    $null = Require-Payload "Shaders/Upscaling/FidelityFX/$file"
+                  }
+
+                  $manifest = [ordered]@{
+                    repository = $env:INTEGRATION_REPOSITORY
+                    integrationCommit = $env:INTEGRATION_SHA
+                    upstreamDevCommit = '72441aa923f4f582449c4b06ab4190a6fd894d70'
+                    sourceMainVrCommit = '75799ca034562ea124b9aa19e94e531a639a9ec3'
+                    workflowRun = "https://github.com/$env:INTEGRATION_REPOSITORY/actions/runs/$env:INTEGRATION_RUN_ID"
+                    preset = 'ALL'
+                    runtimes = @('SE', 'AE', 'VR')
+                    devBenchBridge = $true
+                    changesInOrder = @(
+                      @{ feature = 'Guided model reconstruction'; originalCommit = 'edf95c6253b53aa45e541e6c0b5e730457dc2e68'; prHead = 'c6bb4fc542ced474843afeb464361f299ea5bd2d' }
+                      @{ feature = 'Peripheral compression'; originalCommit = 'd7d640ac48553310db01d0a8af6d56e70ffe24c6'; prHead = '513c420770779ded80c77545a27bde68c16a8b6d' }
+                      @{ feature = 'Combat pause'; originalCommit = 'e83a0a72bbdb830757b9da03236809c6952c2553'; prHead = 'c3450c81fb50bed0f056d11e403f3c5970ea6b26' }
+                      @{ feature = 'Scene selection'; originalCommit = '0a7b11ac2aacbe19bcfc28115548c270adf85088'; prHead = '422c87c05296a4f76e9b63a2cb9dfad979466ae8' }
+                    )
+                    inputAio = $archive.Name
+                    inputAioSha256 = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+                    pluginSha256 = (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash.ToLowerInvariant()
+                    verifiedPayloadSha256 = $payloadHashes
+                    externalNrRuntime = 'Supply validated nvngx_dlssnr.dll 310.8.x/310.9.x in Data/Shaders/Upscaling/Streamline/; not redistributed.'
+                  }
+                  $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $stage 'NR-INTEGRATION-MANIFEST.json') -Encoding utf8
+                  Copy-Item docs/development/neural-rendering.md (Join-Path $stage 'NR-UPSTREAM-GUIDE.md')
+                  Copy-Item docs/development/nr-integration-testing.md (Join-Path $stage 'NR-INTEGRATION-TESTING.md')
+                  @"
+                  # Open Shaders NR integration test build
+
+                  This ZIP contains the complete AIO installation for integration commit $env:INTEGRATION_SHA.
+                  Install it as one mod overriding the existing Open Shaders files so the DLL and shaders stay matched.
+                  It combines guided model reconstruction, peripheral compression, combat pause and scene selection, in that order.
+                  The universal DLL supports SE, AE and VR, with the DevBench bridge enabled.
+
+                  Keep or supply your validated nvngx_dlssnr.dll 310.8.x/310.9.x in Data/Shaders/Upscaling/Streamline/.
+                  That separately supplied NR runtime is not redistributed in this package.
+                  Enable Neural Rendering in Upscaling; see NR-UPSTREAM-GUIDE.md for the existing NR controls and runtime requirements.
+                  See NR-INTEGRATION-TESTING.md for integration setup and the four-feature test matrix.
+                  See NR-INTEGRATION-MANIFEST.json for exact source commits, package hashes and the validation run.
+                  In-game flat and VR validation on supported hardware remains necessary.
+                  "@ | Set-Content -LiteralPath (Join-Path $stage 'NR-INTEGRATION-README.md') -Encoding utf8
+            - name: Verify integration artifact contains no NR runtime
+              shell: pwsh
+              run: ./tools/verify-no-nr-runtime.ps1 -Path nr-integration-package
+            - uses: actions/upload-artifact@v7
+              with:
+                  name: nr-integration-test-build
+                  path: nr-integration-package/
+                  retention-days: 30
+                  if-no-files-found: error
+                  include-hidden-files: true

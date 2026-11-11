@@ -56856,21 +56856,32 @@ void Upscaling::ServiceVRRenderScalePresentationRecovery(
 	}
 	const auto mutation = GetVRRenderScalePhysicalMutationSnapshot();
 	const uint64_t now = ::GetTickCount64();
+	if (IsSubmitStageDeviceLost()) {
+		vrRenderScalePresentationRecoveryStage.store(Stage::Quarantined, std::memory_order_release);
+		LogVRRenderScalePresentationStall(a_epoch, "device quarantine", a_context);
+		return;
+	}
+	if (IsKnownGameMenuContextActive()) {
+		// Menu presentation intentionally withholds stereo promotion, so it cannot
+		// consume a gameplay recovery deadline or its one-shot fallback quota.
+		vrRenderScalePresentationRecoveryMenuEpoch = a_epoch;
+		vrRenderScalePresentationRecoveryLastMenuTickMs = now;
+		vrRenderScalePresentationRecoveryStartTickMs = now;
+		return;
+	}
+	const uint64_t lastProgressTickMs = vrRenderScalePresentationRecoveryMenuEpoch == a_epoch ?
+	                                        std::max(mutation.lastProgressTickMs, vrRenderScalePresentationRecoveryLastMenuTickMs) :
+	                                        mutation.lastProgressTickMs;
 	const bool stalled = VRVendorRelatchPolicy::HasPostMutationEmergencyRecoveryStalled({
 		.progressPhase = mutation.progressPhase,
 		.mutationStartTickMs = mutation.startTickMs,
-		.lastProgressTickMs = mutation.lastProgressTickMs,
+		.lastProgressTickMs = lastProgressTickMs,
 		.currentTickMs = now,
 		.initialDelayMs = kVRRenderScalePostMutationEmergencyAttemptDelayMilliseconds,
 		.progressingStallDelayMs = kVRRenderScalePostMutationStalledDeadlineMilliseconds,
 	});
 	if (stage == Stage::None && !stalled)
 		return;
-	if (IsSubmitStageDeviceLost()) {
-		vrRenderScalePresentationRecoveryStage.store(Stage::Quarantined, std::memory_order_release);
-		LogVRRenderScalePresentationStall(a_epoch, "device quarantine", a_context);
-		return;
-	}
 	if (stage == Stage::NativeFallback) {
 		if (VRVendorRelatchPolicy::HasElapsedMonotonicDeadline(
 				vrRenderScalePresentationRecoveryStartTickMs, now,

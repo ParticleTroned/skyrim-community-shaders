@@ -9,6 +9,7 @@
 #include <optional>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 
 using Stage = VRVendorRelatchPolicy::PresentationRecoveryStage;
 using Phase = VRVendorRelatchPolicy::PostMutationProgressPhase;
@@ -59,8 +60,9 @@ namespace globals
 }
 #include "vr_presentation_mutexes_under_test.h"
 std::atomic<bool> g_vrLoadingTransitionSerialOpen{ false };
-bool loadMenu = false, worldReady = true, exactContract = true, vendorReset = false;
+bool loadMenu = false, knownMenu = false, worldReady = true, exactContract = true, vendorReset = false;
 bool IsLoadingMenuContextActive() { return loadMenu; }
+bool IsKnownGameMenuContextActive() { return knownMenu; }
 bool HasCompletedVRWorldFrameAfterLatestLoad(const State*) { return worldReady; }
 bool HasPendingVRVendorRuntimeReset(const auto&, unsigned) { return vendorReset; }
 bool IsVRRenderScalePhysicalVendorContractExact(const auto&, const auto&, unsigned) { return exactContract; }
@@ -120,6 +122,8 @@ struct Upscaling : PresentationRecoveryMutexes
 	std::atomic<bool> postLoadRuntimeResetPending{ false }, perfModeRenderTargetRecreateInProgress{ false };
 	bool deferredVRRenderScaleRelatchAfterPresentation = false, deferredVRRenderScalePostLoadResetAfterPresentation = false;
 	uint64_t vrRenderScalePresentationRecoveryStartTickMs = 0;
+	uint64_t vrRenderScalePresentationRecoveryMenuEpoch = 0;
+	uint64_t vrRenderScalePresentationRecoveryLastMenuTickMs = 0;
 	bool vrRenderScalePresentationResumeAttempted = false;
 	Transition controller;
 	Mutation mutationState;
@@ -261,11 +265,72 @@ struct Upscaling : PresentationRecoveryMutexes
 
 void Require(bool condition, const char* message)
 {
-	if (!condition)
+	if (!condition) {
+		std::cerr << message << '\n';
 		throw std::runtime_error(message);
+	}
 }
 int main()
 {
+	for (const auto [covered, retryAdmitted] : {
+			 std::pair{ false, false }, std::pair{ false, true },
+			 std::pair{ true, false }, std::pair{ true, true } }) {
+		Upscaling u;
+		u.hold = covered;
+		u.resourcesReady = false;
+		if (retryAdmitted)
+			u.ServiceVRRenderScalePostMutationWatchdog("gameplay retry before menu");
+		knownMenu = true;
+		for (unsigned minute = 0; minute < 3; ++minute) {
+			testTick += 60000;
+			u.ServiceVRRenderScalePostMutationWatchdog("character creation with current preview world frames");
+			Require(u.nativeFallbacks == 0 && u.resumes == 0 && u.hold == covered &&
+						u.vrRenderScalePresentationRecoveryStage == (retryAdmitted ? Stage::ResumePending : Stage::None),
+				"An intentional menu cannot consume presentation recovery or native fallback quota");
+		}
+		knownMenu = false;
+		u.ServiceVRRenderScalePostMutationWatchdog("menu closed");
+		Require(u.nativeFallbacks == 0, "Closing a long-lived menu cannot immediately trigger fallback");
+		if (!retryAdmitted) {
+			testTick += kVRRenderScalePostMutationStalledDeadlineMilliseconds - 1;
+			u.ServiceVRRenderScalePostMutationWatchdog("gameplay within fresh stall interval");
+			Require(u.vrRenderScalePresentationRecoveryStage == Stage::None,
+				"A menu must leave the full gameplay stall interval for stereo promotion");
+			++testTick;
+			u.ServiceVRRenderScalePostMutationWatchdog("gameplay stall reached");
+			Require(u.vrRenderScalePresentationRecoveryStage == Stage::ResumePending,
+				"A real gameplay stall must still admit bounded presentation recovery");
+		}
+		testTick += kVRRenderScalePresentationRetryMilliseconds - 1;
+		u.ServiceVRRenderScalePostMutationWatchdog("gameplay within fresh retry interval");
+		Require(u.nativeFallbacks == 0, "Menu time cannot exhaust the presentation retry interval");
+		++testTick;
+		u.ServiceVRRenderScalePostMutationWatchdog("gameplay retry exhausted");
+		Require(u.nativeFallbacks == 1 && u.vrRenderScalePresentationRecoveryStage == Stage::NativeFallback,
+			"A failed gameplay retry must retain the existing one-shot native fallback");
+	}
+	{
+		Upscaling u;
+		knownMenu = true;
+		u.ServiceVRRenderScalePostMutationWatchdog("menu under previous owner");
+		knownMenu = false;
+		u.vrRenderScalePostMutationSerializationEpoch = 8;
+		u.controller.applied.transitionEpoch = 8;
+		u.controller.stable.transitionEpoch = 8;
+		u.ServiceVRRenderScalePostMutationWatchdog("new owner with an actual gameplay stall");
+		Require(u.resumes == 1, "An old menu clock cannot defer a different serialization owner");
+	}
+	{
+		Upscaling u;
+		u.hold = true;
+		u.removeOnProbe = true;
+		knownMenu = true;
+		u.ServiceVRRenderScalePostMutationWatchdog("device removal during character creation");
+		knownMenu = false;
+		Require(u.vrRenderScalePresentationRecoveryStage == Stage::Quarantined &&
+					u.nativeFallbacks == 0 && u.resumes == 0 && u.hold,
+			"An intentional menu cannot hide typed device-loss evidence");
+	}
 	for (bool covered : { false, true }) {
 		Upscaling u;
 		u.hold = covered;

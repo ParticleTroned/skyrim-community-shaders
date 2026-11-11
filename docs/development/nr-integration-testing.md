@@ -25,7 +25,7 @@ rebase preserves the earlier implementation and follow-up fixes in each PR.
 | 1     | [RGB-guided reconstruction (#1053)](https://github.com/alandtse/open-shaders/pull/1053)        | [Guided reconstruction](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-guided-reconstruction-20261031)   | `c6bb4fc542ced474843afeb464361f299ea5bd2d` |
 | 2     | [Peripheral compression (#1054)](https://github.com/alandtse/open-shaders/pull/1054)           | [Peripheral compression](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-peripheral-compression-20261031) | `513c420770779ded80c77545a27bde68c16a8b6d` |
 | 3     | [Pause NR during combat (#1055)](https://github.com/alandtse/open-shaders/pull/1055)           | [Combat pause](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-combat-pause-20261031)                     | `c3450c81fb50bed0f056d11e403f3c5970ea6b26` |
-| 4     | [Reduced-model material selection (#1056)](https://github.com/alandtse/open-shaders/pull/1056) | [Scene selection](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-scene-selection-20261031)               | `422c87c05296a4f76e9b63a2cb9dfad979466ae8` |
+| 4     | [Reduced-model material selection (#1056)](https://github.com/alandtse/open-shaders/pull/1056) | [Scene selection](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-scene-selection-20261031)               | `5161e9a019933317cf3a676a1417240ae6045fb9` |
 
 The refresh uses `main-VR` at
 `75799ca034562ea124b9aa19e94e531a639a9ec3` as its source baseline. It brings

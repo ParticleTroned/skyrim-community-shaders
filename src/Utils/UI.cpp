@@ -543,9 +543,11 @@ namespace Util
 
 	bool PercentageSlider(const char* label, float* data, float lb, float ub, const char* format)
 	{
-		float percentageData = (*data) * 1e2f;
-		bool retval = Util::Widgets::SliderFloat(label, &percentageData, lb, ub, format);
-		(*data) = percentageData * 1e-2f;
+		const float shownPercentage = (*data) * 1e2f;
+		float percentageData = shownPercentage;
+		const bool retval = Util::Widgets::SliderFloat(label, &percentageData, lb, ub, format);
+		if (percentageData != shownPercentage)
+			(*data) = percentageData * 1e-2f;
 		return retval;
 	}
 

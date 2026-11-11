@@ -580,8 +580,8 @@ void ScreenSpaceShadows::DrawShadows()
 	// Shared dispatch logic for both VR and non-VR
 	auto DispatchEye = [&](const char* eyeName, ID3D11ComputeShader* shader, uint32_t eyeIndex, const float* lightProj,
 						   float invTexSizeX, float invTexSizeY) {
-		const char* profileName = eyeName ? (eyeIndex == 0 ? "ScreenSpaceShadows::RayMarch(Left Eye)" : "ScreenSpaceShadows::RayMarch(Right Eye)") : "ScreenSpaceShadows::RayMarch";
-		CS_GPU_PASS_DYNAMIC(profileName);
+		CS_GPU_PASS_INDEXED(eyeName ? 1 + eyeIndex : 0,
+			"ScreenSpaceShadows::RayMarch", "ScreenSpaceShadows::RayMarch(Left Eye)", "ScreenSpaceShadows::RayMarch(Right Eye)");
 
 		context->CSSetShader(shader, nullptr, 0);
 

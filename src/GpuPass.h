@@ -8,6 +8,9 @@
 #include <Tracy/Tracy.hpp>
 #include <Tracy/TracyD3D11.hpp>
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string_view>
 
@@ -47,6 +50,27 @@ private:
 #define CS_GPU_PASS_CONCAT_IMPL(a, b) a##b
 #define CS_GPU_PASS_CONCAT(a, b) CS_GPU_PASS_CONCAT_IMPL(a, b)
 
+namespace GpuPassDetail
+{
+	/** @brief Selects a fixed pass entry, clamping out-of-range indices to the last entry. */
+	template <class T, std::size_t N>
+	constexpr const T& SelectPass(const std::array<T, N>& a_passes, std::size_t a_index)
+	{
+		static_assert(N > 0);
+		return a_passes[a_index < N ? a_index : N - 1];
+	}
+
+#ifdef TRACY_ENABLE
+	/** @brief Builds one static Tracy source location per literal pass name. */
+	template <class... Names>
+	constexpr auto MakeSourceLocations(const char* a_function, const char* a_file, std::uint32_t a_line, Names... a_names)
+	{
+		static_assert(sizeof...(Names) > 0);
+		return std::array{ tracy::SourceLocationData{ a_names, a_function, a_file, a_line, 0 }... };
+	}
+#endif
+}
+
 #ifdef TRACY_ENABLE
 #	define CS_GPU_PASS(name)                                                                                                                                \
 		static constexpr tracy::SourceLocationData CS_GPU_PASS_CONCAT(cs_gpu_pass_source_, __LINE__){ name, __FUNCTION__, __FILE__, (uint32_t)__LINE__, 0 }; \
@@ -67,6 +91,18 @@ private:
 
 #	define CS_GPU_PASS_SELECT(condition, firstName, secondName) \
 		ScopedGpuPass CS_GPU_PASS_CONCAT(cs_gpu_pass_, __LINE__) { (condition) ? std::string_view(firstName) : std::string_view(secondName) }
+#endif
+
+/** @brief Instruments a fixed name set without formatting or dynamic Tracy source locations. */
+#ifdef TRACY_ENABLE
+#	define CS_GPU_PASS_INDEXED(index, ...)                                                                                                                                                       \
+		static constexpr auto CS_GPU_PASS_CONCAT(cs_gpu_pass_sources_, __LINE__) = GpuPassDetail::MakeSourceLocations(__FUNCTION__, __FILE__, static_cast<std::uint32_t>(__LINE__), __VA_ARGS__); \
+		const auto& CS_GPU_PASS_CONCAT(cs_gpu_pass_source_, __LINE__) = GpuPassDetail::SelectPass(CS_GPU_PASS_CONCAT(cs_gpu_pass_sources_, __LINE__), static_cast<std::size_t>(index));           \
+		ScopedGpuPass CS_GPU_PASS_CONCAT(cs_gpu_pass_, __LINE__) { &CS_GPU_PASS_CONCAT(cs_gpu_pass_source_, __LINE__), CS_GPU_PASS_CONCAT(cs_gpu_pass_source_, __LINE__).name }
+#else
+#	define CS_GPU_PASS_INDEXED(index, ...)                                                          \
+		static constexpr std::array CS_GPU_PASS_CONCAT(cs_gpu_pass_names_, __LINE__){ __VA_ARGS__ }; \
+		ScopedGpuPass CS_GPU_PASS_CONCAT(cs_gpu_pass_, __LINE__) { GpuPassDetail::SelectPass(CS_GPU_PASS_CONCAT(cs_gpu_pass_names_, __LINE__), static_cast<std::size_t>(index)) }
 #endif
 
 #ifdef TRACY_ENABLE

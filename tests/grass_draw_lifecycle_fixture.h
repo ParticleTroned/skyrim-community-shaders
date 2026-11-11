@@ -442,6 +442,15 @@ public:
 		uint64_t residentRevision = 0, cpuRecordBytes = 0;
 		std::unordered_map<unsigned, std::weak_ptr<Queue>> queues;
 		std::vector<std::shared_ptr<const QueuedGroup>> queuedGroups;
+		struct TextureCache
+		{
+			uint32_t frameCalls = 0, lastFrame = 0;
+			void EndFrame(uint32_t frame) noexcept
+			{
+				++frameCalls;
+				lastFrame = frame;
+			}
+		} textureCache;
 		GrassPolicy::Settings frameSettings;
 		bool geometryCPUValid = false, failed = false, ready = false, cullingPrepared = false, throwOnPrepare = false;
 		bool allCulled = false, throwOnUpload = false;

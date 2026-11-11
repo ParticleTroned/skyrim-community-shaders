@@ -118,6 +118,8 @@ namespace
 						Require(binding.BindPoint == 2, "Batch fade changed register");
 						Check(reflection->GetResourceBindingDescByName("GrassSourceRecords", &binding));
 						Require(binding.BindPoint == 3, "Batch source records changed register");
+						Check(reflection->GetResourceBindingDescByName("GrassTextureNormalLength", &binding));
+						Require(binding.BindPoint == 4, "Grass texture classification changed register");
 						D3D11_SHADER_VARIABLE_DESC world{}, previous{};
 						ValidateWindLayout(reflection.Get(), "PerGeometry", vr);
 						auto geometry = reflection->GetConstantBufferByName("PerGeometry");
@@ -197,6 +199,7 @@ int main()
 		RunSPDReduction(4096, 128, 2);
 		RunSPDReduction(128, 8192, 1);
 		Compile(L"features/Grass Optimizations/Shaders/GrassOptimizations/GrassDepthCS.hlsl", "cs_5_0");
+		Compile(L"features/Grass Optimizations/Shaders/GrassOptimizations/DetectComplexCS.hlsl", "cs_5_0");
 		Compile(L"features/Grass Optimizations/Shaders/GrassOptimizations/GrassInstanceSignatureVS.hlsl", "vs_5_0");
 		for (bool vr : { false, true }) {
 			std::vector<D3D_SHADER_MACRO> defines;

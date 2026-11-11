@@ -140,11 +140,22 @@ struct Context {
     ID3D11InputLayout* layout = nullptr;
     ID3D11Buffer* vertices = nullptr;
     UINT stride = 0;
+    ID3D11ShaderResourceView* pixelAtlas = nullptr;
+    ID3D11ShaderResourceView* vertexNormalLength = nullptr;
+    unsigned textureReads = 0;
     std::vector<Draw> draws;
     void VSSetShader(Resource*, void*, UINT) {}
     void PSSetShader(Resource*, void*, UINT) {}
     void VSSetConstantBuffers1(UINT, UINT, ID3D11Buffer**, const UINT*, const UINT*) {}
-    void VSSetShaderResources(UINT, UINT, ID3D11ShaderResourceView* const*) {}
+    void PSGetShaderResources(UINT first, UINT count, ID3D11ShaderResourceView** output) {
+        Require(first == 0 && count == 1, "Classification must read the bound pixel atlas");
+        ++textureReads; *output = pixelAtlas;
+        if (*output) (*output)->AddRef();
+    }
+    void VSSetShaderResources(UINT first, UINT count, ID3D11ShaderResourceView* const* sources) {
+        Require(first == 2 && count == 3, "Unexpected grass vertex resource slots");
+        vertexNormalLength = sources[2];
+    }
     void IASetPrimitiveTopology(UINT) {}
     void IASetInputLayout(ID3D11InputLayout* next) { layout = next; }
     void IASetVertexBuffers(UINT slot, UINT, ID3D11Buffer** buffers, const UINT* strides, const UINT*) {
@@ -163,6 +174,9 @@ namespace globals {
     struct State { UINT modifiedPixelDescriptor = 0; } stateStorage;
     auto* state = &stateStorage;
     namespace d3d { auto* device = &::device; }
+    namespace features {
+        struct { bool loaded = false; struct { bool Enabled = false; } settings; } grassLighting;
+    }
 }
 PRODUCTION_CONSTANTS
 struct GrassBucketRenderer { struct Impl {
@@ -172,6 +186,19 @@ struct GrassBucketRenderer { struct Impl {
     std::array<winrt::com_ptr<Resource>, 2> drawVertexShaders;
     std::array<winrt::com_ptr<Resource>, 8> drawPixelShaders;
     std::vector<std::shared_ptr<Buffer>> frameConstants{std::make_shared<Buffer>()};
+    uint32_t frame = 7;
+    struct TextureCache {
+        unsigned lookups = 0;
+        uint32_t lastFrame = 0;
+        ID3D11ShaderResourceView* lastSource = nullptr;
+        Resource classified;
+        ID3D11ShaderResourceView* Get(Context* context, ID3D11ShaderResourceView* source, uint32_t frame) {
+            Require(source == context->pixelAtlas && (!source || source->references == 2),
+                "Classification must retain the exact bound atlas view during lookup");
+            ++lookups; lastSource = source; lastFrame = frame;
+            return source ? &classified : nullptr;
+        }
+    } textureCache;
     void CompileSignature() {}
     ID3D11InputLayout* Layout(uint64_t);
     LOADER_DECLARATION
@@ -267,6 +294,27 @@ int main() {
         bucket.plan.meshes[1] = {}; bucket.plan.layouts[1] = {};
         state.context->draws.clear(); state.EmitDraws(bucket);
         Require(state.context->draws.size() == 4 && state.context->draws[2].argumentOffset == 140, "Missing optional mesh shifted surviving tier slots");
+        Resource atlas;
+        for (bool lightingLoaded : {false, true}) for (bool enabled : {false, true})
+            for (bool farLOD : {false, true}) for (bool depth : {false, true})
+                for (bool hasAtlas : {false, true}) {
+                    globals::features::grassLighting.loaded = lightingLoaded;
+                    globals::features::grassLighting.settings.Enabled = enabled;
+                    globals::state->modifiedPixelDescriptor = depth ? 1u : 0u;
+                    bucket.plan.meshes[2].farLOD = farLOD;
+                    state.context->pixelAtlas = hasAtlas ? &atlas : nullptr;
+                    const auto lookups = state.textureCache.lookups, reads = state.context->textureReads;
+                    const bool classify = (lightingLoaded && enabled) || farLOD;
+                    state.EmitDraws(bucket);
+                    Require(state.textureCache.lookups == lookups + unsigned(classify) &&
+                        state.context->textureReads == reads + unsigned(classify),
+                        "Grass classification must follow lighting or far-billboard demand, including depth draws");
+                    Require(state.context->vertexNormalLength == (classify && hasAtlas ? &state.textureCache.classified : nullptr),
+                        "Grass must bind its cached normal length or null for the pixel fallback");
+                    Require(!classify || (state.textureCache.lastSource == state.context->pixelAtlas &&
+                        state.textureCache.lastFrame == state.frame), "Classification used the wrong view or frame");
+                    Require(atlas.references == 1, "Classification leaked the temporary bound-atlas reference");
+                }
         std::cout << "Authored LOD loading, layouts, failures and per-eye draw bindings passed\n";
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
@@ -713,12 +761,16 @@ namespace logger {
     unsigned warnings = 0;
     template<class... T> void warn(T&&...) { ++warnings; }
 }
-namespace globals::features {
-    struct Feature {
-        bool loaded = true;
-        GrassPolicy::Settings settings;
-        auto GetSettings() { return settings; }
-    } grassOptimizations;
+namespace globals {
+    struct State { uint32_t frameCount = 1; } stateStorage;
+    auto* state = &stateStorage;
+    namespace features {
+        struct Feature {
+            bool loaded = true;
+            GrassPolicy::Settings settings;
+            auto GetSettings() { return settings; }
+        } grassOptimizations;
+    }
 }
 struct GrassBucketRenderer {
     struct Impl {
@@ -728,6 +780,10 @@ struct GrassBucketRenderer {
         void ClearDrawContext() noexcept;
         Mutex captureMutex;
         std::vector<std::shared_ptr<const QueuedGroup>> queuedGroups;
+        struct TextureCache {
+            uint32_t frameCalls = 0, lastFrame = 0;
+            void EndFrame(uint32_t frame) noexcept { ++frameCalls; lastFrame = frame; }
+        } textureCache;
         std::map<int, Source> residents;
         uint64_t residentRevision = 0, lodRevision = UINT64_MAX;
         uint32_t lodMode = 0;
@@ -882,8 +938,13 @@ int main() {
             GrassBucketRenderer renderer;
             renderer.impl->queuedGroups.push_back(std::make_shared<QueuedGroup>());
             Require(Owner::alive == 1);
+            globals::state->frameCount = 27;
             renderer.EndFrame();
-            Require(Owner::alive == 0 && renderer.impl->queuedGroups.empty());
+            Require(Owner::alive == 0 && renderer.impl->queuedGroups.empty() &&
+                renderer.impl->textureCache.frameCalls == 1 && renderer.impl->textureCache.lastFrame == 27);
+            globals::state->frameCount = 28;
+            renderer.EndFrame();
+            Require(renderer.impl->textureCache.frameCalls == 2 && renderer.impl->textureCache.lastFrame == 28);
         }
         auto& settings = globals::features::grassOptimizations.settings;
         settings.EnableMeshLOD = true;

@@ -103,6 +103,7 @@ def release_requests(runtime: str, features: dict[str, bool], *, reverse_z_enabl
     for source, feature in (
         ("GrassCollision/CollisionUpdateCS.hlsl", "GrassCollision"),
         ("GrassOptimizations/GrassCullingCS.hlsl", "GrassOptimizations"),
+        ("GrassOptimizations/DetectComplexCS.hlsl", "GrassOptimizations"),
         ("LightLimitFix/ClusterBuildingCS.hlsl", "LightLimitFix"),
         ("LightLimitFix/ClusterCullingCS.hlsl", "LightLimitFix"),
         ("Skylighting/UpdateProbesCS.hlsl", "Skylighting"),

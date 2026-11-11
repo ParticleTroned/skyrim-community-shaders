@@ -9,6 +9,7 @@
 #include "Common/SharedData.hlsli"
 
 #if defined(PSHADER)
+#	include "Common/GrassTexture.hlsli"
 #	if defined(PBR_GRASS) && defined(GRASS_LIGHTING)
 #		define TRUE_PBR
 #	endif
@@ -48,6 +49,9 @@ struct VS_OUTPUT
 	float4 HPosition: SV_POSITION0;
 	float4 Color: COLOR0;
 	float VertexMult: COLOR1;
+#	ifdef GRASS_OPTIMIZATIONS
+	nointerpolation float TextureNormalLength: COLOR2;
+#	endif
 	float3 TexCoord: TEXCOORD0;
 	float3 ViewSpacePosition:
 #	if !defined(VR)
@@ -79,6 +83,9 @@ struct VS_OUTPUT
 	float VertexMult: COLOR1;
 	float3 TexCoord: TEXCOORD0;
 	float4 AmbientColor: TEXCOORD1;
+#	ifdef GRASS_OPTIMIZATIONS
+	nointerpolation float TextureNormalLength: COLOR2;
+#	endif
 	float3 ViewSpacePosition: TEXCOORD2;
 #	if defined(RENDER_DEPTH)
 	float2 Depth: TEXCOORD3;
@@ -302,6 +309,7 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.Color.w = distanceFade * perInstanceFade;
 	vsout.VertexMult = input.InstanceData1.w;
 #		ifdef GRASS_OPTIMIZATIONS
+	vsout.TextureNormalLength = GetGrassBatchTextureNormalLength();
 	if (GrassBatchEnabled) {
 		vsout.Color.w = perInstanceFade;
 		vsout.VertexMult = GetGrassBatchShading(input.InstanceID);
@@ -408,6 +416,7 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.Color.w = distanceFade * perInstanceFade;
 	vsout.VertexMult = input.InstanceData1.w;
 #		ifdef GRASS_OPTIMIZATIONS
+	vsout.TextureNormalLength = GetGrassBatchTextureNormalLength();
 	if (GrassBatchEnabled) {
 		vsout.Color.w = perInstanceFade;
 		vsout.VertexMult = GetGrassBatchShading(input.InstanceID);
@@ -590,21 +599,24 @@ float3 ApplyGrassSnowMeltDarkening(float3 color, SnowCover::CoverageInputs footp
 #		define GRASS_BILLBOARD false
 #	endif
 
-float4 SampleGrassLightingBaseColor(float2 texCoord, out bool complex, bool fullTexture = false)
+float4 SampleGrassLightingBaseColor(PS_INPUT input, out bool complex, bool fullTexture = false)
 {
-	float x, y;
-	TexBaseSampler.GetDimensions(x, y);
-	float3 complexTest = TexBaseSampler.Load(int3(0, int(y) - 1, 0)).xyz * 2.0 - 1.0;
-	complex = abs(length(complexTest) - 1.0) < SharedData::grassLightingSettings.ComplexGrassThreshold;
+	float normalLength = 0;
+#	ifdef GRASS_OPTIMIZATIONS
+	normalLength = input.TextureNormalLength;
+#	endif
+	[branch] if (!(normalLength > 0))
+		normalLength = GetGrassTextureNormalLength(TexBaseSampler);
+	complex = abs(normalLength - 1.0) < SharedData::grassLightingSettings.ComplexGrassThreshold;
 #	if defined(PBR_GRASS)
 	fullTexture = fullTexture || (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::PBRGrass);
 #	endif
 	complex = complex && !fullTexture;
 	float4 baseColor;
 	if (complex) {
-		baseColor = TexBaseSampler.SampleBias(SampBaseSampler, float2(texCoord.x, texCoord.y * 0.5), SharedData::MipBias);
+		baseColor = TexBaseSampler.SampleBias(SampBaseSampler, float2(input.TexCoord.x, input.TexCoord.y * 0.5), SharedData::MipBias);
 	} else {
-		baseColor = TexBaseSampler.SampleBias(SampBaseSampler, texCoord, SharedData::MipBias);
+		baseColor = TexBaseSampler.SampleBias(SampBaseSampler, input.TexCoord.xy, SharedData::MipBias);
 	}
 	return baseColor;
 }
@@ -619,7 +631,7 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 	bool complex = false;
 	float4 baseColor;
 	if (billboard) {
-		baseColor = SampleGrassLightingBaseColor(input.TexCoord.xy, complex, pbrTexture);
+		baseColor = SampleGrassLightingBaseColor(input, complex, pbrTexture);
 		if (pbrTexture)
 			baseColor.xyz = Color::PBRDiffuse(baseColor.xyz);
 		else
@@ -858,7 +870,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	PS_OUTPUT psout = (PS_OUTPUT)0;
 
 	bool complex;
-	float4 baseColor = SampleGrassLightingBaseColor(input.TexCoord.xy, complex);
+	float4 baseColor = SampleGrassLightingBaseColor(input, complex);
 
 	baseColor.xyz = Color::Diffuse(baseColor.xyz);
 

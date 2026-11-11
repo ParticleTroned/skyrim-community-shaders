@@ -269,6 +269,22 @@ void CheckQueuedStreamingFallback() {
         Require(f.renderer.impl->queuedGroups.empty(), "Frame-end retained stale native draw owners");
     }
 }
+void CheckTextureCacheFrameBoundary() {
+    Fixture f;
+    f.renderer.impl->frame = 3;
+    for (const uint32_t frame : {27u, 28u}) {
+        globals::state->frameCount = frame;
+        f.renderer.EndFrame();
+        Require(f.renderer.impl->textureCache.frameCalls == frame - 26 &&
+                f.renderer.impl->textureCache.lastFrame == frame,
+            "Frame end must retire texture-cache owners using the current engine frame, even without draws");
+    }
+    globals::features::grassOptimizations.loaded = false;
+    globals::features::grassOptimizations.enabled = false;
+    f.renderer.EndFrame();
+    Require(f.renderer.impl->textureCache.frameCalls == 3,
+        "Disabled grass must still retire texture-cache owners");
+}
 void CheckNestedParameterRestoration() {
     for (bool unwind : {false, true}) {
         Fixture f;
@@ -517,6 +533,7 @@ int main() {
             CheckNestedParameterRestoration();
             CheckRenderFamilyIsolation();
             CheckQueuedStreamingFallback();
+            CheckTextureCacheFrameBoundary();
             for (bool loaded : {false, true}) for (bool enabled : {false, true}) {
                 Fixture f;
                 globals::features::grassOptimizations.loaded = loaded;

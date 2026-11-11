@@ -2,6 +2,7 @@
 
 #include "Buffer.h"
 #include "Features/GrassCollision.h"
+#include "Features/GrassLighting.h"
 #include "Features/GrassOptimizations.h"
 #include "Globals.h"
 #include "GpuPass.h"
@@ -16,6 +17,7 @@
 #include "GrassPassCache.h"
 #include "GrassRuntime.h"
 #include "GrassTelemetry.h"
+#include "GrassTextureCache.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
@@ -686,6 +688,7 @@ struct GrassBucketRenderer::Impl
 	winrt::com_ptr<ID3D11DeviceContext1> context;
 	Util::LazyShader<ID3D11ComputeShader> cullShader;
 	GrassHiZ hiZ;
+	GrassTextureCache textureCache;
 	std::unique_ptr<Buffer> table, disabled;
 	std::array<float, 152> geometryCPU{};
 	bool geometryCPUValid = false;
@@ -1387,6 +1390,7 @@ void GrassBucketRenderer::SetupResources()
 	try {
 		// Grass plugins finish applying their INI overrides before the first visibility pass.
 		impl->nativeSettingsReady = false;
+		impl->textureCache.Reset();
 		DX::ThrowIfFailed(globals::d3d::context->QueryInterface(__uuidof(ID3D11DeviceContext1), impl->context.put_void()));
 		D3D11_SUBRESOURCE_DATA data{};
 		D3D11_BUFFER_DESC desc = ConstantBufferDesc(64, false);
@@ -1435,6 +1439,7 @@ void GrassBucketRenderer::ClearShaderCache()
 	impl->signature = nullptr;
 	impl->layouts.clear();
 	impl->hiZ.Reset();
+	impl->textureCache.Reset();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	impl->diagnosticShader.Reset();
 #endif
@@ -1457,6 +1462,7 @@ void GrassBucketRenderer::EndFrame()
 	impl->EndBackgroundPreparation(settings);
 	impl->UpdateLODDemand(settings);
 	impl->PollLODLoads();
+	impl->textureCache.EndFrame(globals::state->frameCount);
 }
 
 void GrassBucketRenderer::Impl::PrepareFrame()
@@ -2913,7 +2919,14 @@ void GrassBucketRenderer::Impl::EmitDraws(const Bucket& bucket)
 	const UINT geometryFirst = (bucket.plan.slot % kSlotsPerPage) * (kFrameSlotBytes / 16), geometryCount = eyes == 2 ? 48u : 32u;
 	context->VSSetConstantBuffers1(2, 1, &geometry, &geometryFirst, &geometryCount);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	const std::array<ID3D11ShaderResourceView*, 2> sources{ bucket.result.extras->srv.get(), bucket.records->srv.get() };
+	ID3D11ShaderResourceView* normalLength = nullptr;
+	if ((globals::features::grassLighting.loaded && globals::features::grassLighting.settings.Enabled) || meshes[2].farLOD) {
+		// Classify the bound atlas so replacement texture views match pixel sampling.
+		winrt::com_ptr<ID3D11ShaderResourceView> texture;
+		context->PSGetShaderResources(0, 1, texture.put());
+		normalLength = textureCache.Get(context.get(), texture.get(), frame);
+	}
+	const std::array<ID3D11ShaderResourceView*, 3> sources{ bucket.result.extras->srv.get(), bucket.records->srv.get(), normalLength };
 	context->VSSetShaderResources(2, UINT(sources.size()), sources.data());
 	for (UINT tier = 0; tier < 3; ++tier) {
 		if (!meshes[tier].vertices || !meshes[tier].indices)

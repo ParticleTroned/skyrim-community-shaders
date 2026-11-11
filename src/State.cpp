@@ -2048,11 +2048,11 @@ void State::SetupResources()
 	}
 #endif
 
-	permutationCB = new ConstantBuffer(ConstantBufferDesc<PermutationCB>());
-	sharedDataCB = new ConstantBuffer(ConstantBufferDesc<SharedDataCB>());
+	permutationCB = new ConstantBuffer(ConstantBufferDesc<PermutationCB>(), "State::PermutationCB");
+	sharedDataCB = new ConstantBuffer(ConstantBufferDesc<SharedDataCB>(), "State::SharedDataCB");
 
 	const auto featureDataSize = GetFeatureBufferCapacity();
-	featureDataCB = new ConstantBuffer(ConstantBufferDesc((uint32_t)featureDataSize));
+	featureDataCB = new ConstantBuffer(ConstantBufferDesc((uint32_t)featureDataSize), "State::FeatureDataCB");
 
 	// Grab main texture to get resolution
 	// VR cannot use viewport->screenWidth/Height as it's the desktop preview window's resolution and not HMD

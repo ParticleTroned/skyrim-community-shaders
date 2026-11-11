@@ -52301,20 +52301,22 @@ void Upscaling::SetupResources()
 	}
 
 	DX::ThrowIfFailed(device->CreateDepthStencilState(&depthStencilDesc, upscaleDepthStencilState.put()));
+	Util::SetResourceName(upscaleDepthStencilState.get(), "Upscaling::DepthUpscaleDepthStencilState");
 	D3D11_DEPTH_STENCIL_DESC menuCaptureDepthDesc{};
 	menuCaptureDepthDesc.DepthEnable = false;
 	menuCaptureDepthDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
 	menuCaptureDepthDesc.DepthFunc = D3D11_COMPARISON_ALWAYS;
 	menuCaptureDepthDesc.StencilEnable = false;
 	DX::ThrowIfFailed(device->CreateDepthStencilState(&menuCaptureDepthDesc, vrMenuCaptureDepthDisabledState.put()));
+	Util::SetResourceName(vrMenuCaptureDepthDisabledState.get(), "Upscaling::VRMenuCaptureDepthDisabledState");
 
 	// Create jitter offset constant buffer for depth upscaling
 	delete jitterCB;
-	jitterCB = new ConstantBuffer(ConstantBufferDesc<JitterCB>());
+	jitterCB = new ConstantBuffer(ConstantBufferDesc<JitterCB>(), "Upscaling::JitterCB");
 
 	// Create upscaling data constant buffer for encode textures compute shader
 	delete upscalingDataCB;
-	upscalingDataCB = new ConstantBuffer(ConstantBufferDesc<UpscalingDataCB>());
+	upscalingDataCB = new ConstantBuffer(ConstantBufferDesc<UpscalingDataCB>(), "Upscaling::UpscalingDataCB");
 	delete cameraMotionVectorsCB;
 	cameraMotionVectorsCB = new ConstantBuffer(ConstantBufferDesc<CameraMotionVectorsCB>(), "Upscaling::CameraMotionVectorsCB");
 	menuCameraMVsValid = false;
@@ -52341,6 +52343,7 @@ void Upscaling::SetupResources()
 	blendDesc.RenderTarget[0].BlendEnable = false;
 	blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
 	DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, upscaleBlendState.put()));
+	Util::SetResourceName(upscaleBlendState.get(), "Upscaling::DepthUpscaleBlendState");
 
 	D3D11_BLEND_DESC menuLayerCaptureBlendDesc{};
 	menuLayerCaptureBlendDesc.AlphaToCoverageEnable = false;
@@ -52354,10 +52357,12 @@ void Upscaling::SetupResources()
 	menuLayerCaptureBlendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
 	menuLayerCaptureBlendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
 	DX::ThrowIfFailed(device->CreateBlendState(&menuLayerCaptureBlendDesc, vrMenuLayerCaptureBlendState.put()));
+	Util::SetResourceName(vrMenuLayerCaptureBlendState.get(), "Upscaling::VRMenuLayerCaptureBlendState");
 
 	D3D11_BLEND_DESC menuCompositeBlendDesc = menuLayerCaptureBlendDesc;
 	menuCompositeBlendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
 	DX::ThrowIfFailed(device->CreateBlendState(&menuCompositeBlendDesc, vrMenuCompositeBlendState.put()));
+	Util::SetResourceName(vrMenuCompositeBlendState.get(), "Upscaling::VRMenuCompositeBlendState");
 
 	// Create rasterizer state for fullscreen rendering
 	D3D11_RASTERIZER_DESC rasterizerDesc = {};
@@ -52372,6 +52377,7 @@ void Upscaling::SetupResources()
 	rasterizerDesc.MultisampleEnable = false;
 	rasterizerDesc.AntialiasedLineEnable = false;
 	DX::ThrowIfFailed(device->CreateRasterizerState(&rasterizerDesc, upscaleRasterizerState.put()));
+	Util::SetResourceName(upscaleRasterizerState.get(), "Upscaling::DepthUpscaleRasterizerState");
 
 	CheckResources(GetRuntimeUpscaleMethod());
 	RefreshRuntimeResolutionState();

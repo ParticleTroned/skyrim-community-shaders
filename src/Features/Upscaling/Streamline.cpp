@@ -1472,7 +1472,7 @@ bool Streamline::LoadInterposer()
 	}
 
 	if (SL_FAILED(res, bindings.init(pref, sl::kSDKVersion))) {
-		logger::critical("[Streamline] Failed to initialize Streamline: {}", magic_enum::enum_name(res));
+		logger::critical("[Streamline] Failed to initialize Streamline: {} ({})", magic_enum::enum_name(res), static_cast<int32_t>(res));
 		FreeLibrary(candidateInterposer);
 		ReleaseStreamlineDllDirectory();
 		featureCheckComplete = true;

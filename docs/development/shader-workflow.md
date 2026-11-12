@@ -77,7 +77,10 @@ cmake --build ./build/ALL --target validate_changed
 ```
 
 The target depends on `prepare_shaders`, so the AIO shader tree is assembled
-first. Under the hood it runs `tools/validate_changed_shaders.py`, which maps
+first. Both targets are available even with `AUTO_PLUGIN_DEPLOYMENT` and
+`AIO_ZIP_TO_DIST` disabled. Staging does not build the game DLL; when
+`BUILD_SHADER_TESTS` is enabled, it runs the shader unit tests first.
+Under the hood it runs `tools/validate_changed_shaders.py`, which maps
 changed `package/Shaders/**` and `features/**/Shaders/**` paths into the AIO
 layout and passes them to `hlslkit-compile --changed-files`. Local use requires
 Python and an `hlslkit-compile` version with `--changed-files` support on PATH.

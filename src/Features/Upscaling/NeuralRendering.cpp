@@ -1089,8 +1089,7 @@ struct NeuralRendering::Impl
 		if (peripheralPlan.Active())
 			SetRegion(data, i);
 		colorBuffer->Update(data);
-		lowResBuffer->Update(LowResData{ lowWidth, lowHeight, guideWidth, guideHeight, kModelGuideSigmaStops,
-			reconstructionMode == NR::Reconstruction::Mode::BrightnessGuided ? 1u : 0u });
+		lowResBuffer->Update(LowResData{ lowWidth, lowHeight, guideWidth, guideHeight, kModelGuideSigmaStops, 0u });
 		ID3D11Buffer* buffers[]{ colorBuffer->CB(), lowResBuffer->CB() };
 		context->CSSetConstantBuffers(0, ARRAYSIZE(buffers), buffers);
 		ID3D11ShaderResourceView* inputs[]{ eye.color->srv, eye.lowColor->srv, eye.lowOutput->srv };
@@ -1293,7 +1292,7 @@ struct NeuralRendering::Impl
 		}
 		const bool lowRes = lowWidth != 0;
 		const auto requestedReconstruction = NR::Reconstruction::Select(
-			tuning.modelGuidedUpsample, tuning.modelRgbGuidedUpsample, tuning.modelScale, width, height, lowWidth, lowHeight);
+			tuning.modelGuidedUpsample, tuning.modelScale, width, height, lowWidth, lowHeight);
 		auto selectedReconstruction = requestedReconstruction;
 		auto* reconstructionShader = lowRes ? SelectReconstructionShader(selectedReconstruction) : nullptr;
 		if (selectedReconstruction != reconstructionMode)
@@ -2097,7 +2096,7 @@ namespace
 	}
 
 	/** @brief Draws the model scale and its guided upsample. The scale applies on release, because each size rebuilds the model. Returns true when it changed. */
-	bool DrawModelScaleControls(NR::Tuning& tuning)
+	bool DrawModelScaleControls(NR::Tuning& tuning, bool developerMode)
 	{
 		bool changed = false;
 		const bool unusedByMode = globals::game::isVR && NR::GetEyeMode(tuning) == NR::EyeMode::kAlternate;
@@ -2134,18 +2133,14 @@ namespace
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted(T(TKEY("peripheral_compression_tooltip"),
 				"Higher values can improve performance but reduce Neural Rendering quality toward the edges of the view. More detail is kept in the centre. Does not apply with Alternate eyes or when limited to a tracked actor."));
-		ImGui::BeginDisabled(tuning.modelScale >= NR::Tuning::kMaxModelScale && tuning.peripheralCompressionPercent == 0);
-		changed |= ImGui::Checkbox(T(TKEY("model_guided_upsample"), "Guided Upsample"), &tuning.modelGuidedUpsample);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted(T(TKEY("model_guided_upsample_tooltip"),
-				"Helps keep the Neural Rendering effect aligned with edges."));
-		ImGui::BeginDisabled(!tuning.modelGuidedUpsample);
-		changed |= ImGui::Checkbox(T(TKEY("model_rgb_guided_upsample"), "RGB Guidance"), &tuning.modelRgbGuidedUpsample);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted(T(TKEY("model_rgb_guided_upsample_tooltip"),
-				"Helps keep the Neural Rendering effect from bleeding across colour edges. Enabled by default when needed."));
-		ImGui::EndDisabled();
-		ImGui::EndDisabled();
+		if (developerMode) {
+			ImGui::BeginDisabled(tuning.modelScale >= NR::Tuning::kMaxModelScale && tuning.peripheralCompressionPercent == 0);
+			changed |= ImGui::Checkbox(T(TKEY("model_guided_upsample"), "Improve low-resolution NR"), &tuning.modelGuidedUpsample);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted(T(TKEY("model_guided_upsample_tooltip"),
+					"Helps preserve edges when NR resolution is reduced or compression is used. On by default. Off can look softer."));
+			ImGui::EndDisabled();
+		}
 		ImGui::EndDisabled();
 		return changed;
 	}
@@ -2389,7 +2384,7 @@ void NeuralRendering::DrawSettings(bool& enabled, NR::Context::Profiles& context
 			ImGui::TextUnformatted(T(TKEY("region_overlay_tooltip"),
 				"Draws the evaluated crop: a green outline in the game frame and the same rectangle over the preview below. Only meaningful with Limit to Tracked Actor on, and it draws nothing while no character is tracked, since the whole frame is evaluated then."));
 		ImGui::EndDisabled();
-		if (DrawModelScaleControls(tuning)) {
+		if (DrawModelScaleControls(tuning, developerMode)) {
 			changed = true;
 			resetHistory = true;
 		}

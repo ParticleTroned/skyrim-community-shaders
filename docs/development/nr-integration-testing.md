@@ -22,8 +22,8 @@ rebase preserves the earlier implementation and follow-up fixes in each PR.
 
 | Order | Implementation                                                                                 | Feature branch                                                                                                                         | Included head                              |
 | ----- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| 1     | [RGB-guided reconstruction (#1053)](https://github.com/alandtse/open-shaders/pull/1053)        | [Guided reconstruction](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-guided-reconstruction-20261031)   | `2b2a33431c49c30ab414dc79b9b4540afdf1bf66` |
-| 2     | [Peripheral compression (#1054)](https://github.com/alandtse/open-shaders/pull/1054)           | [Peripheral compression](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-peripheral-compression-20261031) | `587372a92a2984849aede66cfebb5409830e4937` |
+| 1     | [RGB-guided reconstruction (#1053)](https://github.com/alandtse/open-shaders/pull/1053)        | [Guided reconstruction](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-guided-reconstruction-20261031)   | `89571abdd5b7486d9bdcdd6f5929237939896a9b` |
+| 2     | [Peripheral compression (#1054)](https://github.com/alandtse/open-shaders/pull/1054)           | [Peripheral compression](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-peripheral-compression-20261031) | `40e161132f12381f96e66de50a53569bede17aa6` |
 | 3     | [Pause NR during combat (#1055)](https://github.com/alandtse/open-shaders/pull/1055)           | [Combat pause](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-combat-pause-20261031)                     | `c3450c81fb50bed0f056d11e403f3c5970ea6b26` |
 | 4     | [Reduced-model material selection (#1056)](https://github.com/alandtse/open-shaders/pull/1056) | [Scene selection](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-scene-selection-20261031)               | `5161e9a019933317cf3a676a1417240ae6045fb9` |
 
@@ -39,12 +39,12 @@ feature PR:
 
 -   Guided and basic reconstruction sample the compressed model coordinates.
     Optional shader fallback is chosen once for both eyes before crop planning.
--   Compression at Model Scale 1 still reconstructs a reduced grid. Bilinear,
-    brightness-guided and RGB-guided reconstruction all follow that actual grid,
+-   Compression at Model Scale 1 still reconstructs a reduced grid. Bilinear
+    and RGB-guided reconstruction both follow that actual grid,
     including aligned grids with one unchanged axis. Native full-size grids do
     not activate reconstruction.
--   Mapped crops include one model-texel halo for bilinear, brightness-guided and
-    RGB-guided reconstruction. All reconstruction taps stay within the evaluated
+-   Mapped crops include one model-texel halo for bilinear and RGB-guided
+    reconstruction. All reconstruction taps stay within the evaluated
     crop; the optional mode is frozen before that crop is planned.
 -   Material strengths apply in source coordinates after reconstruction, including
     compression-only grids. Native full-size models keep provider protection.
@@ -79,22 +79,25 @@ the original source pixel and alpha.
    [upstream NR guide](https://github.com/alandtse/open-shaders/blob/72441aa923f4f582449c4b06ab4190a6fd894d70/docs/development/neural-rendering.md#enable)
    for version requirements.
 5. Enable Neural Rendering in the Upscaling panel. Leave Developer Mode off
-   and logging at Info. Model Scale, Peripheral Compression and reconstruction
-   controls are available under Performance. Start with a normal full-scene
+   and logging at Info. Model Scale and Peripheral Compression are available
+   under Performance; RGB-guided reconstruction is automatic by default. Start
+   with a normal full-scene
    context and the baseline below.
 
 Lower Model Scale and higher compression can improve performance at the expense
 of Neural Rendering quality. Scale reduces detail across the view; compression
 reduces quality toward the edges while keeping more detail in the centre.
 
-Guided Upsample and RGB Guidance default to on. Supported reduced or compressed
-model grids automatically use RGB guidance, including compression at Model Scale
-1.0. Native-size grids need no reconstruction; an unavailable RGB shader retains
-the existing bilinear fallback.
+RGB-guided reconstruction is enabled by default for supported reduced or
+compressed model grids, including compression at Model Scale 1.0. Native-size
+grids need no reconstruction; an unavailable RGB shader retains the existing
+bilinear fallback.
 
-Saved reconstruction choices are preserved. An earlier test build may have saved
-`modelRgbGuidedUpsample: false`; enable RGB Guidance once to adopt the new default
-in that configuration. Guided Upsample must also be enabled.
+The single **Improve low-resolution NR** checkbox appears only in Developer Mode
+(Debug/Trace). Its saved `modelGuidedUpsample` preference still applies at Info,
+including an explicit off value. The old independent `modelRgbGuidedUpsample` key
+is ignored and is no longer written when settings are saved. There is no separate
+RGB switch.
 
 **No NR DLL is committed or redistributed by these PRs or this integration
 build.** The build checks files and archives before uploading the
@@ -125,20 +128,21 @@ materials selected, and no actor crop, calibration, mirrored-eye or diagnostic
 input transforms. Keep **Use resolution-scaled NR motion** enabled, diagnostic
 options off, and conversion, exposure and composite modes at their production
 settings. First check the default RGB reconstruction on a reduced or compressed
-grid, then compare explicit brightness guidance and bilinear overrides. In VR,
+grid, then use the developer-only master to compare the bilinear path. In VR,
 start with Separate eyes, then repeat the combined cases with
-Parallel eyes. Enable Developer Mode only for the additional Side by side and
-diagnostic tests. Alternate eyes intentionally retains the ordinary sampling
+Parallel eyes. Enable Developer Mode for the master guidance checkbox and
+additional Side by side and diagnostic tests. Alternate eyes intentionally retains the ordinary sampling
 route and is not the mode for testing compression.
 
 | Case                            | Settings                                                                                                          | What to verify                                                                                                                                                                                                                                                 |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Baseline                        | Model Scale 1; compression 0                                                                                      | Existing NR output and native material protection still work. Disabling NR restores ordinary upscaling.                                                                                                                                                        |
-| Ordinary-user controls          | Developer Mode off; Info logging; Model Scale 0.75, then compression 50 at Model Scale 1                            | Both selections must affect the reported model dimensions and survive saving/reloading. RGB guidance applies by default when supported; returning to native size disables reconstruction.                                                                      |
-| Uniform reduction               | Model Scale 0.5, then 0.75 and 0.99; compression 0                                                                | Test guidance off (bilinear), brightness guidance and RGB Guidance. Look for stable colour edges, finite output and correct effective mode at each reduced grid.                                                                                               |
-| Compression only                | Model Scale 1; compression 50                                                                                     | Test bilinear, brightness guidance and RGB Guidance on the actual compact grid. RGB must remain available at nominal scale 1 when compression is active. The centre remains protected and the periphery reconstructs without stale borders.                    |
-| All rendering changes           | Model Scale 0.5; compression 50; RGB Guidance on                                                                  | Change material selection and partial strengths. The original source-resolution categories should control where reconstructed NR gain applies.                                                                                                                 |
-| Reconstruction/crop interaction | Model Scale 0.5 and 1; compression 50; all three reconstruction modes                                             | In VR, enable Follow Foveation and vary the existing foveated rectangles. Check the one-texel model halo, crop edges, eye boundaries and head movement for uninitialised strips or cross-eye sampling.                                                         |
+| Ordinary-user controls          | Developer Mode off; Info logging; Model Scale 0.75, then compression 50 at Model Scale 1                            | Both selections must affect the reported model dimensions and survive saving/reloading. RGB guidance applies by default when supported; guidance checkboxes are hidden. Returning to native size disables reconstruction.                                                                      |
+| Guidance preference             | Default settings; then developer-only master off/on; return to Info and save/reload                                | Default is on. Explicit master choices survive Info logging and reload. A legacy independent RGB key must not change the selected mode. |
+| Uniform reduction               | Model Scale 0.5, then 0.75 and 0.99; compression 0                                                                | Compare automatic RGB guidance with the developer-only master off (bilinear). Look for stable colour edges, finite output and correct effective mode at each reduced grid.                                                                                               |
+| Compression only                | Model Scale 1; compression 50                                                                                     | Compare automatic RGB guidance and bilinear on the actual compact grid. The developer-only master must remain usable at scale 1 when compression is active. The centre remains protected and the periphery reconstructs without stale borders.                    |
+| All rendering changes           | Model Scale 0.5; compression 50; default guidance on                                                                  | Change material selection and partial strengths. The original source-resolution categories should control where reconstructed NR gain applies.                                                                                                                 |
+| Reconstruction/crop interaction | Model Scale 0.5 and 1; compression 50; RGB guidance and bilinear                                             | In VR, enable Follow Foveation and vary the existing foveated rectangles. Check the one-texel model halo, crop edges, eye boundaries and head movement for uninitialised strips or cross-eye sampling.                                                         |
 | Rectangular coverage            | Repeat combined case with Follow Foveation on/off; enable Follow eye gaze in VR when available                    | Actual per-eye gaze rectangles must drive the NR crop. Move gaze across crop boundaries, interrupt tracking and verify the saved rectangle resumes correctly. Preserve the existing full-view fill/blend; compare its settings separately from reconstruction. |
 | Density and alignment           | Hold compression fixed and lower Model Scale in small steps, including low compression near an alignment boundary | Reported model dimensions must not grow on fallback. Check admission reasons, the fixed source-density floor and rounded single-axis savings.                                                                                                                  |
 | Motion donors                   | Move foreground geometry across a distant background with compression active                                      | Colour, depth and motion should describe the same source support. Check periphery and depth edges for sliding or inconsistent motion; repeat supported forward/reverse-Z configurations and bright/dark scenes.                                                |

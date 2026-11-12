@@ -3142,6 +3142,15 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_link_libraries(sharpener_bindings_test PRIVATE d3d11.lib)
     include("${PROJECT_SOURCE_DIR}/tests/d3d11_shader_test.cmake")
+    add_d3d_shader_test(water_history_shader_test WaterHistoryShader tests/water_history_shader_test.cpp)
+    target_sources(
+        water_history_shader_test
+        PRIVATE src/Utils/ShaderInclude.cpp
+    )
+    target_link_libraries(
+        water_history_shader_test
+        PRIVATE spdlog::spdlog windowsapp.lib
+    )
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_depth.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/vanilla_ssao.cmake")
     add_d3d_shader_test(

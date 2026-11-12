@@ -137,10 +137,10 @@ namespace NR
 		uint32_t skipFrameGapMode = 0;
 		/**
 		 * @brief Runs the model at this fraction of the eye size and upsamples its tone gain onto the
-		 *        full-resolution frame. Developer-only; 1 is the full-resolution pass.
+		 *        full-resolution frame. 1 is the full-resolution pass.
 		 */
 		float modelScale = kMaxModelScale;
-		/** @brief Experimental peripheral sampling, 0 off to 100 maximum compression; independent of modelScale. */
+		/** @brief Peripheral sampling, 0 off to 100 maximum compression; independent of modelScale. */
 		uint32_t peripheralCompressionPercent = 0;
 		/**
 		 * @brief Which network a 310.9 or newer runtime creates: 0 the original 310.8 network, 1 the

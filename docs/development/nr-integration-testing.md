@@ -22,8 +22,8 @@ rebase preserves the earlier implementation and follow-up fixes in each PR.
 
 | Order | Implementation                                                                                 | Feature branch                                                                                                                         | Included head                              |
 | ----- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| 1     | [RGB-guided reconstruction (#1053)](https://github.com/alandtse/open-shaders/pull/1053)        | [Guided reconstruction](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-guided-reconstruction-20261031)   | `295eb3282b4fa08eb64bb16219482b600e479e9b` |
-| 2     | [Peripheral compression (#1054)](https://github.com/alandtse/open-shaders/pull/1054)           | [Peripheral compression](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-peripheral-compression-20261031) | `513c420770779ded80c77545a27bde68c16a8b6d` |
+| 1     | [RGB-guided reconstruction (#1053)](https://github.com/alandtse/open-shaders/pull/1053)        | [Guided reconstruction](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-guided-reconstruction-20261031)   | `2b2a33431c49c30ab414dc79b9b4540afdf1bf66` |
+| 2     | [Peripheral compression (#1054)](https://github.com/alandtse/open-shaders/pull/1054)           | [Peripheral compression](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-peripheral-compression-20261031) | `587372a92a2984849aede66cfebb5409830e4937` |
 | 3     | [Pause NR during combat (#1055)](https://github.com/alandtse/open-shaders/pull/1055)           | [Combat pause](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-combat-pause-20261031)                     | `c3450c81fb50bed0f056d11e403f3c5970ea6b26` |
 | 4     | [Reduced-model material selection (#1056)](https://github.com/alandtse/open-shaders/pull/1056) | [Scene selection](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-scene-selection-20261031)               | `5161e9a019933317cf3a676a1417240ae6045fb9` |
 
@@ -78,9 +78,14 @@ the original source pixel and alpha.
    accepted by the existing NR runtime checks. See the
    [upstream NR guide](https://github.com/alandtse/open-shaders/blob/72441aa923f4f582449c4b06ab4190a6fd894d70/docs/development/neural-rendering.md#enable)
    for version requirements.
-5. Enable Neural Rendering in the Upscaling panel. Enable Developer Mode for
-   Model Scale, compression and reconstruction controls. Start with a normal
-   full-scene context and the baseline below.
+5. Enable Neural Rendering in the Upscaling panel. Leave Developer Mode off
+   and logging at Info. Model Scale, Peripheral Compression and reconstruction
+   controls are available under Performance. Start with a normal full-scene
+   context and the baseline below.
+
+Lower Model Scale and higher compression can improve performance at the expense
+of Neural Rendering quality. Scale reduces detail across the view; compression
+reduces quality toward the edges while keeping more detail in the centre.
 
 Guided Upsample and RGB Guidance default to on. Supported reduced or compressed
 model grids automatically use RGB guidance, including compression at Model Scale
@@ -122,12 +127,14 @@ options off, and conversion, exposure and composite modes at their production
 settings. First check the default RGB reconstruction on a reduced or compressed
 grid, then compare explicit brightness guidance and bilinear overrides. In VR,
 start with Separate eyes, then repeat the combined cases with
-Parallel eyes and Side by side. Alternate eyes intentionally retains
-the ordinary sampling route and is not the mode for testing compression.
+Parallel eyes. Enable Developer Mode only for the additional Side by side and
+diagnostic tests. Alternate eyes intentionally retains the ordinary sampling
+route and is not the mode for testing compression.
 
 | Case                            | Settings                                                                                                          | What to verify                                                                                                                                                                                                                                                 |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Baseline                        | Model Scale 1; compression 0                                                                                      | Existing NR output and native material protection still work. Disabling NR restores ordinary upscaling.                                                                                                                                                        |
+| Ordinary-user controls          | Developer Mode off; Info logging; Model Scale 0.75, then compression 50 at Model Scale 1                            | Both selections must affect the reported model dimensions and survive saving/reloading. RGB guidance applies by default when supported; returning to native size disables reconstruction.                                                                      |
 | Uniform reduction               | Model Scale 0.5, then 0.75 and 0.99; compression 0                                                                | Test guidance off (bilinear), brightness guidance and RGB Guidance. Look for stable colour edges, finite output and correct effective mode at each reduced grid.                                                                                               |
 | Compression only                | Model Scale 1; compression 50                                                                                     | Test bilinear, brightness guidance and RGB Guidance on the actual compact grid. RGB must remain available at nominal scale 1 when compression is active. The centre remains protected and the periphery reconstructs without stale borders.                    |
 | All rendering changes           | Model Scale 0.5; compression 50; RGB Guidance on                                                                  | Change material selection and partial strengths. The original source-resolution categories should control where reconstructed NR gain applies.                                                                                                                 |

@@ -165,6 +165,31 @@ contradict this policy.
     the user explicitly requests it for the current task. Earlier in-game
     testing does not authorize live checks or setting changes during later
     source review, default-setting changes, builds, or commits.
+-   **Time-critical live commands: dispatch first.** For direct instructions
+    such as "finish character generation," "move," or "load Whiterun":
+
+    -   When the session and established command are known, dispatch the
+        requested command or established sequence in the first tool call.
+    -   Do not first inspect logs, screenshots, menus, build identity, capture
+        status, shader compilation, or performance. Do not create reports,
+        wrappers, or provenance records before dispatch.
+    -   Reuse the established transport and command. Rediscover only if the
+        necessary information is unavailable or an actual dispatch fails.
+        Any required lookup must be limited to that missing information.
+    -   After dispatch, report only what the response establishes: sent,
+        queued, completed, or failed. Do not delay acknowledgment while
+        waiting for scene stability or collecting optional evidence.
+    -   "Finish character generation and await my move command" authorizes
+        finishing character generation only. Then await the move command.
+    -   If dispatch fails, report the failure promptly. Do not silently
+        start an extended troubleshooting workflow.
+    -   Active WPR recording makes optional delay especially costly.
+        Analysis and optional verification must wait until requested.
+
+    This rule takes precedence over general preparation, observation,
+    measurement, and reporting workflows for these direct commands.
+    Necessary safety checks still apply; speculative checks do not.
+
 -   **Prioritize fast execution, measurement, and analysis.** Perform only the
     requested work, start as soon as the necessary checks are satisfied, and
     return results promptly. Preparation and reporting must not dominate a

@@ -13,13 +13,13 @@ public:
 	virtual inline std::string GetShortName() override { return "Wetterness"; }
 	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
 	virtual inline std::string_view GetShaderDefineName() override { return "WETTERNESS"; }
-	std::string_view GetShaderCacheAbiVersion() override { return "3"; }
+	std::string_view GetShaderCacheAbiVersion() override { return "4"; }
 	virtual std::string_view GetCategory() const override { return "Water"; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Adds rain and snowmelt wetness, puddles, shore wetness and raindrop effects.",
+			"Adds rain-wet surfaces, puddles, shore wetness and raindrop effects.",
 			{ "Dynamic surface wetness based on weather conditions",
 				"Realistic puddle formation and shore wetness effects",
 				"Animated raindrop effects with splashes and ripples",
@@ -31,8 +31,7 @@ public:
 	bool HasShaderDefine(RE::BSShader::Type type) override
 	{
 		return type == RE::BSShader::Type::Lighting ||
-		       type == RE::BSShader::Type::Water ||
-		       type == RE::BSShader::Type::Grass;
+		       type == RE::BSShader::Type::Water;
 	};
 
 	struct Settings
@@ -282,8 +281,6 @@ public:
 	virtual bool IsCore() const override { return false; };
 	bool IsRuntimeActive() const { return loaded && settings.EnableWetterness != 0; }
 	bool IsRuntimeProcessingActive() const;
-	/** Material drying hours (stone, grass, dirt, puddles) for a bounded precipitation load. */
-	float4 GetDryingHours(float precipitationWeight) const;
 	void ResetRuntimeStateAfterGameLoad() const { ResetRuntimeState(); }
 
 	// Override to provide weather analysis configuration

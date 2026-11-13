@@ -44,17 +44,17 @@ int main()
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	Selection state;
 	assert(!state.Pending() && state.Active() == 0);
-	const auto requested = ParseSettings(0, { { "snowMeltFireReuse", false }, { "reverseZBindings", false } });
+	const auto requested = ParseSettings(0, { { "snowWeatherRange", false }, { "reverseZBindings", false } });
 	state.Request(requested);
-	assert(state.Pending() && state.Active() == 0 && state.Requested() == 65);
-	assert(state.Apply() && !state.Pending() && state.Active() == 65);
+	assert(state.Pending() && state.Active() == 0 && state.Requested() == 72);
+	assert(state.Apply() && !state.Pending() && state.Active() == 72);
 	assert(!state.Apply());
-	state.Request(ParseSettings(state.Requested(), { { "snowMeltFireReuse", true } }));
+	state.Request(ParseSettings(state.Requested(), { { "snowWeatherRange", true } }));
 	assert(state.Apply() && state.Active() == 64);
 	state.Request(0);
 	assert(state.Apply() && state.Active() == 0);
 	for (const auto& invalid : { nlohmann::json{}, nlohmann::json::object(), nlohmann::json{ { "unknown", false } },
-			 nlohmann::json{ { "snowMeltFireReuse", false }, { "grassTileFilter", 1 } } }) {
+			 nlohmann::json{ { "snowWeatherRange", false }, { "grassTileFilter", 1 } } }) {
 		bool rejected = false;
 		try {
 			state.Request(ParseSettings(state.Requested(), invalid));
@@ -93,7 +93,6 @@ int main()
 	renderer.SetDefines(authored);
 	assert(renderer.shaderDefinesSnapshot.load()->canonicalText == authored);
 #else
-	static_assert(!ReferenceEnabled(Point::SnowMeltFireReuse));
 	static_assert(!ReferenceEnabled(Point::GrassTileFilter));
 	static_assert(!ReferenceEnabled(Point::FurContactReject));
 	static_assert(!ReferenceEnabled(Point::SnowWeatherRange));

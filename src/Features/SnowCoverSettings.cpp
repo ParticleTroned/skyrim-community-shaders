@@ -1,7 +1,6 @@
 #include "SnowCover.h"
 
 #include "Utils/UI.h"
-#include "Wetterness/SnowMelt.h"
 
 void SnowCover::DrawSettings()
 {
@@ -48,7 +47,6 @@ void SnowCover::DrawSettings()
 	Util::AddTooltip("Saves the current region's snow settings and applies any edited texture paths.");
 	ImGui::SameLine();
 	if (ImGui::Button("Region defaults")) {
-		WetternessSnowMelt::Reset();
 		const auto enabled = wsettings.EnableSnowCover;
 		ResetWorldConfig();
 		wsettings.EnableSnowCover = enabled;

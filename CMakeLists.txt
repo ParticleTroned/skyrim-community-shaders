@@ -3014,14 +3014,6 @@ if(BUILD_CONTROLLER_TESTS)
         tests/wetterness_highlights_test.cpp
     )
     include("${PROJECT_SOURCE_DIR}/tests/wetterness_runtime.cmake")
-    add_controller_test(
-        wetterness_snow_history_test WetternessSnowHistory
-        tests/wetterness_snow_history_test.cpp
-    )
-    add_d3d_shader_test(
-        wetterness_snow_melt_test WetternessSnowMelt
-        tests/wetterness_snow_melt_test.cpp
-    )
     add_d3d_shader_test(
         snow_cover_color_test SnowCoverColor tests/snow_cover_color_test.cpp
     )

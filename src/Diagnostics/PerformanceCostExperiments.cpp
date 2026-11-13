@@ -41,9 +41,9 @@ namespace CSX::Diagnostics::PerformanceCosts
 
 		void InvalidateShaders(uint32_t a_changed)
 		{
-			if (a_changed & (CSX_PERF_SNOW_MELT_FIRE_REUSE | CSX_PERF_FUR_CONTACT_REJECT | CSX_PERF_SNOW_WEATHER_RANGE | CSX_PERF_POINT_LIGHT_COMPOSITION))
+			if (a_changed & (CSX_PERF_FUR_CONTACT_REJECT | CSX_PERF_SNOW_WEATHER_RANGE | CSX_PERF_POINT_LIGHT_COMPOSITION))
 				globals::shaderCache->Clear(RE::BSShader::Type::Lighting);
-			if (a_changed & (CSX_PERF_SNOW_MELT_FIRE_REUSE | CSX_PERF_SNOW_WEATHER_RANGE | CSX_PERF_POINT_LIGHT_COMPOSITION))
+			if (a_changed & (CSX_PERF_SNOW_WEATHER_RANGE | CSX_PERF_POINT_LIGHT_COMPOSITION))
 				globals::shaderCache->Clear(RE::BSShader::Type::Grass);
 			if (a_changed & CSX_PERF_POINT_LIGHT_COMPOSITION) {
 				globals::shaderCache->Clear(RE::BSShader::Type::Water);

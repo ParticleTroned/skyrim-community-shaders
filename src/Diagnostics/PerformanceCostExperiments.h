@@ -17,7 +17,6 @@ namespace CSX::Diagnostics::PerformanceCosts
 	/** Independent references retain feature settings while restoring previous calculations. */
 	enum class Point : uint32_t
 	{
-		SnowMeltFireReuse = CSX_PERF_SNOW_MELT_FIRE_REUSE,
 		GrassTileFilter = CSX_PERF_GRASS_TILE_FILTER,
 		FurContactReject = CSX_PERF_FUR_CONTACT_REJECT,
 		SnowWeatherRange = CSX_PERF_SNOW_WEATHER_RANGE,
@@ -27,8 +26,6 @@ namespace CSX::Diagnostics::PerformanceCosts
 	};
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	inline constexpr uint32_t AllPoints = 127;
-	inline constexpr uint32_t ShaderPoints = AllPoints & ~CSX_PERF_REVERSE_Z_BINDINGS;
 	struct Entry
 	{
 		std::string_view name;
@@ -36,14 +33,20 @@ namespace CSX::Diagnostics::PerformanceCosts
 		std::string_view conditions;
 	};
 	inline constexpr std::array Entries{
-		Entry{ "snowMeltFireReuse", Point::SnowMeltFireReuse, "Active snowmelt history with repeated nonempty fire footprints" },
 		Entry{ "grassTileFilter", Point::GrassTileFilter, "Advanced Grass Collision with more than four actor boxes" },
 		Entry{ "furContactReject", Point::FurContactReject, "Visible fur with Touch enabled and out-of-range contact capsules" },
-		Entry{ "snowWeatherRange", Point::SnowWeatherRange, "Snow Cover with zero snowfall accumulation and inactive melt history" },
+		Entry{ "snowWeatherRange", Point::SnowWeatherRange, "Snow Cover with zero snowfall accumulation" },
 		Entry{ "pointLightComposition", Point::PointLightComposition, "Nonneutral shared and subtype point-light colour controls" },
 		Entry{ "neuralPreparation", Point::NeuralPreparation, "NR empty character selections or zero-detail/zero-appearance preserve-source reconstruction" },
 		Entry{ "reverseZBindings", Point::ReverseZBindings, "Reverse Z active with unchanged physical state during convention transitions" }
 	};
+	inline constexpr uint32_t AllPoints = [] {
+		uint32_t mask = 0;
+		for (const auto& entry : Entries)
+			mask |= static_cast<uint32_t>(entry.point);
+		return mask;
+	}();
+	inline constexpr uint32_t ShaderPoints = AllPoints & ~CSX_PERF_REVERSE_Z_BINDINGS;
 
 	/** Schema and validation use the same independent optimization names. */
 	inline nlohmann::json SettingsSchema()

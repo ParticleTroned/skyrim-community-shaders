@@ -47,7 +47,6 @@
 #include "Features/LightLimitFix.h"
 #include "Features/LightLimitFix/LightAttach.h"
 #include "Features/PerformanceOverlay.h"
-#include "Features/SnowCover.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
@@ -526,7 +525,6 @@ void State::Draw()
 			globals::features::lightLimitFix.Reset();
 			globals::features::interiorSun.isInteriorWithSun = false;
 			globals::features::wetterness.ResetRuntimeStateAfterGameLoad();
-			globals::features::snowCover.ResetRuntimeStateAfterGameLoad();
 			globals::features::grassCollision.ResetRuntimeStateAfterGameLoad();
 			pendingPostLoadRuntimeReset = false;
 			logger::info("Applied deferred post-load runtime reset");
@@ -2052,7 +2050,7 @@ void State::SetupResources()
 	permutationCB = new ConstantBuffer(ConstantBufferDesc<PermutationCB>(), "State::PermutationCB");
 	sharedDataCB = new ConstantBuffer(ConstantBufferDesc<SharedDataCB>(), "State::SharedDataCB");
 
-	const auto featureDataSize = GetFeatureBufferCapacity();
+	const auto featureDataSize = GetFeatureBufferData(false).second;
 	featureDataCB = new ConstantBuffer(ConstantBufferDesc((uint32_t)featureDataSize), "State::FeatureDataCB");
 
 	// Grab main texture to get resolution

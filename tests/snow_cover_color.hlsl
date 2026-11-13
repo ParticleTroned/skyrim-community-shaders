@@ -67,3 +67,9 @@ ColorOutput main(float4 position : SV_Position)
 	result.expected = float4(expected, 1);
 	return result;
 }
+
+float4 WeatherRange(float4 position : SV_Position) : SV_Target0
+{
+	float range = SnowCover::GetWeatherRange(float3(position.x * 100, 0, position.x * 50), 1000);
+	return float4(range, 0, 0, 1);
+}

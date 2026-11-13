@@ -8,6 +8,7 @@
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace
@@ -22,6 +23,20 @@ namespace
 	constexpr Color AlternateTint{ 0.9f, 0.75f, 1.0f, 1.0f };
 	constexpr float MainAO = 0.7f;
 	constexpr float AlternateAO = 0.4f;
+
+	ComPtr<ID3DBlob> CompilePixel(std::vector<D3D_SHADER_MACRO> defines, const char* entry)
+	{
+		PackageIncludes includes("package/Shaders", "features/Snow Cover/Shaders");
+		defines.push_back({ nullptr, nullptr });
+		ComPtr<ID3DBlob> bytecode, errors;
+		const auto compiled = D3DCompileFromFile(L"tests/snow_cover_color.hlsl", defines.data(), &includes,
+			entry, "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+			0, bytecode.GetAddressOf(), errors.GetAddressOf());
+		if (errors)
+			std::cerr << static_cast<const char*>(errors->GetBufferPointer());
+		Check(compiled);
+		return bytecode;
+	}
 
 	struct Target
 	{
@@ -76,20 +91,12 @@ namespace
 
 	size_t CheckColors(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11VertexShader* vertex, bool vr, bool pbr)
 	{
-		PackageIncludes includes("package/Shaders", "features/Snow Cover/Shaders");
 		std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "SNOW_COVER", "1" } };
 		if (vr)
 			defines.push_back({ "VR", "1" });
 		if (pbr)
 			defines.push_back({ "TRUE_PBR", "1" });
-		defines.push_back({ nullptr, nullptr });
-		ComPtr<ID3DBlob> bytecode, errors;
-		const auto compiled = D3DCompileFromFile(L"tests/snow_cover_color.hlsl", defines.data(), &includes,
-			"main", "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
-			0, bytecode.GetAddressOf(), errors.GetAddressOf());
-		if (errors)
-			std::cerr << static_cast<const char*>(errors->GetBufferPointer());
-		Check(compiled);
+		auto bytecode = CompilePixel(std::move(defines), "main");
 		ComPtr<ID3D11PixelShader> shader;
 		Check(device->CreatePixelShader(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), nullptr, shader.GetAddressOf()));
 		Util::SetResourceName(shader.Get(), "SnowColorTest::PS");
@@ -173,6 +180,49 @@ namespace
 		}
 		return count;
 	}
+
+	void CheckWeatherRange(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11VertexShader* vertex, bool vr, bool reference)
+	{
+		std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "SNOW_COVER", "1" } };
+		if (vr)
+			defines.push_back({ "VR", "1" });
+		if (reference)
+			defines.push_back({ "CSX_PERF_REFERENCE_FLAGS", "CSX_PERF_SNOW_WEATHER_RANGE" });
+		auto bytecode = CompilePixel(std::move(defines), "WeatherRange");
+		ComPtr<ID3D11PixelShader> shader;
+		Check(device->CreatePixelShader(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), nullptr, shader.GetAddressOf()));
+		Util::SetResourceName(shader.Get(), "SnowColorTest::WeatherRangePS");
+		ComPtr<ID3D11ShaderReflection> reflection;
+		Check(D3DReflect(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
+		ConstantBuffer features(device, reflection.Get(), "SharedData::FeatureData");
+		features.SetMember("SharedData::snowCoverSettings", "WeatherFadeStart", 200.0f);
+		features.SetMember("SharedData::snowCoverSettings", "WeatherFadeEnd", 1000.0f);
+		Target target(device);
+		context->ClearState();
+		context->OMSetRenderTargets(1, target.view.GetAddressOf(), nullptr);
+		const D3D11_VIEWPORT viewport{ 0, 0, 3, 1, 0, 1 };
+		context->RSSetViewports(1, &viewport);
+		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		context->VSSetShader(vertex, nullptr, 0);
+		context->PSSetShader(shader.Get(), nullptr, 0);
+		Results weather{};
+		for (float accumulation : { 1.0f, 0.0f, -1.0f }) {
+			features.SetMember("SharedData::snowCoverSettings", "TimeSnowing", accumulation);
+			features.Bind(context, D3D11ShaderTest::Stage::Pixel);
+			context->Draw(3, 0);
+			const auto values = target.Read(context);
+			if (accumulation > 0)
+				weather = values;
+			for (size_t i = 0; i < values.size(); ++i) {
+				if (!(weather[i][0] > 0 && weather[i][0] < 1) || values[i][3] != 1)
+					throw std::runtime_error("Snow weather-distance test missed the rendered fade");
+				const float expected = accumulation == 0 && !reference ? 0.0f : weather[i][0];
+				if (!std::isfinite(values[i][0]) || std::abs(values[i][0] - expected) > 1e-6f)
+					throw std::runtime_error("Snow weather-distance optimization changed zero or negative accumulation behavior");
+			}
+		}
+		context->ClearState();
+	}
 }
 
 int main()
@@ -192,7 +242,11 @@ int main()
 		for (bool vr : { false, true })
 			for (bool pbr : { false, true })
 				count += CheckColors(device.Get(), context.Get(), vertex.Get(), vr, pbr);
+		for (bool vr : { false, true })
+			for (bool reference : { false, true })
+				CheckWeatherRange(device.Get(), context.Get(), vertex.Get(), vr, reference);
 		std::cout << "Snow color: " << count << " production surface/foliage samples match native shading on WARP (SE/AE and VR, legacy/PBR sources and targets, LL controls, main/alternate fallback, retained tints/AO)\n";
+		std::cout << "Snow weather distance: positive, zero and negative accumulation passed on WARP (SE/AE and VR, optimized/reference)\n";
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';
 		return 1;

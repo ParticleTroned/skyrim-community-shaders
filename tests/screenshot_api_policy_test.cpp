@@ -2,6 +2,7 @@
 #include "Features/ScreenshotStorageSecurity.cpp"
 #include "screenshot_storage_security_test.h"
 
+#include <array>
 #include <iostream>
 #include <stdexcept>
 
@@ -11,6 +12,18 @@ int main()
 try {
 	RunScreenshotStorageSecurityTests();
 	using namespace CSX::ScreenshotPolicy;
+	for (const auto& test : { std::array<std::size_t, 5>{ 2048, 2048, 1, 3840, 2160 },
+			 std::array<std::size_t, 5>{ 5000, 5000, 1, 4992, 2808 },
+			 std::array<std::size_t, 5>{ 6000, 2500, 1, 4432, 2493 },
+			 std::array<std::size_t, 5>{ 5000, 5000, 0, 3840, 2160 },
+			 std::array<std::size_t, 5>{ 16384, 16384, 1, 16384, 9216 } }) {
+		const auto size = ResolveFramedSize(test[0], test[1], test[2] != 0);
+		if (!size || size->width != test[3] || size->height != test[4])
+			throw std::runtime_error("native framing crop or 4K minimum is invalid");
+	}
+	if (ResolveFramedSize(0, 5000, true) || ResolveFramedSize(5000, 8, true) ||
+		ResolveFramedSize(16385, 5000, true) || ResolveFramedSize(5000, 16385, true))
+		throw std::runtime_error("invalid framing source dimensions were accepted");
 	if (SelectSettingsCaptureSource("hmd_submission", true) != "hmd_submission" ||
 		SelectSettingsCaptureSource("hmd_submission", false) != "desktop_mirror" ||
 		SelectSettingsCaptureSource("desktop_mirror", true) != "desktop_mirror")

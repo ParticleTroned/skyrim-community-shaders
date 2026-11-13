@@ -270,6 +270,7 @@
     "VRCaptureSource": "HMDSubmission",
     "VRFramedDominantEye": "Left",
     "VRFramedEye": "Left",
+    "VRFramedNativeResolution": false,
     "VRFramedView": "Left"
   },
   "VR": {

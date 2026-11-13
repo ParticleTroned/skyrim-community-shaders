@@ -105,8 +105,8 @@ namespace
 	}
 
 	constexpr auto kReadbackMapRetryDelay = std::chrono::milliseconds(1);
-	constexpr uint32_t kFramedEyeOutputWidth = 2560;
-	constexpr uint32_t kFramedEyeOutputHeight = 1440;
+	constexpr uint32_t kFramedEyeOutputWidth = CSX::ScreenshotPolicy::FramedWidth;
+	constexpr uint32_t kFramedEyeOutputHeight = CSX::ScreenshotPolicy::FramedHeight;
 	constexpr float kStereoFeatherFraction = 0.08f;
 	constexpr float kFrameCoverageSafetyScale = 0.995f;
 	constexpr std::size_t kVisibilityMaskGuardPixels = 2;
@@ -295,7 +295,9 @@ namespace
 		DirectX::ScratchImage& a_resizedImage)
 	{
 		if (!a_source.pixels || a_source.width == 0 || a_source.height == 0 ||
-			a_targetWidth == 0 || a_targetHeight == 0) {
+			a_targetWidth == 0 || a_targetHeight == 0 ||
+			a_targetWidth > CSX::ScreenshotPolicy::MaximumFramedDimension ||
+			a_targetHeight > CSX::ScreenshotPolicy::MaximumFramedDimension) {
 			return false;
 		}
 
@@ -329,6 +331,11 @@ namespace
 			return false;
 		}
 
+		if (cropWidth == a_targetWidth && cropHeight == a_targetHeight) {
+			a_resizedImage = std::move(a_croppedImage);
+			return true;
+		}
+
 		DirectX::Image resizeSource = *cropped;
 		uint32_t filterFlags = DirectX::TEX_FILTER_CUBIC | DirectX::TEX_FILTER_SEPARATE_ALPHA;
 		if (a_colorSpace == vr::ColorSpace_Linear) {
@@ -338,12 +345,14 @@ namespace
 		} else if (!IsLinearCapture(a_colorSpace, resizeSource.format)) {
 			filterFlags |= DirectX::TEX_FILTER_SRGB;
 		}
-		return SUCCEEDED(DirectX::Resize(
+		const auto result = DirectX::Resize(
 			resizeSource,
 			a_targetWidth,
 			a_targetHeight,
 			static_cast<DirectX::TEX_FILTER_FLAGS>(filterFlags),
-			a_resizedImage));
+			a_resizedImage);
+		a_croppedImage.Release();
+		return SUCCEEDED(result);
 	}
 
 	struct HeadTangentBounds
@@ -594,6 +603,7 @@ namespace
 		float a_centerY,
 		float a_frameWidth,
 		float a_frameHeight,
+		CSX::ScreenshotPolicy::FramedSize a_outputSize,
 		const std::array<std::array<float, 4>, 2>& a_projectionTangents,
 		const std::array<vr::HmdMatrix34_t, 2>& a_eyeToHeadTransforms,
 		const std::array<std::vector<uint8_t>, 2>& a_visibilityMasks,
@@ -601,14 +611,14 @@ namespace
 	{
 		const float frameLeft = a_centerX - a_frameWidth * 0.5f;
 		const float frameTop = a_centerY + a_frameHeight * 0.5f;
-		for (std::size_t y = 0; y < kFramedEyeOutputHeight; ++y) {
+		for (std::size_t y = 0; y < a_outputSize.height; ++y) {
 			const float tangentY = frameTop -
 			                       (static_cast<float>(y) + 0.5f) /
-			                           static_cast<float>(kFramedEyeOutputHeight) * a_frameHeight;
-			for (std::size_t x = 0; x < kFramedEyeOutputWidth; ++x) {
+			                           static_cast<float>(a_outputSize.height) * a_frameHeight;
+			for (std::size_t x = 0; x < a_outputSize.width; ++x) {
 				const float tangentX = frameLeft +
 				                       (static_cast<float>(x) + 0.5f) /
-				                           static_cast<float>(kFramedEyeOutputWidth) * a_frameWidth;
+				                           static_cast<float>(a_outputSize.width) * a_frameWidth;
 				if (!IsHeadTangentCovered(
 						tangentX,
 						tangentY,
@@ -1031,6 +1041,15 @@ namespace
 		} else if (!IsLinearCapture(a_colorSpace, conversionSource.format)) {
 			convertFlags |= DirectX::TEX_FILTER_SRGB_IN;
 		}
+		if (conversionSource.format == DXGI_FORMAT_R32G32B32A32_FLOAT) {
+			// DirectXTex Convert rejects identical formats; explicit gamma still needs decoding.
+			if (convertFlags & DirectX::TEX_FILTER_SRGB_IN) {
+				return SUCCEEDED(DirectX::TransformImage(conversionSource, [](DirectX::XMVECTOR* a_outputPixels, const DirectX::XMVECTOR* a_inputPixels, size_t a_width, size_t) {
+						for (size_t x = 0; x < a_width; ++x)
+							a_outputPixels[x] = DirectX::XMColorSRGBToRGB(a_inputPixels[x]); }, a_output));
+			}
+			return SUCCEEDED(a_output.InitializeFromImage(conversionSource));
+		}
 
 		return SUCCEEDED(DirectX::Convert(
 			conversionSource,
@@ -1047,9 +1066,13 @@ namespace
 		const std::array<std::vector<vr::HmdVector2_t>, 2>& a_hiddenAreaMeshes,
 		vr::EVREye a_dominantEye,
 		vr::EColorSpace a_colorSpace,
+		CSX::ScreenshotPolicy::FramedSize a_outputSize,
 		DirectX::ScratchImage& a_output)
 	{
-		if (!a_eyeImages[0] || !a_eyeImages[1]) {
+		if (!a_eyeImages[0] || !a_eyeImages[1] ||
+			a_outputSize.width == 0 || a_outputSize.height == 0 ||
+			a_outputSize.width > CSX::ScreenshotPolicy::MaximumFramedDimension ||
+			a_outputSize.height > CSX::ScreenshotPolicy::MaximumFramedDimension) {
 			return false;
 		}
 
@@ -1182,6 +1205,7 @@ namespace
 				desiredCenterY,
 				frameWidth,
 				frameHeight,
+				a_outputSize,
 				a_projectionTangents,
 				a_eyeToHeadTransforms,
 				eyeVisibilityMasks,
@@ -1197,6 +1221,7 @@ namespace
 						desiredCenterY,
 						frameWidth * candidateScale,
 						frameHeight * candidateScale,
+						a_outputSize,
 						a_projectionTangents,
 						a_eyeToHeadTransforms,
 						eyeVisibilityMasks,
@@ -1218,6 +1243,7 @@ namespace
 					desiredCenterY,
 					frameWidth,
 					frameHeight,
+					a_outputSize,
 					a_projectionTangents,
 					a_eyeToHeadTransforms,
 					eyeVisibilityMasks,
@@ -1231,8 +1257,8 @@ namespace
 
 		if (FAILED(a_output.Initialize2D(
 				DXGI_FORMAT_R32G32B32A32_FLOAT,
-				kFramedEyeOutputWidth,
-				kFramedEyeOutputHeight,
+				a_outputSize.width,
+				a_outputSize.height,
 				1,
 				1))) {
 			return false;
@@ -1684,6 +1710,8 @@ json ScreenshotFeature::BuildCaptureDescriptor(
 		};
 		if (a_view == "framed_combined")
 			output["dominantEye"] = vrFramedDominantEye == vr::Eye_Right ? "right" : "left";
+		if (a_view.starts_with("framed_"))
+			output["resolution"] = vrFramedNativeResolution ? "native" : "4k";
 		outputs.push_back(std::move(output));
 	};
 
@@ -1821,6 +1849,8 @@ void ScreenshotFeature::LoadSettings(json& a_json)
 			vrCaptureSource = VRCaptureSource::HMDSubmission;
 		}
 	}
+	if (a_json.contains("VRFramedNativeResolution") && a_json["VRFramedNativeResolution"].is_boolean())
+		vrFramedNativeResolution = a_json["VRFramedNativeResolution"].get<bool>();
 	if (a_json.contains("VRFramedEye") && a_json["VRFramedEye"].is_string()) {
 		legacyFramedEye = a_json["VRFramedEye"].get<std::string>() == "Right" ?
 		                      vr::Eye_Right :
@@ -1934,6 +1964,7 @@ void ScreenshotFeature::SaveSettings(json& a_json)
 	                                 vrFramedDominantEye :
 	                                 (vrFramedView == VRFramedView::Right ? vr::Eye_Right : vr::Eye_Left);
 	a_json["VRFramedEye"] = legacyFramedEye == vr::Eye_Right ? "Right" : "Left";
+	a_json["VRFramedNativeResolution"] = vrFramedNativeResolution;
 	a_json["SettingsSchemaVersion"] = 2;
 	a_json["Sequence"] = {
 		{ "FrameCount", sequenceDefaults.frameCount },
@@ -2000,7 +2031,7 @@ void ScreenshotFeature::DrawSettings()
 			                        (vrCaptureSource == VRCaptureSource::DesktopMirror ? 2 : 0);
 			const MenuUI::Choice sources[] = {
 				{ "hmd", "HMD submission", "Final image sent to the headset", "Capture the selected eye, or both as separate files." },
-				{ "framed", "Framed view", "2560 x 1440 image", "Save a left, right or combined 16:9 view." },
+				{ "framed", "Framed view", "4K or native image", "Save a left, right or combined 16:9 view." },
 				{ "mirror", "Desktop mirror", "Current desktop picture", "Capture Skyrim's desktop backbuffer." }
 			};
 			const int chosen = MenuUI::ChoiceCards("CaptureSource", captureSource, sources);
@@ -2247,12 +2278,14 @@ void ScreenshotFeature::DrawSettings()
 
 		if (usesFixedEyeFraming) {
 			MenuUI::SectionHeading("Framing");
+			ImGui::Checkbox("Use native resolution when larger than 4K", &vrFramedNativeResolution);
+			ImGui::TextWrapped("Default: 3840 x 2160. Native uses the selected eye's largest 16:9 crop when larger; combined views use the dominant eye's size.");
 			if (vrCaptureSource == VRCaptureSource::FramedStereo) {
 				ImGui::TextWrapped(
 					"Combined aligns submitted eyes in head-projection space. The dominant eye supplies the shared view; the other fills the outer edge with a feathered join. No scene depth: nearby objects may show seams or duplication.");
 			} else {
 				ImGui::TextWrapped(
-					"The selected submitted eye is center-cropped to 16:9 and resized to 2560 x 1440 without stretching.");
+					"The selected submitted eye is center-cropped to 16:9 without stretching. A native crop larger than 4K is saved without resizing.");
 			}
 			ImGui::TextWrapped(
 				"Ignores the ordinary crop preset. Requires live eye submissions; framed views are unavailable during loading.");
@@ -2356,7 +2389,8 @@ ScreenshotFeature::CaptureOptions ScreenshotFeature::SnapshotCaptureOptions() co
 		.copyToClipboard = copyToClipboard,
 		.framedEye = vrCaptureSource == VRCaptureSource::FramedStereo ?
 		                 vrFramedDominantEye :
-		                 (vrFramedView == VRFramedView::Right ? vr::Eye_Right : vr::Eye_Left)
+		                 (vrFramedView == VRFramedView::Right ? vr::Eye_Right : vr::Eye_Left),
+		.nativeFraming = vrFramedNativeResolution
 	};
 }
 
@@ -2553,6 +2587,7 @@ ScreenshotFeature::CaptureStartResult ScreenshotFeature::TryStartApiCapture(
 		}
 		plan.width = output.value("width", 0u);
 		plan.height = output.value("height", 0u);
+		plan.nativeFraming = output.value("resolution", std::string("4k")) == "native";
 		plan.saveAsPng = output.value("encoding", nlohmann::json::object()).value("format", std::string("png")) == "png";
 		plan.copyToClipboard = clipboard;
 		plan.dominantEye = output.value("dominantEye", std::string("left")) == "right" ? vr::Eye_Right : vr::Eye_Left;
@@ -3117,6 +3152,19 @@ void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerSta
 						bool tonemapSceneHdr = screenshot.planes[0].tonemapSceneHdr;
 						bool needsFraming = false;
 						bool dominantEyeFallback = false;
+						CSX::ScreenshotPolicy::FramedSize framedSize{
+							output.width ? output.width : kFramedEyeOutputWidth,
+							output.height ? output.height : kFramedEyeOutputHeight
+						};
+						if (output.nativeFraming) {
+							const bool right = output.view == OutputView::FramedRight ||
+							                   (output.view == OutputView::FramedCombined && output.dominantEye == vr::Eye_Right);
+							const auto* eye = getPlane(right ? 1u : 0u).second;
+							const auto size = eye ? CSX::ScreenshotPolicy::ResolveFramedSize(eye->width, eye->height, true) : std::nullopt;
+							if (!size)
+								throw std::runtime_error("invalid native framing dimensions");
+							framedSize = *size;
+						}
 						switch (output.view) {
 						case OutputView::LeftEye:
 						case OutputView::FramedLeft:
@@ -3137,6 +3185,7 @@ void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerSta
 									screenshot.hiddenAreaMeshes,
 									output.dominantEye,
 									colourSpace,
+									framedSize,
 									stereoComposite)) {
 								sourceScratch = &stereoComposite;
 								sourceImage = stereoComposite.GetImage(0, 0, 0);
@@ -3186,8 +3235,8 @@ void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerSta
 						if (needsFraming) {
 							if (!CenterCropAndResize(
 									*sourceImage,
-									output.width ? output.width : kFramedEyeOutputWidth,
-									output.height ? output.height : kFramedEyeOutputHeight,
+									framedSize.width,
+									framedSize.height,
 									colourSpace,
 									framingCrop,
 									framed))
@@ -3263,6 +3312,16 @@ void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerSta
 			DirectX::ScratchImage stereoCompositeImage;
 			DirectX::ScratchImage* assembledImage = nullptr;
 			const DirectX::Image* assembled = nullptr;
+			if (screenshot.nativeFraming && screenshot.aspectFillWidth != 0) {
+				const auto* eye = planeImages[screenshot.planeCount == 2 && screenshot.dominantEye == vr::Eye_Right ? 1u : 0u];
+				const auto size = eye ? CSX::ScreenshotPolicy::ResolveFramedSize(eye->width, eye->height, true) : std::nullopt;
+				if (!size) {
+					reportFailure("Invalid native framing dimensions.");
+					continue;
+				}
+				screenshot.aspectFillWidth = size->width;
+				screenshot.aspectFillHeight = size->height;
+			}
 			if (screenshot.combineFramedEyes) {
 				const bool composed = screenshot.planeCount == 2 &&
 				                      screenshot.stereoProjectionValid &&
@@ -3273,14 +3332,15 @@ void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerSta
 										  screenshot.hiddenAreaMeshes,
 										  screenshot.dominantEye,
 										  combinedColorSpace,
+										  { screenshot.aspectFillWidth, screenshot.aspectFillHeight },
 										  stereoCompositeImage);
 				if (composed) {
 					assembledImage = &stereoCompositeImage;
 					assembled = stereoCompositeImage.GetImage(0, 0, 0);
 					combinedFormat = DXGI_FORMAT_R32G32B32A32_FLOAT;
 					combinedColorSpace = vr::ColorSpace_Linear;
-					combinedWidth = kFramedEyeOutputWidth;
-					combinedHeight = kFramedEyeOutputHeight;
+					combinedWidth = static_cast<uint32_t>(assembled->width);
+					combinedHeight = static_cast<uint32_t>(assembled->height);
 					screenshot.aspectFillWidth = 0;
 					screenshot.aspectFillHeight = 0;
 				} else {
@@ -3925,6 +3985,7 @@ void ScreenshotFeature::ObserveAcceptedVRSubmit(
 #endif
 		completedScreenshot.saveAsPng = activeCapture.options.saveAsPng;
 		completedScreenshot.copyToClipboard = activeCapture.options.copyToClipboard;
+		completedScreenshot.nativeFraming = activeCapture.options.nativeFraming;
 		completedScreenshot.requestId = activeCapture.options.requestId;
 		completedScreenshot.parentRequestId = activeCapture.options.parentRequestId;
 		completedScreenshot.sequenceOrdinal = activeCapture.options.sequenceOrdinal;
@@ -3982,13 +4043,13 @@ void ScreenshotFeature::ObserveAcceptedVRSubmit(
 		}
 		switch (completedSource) {
 		case VRCaptureSource::FramedEye:
-			logger::debug("Capturing one accepted OpenVR eye at 2560 x 1440");
+			logger::debug("Capturing one accepted OpenVR eye with framing");
 			break;
 		case VRCaptureSource::HMDEye:
 			logger::debug("Capturing one accepted OpenVR eye at source resolution");
 			break;
 		case VRCaptureSource::FramedStereo:
-			logger::debug("Capturing a combined accepted OpenVR eye pair at 2560 x 1440");
+			logger::debug("Capturing a combined accepted OpenVR eye pair with framing");
 			break;
 		case VRCaptureSource::HMDSubmission:
 		default:

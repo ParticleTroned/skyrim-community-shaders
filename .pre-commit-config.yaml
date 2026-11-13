@@ -37,11 +37,11 @@ repos:
     - repo: local
       hooks:
           - id: screenshot-sequence-schema
-            name: screenshot sequence schema
+            name: screenshot request and sequence schemas
             entry: python tests/screenshot_sequence_schema_test.py
             language: python
             additional_dependencies: [jsonschema==4.25.1]
-            files: ^(docs/development/schemas/screenshot-sequence-manifest-v1\.schema\.json|tests/data/screenshot-api/sequence-manifest-v1\.json|tests/screenshot_sequence_schema_test\.py)$
+            files: ^(docs/development/schemas/screenshot-(request|sequence-manifest)-v1\.schema\.json|tests/data/screenshot-api/(capture-request|sequence-manifest)-v1\.json|tests/screenshot_sequence_schema_test\.py)$
             pass_filenames: false
 ci:
     autofix_commit_msg: |

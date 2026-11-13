@@ -61,3 +61,22 @@ foreach(_variant IN ITEMS production devbench)
         target_compile_definitions(${_target} PRIVATE DEVBENCH_BRIDGE_ENABLED)
     endif()
 endforeach()
+
+set(_framing_header "${_screenshot_settings_test_dir}/screenshot_framing_under_test.h")
+add_custom_command(
+    OUTPUT "${_framing_header}"
+    COMMAND
+        "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_screenshot_settings_test_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_screenshot_framing.cmake"
+    DEPENDS src/Features/ScreenshotFeature.cpp tests/extract_screenshot_framing.cmake
+    VERBATIM
+)
+add_controller_test(screenshot_framing_test ScreenshotFraming tests/screenshot_framing_test.cpp)
+target_sources(screenshot_framing_test PRIVATE "${_framing_header}")
+target_include_directories(
+    screenshot_framing_test
+    PRIVATE "${_screenshot_settings_test_dir}"
+            "${PROJECT_SOURCE_DIR}/extern/CommonLibSSE-NG/extern/openvr/headers"
+)
+target_link_libraries(screenshot_framing_test PRIVATE Microsoft::DirectXTex ole32 windowscodecs)

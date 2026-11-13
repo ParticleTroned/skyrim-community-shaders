@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -10,6 +11,26 @@
 
 namespace CSX::ScreenshotPolicy
 {
+	inline constexpr uint32_t FramedWidth = 3840;
+	inline constexpr uint32_t FramedHeight = 2160;
+	inline constexpr uint32_t MaximumFramedDimension = 16384;
+
+	struct FramedSize
+	{
+		uint32_t width;
+		uint32_t height;
+	};
+
+	/** Resolve a bounded 16:9 eye crop, retaining at least 4K in native mode. */
+	inline std::optional<FramedSize> ResolveFramedSize(std::size_t a_width, std::size_t a_height, bool a_native)
+	{
+		if (a_width < 16 || a_height < 9 ||
+			a_width > MaximumFramedDimension || a_height > MaximumFramedDimension)
+			return std::nullopt;
+		const auto scale = a_native ? std::max<std::size_t>(FramedWidth / 16, std::min(a_width / 16, a_height / 9)) : FramedWidth / 16;
+		return FramedSize{ static_cast<uint32_t>(scale * 16), static_cast<uint32_t>(scale * 9) };
+	}
+
 	enum class DispatchClass : std::uint8_t
 	{
 		None,

@@ -870,11 +870,13 @@ ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(
 	if (!capture.is_object())
 		throw std::runtime_error("capture must be an object");
 	const bool settingsUsePng = a_sequenceSettings ? a_feature.frameCaptureUsePng : a_feature.sdrUsePng;
+	json settingsOutputs;
 	if (useSettings) {
 		auto settingsCapture = a_feature.BuildCaptureDescriptor(
 			a_sequenceSettings ? a_feature.frameCaptureEye : a_feature.screenshotEye,
 			settingsUsePng,
 			!a_sequenceSettings && a_feature.copyToClipboard);
+		settingsOutputs = settingsCapture.at("outputs");
 		settingsCapture.merge_patch(capture);
 		capture = std::move(settingsCapture);
 	}
@@ -901,9 +903,11 @@ ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(
 	json outputs = capture.value("outputs", json::array());
 	if (!outputs.is_array())
 		throw std::runtime_error("capture outputs must be an array");
+	if (outputs.empty() && useSettings)
+		outputs = std::move(settingsOutputs);
 	if (outputs.empty()) {
 		outputs.push_back({
-			{ "view", useSettings ? ViewName(a_feature) : "source_native" },
+			{ "view", "source_native" },
 			{ "dominantEye", a_feature.vrFramedDominantEye == vr::Eye_Right ? "right" : "left" },
 			{ "encoding", { { "format", settingsUsePng ? "png" : "bmp" }, { "colourContract", "sdr_srgb" } } },
 		});
@@ -932,12 +936,24 @@ ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(
 		if (view.starts_with("framed_")) {
 			if (output.contains("crop") && !output["crop"].is_null())
 				throw std::runtime_error("framed views do not accept an additional crop");
-			if ((output.contains("width") && output["width"].get<uint32_t>() != 2560u) ||
-				(output.contains("height") && output["height"].get<uint32_t>() != 1440u))
-				throw std::runtime_error("version 1 framed outputs are fixed at 2560 x 1440");
-			output["width"] = 2560;
-			output["height"] = 1440;
-		} else if (output.contains("width") || output.contains("height")) {
+			const auto resolution = output.value("resolution", std::string("4k"));
+			if (resolution != "4k" && resolution != "native")
+				throw std::runtime_error("framed resolution must be 4k or native");
+			if (resolution == "native") {
+				if (output.contains("width") || output.contains("height"))
+					throw std::runtime_error("native framing derives dimensions from the submitted eye");
+			} else {
+				const bool legacySize = !output.contains("resolution") &&
+				                        (output.value("width", json()) == 2560 || output.value("height", json()) == 1440);
+				const uint32_t width = legacySize ? 2560 : CSX::ScreenshotPolicy::FramedWidth;
+				const uint32_t height = legacySize ? 1440 : CSX::ScreenshotPolicy::FramedHeight;
+				if ((output.contains("width") && (!output["width"].is_number_integer() || output["width"] != width)) ||
+					(output.contains("height") && (!output["height"].is_number_integer() || output["height"] != height)))
+					throw std::runtime_error("framed dimensions must be 3840 x 2160 or explicit legacy 2560 x 1440");
+				output["width"] = width;
+				output["height"] = height;
+			}
+		} else if (output.contains("width") || output.contains("height") || output.contains("resolution")) {
 			throw std::runtime_error("custom resizing is not supported for native outputs");
 		}
 		if (output.contains("crop") && output["crop"].is_object()) {
@@ -1017,6 +1033,7 @@ ScreenshotApi::json ScreenshotApi::BuildSettings(const ScreenshotFeature& a_feat
 					{ "View", ViewName(a_feature) },
 					{ "Eye", CaptureEyeName(a_feature.screenshotEye) },
 					{ "DominantEye", a_feature.vrFramedDominantEye == vr::Eye_Right ? "right" : "left" },
+					{ "FramedResolution", a_feature.vrFramedNativeResolution ? "native" : "4k" },
 					{ "ApplyCrop", a_feature.applyCropToScreenshot },
 				} },
 		{ "Sequence", {
@@ -1101,6 +1118,10 @@ ScreenshotApi::json ScreenshotApi::ValidateSettingsPatch(const json& a_patch) co
 						   ((*vr)["Eye"] != "left" && (*vr)["Eye"] != "right" && (*vr)["Eye"] != "both"))) {
 				errors.push_back({ { "field", "VR.Eye" }, { "code", "unsupported_value" } });
 			}
+			if (vr->is_object() && vr->contains("FramedResolution") &&
+				(!(*vr)["FramedResolution"].is_string() ||
+					((*vr)["FramedResolution"] != "4k" && (*vr)["FramedResolution"] != "native")))
+				errors.push_back({ { "field", "VR.FramedResolution" }, { "code", "unsupported_value" } });
 		}
 		if (const auto seq = a_patch.find("Sequence"); seq != a_patch.end()) {
 			if (!seq->is_object())
@@ -1188,6 +1209,8 @@ void ScreenshotApi::ApplySettingsPatch(ScreenshotFeature& a_feature, const json&
 		a_feature.copyToClipboard = a_patch["Clipboard"].get<std::string>() == "file_reference";
 	if (a_patch.contains("VR") && a_patch["VR"].is_object() && a_patch["VR"].contains("Eye"))
 		a_feature.screenshotEye = CaptureEyeFromName(a_patch["VR"]["Eye"].get<std::string>());
+	if (a_patch.contains("VR") && a_patch["VR"].is_object() && a_patch["VR"].contains("FramedResolution"))
+		a_feature.vrFramedNativeResolution = a_patch["VR"]["FramedResolution"] == "native";
 	if (const auto seq = a_patch.find("Sequence"); seq != a_patch.end() && seq->is_object()) {
 		if (seq->contains("Destination") && (*seq)["Destination"].is_object() && (*seq)["Destination"].contains("Directory"))
 			a_feature.frameCapturePath = (*seq)["Destination"]["Directory"].get<std::string>();
@@ -1238,6 +1261,10 @@ ScreenshotApi::json ScreenshotApi::BuildCapabilities(const ScreenshotFeature&) c
 		{ "sources", std::move(sources) },
 		{ "views", { "source_native", "left_eye", "right_eye", "side_by_side", "framed_left", "framed_right", "framed_combined" } },
 		{ "formats", { "png", "bmp" } },
+		{ "framing", { { "resolutions", { "4k", "native" } }, { "defaultResolution", "4k" },
+						 { "width", CSX::ScreenshotPolicy::FramedWidth }, { "height", CSX::ScreenshotPolicy::FramedHeight },
+						 { "nativeSize", "selected_or_dominant_eye_16_9_crop_at_least_4k" },
+						 { "maximumDimension", CSX::ScreenshotPolicy::MaximumFramedDimension } } },
 		{ "colourContracts", { "sdr_srgb" } },
 		{ "scheduleBases", { "game_frames", "wall_clock" } },
 		{ "pathPolicies", { "settings_default", "game_relative", "absolute" } },

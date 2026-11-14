@@ -3,6 +3,7 @@
 #include "BuildProvenance.h"
 #include "Features/ScreenshotApiPolicy.h"
 #include "Features/ScreenshotFeature.h"
+#include "Features/ScreenshotFramingPolicy.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Features/ScreenshotReferencePolicy.h"
 #endif
@@ -874,7 +875,8 @@ ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(
 		auto settingsCapture = a_feature.BuildCaptureDescriptor(
 			a_sequenceSettings ? a_feature.frameCaptureEye : a_feature.screenshotEye,
 			settingsUsePng,
-			!a_sequenceSettings && a_feature.copyToClipboard);
+			!a_sequenceSettings && a_feature.copyToClipboard,
+			!a_sequenceSettings);
 		settingsCapture.merge_patch(capture);
 		capture = std::move(settingsCapture);
 	}
@@ -932,12 +934,21 @@ ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(
 		if (view.starts_with("framed_")) {
 			if (output.contains("crop") && !output["crop"].is_null())
 				throw std::runtime_error("framed views do not accept an additional crop");
-			if ((output.contains("width") && output["width"].get<uint32_t>() != 2560u) ||
-				(output.contains("height") && output["height"].get<uint32_t>() != 1440u))
-				throw std::runtime_error("version 1 framed outputs are fixed at 2560 x 1440");
-			output["width"] = 2560;
-			output["height"] = 1440;
-		} else if (output.contains("width") || output.contains("height")) {
+			const auto sizing = output.value("sizing", std::string(CSX::ScreenshotPolicy::FramedSizingFixed));
+			if (sizing == CSX::ScreenshotPolicy::FramedSizingSourceNative) {
+				// The saved size follows the submission, so a requested size would conflict.
+				if (output.contains("width") || output.contains("height"))
+					throw std::runtime_error("source_native framed outputs do not accept width or height");
+			} else if (sizing == CSX::ScreenshotPolicy::FramedSizingFixed) {
+				if ((output.contains("width") && output["width"].get<uint32_t>() != CSX::ScreenshotPolicy::FramedFixedWidth) ||
+					(output.contains("height") && output["height"].get<uint32_t>() != CSX::ScreenshotPolicy::FramedFixedHeight))
+					throw std::runtime_error("version 1 framed outputs are fixed at 2560 x 1440");
+				output["width"] = CSX::ScreenshotPolicy::FramedFixedWidth;
+				output["height"] = CSX::ScreenshotPolicy::FramedFixedHeight;
+			} else {
+				throw std::runtime_error("framed output sizing must be fixed or source_native");
+			}
+		} else if (output.contains("width") || output.contains("height") || output.contains("sizing")) {
 			throw std::runtime_error("custom resizing is not supported for native outputs");
 		}
 		if (output.contains("crop") && output["crop"].is_object()) {
@@ -1245,6 +1256,7 @@ ScreenshotApi::json ScreenshotApi::BuildCapabilities(const ScreenshotFeature&) c
 						  { "separateEyeArtifacts", true },
 						  { "nrCaptureEvidenceSchemaVersion", 1 },
 						  { "clipboardFileReference", true },
+						  { "framedSourceNativeSizing", true },
 						  { "previewVideo", { { "available", false }, { "encoders", json::array() }, { "runsAfterFrameFinalization", true } } },
 					  } },
 		{ "limits", {

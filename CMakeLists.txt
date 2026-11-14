@@ -5018,6 +5018,12 @@ if(BUILD_CONTROLLER_TESTS)
         PROPERTIES LABELS "ControllerTests"
     )
 
+    add_controller_test(
+        screenshot_framing_policy_test
+        ScreenshotFramingPolicy
+        tests/screenshot_framing_policy_test.cpp
+    )
+
     add_executable(
         screenshot_manifest_snapshot_test
         EXCLUDE_FROM_ALL

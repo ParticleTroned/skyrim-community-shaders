@@ -136,8 +136,12 @@ struct ScreenshotFeature : public Feature
 
 private:
 	friend class ScreenshotApi;
-	/** Expand one eye/format selection into outputs without adding other views. */
-	nlohmann::json BuildCaptureDescriptor(CaptureEye a_eye, bool a_usePng, bool a_clipboard) const;
+	/**
+	 * Expand one eye/format selection into outputs without adding other views.
+	 * a_sourceNativeFraming keeps framed views at the submitted pixel density;
+	 * sequences leave it unset so every frame shares one size.
+	 */
+	nlohmann::json BuildCaptureDescriptor(CaptureEye a_eye, bool a_usePng, bool a_clipboard, bool a_sourceNativeFraming) const;
 	std::string uiSequenceRequestId;
 	std::chrono::steady_clock::time_point nextUiSequencePoll{};
 	struct StagedPlane
@@ -184,6 +188,7 @@ private:
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		bool exactPath = false;
 #endif
+		// Zero keeps a framed view at its submitted pixel density.
 		uint32_t width = 0;
 		uint32_t height = 0;
 		bool saveAsPng = true;

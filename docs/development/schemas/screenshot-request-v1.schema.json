@@ -44,6 +44,10 @@
         "dominantEye": { "enum": ["left", "right"] },
         "width": { "type": "integer", "minimum": 1 },
         "height": { "type": "integer", "minimum": 1 },
+        "sizing": {
+          "enum": ["fixed", "source_native"],
+          "description": "Framed views only. fixed (the default) saves 2560 x 1440. source_native keeps the submitted pixel density and does not accept width or height; the saved size follows each submission and is reported with each artifact."
+        },
         "crop": {
           "type": ["object", "null"],
           "properties": {

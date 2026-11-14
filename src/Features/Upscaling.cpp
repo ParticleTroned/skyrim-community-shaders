@@ -6443,7 +6443,13 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		if (a_upscaling.HasPendingVRUpscalingTransition())
 			return true;
 
-		return a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire);
+		if (a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire))
+			return true;
+
+		// Native publication clears the queue before stereo proves the full-size
+		// contract. Do not recreate a reduced boot latch during that handoff.
+		return a_upscaling.vrNativeRestorePresentationGuardEpoch.load(std::memory_order_acquire) != 0 &&
+		       a_upscaling.IsVRNativeRestorePresentationGuardActive();
 	}
 
 	bool ShouldQueueDeferredVRRenderScaleActivation(const Upscaling& a_upscaling)

@@ -44,6 +44,7 @@ namespace RE
 			struct ConstantBuffer
 			{
 				void* buffer = nullptr;
+				void* data = nullptr;
 			};
 			std::array<ConstantBuffer, 3> constantBuffers{};
 			std::array<int, 3> constantTable{ 0, 1, 4 };
@@ -114,6 +115,7 @@ struct TestState
 	uint32_t modifiedPixelDescriptor = 0;
 	uint32_t currentVertexDescriptor = 0, currentPixelDescriptor = 0, modifiedVertexDescriptor = 0;
 	uint32_t lastModifiedVertexDescriptor = 0, lastModifiedPixelDescriptor = 0, frameCount = 0;
+	uint64_t techniqueShaderSequence = 0, techniqueShaderRevision = 0;
 	bool updateShader = false;
 	struct
 	{
@@ -185,6 +187,10 @@ namespace globals
 	}
 	namespace features
 	{
+		struct VolumetricLighting
+		{
+			bool IsDepthDispatchRejected() const { return false; }
+		} volumetricLighting;
 		struct UnifiedWater
 		{
 			bool loaded = true;
@@ -263,6 +269,8 @@ namespace SIE
 		bool enabled = true, safeLoad = false, async = true, compilationSucceeds = true;
 		std::atomic_bool backgroundCompilation{ false };
 		unsigned compiles = 0, vertexLookups = 0;
+		uint64_t graphicsRevision = 0;
+		uint64_t GetGraphicsShaderRevision() const { return graphicsRevision; }
 		RE::BSGraphics::VertexShader* vertex = nullptr;
 		auto* GetVertexShader(const RE::BSShader&, uint32_t)
 		{
@@ -309,6 +317,7 @@ namespace SIE
 		}
 		void PrewarmDeferredPixelShaders(const RE::BSShader&, uint32_t, bool, bool a_precompile = false);
 		RE::BSGraphics::PixelShader* GetPixelShader(const RE::BSShader&, uint32_t, PixelShaderLookup = PixelShaderLookup::Compile);
+		void SelectLightingPixelShader(const RE::BSShader&, uint32_t);
 	};
 #include "pixel_lookup.h"
 #include "pixel_prewarm.h"
@@ -680,6 +689,7 @@ void TestTechniqueAdmission()
 	f.cache.vertex = &vertex;
 	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, plain, requested, false));
 	Require(f.current == fallback && f.context.vertex == &nativeVS && !f.state.settingCustomShader);
+	Require(f.state.techniqueShaderSelection.pixel == fallback && f.state.techniqueShaderSelection.vertex == &vertex);
 	Require(f.state.selectedCustomPixelShaderType == RE::BSShader::Type::Lighting);
 	// Depth-only fallback requires a vertex stage but never a pixel variant.
 	f.cache.pixelShaders[0].clear();
@@ -900,6 +910,69 @@ void TestPrecompileLookupContract()
 		}
 	}
 }
+void TestLightingSpecialization()
+{
+	using Cache = SIE::ShaderCache;
+	Fixture f;
+	constexpr uint32_t descriptor = 0x10011u;
+	constexpr auto flag = Cache::kLightingNoMeshVariation;
+	auto* standard = f.cache.Add(f.shader, descriptor);
+	f.Bind(descriptor);
+	++f.state.techniqueShaderSequence;
+	f.cache.async = false;
+	f.cache.SelectLightingPixelShader(f.shader, flag);
+	Require(f.context.bound == standard->shader && f.cache.compiles == 0);
+	Require(f.cache.compilationSet.requests.contains(descriptor | flag));
+	auto* variant = f.cache.Add(f.shader, descriptor | flag);
+	variant->constantBuffers = standard->constantBuffers;
+	++f.state.frameCount;
+	f.cache.SelectLightingPixelShader(f.shader, flag);
+	Require(f.context.bound == variant->shader && f.current == &f.native);
+	const auto binds = f.context.binds;
+	f.cache.SelectLightingPixelShader(f.shader, flag);
+	Require(f.context.binds == binds);
+	f.cache.SelectLightingPixelShader(f.shader, 0);
+	Require(f.context.bound == standard->shader);
+	f.current = standard;
+	f.cache.SelectLightingPixelShader(f.shader, flag);
+	Require(f.current == variant);
+	f.cache.SelectLightingPixelShader(f.shader, 0);
+	Require(f.current == standard);
+	f.cache.SelectLightingPixelShader(f.shader, flag);
+	f.Bind(descriptor);
+	++f.state.techniqueShaderSequence;
+	f.cache.SelectLightingPixelShader(f.shader, flag);
+	Require(f.context.bound == variant->shader);
+	f.cache.blockedKeyIndex = 0;
+	f.cache.blockedKey = "blocked";
+	f.cache.SelectLightingPixelShader(f.shader, flag);
+	Require(f.context.bound == standard->shader);
+	f.cache.blockedKeyIndex = -1;
+	++f.cache.graphicsRevision;
+	f.cache.pixelShaders[0].erase(descriptor | flag);
+	f.cache.SelectLightingPixelShader(f.shader, flag);
+	Require(f.context.bound == standard->shader);
+	f.state.techniqueShaderRevision = f.cache.graphicsRevision;
+	variant = f.cache.Add(f.shader, descriptor | flag);
+	++f.state.frameCount;
+	f.cache.SelectLightingPixelShader(f.shader, flag);
+	Require(f.context.bound == standard->shader);  // A different constant buffer cannot use the existing upload.
+	variant->constantBuffers = standard->constantBuffers;
+	variant->constantTable[0]++;
+	++f.state.frameCount;
+	f.cache.SelectLightingPixelShader(f.shader, flag);
+	Require(f.context.bound == standard->shader);
+	variant->constantTable = standard->constantTable;
+	++f.state.frameCount;
+	f.cache.SelectLightingPixelShader(f.shader, flag);
+	Require(f.context.bound == variant->shader);
+	Require(Cache::SupportsMeshVariationVariant(descriptor));
+	for (auto excluded : { Cache::LightingShaderFlags::Skinned, Cache::LightingShaderFlags::ProjectedUV,
+			 Cache::LightingShaderFlags::DoAlphaTest, Cache::LightingShaderFlags::FurShells })
+		Require(!Cache::SupportsMeshVariationVariant(descriptor | static_cast<uint32_t>(excluded)));
+	Require(!Cache::SupportsMeshVariationVariant(static_cast<uint32_t>(Cache::LightingShaderTechniques::MultilayerParallax) << 24));
+}
+
 void TestWaterRuntimeDescriptor()
 {
 	constexpr auto wading = static_cast<uint32_t>(SIE::ShaderCache::WaterShaderFlags::Wading);
@@ -935,6 +1008,7 @@ int main()
 			TestSeamTechniqueFallback();
 			TestPrecompileLookupContract();
 			TestWaterRuntimeDescriptor();
+			TestLightingSpecialization();
 			TestPBRPrewarming();
 			TestSeamPrewarming();
 			TestNativeImageSpaceAdmission();

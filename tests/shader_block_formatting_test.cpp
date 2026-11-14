@@ -168,7 +168,8 @@ namespace SIE
 		RE::BSGraphics::PixelShader* GetPixelShader(const RE::BSShader&, std::uint32_t, PixelShaderLookup);
 		RE::BSGraphics::ComputeShader* GetComputeShader(const RE::BSShader&, std::uint32_t);
 	};
-#include "shader_block_pixel_compute_under_test.h"
+#include "shader_block_compute_under_test.h"
+#include "shader_block_pixel_under_test.h"
 #include "shader_block_vertex_under_test.h"
 }
 

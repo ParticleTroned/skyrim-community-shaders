@@ -4535,7 +4535,8 @@ if(BUILD_CONTROLLER_TESTS)
         "${_shader_block_test_dir}/shader_block_lookup_contract.h"
         "${_shader_block_test_dir}/shader_block_lighting_constants.h"
         "${_shader_block_test_dir}/shader_block_vertex_under_test.h"
-        "${_shader_block_test_dir}/shader_block_pixel_compute_under_test.h"
+        "${_shader_block_test_dir}/shader_block_pixel_under_test.h"
+        "${_shader_block_test_dir}/shader_block_compute_under_test.h"
     )
     add_custom_command(
         OUTPUT ${_shader_block_test_headers}

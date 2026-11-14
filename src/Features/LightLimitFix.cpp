@@ -1,4 +1,5 @@
 #include "LightLimitFix.h"
+#include "Deferred.h"
 #include "EngineFix.h"
 #include "Features/InverseSquareLighting/Common.h"
 #include "Globals.h"
@@ -10,6 +11,7 @@
 #include "LinearLighting.h"
 #include "LocationContext.h"
 #include "Menu/SettingsPage.h"
+#include "TerrainVariation.h"
 #include "Utils/UI.h"
 
 #include "Menu/ThemeManager.h"
@@ -3697,6 +3699,15 @@ void LightLimitFix::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* T
 		func(This, Pass, RenderFlags);
 	}
 	singleton.BSLightingShader_SetupGeometry_After(Pass);
+	uint32_t specialization = 0;
+	const auto& state = *globals::state;
+	const auto& variation = globals::features::terrainVariation;
+	if (directionalSlotSafe && variation.loaded && Pass && Pass->geometry &&
+		SIE::ShaderCache::SupportsMeshVariationVariant(state.modifiedPixelDescriptor) &&
+		(globals::deferred->deferredPass || (state.permutationData.ExtraShaderDescriptor & static_cast<uint32_t>(State::ExtraShaderDescriptors::IsReflections))) &&
+		!(state.permutationData.ExtraFeatureDescriptor & static_cast<uint32_t>(State::ExtraFeatureDescriptors::TVMeshVariation)))
+		specialization |= SIE::ShaderCache::kLightingNoMeshVariation;
+	globals::shaderCache->SelectLightingPixelShader(*This, specialization);
 }
 
 void LightLimitFix::Hooks::BSEffectShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)

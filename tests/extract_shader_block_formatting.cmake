@@ -18,5 +18,9 @@ extract_between(
 )
 extract_between(
     "${_source}" "RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader("
-    "ShaderCache::~ShaderCache()" "shader_block_pixel_compute_under_test.h"
+    "void ShaderCache::SelectLightingPixelShader(" "shader_block_pixel_under_test.h"
+)
+extract_between(
+    "${_source}" "RE::BSGraphics::ComputeShader* ShaderCache::GetComputeShader("
+    "ShaderCache::~ShaderCache()" "shader_block_compute_under_test.h"
 )

@@ -104,6 +104,7 @@ public:
 		uint32_t vertexDescriptor = 0, pixelDescriptor = 0;
 		bool pixelCleared = false;
 	} techniqueShaderSelection;
+	uint64_t techniqueShaderSequence = 0, techniqueShaderRevision = 0;
 	// A deferred draw must be withheld if neither compatible pixel variant is ready.
 	bool deferredPixelShaderMissing = false;
 	RE::BSShader* currentShader = nullptr;

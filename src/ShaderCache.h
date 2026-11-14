@@ -710,12 +710,15 @@ namespace SIE
 			Compile,
 			Precompile,
 			Draw,
+			Specialization,
 			Cached
 		};
 
 		/** Draw lookups may use the other deferred category layout while the exact variant compiles. */
 		RE::BSGraphics::PixelShader* GetPixelShader(const RE::BSShader& shader,
 			uint32_t descriptor, PixelShaderLookup a_lookup = PixelShaderLookup::Compile);
+		/** Binds a compatible per-draw lighting variant, retaining the technique shader while it compiles. */
+		void SelectLightingPixelShader(const RE::BSShader& shader, uint32_t specializationFlags);
 		RE::BSGraphics::ComputeShader* GetComputeShader(const RE::BSShader& shader,
 			uint32_t descriptor);
 
@@ -853,6 +856,7 @@ namespace SIE
 		};
 
 		static constexpr uint32_t kLightingSnowCoverInactive = 1u << 19;
+		static constexpr uint32_t kLightingNoMeshVariation = 1u << 7;
 
 		enum class LightingShaderFlags : uint32_t
 		{
@@ -885,6 +889,28 @@ namespace SIE
 			FurShells = 1u << 30,
 			FurShellsDepth = 1u << 31
 		};
+
+		/** Reports mesh techniques whose texture sampling can omit Terrain Variation. */
+		static constexpr bool SupportsMeshVariationVariant(uint32_t descriptor)
+		{
+			constexpr auto excluded = static_cast<uint32_t>(LightingShaderFlags::FurShells) |
+			                          static_cast<uint32_t>(LightingShaderFlags::Skinned) |
+			                          static_cast<uint32_t>(LightingShaderFlags::ProjectedUV) |
+			                          static_cast<uint32_t>(LightingShaderFlags::DoAlphaTest) |
+			                          static_cast<uint32_t>(LightingShaderFlags::AdditionalAlphaMask);
+			if (descriptor & excluded)
+				return false;
+			switch (static_cast<LightingShaderTechniques>((descriptor >> 24) & 0x3F)) {
+			case LightingShaderTechniques::None:
+			case LightingShaderTechniques::Envmap:
+			case LightingShaderTechniques::Glowmap:
+			case LightingShaderTechniques::Parallax:
+			case LightingShaderTechniques::ParallaxOcc:
+				return true;
+			default:
+				return false;
+			}
+		}
 
 		enum class BloodSplatterShaderTechniques
 		{

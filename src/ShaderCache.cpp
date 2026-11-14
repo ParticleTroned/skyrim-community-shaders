@@ -1464,7 +1464,8 @@ namespace SIE
 		static void GetLightingShaderDefines(uint32_t descriptor, std::span<D3D_SHADER_MACRO> defines)
 		{
 			const bool snowCoverInactive = (descriptor & ShaderCache::kLightingSnowCoverInactive) != 0;
-			descriptor &= ~ShaderCache::kLightingSnowCoverInactive;
+			const bool noMeshVariation = (descriptor & ShaderCache::kLightingNoMeshVariation) != 0;
+			descriptor &= ~(ShaderCache::kLightingSnowCoverInactive | ShaderCache::kLightingNoMeshVariation);
 			static_assert((static_cast<uint32_t>(ShaderCache::LightingShaderFlags::LandscapeSeams) &
 							  ShaderCache::GetCharacterCategoryFlag(RE::BSShader::Type::Lighting)) == 0);
 			static REL::Relocation<void(uint32_t, D3D_SHADER_MACRO*)> VanillaGetLightingShaderDefines(RELOCATION_ID(101631, 108698));
@@ -1473,6 +1474,8 @@ namespace SIE
 			size_t lastIndex = std::ranges::find_if(defines, [](const D3D_SHADER_MACRO& macro) { return macro.Name == nullptr; }) - defines.begin();
 			if (snowCoverInactive)
 				defines[lastIndex++] = { "SNOW_COVER_INACTIVE", nullptr };
+			if (noMeshVariation)
+				defines[lastIndex++] = { "NO_MESH_VARIATION", nullptr };
 
 			if (descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::Deferred)) {
 				defines[lastIndex++] = { "DEFERRED", nullptr };
@@ -3575,7 +3578,7 @@ namespace SIE
 		if (a_lookup == PixelShaderLookup::Cached)
 			return nullptr;
 		const bool specializedLighting = shader.shaderType.get() == RE::BSShader::Type::Lighting &&
-		                                 (descriptor & kLightingSnowCoverInactive) != 0;
+		                                 (descriptor & (kLightingSnowCoverInactive | kLightingNoMeshVariation)) != 0;
 		if (!IsSaveLoadSafeModeActive()) {
 			if (specializedLighting || (ShouldUseAsyncCompilation() && (a_lookup != PixelShaderLookup::Draw || !globals::features::reverseZ.IsActive()))) {
 				compilationSet.Add({ ShaderClass::Pixel, shader, descriptor, precompile });
@@ -3584,8 +3587,8 @@ namespace SIE
 			}
 		}
 
-		if (specializedLighting)
-			return GetPixelShader(shader, descriptor & ~kLightingSnowCoverInactive, a_lookup);
+		if (specializedLighting && a_lookup != PixelShaderLookup::Specialization)
+			return GetPixelShader(shader, descriptor & ~(kLightingSnowCoverInactive | kLightingNoMeshVariation), a_lookup);
 
 		auto* deferred = globals::deferred;
 		const auto categoryFlag = GetCharacterCategoryFlag(shader.shaderType.get());
@@ -3598,6 +3601,62 @@ namespace SIE
 		}
 
 		return nullptr;
+	}
+
+	void ShaderCache::SelectLightingPixelShader(const RE::BSShader& shader, uint32_t specializationFlags)
+	{
+		struct Variant
+		{
+			RE::BSGraphics::PixelShader* shader = nullptr;
+			uint32_t requestFrame = UINT32_MAX;
+		};
+		struct Selection
+		{
+			RE::BSGraphics::PixelShader* standard = nullptr;
+			RE::BSGraphics::PixelShader* bound = nullptr;
+			uint64_t revision = 0, sequence = 0;
+			std::array<Variant, 2> variants{};
+		};
+		static thread_local Selection selection;
+		auto& state = *globals::state;
+		const auto revision = GetGraphicsShaderRevision();
+		auto* standard = state.techniqueShaderSelection.pixel;
+		if (state.currentShader != &shader || shader.shaderType.get() != RE::BSShader::Type::Lighting ||
+			state.selectedCustomPixelShaderType != RE::BSShader::Type::Lighting || !standard ||
+			state.techniqueShaderRevision != revision) {
+			selection = {};
+			return;
+		}
+		if (selection.revision != revision || selection.standard != standard)
+			selection = { .standard = standard, .bound = standard, .revision = revision };
+		if (selection.sequence != state.techniqueShaderSequence) {
+			selection.sequence = state.techniqueShaderSequence;
+			selection.bound = standard;
+		}
+		auto* selected = standard;
+		const auto flags = specializationFlags & kLightingNoMeshVariation;
+		if (flags) {
+			auto& variant = selection.variants[1];
+			if (!variant.shader && variant.requestFrame != state.frameCount) {
+				variant.requestFrame = state.frameCount;
+				const auto descriptor = standard->id | flags;
+				auto* candidate = GetPixelShader(shader, descriptor, PixelShaderLookup::Specialization);
+				if (candidate && candidate->id == descriptor && candidate->constantTable == standard->constantTable &&
+					std::ranges::equal(standard->constantBuffers, candidate->constantBuffers, [](const auto& left, const auto& right) {
+						return left.buffer == right.buffer && (left.buffer || left.data == right.data);
+					}))
+					variant.shader = candidate;
+			}
+			if (variant.shader)
+				selected = variant.shader;
+		}
+		if (GetGraphicsShaderRevision() != revision || selected == selection.bound)
+			return;
+		auto& engineShader = *globals::game::currentPixelShader;
+		if (engineShader == selection.bound)
+			engineShader = selected;
+		globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(selected->shader), nullptr, 0);
+		selection.bound = selected;
 	}
 
 	RE::BSGraphics::ComputeShader* ShaderCache::GetComputeShader(const RE::BSShader& shader,

@@ -279,5 +279,5 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::unifiedWater.GetCommonBufferData(),
 		globals::features::adaptiveBrightness.GetEffectiveWaterAppearanceSettings(),
 		globals::features::adaptiveBrightness.GetEffectiveBloomSettings(),
-		globals::features::snowCover.GetCommonBufferData(a_inWorld));
+		globals::features::snowCover.PrepareFrameData(a_inWorld));
 }

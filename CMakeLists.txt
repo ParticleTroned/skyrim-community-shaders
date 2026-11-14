@@ -4532,6 +4532,8 @@ if(BUILD_CONTROLLER_TESTS)
         "${CMAKE_CURRENT_BINARY_DIR}/generated/shader-block-formatting"
     )
     set(_shader_block_test_headers
+        "${_shader_block_test_dir}/shader_block_lookup_contract.h"
+        "${_shader_block_test_dir}/shader_block_lighting_constants.h"
         "${_shader_block_test_dir}/shader_block_vertex_under_test.h"
         "${_shader_block_test_dir}/shader_block_pixel_compute_under_test.h"
     )
@@ -4543,6 +4545,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${PROJECT_SOURCE_DIR}/tests/extract_shader_block_formatting.cmake"
         DEPENDS
             src/ShaderCache.cpp
+            src/ShaderCache.h
             tests/extract_shader_block_formatting.cmake
             tests/extract_source_region.cmake
         VERBATIM

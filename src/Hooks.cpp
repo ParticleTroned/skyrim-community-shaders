@@ -838,6 +838,8 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	// Only check against non-shader bits
 	const uint32_t runtimePixelBits = shader->shaderType.get() == RE::BSShader::Type::Water ?
 	                                      static_cast<uint32_t>(SIE::ShaderCache::WaterShaderFlags::Wading) :
+	                                  shader->shaderType.get() == RE::BSShader::Type::Lighting ?
+	                                      static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::BaseObjectIsSnow) :
 	                                      0u;
 	state->permutationData.PixelShaderDescriptor = Util::ShaderDescriptor::UploadedPixelDescriptor(
 		state->permutationData.PixelShaderDescriptor, state->modifiedPixelDescriptor, runtimePixelBits);

@@ -116,17 +116,8 @@ namespace SIE
 	}
 	struct ShaderCache
 	{
-		enum class VertexShaderLookup
-		{
-			Compile,
-			Draw
-		};
-		enum class PixelShaderLookup
-		{
-			Compile,
-			Cached,
-			Draw
-		};
+#include "shader_block_lighting_constants.h"
+#include "shader_block_lookup_contract.h"
 		template <class T>
 		using Maps = std::array<std::unordered_map<std::uint32_t, std::unique_ptr<T>>, 1>;
 		Maps<RE::BSGraphics::VertexShader> vertexShaders;

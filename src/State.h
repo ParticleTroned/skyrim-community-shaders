@@ -344,6 +344,7 @@ public:
 	uint lastPixelDescriptor = 0;
 	uint modifiedVertexDescriptor = 0;
 	uint modifiedPixelDescriptor = 0;
+	uint32_t lightingPixelShaderFlags = 0;
 	uint lastModifiedVertexDescriptor = 0;
 	uint lastModifiedPixelDescriptor = 0;
 	uint lastExtraDescriptor = 0;

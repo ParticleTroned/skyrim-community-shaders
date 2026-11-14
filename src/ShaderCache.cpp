@@ -1463,12 +1463,16 @@ namespace SIE
 
 		static void GetLightingShaderDefines(uint32_t descriptor, std::span<D3D_SHADER_MACRO> defines)
 		{
+			const bool snowCoverInactive = (descriptor & ShaderCache::kLightingSnowCoverInactive) != 0;
+			descriptor &= ~ShaderCache::kLightingSnowCoverInactive;
 			static_assert((static_cast<uint32_t>(ShaderCache::LightingShaderFlags::LandscapeSeams) &
 							  ShaderCache::GetCharacterCategoryFlag(RE::BSShader::Type::Lighting)) == 0);
 			static REL::Relocation<void(uint32_t, D3D_SHADER_MACRO*)> VanillaGetLightingShaderDefines(RELOCATION_ID(101631, 108698));
 			VanillaGetLightingShaderDefines(descriptor, defines.data());
 
 			size_t lastIndex = std::ranges::find_if(defines, [](const D3D_SHADER_MACRO& macro) { return macro.Name == nullptr; }) - defines.begin();
+			if (snowCoverInactive)
+				defines[lastIndex++] = { "SNOW_COVER_INACTIVE", nullptr };
 
 			if (descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::Deferred)) {
 				defines[lastIndex++] = { "DEFERRED", nullptr };
@@ -3570,13 +3574,18 @@ namespace SIE
 		}
 		if (a_lookup == PixelShaderLookup::Cached)
 			return nullptr;
+		const bool specializedLighting = shader.shaderType.get() == RE::BSShader::Type::Lighting &&
+		                                 (descriptor & kLightingSnowCoverInactive) != 0;
 		if (!IsSaveLoadSafeModeActive()) {
-			if (ShouldUseAsyncCompilation() && (a_lookup != PixelShaderLookup::Draw || !globals::features::reverseZ.IsActive())) {
+			if (specializedLighting || (ShouldUseAsyncCompilation() && (a_lookup != PixelShaderLookup::Draw || !globals::features::reverseZ.IsActive()))) {
 				compilationSet.Add({ ShaderClass::Pixel, shader, descriptor, precompile });
 			} else if (auto* compiled = MakeAndAddPixelShader(shader, descriptor)) {
 				return compiled;
 			}
 		}
+
+		if (specializedLighting)
+			return GetPixelShader(shader, descriptor & ~kLightingSnowCoverInactive, a_lookup);
 
 		auto* deferred = globals::deferred;
 		const auto categoryFlag = GetCharacterCategoryFlag(shader.shaderType.get());

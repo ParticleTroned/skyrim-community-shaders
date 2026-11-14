@@ -973,6 +973,31 @@ void TestLightingSpecialization()
 	Require(!Cache::SupportsMeshVariationVariant(static_cast<uint32_t>(Cache::LightingShaderTechniques::MultilayerParallax) << 24));
 }
 
+void TestCombinedLightingSpecializations()
+{
+	using Cache = SIE::ShaderCache;
+	Fixture f;
+	constexpr uint32_t descriptor = 0x10011u;
+	auto* standard = f.cache.Add(f.shader, descriptor);
+	f.Bind(descriptor);
+	++f.state.techniqueShaderSequence;
+	for (const auto flags : { Cache::kLightingNoLocalLights, Cache::kLightingNoMeshVariation | Cache::kLightingNoLocalLights }) {
+		auto* variant = f.cache.Add(f.shader, descriptor | flags);
+		variant->constantBuffers = standard->constantBuffers;
+		f.cache.SelectLightingPixelShader(f.shader, flags);
+		Require(f.context.bound == variant->shader);
+		f.cache.SelectLightingPixelShader(f.shader, 0);
+		Require(f.context.bound == standard->shader);
+	}
+	f.cache.pixelShaders[0].erase(descriptor | Cache::kLightingNoLocalLights);
+	++f.cache.graphicsRevision;
+	f.state.techniqueShaderRevision = f.cache.graphicsRevision;
+	const auto specialized = descriptor | Cache::kLightingNoLocalLights;
+	Require(f.cache.GetPixelShader(f.shader, specialized, Cache::PixelShaderLookup::Specialization) == nullptr);
+	Require(f.cache.GetPixelShader(f.shader, specialized, Cache::PixelShaderLookup::Draw) == standard);
+	Require(f.deferred.captureReady && !f.state.deferredPixelShaderMissing);
+}
+
 void TestWaterRuntimeDescriptor()
 {
 	constexpr auto wading = static_cast<uint32_t>(SIE::ShaderCache::WaterShaderFlags::Wading);
@@ -1009,6 +1034,7 @@ int main()
 			TestPrecompileLookupContract();
 			TestWaterRuntimeDescriptor();
 			TestLightingSpecialization();
+			TestCombinedLightingSpecializations();
 			TestPBRPrewarming();
 			TestSeamPrewarming();
 			TestNativeImageSpaceAdmission();

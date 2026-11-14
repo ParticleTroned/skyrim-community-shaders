@@ -1556,6 +1556,7 @@ void LightLimitFix::SetupRenderTargetResources()
 
 void LightLimitFix::Reset()
 {
+	zeroClusteredLightsFrame = UINT32_MAX;
 	LightLimitFixDetail::LightAttach::Update(settings.SkipRedundantLightAttach, settings.LightAttachRefreshFrames,
 		loaded && !globals::state->IsFeatureDisabled(GetShortName()));
 	LightLimitFixDetail::ShadowCulling::Update(settings.ShadowCulling, loaded && !globals::state->IsFeatureDisabled(GetShortName()));
@@ -1847,22 +1848,22 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 #endif
 }
 
-void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
+bool LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 {
 	auto shaderCache = globals::shaderCache;
 	auto context = globals::d3d::context;
 	auto smState = globals::game::smState;
 
 	if (!shaderCache->IsEnabled())
-		return;
+		return false;
 
 	if (!smState || !strictLightDataCB) {
-		return;
+		return false;
 	}
 
 	auto accumulator = *globals::game::currentAccumulator.get();
 	if (!accumulator) {
-		return;
+		return false;
 	}
 
 	auto shadowSceneNode = smState->shadowSceneNode[0];
@@ -1884,6 +1885,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 		ID3D11Buffer* buffer = { strictLightDataCB->CB() };
 		context->PSSetConstantBuffers(3, 1, &buffer);
 	}
+	return shadowSceneNode && isWorld && isEmpty;
 }
 
 void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3 a_initialPosition, bool a_cached)
@@ -3234,6 +3236,7 @@ float3 LightLimitFix::Saturation(float3 color, float saturation)
 void LightLimitFix::UpdateLights()
 {
 	ZoneScopedN("LLF::UpdateLights");
+	zeroClusteredLightsFrame = UINT32_MAX;
 
 	auto clearCachedParticleLights = [&]() {
 		std::lock_guard<std::shared_mutex> lk{ cachedParticleLightsMutex };
@@ -3560,6 +3563,8 @@ void LightLimitFix::UpdateLights()
 	}
 
 	UpdateStructure();
+	if (lightCount == 0)
+		zeroClusteredLightsFrame = globals::state->frameCount;
 }
 
 void LightLimitFix::UpdateStructure()
@@ -3698,10 +3703,14 @@ void LightLimitFix::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* T
 	if (directionalSlotSafe) {
 		func(This, Pass, RenderFlags);
 	}
-	singleton.BSLightingShader_SetupGeometry_After(Pass);
+	const bool noStrictLights = singleton.BSLightingShader_SetupGeometry_After(Pass);
 	uint32_t specialization = 0;
 	const auto& state = *globals::state;
 	const auto& variation = globals::features::terrainVariation;
+	if (directionalSlotSafe && globals::deferred->deferredPass && noStrictLights &&
+		singleton.zeroClusteredLightsFrame == state.frameCount && !singleton.currentEnableLightsVisualisation && !singleton.settings.EnableLightsVisualisation &&
+		Pass && Pass->geometry)
+		specialization |= SIE::ShaderCache::kLightingNoLocalLights;
 	if (directionalSlotSafe && variation.loaded && Pass && Pass->geometry &&
 		SIE::ShaderCache::SupportsMeshVariationVariant(state.modifiedPixelDescriptor) &&
 		(globals::deferred->deferredPass || (state.permutationData.ExtraShaderDescriptor & static_cast<uint32_t>(State::ExtraShaderDescriptors::IsReflections))) &&

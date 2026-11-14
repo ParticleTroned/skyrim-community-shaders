@@ -3985,7 +3985,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		transmissionColor += pointLightOutput.transmission;
 	}
 
-#		else
+#		elif !defined(LLF_NO_LOCAL_LIGHTS) || defined(LLFDEBUG)
 
 	uint numClusteredLights = 0;
 	uint totalLightCount = LightLimitFix::NumStrictLights;

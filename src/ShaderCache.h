@@ -704,7 +704,7 @@ namespace SIE
 			}
 		}
 
-		/** Cached lookups never schedule compilation; draw lookups permit compatible deferred fallback. */
+		/** Cached lookups never compile; specialization lookups queue exact variants without fallback. */
 		enum class PixelShaderLookup
 		{
 			Compile,
@@ -857,6 +857,7 @@ namespace SIE
 
 		static constexpr uint32_t kLightingSnowCoverInactive = 1u << 19;
 		static constexpr uint32_t kLightingNoMeshVariation = 1u << 7;
+		static constexpr uint32_t kLightingNoLocalLights = 1u << 8;
 
 		enum class LightingShaderFlags : uint32_t
 		{

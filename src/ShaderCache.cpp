@@ -1465,7 +1465,8 @@ namespace SIE
 		{
 			const bool snowCoverInactive = (descriptor & ShaderCache::kLightingSnowCoverInactive) != 0;
 			const bool noMeshVariation = (descriptor & ShaderCache::kLightingNoMeshVariation) != 0;
-			descriptor &= ~(ShaderCache::kLightingSnowCoverInactive | ShaderCache::kLightingNoMeshVariation);
+			const bool noLocalLights = (descriptor & ShaderCache::kLightingNoLocalLights) != 0;
+			descriptor &= ~(ShaderCache::kLightingSnowCoverInactive | ShaderCache::kLightingNoMeshVariation | ShaderCache::kLightingNoLocalLights);
 			static_assert((static_cast<uint32_t>(ShaderCache::LightingShaderFlags::LandscapeSeams) &
 							  ShaderCache::GetCharacterCategoryFlag(RE::BSShader::Type::Lighting)) == 0);
 			static REL::Relocation<void(uint32_t, D3D_SHADER_MACRO*)> VanillaGetLightingShaderDefines(RELOCATION_ID(101631, 108698));
@@ -1476,6 +1477,8 @@ namespace SIE
 				defines[lastIndex++] = { "SNOW_COVER_INACTIVE", nullptr };
 			if (noMeshVariation)
 				defines[lastIndex++] = { "NO_MESH_VARIATION", nullptr };
+			if (noLocalLights)
+				defines[lastIndex++] = { "LLF_NO_LOCAL_LIGHTS", nullptr };
 
 			if (descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::Deferred)) {
 				defines[lastIndex++] = { "DEFERRED", nullptr };
@@ -3578,7 +3581,7 @@ namespace SIE
 		if (a_lookup == PixelShaderLookup::Cached)
 			return nullptr;
 		const bool specializedLighting = shader.shaderType.get() == RE::BSShader::Type::Lighting &&
-		                                 (descriptor & (kLightingSnowCoverInactive | kLightingNoMeshVariation)) != 0;
+		                                 (descriptor & (kLightingSnowCoverInactive | kLightingNoMeshVariation | kLightingNoLocalLights)) != 0;
 		if (!IsSaveLoadSafeModeActive()) {
 			if (specializedLighting || (ShouldUseAsyncCompilation() && (a_lookup != PixelShaderLookup::Draw || !globals::features::reverseZ.IsActive()))) {
 				compilationSet.Add({ ShaderClass::Pixel, shader, descriptor, precompile });
@@ -3588,7 +3591,7 @@ namespace SIE
 		}
 
 		if (specializedLighting && a_lookup != PixelShaderLookup::Specialization)
-			return GetPixelShader(shader, descriptor & ~(kLightingSnowCoverInactive | kLightingNoMeshVariation), a_lookup);
+			return GetPixelShader(shader, descriptor & ~(kLightingSnowCoverInactive | kLightingNoMeshVariation | kLightingNoLocalLights), a_lookup);
 
 		auto* deferred = globals::deferred;
 		const auto categoryFlag = GetCharacterCategoryFlag(shader.shaderType.get());
@@ -3615,7 +3618,7 @@ namespace SIE
 			RE::BSGraphics::PixelShader* standard = nullptr;
 			RE::BSGraphics::PixelShader* bound = nullptr;
 			uint64_t revision = 0, sequence = 0;
-			std::array<Variant, 2> variants{};
+			std::array<Variant, 4> variants{};
 		};
 		static thread_local Selection selection;
 		auto& state = *globals::state;
@@ -3634,9 +3637,11 @@ namespace SIE
 			selection.bound = standard;
 		}
 		auto* selected = standard;
-		const auto flags = specializationFlags & kLightingNoMeshVariation;
+		const auto flags = blockedKeyIndex != -1 && !blockedKey.empty() ? 0u :
+		                                                                  specializationFlags & (kLightingNoMeshVariation | kLightingNoLocalLights);
 		if (flags) {
-			auto& variant = selection.variants[1];
+			const size_t index = ((flags & kLightingNoMeshVariation) ? 1u : 0u) | ((flags & kLightingNoLocalLights) ? 2u : 0u);
+			auto& variant = selection.variants[index];
 			if (!variant.shader && variant.requestFrame != state.frameCount) {
 				variant.requestFrame = state.frameCount;
 				const auto descriptor = standard->id | flags;
@@ -3650,7 +3655,11 @@ namespace SIE
 			if (variant.shader)
 				selected = variant.shader;
 		}
-		if (GetGraphicsShaderRevision() != revision || selected == selection.bound)
+		if (GetGraphicsShaderRevision() != revision)
+			return;
+		if (state.IsDeveloperMode() || activeShaderCaptureFramesRemaining.load(std::memory_order_relaxed) > 0)
+			TrackActiveShader(ShaderClass::Pixel, shader, selected->id);
+		if (selected == selection.bound)
 			return;
 		auto& engineShader = *globals::game::currentPixelShader;
 		if (engineShader == selection.bound)

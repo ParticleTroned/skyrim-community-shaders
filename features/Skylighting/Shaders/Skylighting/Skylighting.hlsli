@@ -129,10 +129,10 @@ namespace Skylighting
 #endif
 
 #if defined(PSHADER) || defined(SKYLIGHTING_PROBE_REGISTER)
-	float GetProbeTangentWeight(float3 cellCentreMS, float3 positionMS, float3 normalWS)
+	float GetProbeTangentWeight(float3 probeOffset, float3 normalWS)
 	{
-		// Favor probes on the receiver's side of the surface to limit light leaking.
-		return saturate(dot(normalize(cellCentreMS - positionMS), normalWS) * 0.5 + 0.5);
+		// Cubic probe cells preserve world-space direction in grid coordinates.
+		return saturate(dot(probeOffset, normalWS) * rsqrt(max(dot(probeOffset, probeOffset), EPSILON_WEIGHT_SUM)) * 0.5 + 0.5);
 	}
 
 	sh2 Sample(float3 positionMS, float3 normalWS)
@@ -171,11 +171,9 @@ namespace Skylighting
 					if (any(cellID < 0) || any((uint3)cellID >= arrayDims))
 						continue;
 
-					float3 cellCentreMS = (float3(cellID) + 0.5 - float3(arrayDims) * 0.5) * cellSize;
-
-					float tangentWeight = GetProbeTangentWeight(cellCentreMS, positionMSAdjusted, normalWS);
-
-					float3 trilinearWeights = 1 - abs(offset - trilinearPos);
+					float3 probeOffset = offset - trilinearPos;
+					float tangentWeight = GetProbeTangentWeight(probeOffset, normalWS);
+					float3 trilinearWeights = 1 - abs(probeOffset);
 					float w = trilinearWeights.x * trilinearWeights.y * trilinearWeights.z * tangentWeight;
 
 					uint3 cellTexID = offset == 0 ? lowerProbe : upperProbe;
@@ -234,11 +232,11 @@ namespace Skylighting
 								if (any(cellID < 0) || any((uint3)cellID >= arrayDims))
 									continue;
 
-								float3 trilinearWeights = 1 - abs(cellOffset - trilinearPos);
+								float3 probeOffset = cellOffset - trilinearPos;
+								float3 trilinearWeights = 1 - abs(probeOffset);
 								float triWeight = trilinearWeights.x * trilinearWeights.y * trilinearWeights.z;
 								uint3 cellTexID = cellOffset == 0 ? lowerProbe : upperProbe;
-								float3 cellCentreMS = (float3(cellID) + 0.5 - float3(arrayDims) * 0.5) * cellSize;
-								float tangentWeight = GetProbeTangentWeight(cellCentreMS, positionMSAdjusted, normalWS);
+								float tangentWeight = GetProbeTangentWeight(probeOffset, normalWS);
 								float shWeight = triWeight * tangentWeight;
 
 								shSum = SphericalHarmonics::Add(shSum, SphericalHarmonics::Scale(SkylightingProbeArray[cellTexID], shWeight));

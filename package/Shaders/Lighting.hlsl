@@ -3991,7 +3991,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	uint totalLightCount = LightLimitFix::NumStrictLights;
 	uint clusterIndex = 0;
 	uint lightOffset = 0;
-#			if defined(DEFERRED)
+#			if defined(DEFERRED) && !defined(LLF_NO_CONTACT_SHADOWS)
 	const bool contactShadowsEnabled = SharedData::lightLimitFixSettings.ContactShadowFlags != 0;
 	uint contactShadowOffset = 0;
 	uint contactShadowCount = 0;
@@ -4005,7 +4005,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		numClusteredLights = LightLimitFix::lightGrid[clusterIndex].lightCount;
 		totalLightCount += numClusteredLights;
 		lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
-#			if defined(DEFERRED)
+#			if defined(DEFERRED) && !defined(LLF_NO_CONTACT_SHADOWS)
 		[branch] if (contactShadowsEnabled)
 			LightLimitFix::GetContactShadowClusterRange(clusterIndex, contactShadowOffset, contactShadowCount);
 #			endif
@@ -4057,7 +4057,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		float3 normalizedLightDirection = lightDirection / lightDist;
 		float lightAngle = dot(worldNormal.xyz, normalizedLightDirection.xyz);
-#			if defined(DEFERRED)
+#			if defined(DEFERRED) && !defined(LLF_NO_CONTACT_SHADOWS)
 		const bool isParticleLight = (light.lightFlags & LightLimitFix::LightFlags::Particle) != 0;
 		const bool canUseContactShadow = contactShadowsEnabled && LightLimitFix::CanUseContactShadows(light, isParticleLight);
 		bool isContactShadowCandidate = false;
@@ -4108,7 +4108,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif  // defined(EMAT) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
 
 		float contactShadow = 1.0;
-#			if defined(DEFERRED)
+#			if defined(DEFERRED) && !defined(LLF_NO_CONTACT_SHADOWS)
 		[branch] if (
 			isContactShadowCandidate &&
 			lightAngle > 0.0 &&

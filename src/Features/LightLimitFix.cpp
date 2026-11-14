@@ -1415,6 +1415,10 @@ LightLimitFix::PerFrame LightLimitFix::GetCommonBufferData()
 	perFrame.EnableLightsVisualisation = settings.EnableLightsVisualisation;
 	perFrame.LightsVisualisationMode = settings.LightsVisualisationMode;
 	perFrame.ContactShadowFlags = PackContactShadowFlags(settings);
+	auto& shaderFlags = globals::state->lightingPixelShaderFlags;
+	shaderFlags &= ~SIE::ShaderCache::kLightingNoContactShadows;
+	if (loaded && perFrame.ContactShadowFlags == 0)
+		shaderFlags |= SIE::ShaderCache::kLightingNoContactShadows;
 	perFrame.ContactShadowParams = PackContactShadowParams(settings);
 	std::copy(clusterSize, clusterSize + 3, perFrame.ClusterSize);
 	return perFrame;

@@ -1466,7 +1466,8 @@ namespace SIE
 			const bool snowCoverInactive = (descriptor & ShaderCache::kLightingSnowCoverInactive) != 0;
 			const bool noMeshVariation = (descriptor & ShaderCache::kLightingNoMeshVariation) != 0;
 			const bool noLocalLights = (descriptor & ShaderCache::kLightingNoLocalLights) != 0;
-			descriptor &= ~(ShaderCache::kLightingSnowCoverInactive | ShaderCache::kLightingNoMeshVariation | ShaderCache::kLightingNoLocalLights);
+			const bool noContactShadows = (descriptor & ShaderCache::kLightingNoContactShadows) != 0;
+			descriptor &= ~ShaderCache::kLightingSpecializationMask;
 			static_assert((static_cast<uint32_t>(ShaderCache::LightingShaderFlags::LandscapeSeams) &
 							  ShaderCache::GetCharacterCategoryFlag(RE::BSShader::Type::Lighting)) == 0);
 			static REL::Relocation<void(uint32_t, D3D_SHADER_MACRO*)> VanillaGetLightingShaderDefines(RELOCATION_ID(101631, 108698));
@@ -1479,6 +1480,8 @@ namespace SIE
 				defines[lastIndex++] = { "NO_MESH_VARIATION", nullptr };
 			if (noLocalLights)
 				defines[lastIndex++] = { "LLF_NO_LOCAL_LIGHTS", nullptr };
+			if (noContactShadows)
+				defines[lastIndex++] = { "LLF_NO_CONTACT_SHADOWS", nullptr };
 
 			if (descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::Deferred)) {
 				defines[lastIndex++] = { "DEFERRED", nullptr };
@@ -3581,7 +3584,7 @@ namespace SIE
 		if (a_lookup == PixelShaderLookup::Cached)
 			return nullptr;
 		const bool specializedLighting = shader.shaderType.get() == RE::BSShader::Type::Lighting &&
-		                                 (descriptor & (kLightingSnowCoverInactive | kLightingNoMeshVariation | kLightingNoLocalLights)) != 0;
+		                                 (descriptor & kLightingSpecializationMask) != 0;
 		if (!IsSaveLoadSafeModeActive()) {
 			if (specializedLighting || (ShouldUseAsyncCompilation() && (a_lookup != PixelShaderLookup::Draw || !globals::features::reverseZ.IsActive()))) {
 				compilationSet.Add({ ShaderClass::Pixel, shader, descriptor, precompile });
@@ -3591,7 +3594,7 @@ namespace SIE
 		}
 
 		if (specializedLighting && a_lookup != PixelShaderLookup::Specialization)
-			return GetPixelShader(shader, descriptor & ~(kLightingSnowCoverInactive | kLightingNoMeshVariation | kLightingNoLocalLights), a_lookup);
+			return GetPixelShader(shader, descriptor & ~kLightingSpecializationMask, a_lookup);
 
 		auto* deferred = globals::deferred;
 		const auto categoryFlag = GetCharacterCategoryFlag(shader.shaderType.get());

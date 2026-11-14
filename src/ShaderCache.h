@@ -858,6 +858,9 @@ namespace SIE
 		static constexpr uint32_t kLightingSnowCoverInactive = 1u << 19;
 		static constexpr uint32_t kLightingNoMeshVariation = 1u << 7;
 		static constexpr uint32_t kLightingNoLocalLights = 1u << 8;
+		static constexpr uint32_t kLightingNoContactShadows = 1u << 13;
+		static constexpr uint32_t kLightingSpecializationMask = kLightingSnowCoverInactive | kLightingNoMeshVariation |
+		                                                        kLightingNoLocalLights | kLightingNoContactShadows;
 
 		enum class LightingShaderFlags : uint32_t
 		{

@@ -1,4 +1,5 @@
 #include "Features/ScreenshotApiPolicy.h"
+#include "Features/ScreenshotFramingPolicy.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Features/ScreenshotBurstPolicy.h"
 #	include "Utils/CaptureRetention.h"
@@ -55,7 +56,7 @@ struct ScreenshotFeature
 		void LoadSettings(json&) {}
 	} subrect;
 	void SetEnabled(bool value) { runtimeEnabled = value; }
-	json BuildCaptureDescriptor(CaptureEye, bool, bool) const;
+	json BuildCaptureDescriptor(CaptureEye, bool, bool, bool) const;
 	void LoadSettings(json&);
 };
 bool IsFramedCapture(ScreenshotFeature::VRCaptureSource value)
@@ -110,6 +111,7 @@ int main()
 		const auto capabilities = api.BuildCapabilities(feature);
 		check(capabilities.at("sources").size() == (vr ? 2 : 1), "runtime capture sources changed");
 		check(capabilities.at("formats") == json({ "png", "bmp" }), "ordinary image formats disappeared");
+		check(capabilities.at("optional").value("framedSourceNativeSizing", false), "source-native framed sizing is not advertised");
 		check(api.CheckSequenceBuildSupport({ { "sequence", { { "frameCount", 2 } } } }).at("ok"), "ordinary sequences rejected");
 		for (const auto burst : { json(nullptr), json::object(), json{ { "regions", json::array() } } }) {
 			const auto admission = api.CheckSequenceBuildSupport({ { "sequence", { { "frameCount", 2 }, { "burst", burst } } } });
@@ -169,14 +171,56 @@ int main()
 	feature.vrFramedDominantEye = vr::Eye_Right;
 	const auto framed = api.NormalizeCaptureDescriptor(feature, { { "useSettings", true } }, true);
 	check(framed["outputs"].size() == 1 && framed["outputs"][0]["dominantEye"] == "right", "framed combined lost dominant eye");
+	check(!framed["outputs"][0].contains("sizing") && framed["outputs"][0].value("width", 0) == 2560 &&
+			  framed["outputs"][0].value("height", 0) == 1440,
+		"settings framed sequence lost its shared frame size");
+	const auto framedStill = api.NormalizeCaptureDescriptor(feature, { { "useSettings", true } });
+	check(framedStill["outputs"].size() == 1 && framedStill["outputs"][0].value("view", std::string{}) == "framed_right" &&
+			  framedStill["outputs"][0].value("sizing", std::string{}) == "source_native" &&
+			  !framedStill["outputs"][0].contains("width") && !framedStill["outputs"][0].contains("height"),
+		"settings framed screenshot lost its submitted pixel density");
 	globals::game::isVR = false;
 	const auto desktop = api.NormalizeCaptureDescriptor(feature, { { "useSettings", true } }, true);
 	check(desktop["source"]["kind"] == "desktop_mirror" && desktop["outputs"][0]["view"] == "source_native", "SE/AE generated HMD-only output");
+	const auto desktopStill = api.NormalizeCaptureDescriptor(feature, { { "useSettings", true } });
+	check(!desktopStill["outputs"][0].contains("sizing"), "SE/AE desktop screenshot carried framed sizing");
 	globals::game::isVR = true;
 	for (const auto patch : { json{ { "VR", { { "Eye", "bad" } } } }, json{ { "Sequence", { { "Eye", 9 } } } }, json{ { "Sequence", { { "Encoding", { { "Format", "jpeg" } } } } } } })
 		check(!api.ValidateSettingsPatch(patch)["valid"].get<bool>(), "invalid eye/encoding accepted");
 	json explicitRequest = { { "useSettings", false }, { "capture", { { "source", { { "kind", "hmd_submission" } } }, { "outputs", { { { "view", "left_eye" }, { "encoding", { { "format", "png" } } } } } } } } };
 	const auto explicitResult = api.NormalizeCaptureDescriptor(feature, explicitRequest, true);
 	check(explicitResult["outputs"].size() == 1 && explicitResult["outputs"][0]["view"] == "left_eye" && explicitResult["outputs"][0]["encoding"]["format"] == "png", "explicit descriptor changed");
+	const auto framedRequest = [](json a_output) {
+		a_output["view"] = "framed_left";
+		return json{ { "useSettings", false }, { "capture", { { "source", { { "kind", "hmd_submission" } } }, { "outputs", json::array({ std::move(a_output) }) } } } };
+	};
+	const auto framedOutput = [&](json a_output) {
+		return api.NormalizeCaptureDescriptor(feature, framedRequest(std::move(a_output))).at("outputs").at(0);
+	};
+	const auto fixedByDefault = framedOutput(json::object());
+	check(!fixedByDefault.contains("sizing") && fixedByDefault.value("width", 0) == 2560 && fixedByDefault.value("height", 0) == 1440,
+		"framed output without sizing lost its fixed size");
+	const auto explicitFixed = framedOutput({ { "sizing", "fixed" }, { "width", 2560 }, { "height", 1440 } });
+	check(explicitFixed.value("width", 0) == 2560 && explicitFixed.value("height", 0) == 1440, "explicit fixed framed size changed");
+	const auto sourceNative = framedOutput({ { "sizing", "source_native" } });
+	check(sourceNative.value("sizing", std::string{}) == "source_native" && !sourceNative.contains("width") && !sourceNative.contains("height"),
+		"source-native framed output gained a fixed size");
+	json nativeViewSizing = explicitRequest;
+	nativeViewSizing["capture"]["outputs"][0]["sizing"] = "source_native";
+	for (const auto& invalid : {
+			 framedRequest({ { "sizing", "source_native" }, { "width", 2560 } }),
+			 framedRequest({ { "sizing", "source_native" }, { "height", 1440 } }),
+			 framedRequest({ { "sizing", "fixed" }, { "width", 1920 } }),
+			 framedRequest({ { "width", 1920 } }),
+			 framedRequest({ { "sizing", "native" } }),
+			 nativeViewSizing }) {
+		bool rejected = false;
+		try {
+			(void)api.NormalizeCaptureDescriptor(feature, invalid);
+		} catch (const std::exception&) {
+			rejected = true;
+		}
+		check(rejected, "contradictory or unknown framed sizing accepted");
+	}
 	return failures ? 1 : 0;
 }

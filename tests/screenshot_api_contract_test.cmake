@@ -133,6 +133,14 @@ foreach(_required_schema_text IN ITEMS runtime_session persistent_user settings_
         message(FATAL_ERROR "Screenshot request schema is missing: ${_required_schema_text}")
     endif()
 endforeach()
+string(FIND "${_request_schema}" "\"sizing\"" _sizing_schema_position)
+string(FIND "${_implementation}" "FramedSizingSourceNative" _sizing_validator_position)
+string(FIND "${_implementation}" "framedSourceNativeSizing" _sizing_capability_position)
+string(FIND "${_feature_implementation}" "FramedSizingSourceNative" _sizing_controls_position)
+if(_sizing_schema_position EQUAL -1 OR _sizing_validator_position EQUAL -1 OR
+   _sizing_capability_position EQUAL -1 OR _sizing_controls_position EQUAL -1)
+    message(FATAL_ERROR "Framed output sizing must be named by the request schema, validator, capabilities, and native controls")
+endif()
 
 file(READ "${PROJECT_ROOT}/src/ScreenshotDevBenchBridge.cpp" _bridge)
 string(FIND "${_bridge}" "communityshaders.screenshot" _tool_position)

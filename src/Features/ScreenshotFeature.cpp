@@ -9,6 +9,7 @@
 #include "Features/ScreenshotApi.h"
 #include "Features/ScreenshotApiPolicy.h"
 #include "Features/ScreenshotFeature.h"
+#include "Features/ScreenshotFramingPolicy.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Features/ScreenshotNativeImage.h"
 #endif
@@ -38,7 +39,6 @@
 #include <imgui.h>
 #include <imgui_impl_dx11.h>
 #include <limits>
-#include <numeric>
 #include <thread>
 #include <tuple>
 #include <utility>
@@ -105,8 +105,8 @@ namespace
 	}
 
 	constexpr auto kReadbackMapRetryDelay = std::chrono::milliseconds(1);
-	constexpr uint32_t kFramedEyeOutputWidth = 2560;
-	constexpr uint32_t kFramedEyeOutputHeight = 1440;
+	constexpr uint32_t kFramedEyeOutputWidth = CSX::ScreenshotPolicy::FramedFixedWidth;
+	constexpr uint32_t kFramedEyeOutputHeight = CSX::ScreenshotPolicy::FramedFixedHeight;
 	constexpr float kStereoFeatherFraction = 0.08f;
 	constexpr float kFrameCoverageSafetyScale = 0.995f;
 	constexpr std::size_t kVisibilityMaskGuardPixels = 2;
@@ -286,6 +286,23 @@ namespace
 		return !IsEightBitPerComponentFormat(a_format);
 	}
 
+	bool CenterCropToAspect(
+		const DirectX::Image& a_source,
+		uint32_t a_targetWidth,
+		uint32_t a_targetHeight,
+		DirectX::ScratchImage& a_croppedImage)
+	{
+		const auto crop = CSX::ScreenshotPolicy::ResolveFramedCrop(a_source.width, a_source.height, a_targetWidth, a_targetHeight);
+		if (!a_source.pixels || !crop ||
+			FAILED(a_croppedImage.Initialize2D(a_source.format, crop.width, crop.height, 1, 1))) {
+			return false;
+		}
+
+		const auto* cropped = a_croppedImage.GetImage(0, 0, 0);
+		const DirectX::Rect cropRect(crop.x, crop.y, crop.width, crop.height);
+		return cropped && SUCCEEDED(DirectX::CopyRectangle(a_source, cropRect, *cropped, DirectX::TEX_FILTER_DEFAULT, 0, 0));
+	}
+
 	bool CenterCropAndResize(
 		const DirectX::Image& a_source,
 		uint32_t a_targetWidth,
@@ -294,41 +311,11 @@ namespace
 		DirectX::ScratchImage& a_croppedImage,
 		DirectX::ScratchImage& a_resizedImage)
 	{
-		if (!a_source.pixels || a_source.width == 0 || a_source.height == 0 ||
-			a_targetWidth == 0 || a_targetHeight == 0) {
-			return false;
-		}
-
-		const size_t aspectDivisor = std::gcd<size_t>(a_targetWidth, a_targetHeight);
-		const size_t aspectWidth = a_targetWidth / aspectDivisor;
-		const size_t aspectHeight = a_targetHeight / aspectDivisor;
-		const size_t aspectScale = std::min(
-			a_source.width / aspectWidth,
-			a_source.height / aspectHeight);
-		if (aspectScale == 0) {
-			return false;
-		}
-
-		const size_t cropWidth = aspectScale * aspectWidth;
-		const size_t cropHeight = aspectScale * aspectHeight;
-		const size_t cropX = (a_source.width - cropWidth) / 2;
-		const size_t cropY = (a_source.height - cropHeight) / 2;
-		if (FAILED(a_croppedImage.Initialize2D(a_source.format, cropWidth, cropHeight, 1, 1))) {
+		if (!CenterCropToAspect(a_source, a_targetWidth, a_targetHeight, a_croppedImage)) {
 			return false;
 		}
 
 		const auto* cropped = a_croppedImage.GetImage(0, 0, 0);
-		const DirectX::Rect cropRect(cropX, cropY, cropWidth, cropHeight);
-		if (!cropped || FAILED(DirectX::CopyRectangle(
-							a_source,
-							cropRect,
-							*cropped,
-							DirectX::TEX_FILTER_DEFAULT,
-							0,
-							0))) {
-			return false;
-		}
-
 		DirectX::Image resizeSource = *cropped;
 		uint32_t filterFlags = DirectX::TEX_FILTER_CUBIC | DirectX::TEX_FILTER_SEPARATE_ALPHA;
 		if (a_colorSpace == vr::ColorSpace_Linear) {
@@ -594,6 +581,8 @@ namespace
 		float a_centerY,
 		float a_frameWidth,
 		float a_frameHeight,
+		std::size_t a_outputWidth,
+		std::size_t a_outputHeight,
 		const std::array<std::array<float, 4>, 2>& a_projectionTangents,
 		const std::array<vr::HmdMatrix34_t, 2>& a_eyeToHeadTransforms,
 		const std::array<std::vector<uint8_t>, 2>& a_visibilityMasks,
@@ -601,14 +590,14 @@ namespace
 	{
 		const float frameLeft = a_centerX - a_frameWidth * 0.5f;
 		const float frameTop = a_centerY + a_frameHeight * 0.5f;
-		for (std::size_t y = 0; y < kFramedEyeOutputHeight; ++y) {
+		for (std::size_t y = 0; y < a_outputHeight; ++y) {
 			const float tangentY = frameTop -
 			                       (static_cast<float>(y) + 0.5f) /
-			                           static_cast<float>(kFramedEyeOutputHeight) * a_frameHeight;
-			for (std::size_t x = 0; x < kFramedEyeOutputWidth; ++x) {
+			                           static_cast<float>(a_outputHeight) * a_frameHeight;
+			for (std::size_t x = 0; x < a_outputWidth; ++x) {
 				const float tangentX = frameLeft +
 				                       (static_cast<float>(x) + 0.5f) /
-				                           static_cast<float>(kFramedEyeOutputWidth) * a_frameWidth;
+				                           static_cast<float>(a_outputWidth) * a_frameWidth;
 				if (!IsHeadTangentCovered(
 						tangentX,
 						tangentY,
@@ -1040,6 +1029,7 @@ namespace
 			a_output));
 	}
 
+	// Zero output dimensions keep the dominant eye's pixel density.
 	bool ComposeFramedStereo(
 		const std::array<const DirectX::Image*, 2>& a_eyeImages,
 		const std::array<std::array<float, 4>, 2>& a_projectionTangents,
@@ -1047,6 +1037,8 @@ namespace
 		const std::array<std::vector<vr::HmdVector2_t>, 2>& a_hiddenAreaMeshes,
 		vr::EVREye a_dominantEye,
 		vr::EColorSpace a_colorSpace,
+		uint32_t a_outputWidth,
+		uint32_t a_outputHeight,
 		DirectX::ScratchImage& a_output)
 	{
 		if (!a_eyeImages[0] || !a_eyeImages[1]) {
@@ -1107,8 +1099,11 @@ namespace
 		const float desiredCenterX = dominantHeadX / dominantForward;
 		const float desiredCenterY = dominantHeadY / dominantForward;
 
-		constexpr float targetAspect = static_cast<float>(kFramedEyeOutputWidth) /
-		                               static_cast<float>(kFramedEyeOutputHeight);
+		const bool sourceDensity = a_outputWidth == 0 || a_outputHeight == 0;
+		const float targetAspect = sourceDensity ?
+		                               static_cast<float>(CSX::ScreenshotPolicy::FramedAspectWidth) /
+		                                   static_cast<float>(CSX::ScreenshotPolicy::FramedAspectHeight) :
+		                               static_cast<float>(a_outputWidth) / static_cast<float>(a_outputHeight);
 		const float availableHalfWidth = std::min(
 			desiredCenterX - unionLeft,
 			unionRight - desiredCenterX);
@@ -1177,11 +1172,30 @@ namespace
 			frameHalfWidth = frameWidth * 0.5f;
 			frameHalfHeight = frameHeight * 0.5f;
 		}
+		uint32_t outputWidth = a_outputWidth;
+		uint32_t outputHeight = a_outputHeight;
+		if (sourceDensity) {
+			// Fix the size before the per-pixel fit so the fitted grid is the composed grid.
+			const auto& dominantTangents = a_projectionTangents[dominantIndex];
+			const auto densitySize = CSX::ScreenshotPolicy::ResolveFramedSourceDensitySize(
+				frameWidth,
+				dominantTangents[kProjectionRight] - dominantTangents[kProjectionLeft],
+				dominantTangents[kProjectionTop] - dominantTangents[kProjectionBottom],
+				a_eyeImages[dominantIndex]->width,
+				a_eyeImages[dominantIndex]->height);
+			if (!densitySize) {
+				return false;
+			}
+			outputWidth = densitySize.width;
+			outputHeight = densitySize.height;
+		}
 		if (!IsFrameCoverageComplete(
 				desiredCenterX,
 				desiredCenterY,
 				frameWidth,
 				frameHeight,
+				outputWidth,
+				outputHeight,
 				a_projectionTangents,
 				a_eyeToHeadTransforms,
 				eyeVisibilityMasks,
@@ -1197,6 +1211,8 @@ namespace
 						desiredCenterY,
 						frameWidth * candidateScale,
 						frameHeight * candidateScale,
+						outputWidth,
+						outputHeight,
 						a_projectionTangents,
 						a_eyeToHeadTransforms,
 						eyeVisibilityMasks,
@@ -1218,6 +1234,8 @@ namespace
 					desiredCenterY,
 					frameWidth,
 					frameHeight,
+					outputWidth,
+					outputHeight,
 					a_projectionTangents,
 					a_eyeToHeadTransforms,
 					eyeVisibilityMasks,
@@ -1231,8 +1249,8 @@ namespace
 
 		if (FAILED(a_output.Initialize2D(
 				DXGI_FORMAT_R32G32B32A32_FLOAT,
-				kFramedEyeOutputWidth,
-				kFramedEyeOutputHeight,
+				outputWidth,
+				outputHeight,
 				1,
 				1))) {
 			return false;
@@ -1670,7 +1688,8 @@ namespace
 json ScreenshotFeature::BuildCaptureDescriptor(
 	CaptureEye a_eye,
 	bool a_usePng,
-	bool a_clipboard) const
+	bool a_clipboard,
+	bool a_sourceNativeFraming) const
 {
 	const bool vrRuntime = globals::game::isVR;
 	const bool framed = vrCaptureSource == VRCaptureSource::FramedEye ||
@@ -1684,6 +1703,8 @@ json ScreenshotFeature::BuildCaptureDescriptor(
 		};
 		if (a_view == "framed_combined")
 			output["dominantEye"] = vrFramedDominantEye == vr::Eye_Right ? "right" : "left";
+		if (a_sourceNativeFraming && a_view.starts_with("framed_"))
+			output["sizing"] = CSX::ScreenshotPolicy::FramedSizingSourceNative;
 		outputs.push_back(std::move(output));
 	};
 
@@ -2000,7 +2021,7 @@ void ScreenshotFeature::DrawSettings()
 			                        (vrCaptureSource == VRCaptureSource::DesktopMirror ? 2 : 0);
 			const MenuUI::Choice sources[] = {
 				{ "hmd", "HMD submission", "Final image sent to the headset", "Capture the selected eye, or both as separate files." },
-				{ "framed", "Framed view", "2560 x 1440 image", "Save a left, right or combined 16:9 view." },
+				{ "framed", "Framed view", "16:9 view of the headset image", "Save a left, right or combined 16:9 view. Screenshots keep the headset's pixel density; sequence frames are 2560 x 1440." },
 				{ "mirror", "Desktop mirror", "Current desktop picture", "Capture Skyrim's desktop backbuffer." }
 			};
 			const int chosen = MenuUI::ChoiceCards("CaptureSource", captureSource, sources);
@@ -2190,7 +2211,7 @@ void ScreenshotFeature::DrawSettings()
 		ImGui::BeginDisabled(!IsRuntimeEnabled() && uiSequenceRequestId.empty());
 		if (uiSequenceRequestId.empty()) {
 			if (ImGui::Button("Start Frame Capture")) {
-				auto capture = BuildCaptureDescriptor(frameCaptureEye, frameCaptureUsePng, false);
+				auto capture = BuildCaptureDescriptor(frameCaptureEye, frameCaptureUsePng, false, false);
 				const auto response = CSX::Api::DispatchScreenshotServiceRequest({
 					{ "contractMajor", 1 },
 					{ "action", "sequence_start" },
@@ -2252,8 +2273,10 @@ void ScreenshotFeature::DrawSettings()
 					"Combined aligns submitted eyes in head-projection space. The dominant eye supplies the shared view; the other fills the outer edge with a feathered join. No scene depth: nearby objects may show seams or duplication.");
 			} else {
 				ImGui::TextWrapped(
-					"The selected submitted eye is center-cropped to 16:9 and resized to 2560 x 1440 without stretching.");
+					"The selected submitted eye is center-cropped to 16:9 without stretching.");
 			}
+			ImGui::TextWrapped(
+				"Screenshots keep the headset's pixel density. Sequence frames are 2560 x 1440 so every frame has the same size.");
 			ImGui::TextWrapped(
 				"Ignores the ordinary crop preset. Requires live eye submissions; framed views are unavailable during loading.");
 			return;
@@ -2472,7 +2495,7 @@ nlohmann::json ScreenshotFeature::RequestApiCapture(std::string_view a_origin)
 		{ "clientId", std::format("csx.control:{}", a_origin) },
 		{ "commandId", std::format("{}:{}", GetTickCount64(), commandSequence.fetch_add(1, std::memory_order_relaxed)) },
 		{ "useSettings", false },
-		{ "capture", BuildCaptureDescriptor(screenshotEye, sdrUsePng, copyToClipboard) },
+		{ "capture", BuildCaptureDescriptor(screenshotEye, sdrUsePng, copyToClipboard, true) },
 	});
 }
 
@@ -3137,6 +3160,8 @@ void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerSta
 									screenshot.hiddenAreaMeshes,
 									output.dominantEye,
 									colourSpace,
+									output.width,
+									output.height,
 									stereoComposite)) {
 								sourceScratch = &stereoComposite;
 								sourceImage = stereoComposite.GetImage(0, 0, 0);
@@ -3183,11 +3208,16 @@ void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerSta
 
 						DirectX::ScratchImage framingCrop;
 						DirectX::ScratchImage framed;
-						if (needsFraming) {
+						if (needsFraming && (output.width == 0 || output.height == 0)) {
+							// Without a requested size the crop keeps its submitted pixels.
+							if (!CenterCropToAspect(*sourceImage, CSX::ScreenshotPolicy::FramedAspectWidth, CSX::ScreenshotPolicy::FramedAspectHeight, framingCrop))
+								throw std::runtime_error("failed to frame requested screenshot view");
+							imageToSave = &framingCrop;
+						} else if (needsFraming) {
 							if (!CenterCropAndResize(
 									*sourceImage,
-									output.width ? output.width : kFramedEyeOutputWidth,
-									output.height ? output.height : kFramedEyeOutputHeight,
+									output.width,
+									output.height,
 									colourSpace,
 									framingCrop,
 									framed))
@@ -3273,6 +3303,8 @@ void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerSta
 										  screenshot.hiddenAreaMeshes,
 										  screenshot.dominantEye,
 										  combinedColorSpace,
+										  kFramedEyeOutputWidth,
+										  kFramedEyeOutputHeight,
 										  stereoCompositeImage);
 				if (composed) {
 					assembledImage = &stereoCompositeImage;
@@ -3982,13 +4014,13 @@ void ScreenshotFeature::ObserveAcceptedVRSubmit(
 		}
 		switch (completedSource) {
 		case VRCaptureSource::FramedEye:
-			logger::debug("Capturing one accepted OpenVR eye at 2560 x 1440");
+			logger::debug("Capturing one accepted OpenVR eye as a framed view");
 			break;
 		case VRCaptureSource::HMDEye:
 			logger::debug("Capturing one accepted OpenVR eye at source resolution");
 			break;
 		case VRCaptureSource::FramedStereo:
-			logger::debug("Capturing a combined accepted OpenVR eye pair at 2560 x 1440");
+			logger::debug("Capturing an accepted OpenVR eye pair as a combined framed view");
 			break;
 		case VRCaptureSource::HMDSubmission:
 		default:

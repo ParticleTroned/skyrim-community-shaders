@@ -3375,6 +3375,7 @@ public:
 	void NotifyGameLoadStarted(bool a_newGame, bool a_initialProcessSaveLoad);
 	void RequestPostLoadRuntimeReset();
 	bool ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod);
+	bool TryRetainFSRForCompletedSaveLoad(UpscaleMethod a_upscaleMethod, uint64_t a_recoveryEpoch);
 	[[nodiscard]] bool ShouldDeferVRVendorLifecycleMutation() const;
 	/** Ordinary-save recovery may only reuse resources while persistence remains guarded. */
 	[[nodiscard]] bool ShouldReuseOrdinarySaveResources() const;

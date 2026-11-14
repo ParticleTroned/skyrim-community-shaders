@@ -687,6 +687,12 @@ bool State::IsEngineSaveLoadActivityActive() const
 	return engineSaveLoadActivityActive.load(std::memory_order_acquire);
 }
 
+bool State::IsEngineSaveLoadKnownIdle() const
+{
+	std::lock_guard lock(saveLoadSafeModeMutex);
+	return engineSaveLoadActivityKnown && !IsEngineSaveLoadActivityActive();
+}
+
 uint64_t State::GetOrdinarySaveRenderRecoveryToken() const
 {
 	std::lock_guard lock(saveLoadSafeModeMutex);

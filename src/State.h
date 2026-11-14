@@ -206,6 +206,7 @@ public:
 	// Current engine-owned save/load work only. Unlike IsSaveLoadSafeModeActive,
 	// this excludes the fixed post-event grace used for mutation/persistence safety.
 	bool IsEngineSaveLoadActivityActive() const;
+	bool IsEngineSaveLoadKnownIdle() const;
 	/** Returns a distinct save token only after known ordinary-save work is idle. */
 	uint64_t GetOrdinarySaveRenderRecoveryToken() const;
 	bool IsPersistentMutationBlocked() const;

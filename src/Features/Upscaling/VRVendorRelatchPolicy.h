@@ -450,6 +450,33 @@ namespace VRVendorRelatchPolicy
 		       !a_state.stabilizerSyncUnresolved;
 	}
 
+	struct RetainedSaveLoadDestination
+	{
+		std::uint64_t loadingSerial = 0;
+		std::uint64_t recoveryLoadingSerial = 0;
+		std::uint64_t holdLoadingSerial = 0;
+		std::uint32_t closeFrame = 0;
+		std::uint32_t recoveryStartFrame = 0;
+		std::uint32_t completedWorldFrame = 0;
+		std::uint32_t currentFrame = 0;
+		bool loadingOpen = true;
+		bool inGameLoadHold = false;
+	};
+
+	[[nodiscard]] constexpr bool HasRetainedSaveLoadDestination(
+		const RetainedSaveLoadDestination& a_state) noexcept
+	{
+		return a_state.inGameLoadHold && !a_state.loadingOpen &&
+		       a_state.loadingSerial != 0 &&
+		       a_state.loadingSerial == a_state.recoveryLoadingSerial &&
+		       a_state.loadingSerial == a_state.holdLoadingSerial &&
+		       a_state.closeFrame != 0 && a_state.recoveryStartFrame != 0 &&
+		       a_state.completedWorldFrame > a_state.closeFrame &&
+		       a_state.completedWorldFrame > a_state.recoveryStartFrame &&
+		       a_state.completedWorldFrame <= a_state.currentFrame &&
+		       a_state.completedWorldFrame != (std::numeric_limits<std::uint32_t>::max)();
+	}
+
 	struct SerializedPresentationReadiness
 	{
 		bool compositorHoldActive = false;

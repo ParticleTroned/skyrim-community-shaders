@@ -10,6 +10,40 @@ namespace
 {
 	using namespace VRVendorRelatchPolicy;
 
+	constexpr bool CoversRetainedSaveLoadDestination()
+	{
+		const RetainedSaveLoadDestination matched{ 7, 7, 7, 100, 101, 102, 103, false, true };
+		auto candidate = matched;
+		candidate.recoveryLoadingSerial = 6;
+		if (HasRetainedSaveLoadDestination(candidate))
+			return false;
+		candidate = matched;
+		candidate.holdLoadingSerial = 8;
+		if (HasRetainedSaveLoadDestination(candidate))
+			return false;
+		candidate = matched;
+		candidate.completedWorldFrame = 100;
+		if (HasRetainedSaveLoadDestination(candidate))
+			return false;
+		candidate = matched;
+		candidate.completedWorldFrame = 101;
+		if (HasRetainedSaveLoadDestination(candidate))
+			return false;
+		candidate = matched;
+		candidate.completedWorldFrame = 104;
+		if (HasRetainedSaveLoadDestination(candidate))
+			return false;
+		candidate = matched;
+		candidate.loadingOpen = true;
+		if (HasRetainedSaveLoadDestination(candidate))
+			return false;
+		candidate = matched;
+		candidate.inGameLoadHold = false;
+		return !HasRetainedSaveLoadDestination(candidate) &&
+		       HasRetainedSaveLoadDestination(matched);
+	}
+	static_assert(CoversRetainedSaveLoadDestination());
+
 	static_assert(!ShouldDeferPresentationSuccessor(0, 0, false));
 	static_assert(ShouldDeferPresentationSuccessor(7, 0, false));
 	static_assert(!ShouldDeferPresentationSuccessor(7, 7, false));

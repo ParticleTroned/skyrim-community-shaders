@@ -997,6 +997,9 @@ namespace
 	std::atomic_uint64_t g_vrLoadingTransitionSerial{ 0 };
 	std::atomic_bool g_vrLoadingTransitionSerialOpen{ false };
 	std::mutex g_vrLoadingTransitionSerialMutex;
+	// Close-side dirtiness is serialized by perfModeRenderTargetRecreateQueueMutex.
+	uint64_t g_vrDeferredPostLoadFSRResetSerial = 0;
+	std::atomic_uint64_t g_vrRetainedPostLoadPresentationSerial{ 0 };
 	std::atomic_uint32_t g_vrLoadingTransitionSourceCellFormID{ 0 };
 	std::atomic_uint32_t g_vrLoadingTransitionDestinationCellFormID{ 0 };
 	std::atomic_uint32_t g_vrLoadingTransitionDestinationObservationWorldFrame{ 0 };
@@ -5983,6 +5986,12 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 
 	bool IsVRLoadingPresentationTailActive(const State* a_state)
 	{
+		const auto retainedSerial = g_vrRetainedPostLoadPresentationSerial.load(std::memory_order_acquire);
+		if (retainedSerial != 0 &&
+			!g_vrLoadingTransitionSerialOpen.load(std::memory_order_acquire) &&
+			retainedSerial == g_vrLoadingTransitionSerial.load(std::memory_order_acquire)) {
+			return false;
+		}
 		return IsSaveLoadTransitionContextActive(a_state) ?
 		           IsLoadingTransitionTailActive(a_state) :
 		           IsCellTransitionTailActive(a_state, kVRCellTransitionPresentationTailFrames);
@@ -21731,7 +21740,22 @@ void Upscaling::CompleteVRLoadingMenuCloseOutsideLocks(
 	uint64_t a_loadingSerial)
 {
 	NotifyVRPostLoadCompositorLoadingMenuClosed(a_loadingSerial);
-	QueueVendorRuntimeResetAfterLoadingMenu(*this);
+	{
+		const std::scoped_lock queueLock(perfModeRenderTargetRecreateQueueMutex);
+		const bool canDeferReset =
+			a_loadingSerial != 0 &&
+			a_loadingSerial == g_vrLoadingTransitionSerial.load(std::memory_order_acquire) &&
+			postLoadRuntimeResetPending.load(std::memory_order_acquire) &&
+			GetConfiguredUpscaleMethodForTransition() == UpscaleMethod::kFSR &&
+			IsVRPostLoadCompositorHoldOwnedByLoadingSerial(a_loadingSerial) &&
+			static_cast<VRPostLoadCompositorHoldRoute>(
+				vrPostLoadCompositorHoldRoute.load(std::memory_order_acquire)) ==
+				VRPostLoadCompositorHoldRoute::InGameLoad;
+		if (canDeferReset)
+			g_vrDeferredPostLoadFSRResetSerial = a_loadingSerial;
+		else
+			QueueVendorRuntimeResetAfterLoadingMenu(*this);
+	}
 	if (globals::state && IsSaveLoadTransitionContextActive(globals::state))
 		QueueVRFpsStabilizerLoadSync(globals::state->frameCount);
 	if (globals::state &&
@@ -22751,6 +22775,7 @@ void Upscaling::NotifyGamePreLoadStarted(bool a_initialProcessSaveLoad)
 	if (!globals::game::isVR || IsOpenCompositeUpscalingBlocked())
 		return;
 
+	g_vrRetainedPostLoadPresentationSerial.store(0, std::memory_order_release);
 	const auto configuredMethod = GetConfiguredUpscaleMethodForTransition();
 	const bool awaitingStabilizerSync =
 		!IsVendorUpscalingMethod(configuredMethod) &&
@@ -42169,6 +42194,84 @@ void Upscaling::RequestVRSubmitStageHistoryReset()
 	RequestHistoryReset();
 }
 
+bool Upscaling::TryRetainFSRForCompletedSaveLoad(
+	UpscaleMethod a_upscaleMethod, uint64_t a_recoveryEpoch)
+{
+	auto* state = globals::state;
+	if (a_upscaleMethod != UpscaleMethod::kFSR || a_recoveryEpoch == 0 || !state ||
+		!state->IsEngineSaveLoadKnownIdle() || state->pendingPostLoadRuntimeReset ||
+		IsMainMenuContextActive() || IsLoadingMenuContextActive() ||
+		IsNonLoadingVRMenuPresentationContextActive() ||
+		HasPendingVRUpscalingTransition() || perfMode.HasRestartRequiredChange() ||
+		pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+		vrRenderScalePostMutationSerializationEpoch.load(std::memory_order_acquire) != 0 ||
+		vrRenderScaleUnresolvedPhysicalMutationEpoch.load(std::memory_order_acquire) != 0 ||
+		submitStageVendorResumeFrame.load(std::memory_order_acquire) != 0 ||
+		IsSubmitStageDeviceLost() || HasPendingVRVendorRuntimeReset(*this, a_upscaleMethod) ||
+		HasPendingVRIntermediateTextureCleanup() || IsVRFpsStabilizerSyncActive()) {
+		return false;
+	}
+
+	const std::scoped_lock loadLock(
+		g_vrLoadingMenuGateReconciliationMutex, g_vrLoadingTransitionSerialMutex);
+	const auto loadSerial = g_vrLoadingTransitionSerial.load(std::memory_order_relaxed);
+	const auto closeFrame = g_vrLoadingTransitionCloseFrame.load(std::memory_order_relaxed);
+	const auto transition = GetVRRenderScaleTransitionSnapshot();
+	const auto& recovery = transition.postLoadRecovery;
+	const auto holdState = static_cast<VRPostLoadCompositorHoldState>(
+		vrPostLoadCompositorHoldState.load(std::memory_order_acquire));
+	if (!VRVendorRelatchPolicy::HasRetainedSaveLoadDestination({
+			.loadingSerial = loadSerial,
+			.recoveryLoadingSerial = recovery.loadingSerial,
+			.holdLoadingSerial = vrPostLoadCompositorHoldLoadingSerial.load(std::memory_order_acquire),
+			.closeFrame = closeFrame,
+			.recoveryStartFrame = recovery.startFrame,
+			.completedWorldFrame = state->lastCompletedWorldRenderFrame,
+			.currentFrame = state->frameCount,
+			.loadingOpen = g_vrLoadingTransitionSerialOpen.load(std::memory_order_relaxed) ||
+	                       IsLoadingMenuContextActive(),
+			.inGameLoadHold = (holdState == VRPostLoadCompositorHoldState::Armed ||
+								  holdState == VRPostLoadCompositorHoldState::Holding) &&
+	                          vrPostLoadCompositorHoldLoadingMenuClosed.load(std::memory_order_acquire) &&
+	                          static_cast<VRPostLoadCompositorHoldRoute>(
+								  vrPostLoadCompositorHoldRoute.load(std::memory_order_acquire)) ==
+	                              VRPostLoadCompositorHoldRoute::InGameLoad,
+		}) ||
+		!recovery.active || recovery.recoveryEpoch != a_recoveryEpoch ||
+		recovery.engineTargetCreateEntered ||
+		transition.state != VRRenderScaleTransitionState::Active) {
+		return false;
+	}
+
+	const auto boot = perfMode.GetBootSnapshot();
+	const auto& applied = transition.applied;
+	const auto& stable = transition.stable;
+	if (GetConfiguredUpscaleMethodForTransition() != a_upscaleMethod ||
+		!IsRenderScaleModeRequested() || !GetVRRenderScaleModeRequested() ||
+		GetEffectiveUpscalingQualityMode() != boot.qualityMode ||
+		applied.fsr4RuntimeEnabled != settings.fsr4RuntimeEnable ||
+		stable.transitionEpoch != applied.transitionEpoch ||
+		!IsVRRenderScaleAppliedVendorContractExact(transition, boot, a_upscaleMethod) ||
+		!HasTruthfulStableVRVendorResources(stable) ||
+		!IsVRRenderScalePhysicalContractConverged(a_upscaleMethod, boot.qualityMode) ||
+		!CanDispatchExistingVRVendorEvaluation(a_upscaleMethod)) {
+		return false;
+	}
+
+	// Evaluation uses the existing provider. The compositor hold still owns
+	// release and requires fresh, exact stereo outputs. Keep the game-entry
+	// lifecycle work gate while the save/load mutation grace remains active.
+	RequestHistoryReset();
+	g_vrDeferredPostLoadFSRResetSerial = 0;
+	postLoadRuntimeResetPending.store(false, std::memory_order_release);
+	g_vrRetainedPostLoadPresentationSerial.store(loadSerial, std::memory_order_release);
+	logger::info(
+		"[VRRenderScale][PostLoad] Retained FSR provider after save load serial={} recoveryEpoch={} generation={} worldFrame={} frame={}",
+		loadSerial, a_recoveryEpoch, boot.generation, state->lastCompletedWorldRenderFrame, state->frameCount);
+	return true;
+}
+
 bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 {
 	if (!postLoadRuntimeResetPending.load(std::memory_order_acquire))
@@ -42186,8 +42289,17 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 	const uint64_t recoveryEpoch = pendingPostLoadRuntimeResetEpoch.load(std::memory_order_acquire);
 
 	auto* state = globals::state;
-	if (IsSaveLoadMutationContextActive(state)) {
+	if (TryRetainFSRForCompletedSaveLoad(a_upscaleMethod, recoveryEpoch)) {
+		CompleteVRRenderScalePostLoadRecovery(recoveryEpoch, 0);
 		return true;
+	}
+	if (IsSaveLoadMutationContextActive(state))
+		return true;
+
+	const auto deferredResetSerial = std::exchange(g_vrDeferredPostLoadFSRResetSerial, 0);
+	if (deferredResetSerial != 0 &&
+		deferredResetSerial == g_vrLoadingTransitionSerial.load(std::memory_order_acquire)) {
+		QueueVendorRuntimeResetAfterLoadingMenu(*this);
 	}
 
 	const bool renderScalePostLoadResetRelevant = IsVRRenderScalePostLoadResetRelevant(*this, a_upscaleMethod);

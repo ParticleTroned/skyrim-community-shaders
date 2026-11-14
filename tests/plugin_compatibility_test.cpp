@@ -137,7 +137,16 @@ namespace
 		Require(!probe.present && !probe.error, "directory with a DLL name must not be blacklisted");
 		fs::remove(installed);
 		std::ofstream(installed) << "Not a loadable DLL";
-		Require(LoadLibraryW(installed.c_str()) == nullptr, "legacy probe must miss an unloadable DLL");
+		DWORD previousErrorMode{};
+		// The intentionally invalid image must return an error without opening a modal dialog.
+		Require(SetThreadErrorMode(GetThreadErrorMode() | SEM_FAILCRITICALERRORS, &previousErrorMode),
+			"cannot suppress expected loader dialogs");
+		const auto invalidModule = LoadLibraryW(installed.c_str());
+		const auto restoredErrorMode = SetThreadErrorMode(previousErrorMode, nullptr);
+		if (invalidModule)
+			FreeLibrary(invalidModule);
+		Require(restoredErrorMode, "cannot restore the thread error mode");
+		Require(!invalidModule, "legacy probe must miss an unloadable DLL");
 		ExpectStartupFailure([] { CheckIncompatiblePlugins(); }, shadow.reason);
 		Require(errors.size() == 1 && logged.size() == 1, "installed mixed-case DLL was missed from another CWD");
 		Require(!Compatibility::IsLoaded(shadow), "detection must never load the conflicting DLL");

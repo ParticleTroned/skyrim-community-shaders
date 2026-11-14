@@ -86,7 +86,7 @@
     },
     "settingsContract": {
       "revision": 33,
-      "sourceTreeSha256": "4923E8947AD0D0B0A16F05F0CB916487A3457207DC4456247758746DADBAC887"
+      "sourceTreeSha256": "422EEFD0C5498F46EF4BEB932F5EBDE2E630376FC455970142AF9797FFDCCECD"
     }
   },
   "Upscaling": {
@@ -284,6 +284,7 @@
     "VRCaptureSource": "HMDSubmission",
     "VRFramedDominantEye": "Left",
     "VRFramedEye": "Left",
+    "VRFramedNativeResolution": false,
     "VRFramedView": "Left"
   },
   "VR": {
@@ -2216,6 +2217,7 @@
     "ModernWetIndirectSpecularScale": 0.75,
     "PostRainPuddleWaterStrength": 2.5,
     "PostRainWaterClarity": 0.75,
+    "PreserveWetnessHighlights": false,
     "PuddleDryingHours": 15.0,
     "PuddleLayout": 3.0,
     "PuddleMaxAngle": 0.75,
@@ -2232,6 +2234,7 @@
     "RaindropGridSize": 3.25,
     "RaindropInterval": 0.5799999833106995,
     "RaindropTransitionFalloff": 2.0,
+    "RestrictPuddleSlopes": false,
     "RippleBreadth": 0.4000000059604645,
     "RippleLifetime": 0.25999999046325684,
     "RippleRadius": 0.6000000238418579,

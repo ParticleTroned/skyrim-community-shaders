@@ -11,6 +11,8 @@ namespace
 {
 	unsigned effects = 0;
 	unsigned presentCalls = 0;
+	unsigned presentFailures = 0;
+	HRESULT loggedFailure = S_OK;
 	UINT forwardedFlags = 0;
 	UINT forwardedInterval = 0;
 	IDXGISwapChain* forwardedChain = nullptr;
@@ -157,7 +159,16 @@ void TracyD3D11Collect(int)
 }
 void LogFrameIntervalSpikeIfNeeded(uint64_t, uint64_t, uint64_t, uint64_t, HRESULT) { ++effects; }
 
+struct IDXGISwapChain_Present
+{
+	static void LogFirstPresentFailure(HRESULT result)
+	{
+		++presentFailures;
+		loggedFailure = result;
+	}
+
 #include "menu_present_under_test.h"
+};
 
 int main()
 {
@@ -179,6 +190,8 @@ int main()
 					for (bool initialized : { false, true }) {
 						for (bool blurReady : { false, true }) {
 							effects = presentCalls = 0;
+							presentFailures = 0;
+							loggedFailure = S_OK;
 							flatBegins = flatCompletions = timingCapabilityQueries = 0;
 							renderOrder.clear();
 							globals::stateValue.frameCount = 0;
@@ -193,6 +206,7 @@ int main()
 																	 "mirror;reset;overlay;render-targets;capture;indicator;timing-end;present;timing-begin;collect;");
 							const bool expectedBlurReady = blurReady || (!test && initialized && SUCCEEDED(result));
 							if (actual != result || presentCalls != 1 || forwardedChain != chain || forwardedFlags != flags || forwardedInterval != 2 ||
+								presentFailures != unsigned(FAILED(result)) || (FAILED(result) && loggedFailure != result) ||
 								flatBegins != unsigned(!vr && !test) || flatCompletions != flatBegins || timingCapabilityQueries != flatBegins ||
 								(!vr && !test && (timingFrame != 0 || timingResult != result || !timingSupported)) ||
 								renderOrder != expectedOrder || globals::stateValue.startupMenuBlurSourceReady != expectedBlurReady ||

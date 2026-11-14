@@ -8,5 +8,5 @@ extract_between("${_hooks}"
     "graphics_adapter_initialization_under_test.h")
 extract_between("${_state}"
     "void State::SetAdapterDescription("
-    "\nvoid State::UpdateSharedData("
+    "\nvoid State::UpdateWaterData("
     "graphics_adapter_name_under_test.h")

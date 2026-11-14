@@ -591,7 +591,13 @@ bool UseAmbientEffectLighting()
 
 float3 GetEffectAmbientLighting(float skylightingDiffuse)
 {
-	float3 ambientColor = ShadowSampling::GetRawAmbientLighting(ShadowSampling::LightingSampleNormal);
+	bool needsAmbient = true;
+#	if defined(IBL)
+	needsAmbient = !SharedData::iblSettings.EnableIBL || SharedData::iblSettings.DALCAmount != 0.0;
+#	endif
+	float3 ambientColor = 0.0;
+	[branch] if (needsAmbient)
+		ambientColor = ShadowSampling::GetRawAmbientLighting(ShadowSampling::LightingSampleNormal);
 
 #	if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {

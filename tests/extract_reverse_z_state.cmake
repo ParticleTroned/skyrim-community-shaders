@@ -17,7 +17,7 @@ extract_between("${source}" "\tvoid ResetTrackedContextState()"
 extract_between("${source}" "\tstruct ID3D11DeviceContext_OMGetDepthStencilState"
     "\n\tthread_local bool t_inOccluderDownscale" "reverse_z_state_getters.h")
 extract_between("${source}" "\tusing RENDER_TARGET_DEPTHSTENCIL ="
-    "\n\t// Flat layout" "reverse_z_state_targets.h")
+    "\n\tusing CameraStateEntry =" "reverse_z_state_targets.h")
 extract_between("${source}" "\tstd::shared_mutex g_viewMutex;"
     "\n\tstd::mutex g_stateMutex;" "reverse_z_state_views.h")
 extract_between("${source}" "\tDXGI_FORMAT ToFloatDepthFormat"

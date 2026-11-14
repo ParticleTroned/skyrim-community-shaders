@@ -228,11 +228,28 @@ namespace Color
 		return ENABLE_LL_COLOR_ADJUSTMENTS ? color : LinearToSrgb(color);
 	}
 
+	/** Applies category gamma while retaining magnitude semantics at unit gamma. */
+	float3 CategoryGamma(float3 color, float gamma)
+	{
+		float3 magnitude = abs(color);
+		[branch] if (gamma != 1.0)
+			magnitude = pow(magnitude, gamma);
+		return magnitude;
+	}
+
+	float CategoryGamma(float value, float gamma)
+	{
+		float magnitude = abs(value);
+		[branch] if (gamma != 1.0)
+			magnitude = pow(magnitude, gamma);
+		return magnitude;
+	}
+
 	float3 Diffuse(float3 color, bool pbrMaterial)
 	{
 		if (pbrMaterial)
 			return PBRDiffuse(color);
-		return ENABLE_LL_COLOR_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.colorGamma) * SharedData::linearLightingSettings.vanillaDiffuseColorMult : color;
+		return ENABLE_LL_COLOR_ADJUSTMENTS ? CategoryGamma(color, SharedData::linearLightingSettings.colorGamma) * SharedData::linearLightingSettings.vanillaDiffuseColorMult : color;
 	}
 
 	float3 Diffuse(float3 color)
@@ -249,9 +266,9 @@ namespace Color
 		if (ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) {
 			if (preserveHDRIntensity) {
 				const float hdrScale = max(1.0f, max(abs(color.r), max(abs(color.g), abs(color.b))));
-				color = pow(abs(color / hdrScale), SharedData::linearLightingSettings.lightGamma) * hdrScale;
+				color = CategoryGamma(color / hdrScale, SharedData::linearLightingSettings.lightGamma) * hdrScale;
 			} else {
-				color = pow(abs(color), SharedData::linearLightingSettings.lightGamma);
+				color = CategoryGamma(color, SharedData::linearLightingSettings.lightGamma);
 			}
 		}
 #	if defined(TRUE_PBR)
@@ -336,7 +353,7 @@ namespace Color
 	float3 EmitColor(float3 color)
 	{
 		if (ENABLE_LL_COLOR_ADJUSTMENTS)
-			color = pow(abs(color / max(emissiveMult, 1e-5)), SharedData::linearLightingSettings.emitColorGamma);
+			color = CategoryGamma(color / max(emissiveMult, 1e-5), SharedData::linearLightingSettings.emitColorGamma);
 
 		// The vanilla path does not require the Linear Lighting geometry buffer.
 		color = AdjustUtilityColor(color, SharedData::adaptiveBalanceSettings.appearance.emissiveSaturation,
@@ -353,7 +370,7 @@ namespace Color
 		color = ENABLE_LL_COLOR_ADJUSTMENTS ? color : LinearToSrgb(color);
 #	else
 		if (ENABLE_LL_COLOR_ADJUSTMENTS) {
-			color = pow(abs(color), SharedData::linearLightingSettings.glowmapGamma);
+			color = CategoryGamma(color, SharedData::linearLightingSettings.glowmapGamma);
 		}
 #	endif
 
@@ -365,7 +382,7 @@ namespace Color
 	/// Engine ambient adjustments before selecting vanilla or image-based lighting.
 	float3 Ambient(float3 color)
 	{
-		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.ambientGamma) * SharedData::linearLightingSettings.ambientMult : color;
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? CategoryGamma(color, SharedData::linearLightingSettings.ambientGamma) * SharedData::linearLightingSettings.ambientMult : color;
 	}
 
 	/// Scene adjustments include reflections and exclude out-of-world object previews.
@@ -376,19 +393,19 @@ namespace Color
 
 	float3 Fog(float3 color)
 	{
-		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.fogGamma) : color;
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? CategoryGamma(color, SharedData::linearLightingSettings.fogGamma) : color;
 	}
 
 	float FogAlpha(float alpha)
 	{
-		alpha = ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(alpha), SharedData::linearLightingSettings.fogAlphaGamma) : alpha;
+		alpha = ENABLE_BRIGHTNESS_ADJUSTMENTS ? CategoryGamma(alpha, SharedData::linearLightingSettings.fogAlphaGamma) : alpha;
 		float intensity = IsSceneColorDraw() ? SharedData::adaptiveBalanceSettings.fogIntensity : 1.0;
 		return intensity == 1.0 ? alpha : saturate(alpha * intensity);
 	}
 
 	float3 Effect(float3 color)
 	{
-		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.effectGamma) : color;
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? CategoryGamma(color, SharedData::linearLightingSettings.effectGamma) : color;
 	}
 
 	float3 EffectMult(float3 color)
@@ -416,31 +433,31 @@ namespace Color
 
 	float EffectAlpha(float alpha)
 	{
-		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(alpha), SharedData::linearLightingSettings.effectAlphaGamma) : alpha;
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? CategoryGamma(alpha, SharedData::linearLightingSettings.effectAlphaGamma) : alpha;
 	}
 
 	float3 Sky(float3 color)
 	{
 #	if defined(CLOUDS)
-		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.cloudGamma) : color;
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? CategoryGamma(color, SharedData::linearLightingSettings.cloudGamma) : color;
 #	else
-		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.skyGamma) : color;
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? CategoryGamma(color, SharedData::linearLightingSettings.skyGamma) : color;
 #	endif
 	}
 
 	float3 Water(float3 color)
 	{
-		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.waterGamma) : color;
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? CategoryGamma(color, SharedData::linearLightingSettings.waterGamma) : color;
 	}
 
 	float3 VolumetricLighting(float3 color)
 	{
-		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.vlGamma) : color;
+		return ENABLE_BRIGHTNESS_ADJUSTMENTS ? CategoryGamma(color, SharedData::linearLightingSettings.vlGamma) : color;
 	}
 
 	float3 ColorToLinear(float3 color)
 	{
-		return ENABLE_LL_COLOR_ADJUSTMENTS ? pow(abs(color), SharedData::linearLightingSettings.colorGamma) : color;
+		return ENABLE_LL_COLOR_ADJUSTMENTS ? CategoryGamma(color, SharedData::linearLightingSettings.colorGamma) : color;
 	}
 
 	float3 RadianceToLinear(float3 color)

@@ -1,7 +1,10 @@
 #pragma once
 
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
 #include "Features/GrassOptimizations/GrassPassCache.h"
 #include "Features/GrassOptimizations/GrassPolicy.h"
+#include "Utils/GrassGroupLock.h"
 #include <array>
 #include <atomic>
 #include <bit>
@@ -188,10 +191,10 @@ namespace RE
 }
 namespace GrassRuntime
 {
-	struct GroupReadLock
+	inline volatile uint32_t groupWord = 0;
+	struct GroupReadLock : Util::GrassGroupLock
 	{
-		GroupReadLock() {}
-		~GroupReadLock() {}
+		GroupReadLock() : GrassGroupLock(groupWord) {}
 	};
 	using SetupGeometry = void (*)(RE::BSShader*, RE::BSRenderPass*, uint32_t);
 	inline auto& GetPropertyData(RE::BSGrassShaderProperty* property, bool) { return *property; }

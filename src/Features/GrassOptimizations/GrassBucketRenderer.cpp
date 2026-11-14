@@ -2994,9 +2994,13 @@ void GrassBucketRenderer::DrawRenderPass(RE::BSRenderPass* pass, uint32_t techni
 	}
 	if (queued && queued->representative != pass->geometry)
 		queued.reset();
-	if (queued)
+	if (queued) {
+		// Retaining the shape does not retain groups read by native setup and drawing.
+		const GrassRuntime::GroupReadLock groupsLock;
 		impl->MakeNativeVisible(static_cast<RE::BSMultiStreamInstanceTriShape*>(pass->geometry));
-	draw(pass, technique, alphaTest, flags);
+		draw(pass, technique, alphaTest, flags);
+	} else
+		draw(pass, technique, alphaTest, flags);
 	if (impl->current == pass->geometry && impl->currentAdmission.bucket < impl->buckets.size() && impl->currentMainPass) {
 		auto& bucket = impl->buckets.at(impl->currentAdmission.bucket);
 		if (bucket.outcomes.MainOutcome() == Outcome::Batched)
@@ -3011,9 +3015,9 @@ void GrassBucketRenderer::DrawRenderPass(RE::BSRenderPass* pass, uint32_t techni
 		auto* shape = member.shape.get();
 		if (shape == pass->geometry || !member.lifetime->alive.load(std::memory_order_acquire))
 			continue;
+		const GrassRuntime::GroupReadLock groupsLock;
 		RE::NiPointer<RE::BSShaderProperty> property;
 		{
-			const GrassRuntime::GroupReadLock groupsLock;
 			std::scoped_lock lock(impl->captureMutex);
 			property = shape->GetGeometryRuntimeData().shaderProperty;
 			if (!property || property->GetRTTI() != REL::Relocation<const RE::NiRTTI*>{ RE::NiRTTI_BSGrassShaderProperty }.get())

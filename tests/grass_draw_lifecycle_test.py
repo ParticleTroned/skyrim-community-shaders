@@ -206,8 +206,21 @@ void CheckParameterPassthrough() {
             "Unavailable grass passes/resources must not query or restore native buffer changes");
     }
 }
+void CheckNativeGroupOwnership(Fixture& fixture, bool guarded) {
+    const auto [writerAcquired, captureAcquired] = std::async(std::launch::async, [&] {
+        auto* word = reinterpret_cast<volatile LONG*>(&GrassRuntime::groupWord);
+        const bool writer = InterlockedCompareExchange(word, 1, 0) == 0;
+        if (writer) InterlockedExchange(word, 0);
+        const bool capture = fixture.renderer.impl->captureMutex.try_lock();
+        if (capture) fixture.renderer.impl->captureMutex.unlock();
+        return std::pair{writer, capture};
+    }).get();
+    Require(writerAcquired == !guarded,
+        "Native group ownership must cover queued draws and release afterward");
+    Require(captureAcquired, "Native drawing must not retain the capture mutex");
+}
 void CheckQueuedStreamingFallback() {
-    for (bool failExpanded : {false, true}) for (unsigned mutation = 0; mutation < 4; ++mutation) {
+    for (unsigned failAtDraw : {0u, 1u, 2u}) for (unsigned mutation = 0; mutation < 4; ++mutation) {
         Fixture f;
         ID3D11Buffer bones;
         auto* previous = &bones;
@@ -239,14 +252,18 @@ void CheckQueuedStreamingFallback() {
         static std::function<void(RE::BSRenderPass*)> visit;
         visit = [&](RE::BSRenderPass* pass) {
             drawn.push_back(pass->geometry);
+            CheckNativeGroupOwnership(f, true);
             if (mutation == 3 && pass->geometry == &f.shape) retire();
             f.Setup(0, pass);
+            CheckNativeGroupOwnership(f, true);
             Require(f.context.vertexConstants[9].buffer == &f.buffer,
                 "Each expanded native member must receive grass parameters");
-            if (failExpanded && pass->geometry == &otherShape)
-                throw InjectedDrawFailure("Injected expanded-member failure");
+            if (failAtDraw && drawn.size() == failAtDraw)
+                throw InjectedDrawFailure("Injected queued-draw failure");
             f.Draw(pass->geometry == &f.shape);
+            CheckNativeGroupOwnership(f, true);
             f.Restore(pass);
+            CheckNativeGroupOwnership(f, true);
         };
         for (unsigned pass = 0; pass < 2; ++pass) {
             drawn.clear();
@@ -255,11 +272,14 @@ void CheckQueuedStreamingFallback() {
                 f.renderer.DrawRenderPass(&f.pass, 0, false, 0,
                     [](RE::BSRenderPass* native, uint32_t, bool, uint32_t) { visit(native); });
             } catch (const InjectedDrawFailure&) { threw = true; }
-            Require(drawn == std::vector{&f.shape, &otherShape},
+            auto expected = std::vector{&f.shape};
+            if (failAtDraw != 1) expected.push_back(&otherShape);
+            Require(drawn == expected,
                 "Streaming invalidation lost or duplicated a suppressed native draw");
-            Require(threw == failExpanded && f.renderer.impl->nativeFallbackDepth == 0 &&
+            Require(threw == (failAtDraw != 0) && f.renderer.impl->nativeFallbackDepth == 0 &&
                     f.context.vertexConstants == before,
                 "Expanded fallback must restore the incoming binding and nesting depth, including exceptions");
+            CheckNativeGroupOwnership(f, false);
             ++f.pass.passEnum;
         }
         Require(f.renderer.impl->submissions == 0, "Native fallback unexpectedly submitted a batch");
@@ -268,6 +288,12 @@ void CheckQueuedStreamingFallback() {
         f.renderer.EndFrame();
         Require(f.renderer.impl->queuedGroups.empty(), "Frame-end retained stale native draw owners");
     }
+    Fixture unqueued;
+    unqueued.renderer.impl->queuedGroups.clear();
+    unqueued.renderer.DrawRenderPass(&unqueued.pass, 0, false, 0,
+        [](RE::BSRenderPass*, uint32_t, bool, uint32_t) {
+            CheckNativeGroupOwnership(*Fixture::active, false);
+        });
 }
 void CheckTextureCacheFrameBoundary() {
     Fixture f;

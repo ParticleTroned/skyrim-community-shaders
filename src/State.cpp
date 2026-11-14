@@ -2112,6 +2112,11 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::TruePbr |
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::LandscapeSeams);
 
+				using LightingFlags = SIE::ShaderCache::LightingShaderFlags;
+				constexpr auto legacyScattering = static_cast<uint32_t>(LightingFlags::SoftLighting) |
+				                                  static_cast<uint32_t>(LightingFlags::RimLighting) |
+				                                  static_cast<uint32_t>(LightingFlags::BackLighting);
+				const bool hasLegacyScattering = (a_pixelDescriptor & legacyScattering) != 0;
 				a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::AmbientSpecular |
 									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::ShadowDir |
 									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::DefShadow |
@@ -2137,9 +2142,12 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 				a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::Snow);
 				a_pixelDescriptor |= lightingPixelShaderFlags & ~SIE::ShaderCache::kLightingNoContactShadows;
 
-				if (deferred->deferredPass || a_forceDeferred)
+				if (deferred->deferredPass || a_forceDeferred) {
 					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::LightingShaderFlags::Deferred |
 					                     (lightingPixelShaderFlags & SIE::ShaderCache::kLightingNoContactShadows);
+					if (!hasLegacyScattering)
+						a_pixelDescriptor |= SIE::ShaderCache::kLightingNoLegacySubsurface;
+				}
 
 				{
 					uint32_t technique = 0x3F & (a_vertexDescriptor >> 24);

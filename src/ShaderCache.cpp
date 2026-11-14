@@ -1467,6 +1467,7 @@ namespace SIE
 			const bool noMeshVariation = (descriptor & ShaderCache::kLightingNoMeshVariation) != 0;
 			const bool noLocalLights = (descriptor & ShaderCache::kLightingNoLocalLights) != 0;
 			const bool noContactShadows = (descriptor & ShaderCache::kLightingNoContactShadows) != 0;
+			const bool noLegacySubsurface = (descriptor & ShaderCache::kLightingNoLegacySubsurface) != 0;
 			descriptor &= ~ShaderCache::kLightingSpecializationMask;
 			static_assert((static_cast<uint32_t>(ShaderCache::LightingShaderFlags::LandscapeSeams) &
 							  ShaderCache::GetCharacterCategoryFlag(RE::BSShader::Type::Lighting)) == 0);
@@ -1474,37 +1475,46 @@ namespace SIE
 			VanillaGetLightingShaderDefines(descriptor, defines.data());
 
 			size_t lastIndex = std::ranges::find_if(defines, [](const D3D_SHADER_MACRO& macro) { return macro.Name == nullptr; }) - defines.begin();
+			if (lastIndex == defines.size())
+				throw std::length_error("Lighting shader macros are not terminated");
+			const auto appendDefine = [&](const char* name) {
+				if (lastIndex + 1 >= defines.size())
+					throw std::length_error("Lighting shader macro capacity exceeded");
+				defines[lastIndex++] = { name, nullptr };
+			};
 			if (snowCoverInactive)
-				defines[lastIndex++] = { "SNOW_COVER_INACTIVE", nullptr };
+				appendDefine("SNOW_COVER_INACTIVE");
 			if (noMeshVariation)
-				defines[lastIndex++] = { "NO_MESH_VARIATION", nullptr };
+				appendDefine("NO_MESH_VARIATION");
 			if (noLocalLights)
-				defines[lastIndex++] = { "LLF_NO_LOCAL_LIGHTS", nullptr };
+				appendDefine("LLF_NO_LOCAL_LIGHTS");
 			if (noContactShadows)
-				defines[lastIndex++] = { "LLF_NO_CONTACT_SHADOWS", nullptr };
+				appendDefine("LLF_NO_CONTACT_SHADOWS");
+			if (noLegacySubsurface)
+				appendDefine("NO_LEGACY_SUBSURFACE");
 
 			if (descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::Deferred)) {
-				defines[lastIndex++] = { "DEFERRED", nullptr };
+				appendDefine("DEFERRED");
 			}
 			if ((descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::TruePbr)) != 0) {
-				defines[lastIndex++] = { "TRUE_PBR", nullptr };
+				appendDefine("TRUE_PBR");
 				if ((descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::AnisoLighting)) != 0) {
-					defines[lastIndex++] = { "GLINT", nullptr };
+					appendDefine("GLINT");
 				}
 			}
 
 			if ((descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::LandscapeSeams)) != 0)
-				defines[lastIndex++] = { "LANDSCAPE_SEAMS", nullptr };
+				appendDefine("LANDSCAPE_SEAMS");
 
 			if ((descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::FurShells)) != 0) {
-				defines[lastIndex++] = { "FUR_SHELLS", nullptr };
+				appendDefine("FUR_SHELLS");
 				if ((descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::FurShellsDepth)) != 0)
-					defines[lastIndex++] = { "FUR_SHELLS_DEPTH", nullptr };
+					appendDefine("FUR_SHELLS_DEPTH");
 			}
 
 			for (auto* feature : Feature::GetFeatureList()) {
 				if (feature->loaded && feature->HasShaderDefine(RE::BSShader::Type::Lighting)) {
-					defines[lastIndex++] = { feature->GetShaderDefineName().data(), nullptr };
+					appendDefine(feature->GetShaderDefineName().data());
 				}
 			}
 

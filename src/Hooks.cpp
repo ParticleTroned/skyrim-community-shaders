@@ -840,7 +840,8 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	                                      static_cast<uint32_t>(SIE::ShaderCache::WaterShaderFlags::Wading) :
 	                                  shader->shaderType.get() == RE::BSShader::Type::Lighting ?
 	                                      static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::BaseObjectIsSnow) |
-	                                          static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ShadowDir) :
+	                                          static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ShadowDir) |
+	                                          static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::AmbientSpecular) :
 	                                      0u;
 	state->permutationData.PixelShaderDescriptor = Util::ShaderDescriptor::UploadedPixelDescriptor(
 		state->permutationData.PixelShaderDescriptor, state->modifiedPixelDescriptor, runtimePixelBits);

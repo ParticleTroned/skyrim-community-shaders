@@ -23355,6 +23355,29 @@ std::optional<Upscaling::VRRenderScaleProfileSnapshot> Upscaling::GetStableVRRen
 	return vrRenderScaleTransitionController.stable;
 }
 
+std::optional<Upscaling::VRRenderScaleProfileSnapshot> Upscaling::GetGuardedNativeStabilizationProfile() const
+{
+	if (!globals::game::isVR ||
+		vrNativeRestorePresentationGuardEpoch.load(std::memory_order_acquire) == 0 ||
+		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire))
+		return std::nullopt;
+
+	std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+	const auto epoch = vrNativeRestorePresentationGuardEpoch.load(std::memory_order_acquire);
+	const auto& controller = vrRenderScaleTransitionController;
+	const auto& applied = controller.applied;
+	if (epoch == 0 || perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+		controller.state != VRRenderScaleTransitionState::Stabilizing ||
+		controller.targetEpoch != epoch || applied.transitionEpoch != epoch ||
+		!applied.valid || applied.active || applied.method != UpscaleMethod::kNONE ||
+		applied.displayEyeWidth == 0 || applied.displayEyeHeight == 0 ||
+		applied.renderEyeWidth != applied.displayEyeWidth ||
+		applied.renderEyeHeight != applied.displayEyeHeight)
+		return std::nullopt;
+
+	return applied;
+}
+
 std::optional<Upscaling::VRRenderScaleRuntimeOptionsSnapshot> Upscaling::GetVRRenderScaleRuntimeOptions() const
 {
 	if (!REL::Module::IsVR() ||
@@ -24257,7 +24280,8 @@ void Upscaling::CaptureSubmitTemporalSnapshot()
 void Upscaling::RefreshRuntimeResolutionPlan()
 {
 	RuntimeResolutionPlan plan{};
-	plan.upscaleMethod = GetRuntimeUpscaleMethod();
+	const auto guardedNative = GetGuardedNativeStabilizationProfile();
+	plan.upscaleMethod = guardedNative ? guardedNative->method : GetRuntimeUpscaleMethod();
 	plan.qualityMode = GetRuntimeQualityMode();
 	plan.vendorMethod = IsVendorUpscalingMethod(plan.upscaleMethod);
 	plan.knownMenuContextActive = IsKnownGameMenuContextActive();
@@ -24298,8 +24322,18 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 		};
 	};
 
-	const bool vrRenderScaleLatched = IsVRRenderScaleModeLatched();
-	if (vrRenderScaleLatched) {
+	if (guardedNative) {
+		// Keep the newly applied native targets until the guard accepts stereo.
+		// The saved FSR preference and its restart state belong to the later replay.
+		const float2 nativeSize{
+			static_cast<float>(guardedNative->displayEyeWidth * 2u),
+			static_cast<float>(guardedNative->displayEyeHeight)
+		};
+		plan.trueHMDDisplaySize = nativeSize;
+		plan.engineRenderSize = nativeSize;
+		plan.finalOutputSize = nativeSize;
+		plan.perfModeRestartRequired = false;
+	} else if (IsVRRenderScaleModeLatched()) {
 		const float2 displaySize = perfMode.GetDisplayScreenSize();
 		const float2 renderSize = perfMode.GetRenderScreenSize();
 		if (displaySize.x > 0.0f && displaySize.y > 0.0f)
@@ -51951,8 +51985,6 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		if (ApplyPendingPerfModeRenderTargetRecreate("ConfigureUpscaling"))
 			return;
 	}
-	auto upscaleMethod = GetRuntimeUpscaleMethod();
-
 	// Cache original TAA values for UI
 	projectionPosScaleX = a_viewport->projectionPosScaleX;
 	projectionPosScaleY = a_viewport->projectionPosScaleY;
@@ -51964,8 +51996,9 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	auto screenWidth = static_cast<int>(screenSize.x);
 	auto screenHeight = static_cast<int>(screenSize.y);
 
-	const bool vendorUpscalingMethod = IsVendorUpscalingMethod(upscaleMethod);
 	EnsureRuntimeResolutionStateCurrent();
+	const auto upscaleMethod = runtimeResolutionPlan.upscaleMethod;
+	const bool vendorUpscalingMethod = runtimeResolutionPlan.vendorMethod;
 	auto applyFullResolutionPresentation = [&](UpscaleMethod a_upscaleMethod, const char* a_context, bool a_serviceResources = true) {
 		float2 presentationDisplaySize = runtimeResolutionPlan.trueHMDDisplaySize;
 		if (presentationDisplaySize.x <= 0.0f || presentationDisplaySize.y <= 0.0f)

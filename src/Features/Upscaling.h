@@ -4717,6 +4717,7 @@ private:
 		bool fsr4RuntimeEnabled = false;
 	};
 	std::optional<VRRenderScaleProfileSnapshot> GetStableVRRenderScaleRuntimeProfile() const;
+	std::optional<VRRenderScaleProfileSnapshot> GetGuardedNativeStabilizationProfile() const;
 	std::optional<VRRenderScaleRuntimeOptionsSnapshot> GetVRRenderScaleRuntimeOptions() const;
 	std::atomic<bool> vrRenderScaleStableRuntimeProfileAuthoritative{ false };
 	std::atomic<uint32_t> vrRenderScaleLastOutOfMemoryFailureFrame{ 0 };

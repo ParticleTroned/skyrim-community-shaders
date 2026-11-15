@@ -57,11 +57,12 @@ set(_nr_model_tests NRModelResolutionShadersWARP NRModelResolutionShadersWARPBri
 foreach(_target _test IN ZIP_LISTS _nr_model_targets _nr_model_tests)
     add_d3d_shader_test(${_target} ${_test} tests/nr_model_resolution_shader_test.cpp)
     target_sources(${_target} PRIVATE src/Features/Upscaling/NeuralRendering/ModelResolution.cpp)
+    add_dependencies(${_target} vr_depth_encode_test_headers)
     target_compile_definitions(${_target} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
     target_link_libraries(${_target} PRIVATE nlohmann_json::nlohmann_json Microsoft::DirectXTex)
     target_include_directories(${_target} SYSTEM PRIVATE
         "$<TARGET_PROPERTY:Tracy::TracyClient,INTERFACE_INCLUDE_DIRECTORIES>")
-    target_include_directories(${_target} PRIVATE "${_nr_accounting_directory}")
+    target_include_directories(${_target} PRIVATE "${_nr_accounting_directory}" "${_depth_encode_test_dir}")
 endforeach()
 target_compile_definitions(nr_model_resolution_shader_bridge_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
 add_test(NAME NRReconstructionBridgeGate COMMAND "${Python3_EXECUTABLE}"

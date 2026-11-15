@@ -723,6 +723,9 @@ namespace NeuralRendering
 		std::atomic<bool> prewarmPending_{ false };
 
 		ShaderInvalidation shaderInvalidation_;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		ShaderInvalidation referenceShaderInvalidation_;
+#endif
 		bool ServiceRetainedBackendLocked(bool a_requested = true);
 		bool ServiceStallRecoveryLocked(bool a_requested);
 		MemoryRetirementPolicy memoryRetirement_{};
@@ -5027,7 +5030,11 @@ namespace NeuralRendering
 
 	void Renderer::ServiceBackendMaintenance(bool a_requested)
 	{
-		if (!state_->backendMaintenancePending_.load(std::memory_order_relaxed) && !state_->shaderInvalidation_.Pending())
+		if (!state_->backendMaintenancePending_.load(std::memory_order_relaxed) && !state_->shaderInvalidation_.Pending()
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			&& !state_->referenceShaderInvalidation_.Pending()
+#endif
+		)
 			return;
 		Util::RendererOwnership owner(Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context));
 		if (!owner)
@@ -5342,8 +5349,19 @@ namespace NeuralRendering
 	void Renderer::State::ApplyShaderInvalidationLocked()
 	{
 		const auto generation = shaderInvalidation_.Requested();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		const auto referenceGeneration = referenceShaderInvalidation_.Requested();
+		if (generation == shaderInvalidation_.Applied()) {
+			if (referenceGeneration != referenceShaderInvalidation_.Applied()) {
+				colorPipeline_.InvalidateShaders();
+				referenceShaderInvalidation_.Applied(referenceGeneration);
+			}
+			return;
+		}
+#else
 		if (generation == shaderInvalidation_.Applied())
 			return;
+#endif
 		copyDepthGuideCS_.Reset();
 		copyDepthGuideCompileFailed_ = false;
 		actorProtectionCS_.Reset();
@@ -5360,12 +5378,26 @@ namespace NeuralRendering
 		for (auto& slot : slots_)
 			slot.historyValid = false;
 		shaderInvalidation_.Applied(generation);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		referenceShaderInvalidation_.Applied(referenceGeneration);
+#endif
 	}
 
 	void Renderer::ResetShaderCache()
 	{
 		state_->shaderInvalidation_.Request();
 	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	void Renderer::ResetReferenceShaders()
+	{
+		state_->referenceShaderInvalidation_.Request();
+	}
+
+	bool Renderer::HasPendingShaderInvalidation() const noexcept
+	{
+		return state_->shaderInvalidation_.Pending() || state_->referenceShaderInvalidation_.Pending();
+	}
+#endif
 
 	RendererSnapshot Renderer::GetSnapshot() const
 	{

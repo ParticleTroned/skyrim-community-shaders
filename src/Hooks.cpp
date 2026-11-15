@@ -34,6 +34,7 @@
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Diagnostics/D3DTextureLifetimeTracker.h"
 #	include "Diagnostics/EngineStutterMonitor.h"
+#	include "Diagnostics/GpuCrashDiagnostics.h"
 #	include "Diagnostics/AssetLoadHooks.h"
 #	include "Features/Upscaling/VRRenderScaleDevBenchBridge.h"
 #endif
@@ -806,6 +807,10 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	state->currentShader = shader;
 	state->selectedCustomPixelShaderType = RE::BSShader::Type::None;
 	state->deferredPixelShaderMissing = false;
+	if (shader->shaderType.get() == RE::BSShader::Type::ImageSpace &&
+		std::strcmp(shader->fxpFilename, "ISApplyVolumetricLighting") == 0 &&
+		globals::features::volumetricLighting.IsDepthDispatchRejected())
+		return false;
 
 	state->currentVertexDescriptor = vertexDescriptor;
 	state->currentPixelDescriptor = pixelDescriptor;
@@ -1170,11 +1175,37 @@ namespace WaterBlendHistory
 
 struct IDXGISwapChain_Present
 {
+	static void LogFirstPresentFailure(HRESULT result)
+	{
+		static std::atomic_flag reported = ATOMIC_FLAG_INIT;
+		if (SUCCEEDED(result) || reported.test_and_set(std::memory_order_relaxed))
+			return;
+
+		const auto* state = globals::state;
+		auto* primaryDevice = globals::d3d::device;
+		const HRESULT deviceReason = primaryDevice ? primaryDevice->GetDeviceRemovedReason() : E_POINTER;
+		const auto transition = globals::game::isVR ?
+		                            globals::features::upscaling.GetVRRenderScaleTransitionSnapshot() :
+		                            Upscaling::VRRenderScaleTransitionSnapshot{};
+		logger::info("[Present] First failure HRESULT=0x{:08X} primaryDeviceAvailable={} primaryDeviceRemovedReason=0x{:08X} frame={} transitionState={} targetEpoch={} transitionRevision={}",
+			static_cast<std::uint32_t>(result), primaryDevice != nullptr, static_cast<std::uint32_t>(deviceReason),
+			state ? state->frameCount : 0,
+			globals::game::isVR ? Upscaling::GetVRRenderScaleTransitionStateName(transition.state) : "not-applicable",
+			transition.targetEpoch, transition.revision);
+		// A native device-loss abort can follow before the next periodic log flush.
+		if (auto log = spdlog::default_logger())
+			log->flush();
+	}
+
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
 		// Flat-screen status probes must not draw or advance frame accounting.
-		if (!globals::game::isVR && (Flags & DXGI_PRESENT_TEST) != 0)
-			return func(This, SyncInterval, Flags);
+		if (!globals::game::isVR && (Flags & DXGI_PRESENT_TEST) != 0) {
+			const HRESULT result = func(This, SyncInterval, Flags);
+			if (FAILED(result))
+				LogFirstPresentFailure(result);
+			return result;
+		}
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	if defined(NVPERF_ENABLED)
@@ -1223,6 +1254,14 @@ struct IDXGISwapChain_Present
 #endif
 			retval = func(This, SyncInterval, Flags);
 		}
+		if (FAILED(retval))
+			LogFirstPresentFailure(retval);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (FAILED(retval))
+			CSX::Diagnostics::GpuCrash::ReportFailure(retval, "DXGI::Present");
+		else
+			CSX::Diagnostics::GpuCrash::Checkpoint("DXGI::Present returned");
+#endif
 		if (flatPresent)
 			globals::profiler->CompleteFlatPresent(retval);
 		const uint64_t afterPresentTicks = frameDiagActive ? ReadFrameDiagCounterTicks() : 0;
@@ -1725,6 +1764,9 @@ namespace Hooks
 			if (GetModuleHandleW(L"renderdoc.dll"))
 				stl::detour_vfunc<3, ID3D11Device_CreateBuffer>(globals::d3d::device);
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			CSX::Diagnostics::GpuCrash::Initialize(globals::d3d::device, globals::d3d::context);
+#endif
 			globals::InstallD3DHooks(globals::d3d::context);
 			globals::features::reverseZ.InstallRuntimeHooks();
 			CSX::Api::InitializeAcceptedDrawService(globals::d3d::context);
@@ -2043,7 +2085,8 @@ namespace Hooks
 		InvalidProperty = 1u << 2,
 		InvalidMaterial = 1u << 3,
 		InvalidRenderTarget = 1u << 4,
-		Unreadable = 1u << 5
+		Unreadable = 1u << 5,
+		InvalidEnvironmentMaterial = 1u << 6
 	};
 
 	struct VRLightingMaterialSnapshot
@@ -2069,14 +2112,26 @@ namespace Hooks
 			return VRLightingMaterialRejection::InvalidMaterial;
 		a_snapshot.renderTargetIndex = a_snapshot.material->diffuseRenderTargetSourceIndex;
 		a_snapshot.indexRead = true;
-		if (a_snapshot.renderTargetIndex == -1 || Util::IsValidRenderTargetIndex(a_snapshot.renderTargetIndex))
+		const bool validRenderTarget = a_snapshot.renderTargetIndex == -1 || Util::IsValidRenderTargetIndex(a_snapshot.renderTargetIndex);
+		const auto rawTechnique = a_technique >= RE::BSLightingShader::kTechniqueIDBase ?
+		                              a_technique - RE::BSLightingShader::kTechniqueIDBase :
+		                              0u;
+		// Admission uses the queued technique; the shader can still describe the previous draw.
+		const bool environmentSetup = ((rawTechnique >> 24) & 0x3F) == static_cast<uint32_t>(SIE::ShaderCache::LightingShaderTechniques::Envmap);
+		if (validRenderTarget && !environmentSetup)
 			return VRLightingMaterialRejection::None;
 
-		// The shader's current technique can still belong to the previous draw at admission.
 		if (a_technique >= RE::BSLightingShader::kTechniqueIDBase &&
-			globals::features::truePBR.UsesCustomMaterialSetup(a_technique - RE::BSLightingShader::kTechniqueIDBase))
+			globals::features::truePBR.UsesCustomMaterialSetup(rawTechnique))
 			return VRLightingMaterialRejection::None;
-		return VRLightingMaterialRejection::InvalidRenderTarget;
+		if (!validRenderTarget)
+			return VRLightingMaterialRejection::InvalidRenderTarget;
+
+		// Eye materials share the environment texture prefix consumed by native setup.
+		const auto feature = a_snapshot.material->GetFeature();
+		return feature == RE::BSShaderMaterial::Feature::kEnvironmentMap || feature == RE::BSShaderMaterial::Feature::kEye ?
+		           VRLightingMaterialRejection::None :
+		           VRLightingMaterialRejection::InvalidEnvironmentMaterial;
 	}
 
 	__declspec(noinline) void LogRejectedVRLightingMaterial(RE::BSRenderPass* a_pass, uint32_t a_technique,
@@ -2157,6 +2212,10 @@ namespace Hooks
 
 	static void DrawFeatureRenderPass(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags, void (*a_draw)(RE::BSRenderPass*, uint32_t, bool, uint32_t))
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (a_pass && a_pass->shader)
+			CSX::Diagnostics::GpuCrash::RecordDraw(a_pass->shader->fxpFilename, a_technique, reinterpret_cast<uintptr_t>(a_pass->geometry));
+#endif
 		auto draw = [&] {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			ProfileGrassRenderPass(a_pass, [&] { globals::features::grassOptimizations.GetRenderer().DrawRenderPass(a_pass, a_technique, a_alphaTest, a_renderFlags, a_draw); });
@@ -2336,18 +2395,18 @@ namespace Hooks
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		const char* GetVolumetricLightingProfileName(RE::BSComputeShader* shader)
+		const char* GetVolumetricLightingProfileName(const char* name)
 		{
-			if (!shader)
+			if (!name)
 				return nullptr;
 
-			if (shader->name == "ISVolumetricLightingGenerateCS"sv)
+			if (name == "ISVolumetricLightingGenerateCS"sv)
 				return "VolumetricLighting::Generate";
-			if (shader->name == "ISVolumetricLightingRaymarchCS"sv)
+			if (name == "ISVolumetricLightingRaymarchCS"sv)
 				return "VolumetricLighting::Raymarch";
-			if (shader->name == "ISVolumetricLightingBlurHCS"sv)
+			if (name == "ISVolumetricLightingBlurHCS"sv)
 				return "VolumetricLighting::BlurH";
-			if (shader->name == "ISVolumetricLightingBlurVCS"sv)
+			if (name == "ISVolumetricLightingBlurVCS"sv)
 				return "VolumetricLighting::BlurV";
 
 			return nullptr;
@@ -2360,7 +2419,18 @@ namespace Hooks
 				auto state = globals::state;
 				auto shaderCache = globals::shaderCache;
 				auto& vl = globals::features::volumetricLighting;
+				const char* computeName = CurrentlyDispatchedComputeShader ? CurrentlyDispatchedComputeShader->name :
+				                          CurrentlyDispatchedShader        ? CurrentlyDispatchedShader->fxpFilename :
+				                                                             nullptr;
+				const char* volumetricProfile = GetVolumetricLightingProfileName(computeName);
+				const bool reverseVolumetricRequired = globals::features::reverseZ.IsActive() && volumetricProfile;
+				const bool beginsGeneration = computeName && computeName == "ISVolumetricLightingGenerateCS"sv;
+				if (reverseVolumetricRequired && (!vl.loaded || (vl.IsDepthDispatchRejected() && !beginsGeneration))) {
+					vl.AdmitDepthDispatch(false, beginsGeneration);
+					return;
+				}
 				const char* profileName = nullptr;
+				bool replacementSelected = false;
 				bool blurBufferBound = false;
 				winrt::com_ptr<ID3D11Buffer> previousBlurBuffer;
 				winrt::com_ptr<ID3D11DeviceContext1> blurContext1;
@@ -2376,34 +2446,34 @@ namespace Hooks
 					}
 				});
 
-				if (state->ShaderEnabled(RE::BSShader::Type::ImageSpace)) {
+				if (state && shaderCache && state->ShaderEnabled(RE::BSShader::Type::ImageSpace)) {
 					RE::BSImagespaceShader* isShader = CurrentlyDispatchedShader;
 					uint32_t techniqueId = CurrentComputeShaderTechniqueId;
 					bool horizontalBlur = false;
 					bool verticalBlur = false;
-					if (vl.loaded && CurrentlyDispatchedComputeShader) {
-						profileName = GetVolumetricLightingProfileName(CurrentlyDispatchedComputeShader);
-
-						if (CurrentlyDispatchedShader == nullptr) {
-							techniqueId = 0;
-							if (CurrentlyDispatchedComputeShader->name == "ISVolumetricLightingGenerateCS"sv) {
+					if (vl.loaded && volumetricProfile) {
+						profileName = volumetricProfile;
+						techniqueId = 0;
+						horizontalBlur = computeName == "ISVolumetricLightingBlurHCS"sv;
+						verticalBlur = computeName == "ISVolumetricLightingBlurVCS"sv;
+						if ((horizontalBlur || verticalBlur) && (!vl.HasValidBlurDimensions() || !globals::d3d::context)) {
+							isShader = nullptr;
+						} else if (CurrentlyDispatchedComputeShader) {
+							if (beginsGeneration) {
 								isShader = vl.GetOrCreateGenerateCS(CurrentlyDispatchedComputeShader);
-							} else if (CurrentlyDispatchedComputeShader->name == "ISVolumetricLightingRaymarchCS"sv) {
+							} else if (computeName == "ISVolumetricLightingRaymarchCS"sv) {
 								isShader = vl.GetOrCreateRaymarchCS(CurrentlyDispatchedComputeShader);
+							} else if (horizontalBlur) {
+								isShader = vl.GetOrCreateBlurHCS(CurrentlyDispatchedComputeShader);
+							} else if (verticalBlur) {
+								isShader = vl.GetOrCreateBlurVCS(CurrentlyDispatchedComputeShader);
 							}
-						} else if (CurrentlyDispatchedComputeShader->name == "ISVolumetricLightingBlurHCS"sv) {
-							techniqueId = 0;
-							horizontalBlur = true;
-							isShader = vl.HasValidBlurDimensions() ? vl.GetOrCreateBlurHCS(CurrentlyDispatchedComputeShader) : nullptr;
-						} else if (CurrentlyDispatchedComputeShader->name == "ISVolumetricLightingBlurVCS"sv) {
-							techniqueId = 0;
-							verticalBlur = true;
-							isShader = vl.HasValidBlurDimensions() ? vl.GetOrCreateBlurVCS(CurrentlyDispatchedComputeShader) : nullptr;
 						}
 					}
 					if (isShader != nullptr) {
 						if (auto* computeShader = shaderCache->GetComputeShader(*isShader, techniqueId)) {
 							shader = computeShader;
+							replacementSelected = true;
 							// Native fallback must keep its original dispatch and constant-buffer layout.
 							if (horizontalBlur || verticalBlur) {
 								auto* context = globals::d3d::context;
@@ -2421,7 +2491,13 @@ namespace Hooks
 						}
 					}
 				}
+				if (reverseVolumetricRequired && !vl.AdmitDepthDispatch(replacementSelected, beginsGeneration))
+					return;
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				const auto diagnosticPass = CSX::Diagnostics::GpuCrash::BeginPass(computeName ? computeName : "NativeCompute::Unknown");
+				const SKSE::stl::scope_exit finishDiagnostic([&]() noexcept { CSX::Diagnostics::GpuCrash::EndPass(diagnosticPass); });
+#endif
 				if (profileName) {
 					CS_GPU_PASS_DYNAMIC(profileName);
 					func(renderer, shader, threadGroupCountX, threadGroupCountY, threadGroupCountZ);

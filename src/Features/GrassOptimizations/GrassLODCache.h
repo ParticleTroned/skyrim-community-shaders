@@ -24,16 +24,26 @@ namespace GrassLOD
 			std::erase_if(entries, [&](const auto& entry) { return !next.contains(entry.first); });
 			demand = std::move(next);
 		}
-		/** @brief Deduplicate loads, including failures, only while a resident needs the key. */
-		template <class Lookup, class Load>
-		const Value* FindOrLoad(const Lookup& key, Load&& load)
+		/** @brief Return an owned request key without constructing a lookup string. */
+		template <class Lookup>
+		const Key* Requested(const Lookup& key) const
 		{
-			if (const auto found = entries.find(key); found != entries.end())
-				return &found->second;
-			const auto requested = demand.find(key);
-			if (requested == demand.end())
-				return nullptr;
-			return &entries.emplace(*requested, std::forward<Load>(load)(*requested)).first->second;
+			const auto found = demand.find(key);
+			return found == demand.end() ? nullptr : &*found;
+		}
+		/** @brief Read only completed assets; an absent entry keeps native full detail. */
+		template <class Lookup>
+		const Value* Find(const Lookup& key) const
+		{
+			const auto found = entries.find(key);
+			return found == entries.end() ? nullptr : &found->second;
+		}
+		/** @brief Publish a completed positive or negative result only while still requested. */
+		template <class Lookup>
+		void Publish(const Lookup& key, Value&& value)
+		{
+			if (const auto requested = Requested(key))
+				entries.try_emplace(*requested, std::move(value));
 		}
 		const auto& Entries() const { return entries; }
 

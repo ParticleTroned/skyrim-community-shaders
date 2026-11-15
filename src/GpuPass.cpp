@@ -3,6 +3,9 @@
 #include "Globals.h"
 #include "Profiler.h"
 #include "State.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Diagnostics/GpuCrashDiagnostics.h"
+#endif
 #if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
 #	include "Diagnostics/NvPerf.h"
 #endif
@@ -11,6 +14,9 @@
 ScopedGpuPass::ScopedGpuPass(const tracy::SourceLocationData* a_sourceLocation, std::string_view a_name, const Util::PassTimingHandle& a_capture, bool a_detailOnly) :
 	detailOnly(a_detailOnly)
 {
+#	ifdef DEVBENCH_BRIDGE_ENABLED
+	crashDiagnosticPass = CSX::Diagnostics::GpuCrash::BeginPass(a_name);
+#	endif
 	if (detailOnly && !a_capture)
 		return;
 #	ifdef DEVBENCH_BRIDGE_ENABLED
@@ -43,6 +49,9 @@ ScopedGpuPass::ScopedGpuPass(const tracy::SourceLocationData* a_sourceLocation, 
 ScopedGpuPass::ScopedGpuPass(std::string_view a_name, const Util::PassTimingHandle& a_capture, bool a_detailOnly) :
 	detailOnly(a_detailOnly)
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	crashDiagnosticPass = CSX::Diagnostics::GpuCrash::BeginPass(a_name);
+#endif
 	if (detailOnly && !a_capture)
 		return;
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -86,6 +95,9 @@ ScopedGpuPass::ScopedGpuPass(std::string_view a_name, const Util::PassTimingHand
 
 ScopedGpuPass::~ScopedGpuPass()
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	CSX::Diagnostics::GpuCrash::EndPass(crashDiagnosticPass);
+#endif
 	auto* state = globals::state;
 
 	if (annotationOpen && state)

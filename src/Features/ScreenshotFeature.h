@@ -122,6 +122,7 @@ struct ScreenshotFeature : public Feature
 	CaptureEye frameCaptureEye = CaptureEye::Left;
 	VRCaptureSource vrCaptureSource = VRCaptureSource::HMDSubmission;
 	VRFramedView vrFramedView = VRFramedView::Left;
+	bool vrFramedNativeResolution = false;
 	vr::EVREye vrFramedDominantEye = vr::Eye_Left;
 
 	struct SequenceDefaults
@@ -187,6 +188,7 @@ private:
 		uint32_t width = 0;
 		uint32_t height = 0;
 		bool saveAsPng = true;
+		bool nativeFraming = false;
 		bool copyToClipboard = false;
 		vr::EVREye dominantEye = vr::Eye_Left;
 	};
@@ -203,6 +205,7 @@ private:
 		bool saveAsPng = true;
 		bool copyToClipboard = false;
 		vr::EVREye framedEye = vr::Eye_Left;
+		bool nativeFraming = false;
 		std::array<std::array<float, 4>, 2> eyeProjectionTangents{};
 		std::array<vr::HmdMatrix34_t, 2> eyeToHeadTransforms{};
 		std::array<std::vector<vr::HmdVector2_t>, 2> hiddenAreaMeshes{};
@@ -225,6 +228,7 @@ private:
 		uint32_t aspectFillWidth = 0;
 		uint32_t aspectFillHeight = 0;
 		bool combineFramedEyes = false;
+		bool nativeFraming = false;
 		vr::EVREye dominantEye = vr::Eye_Left;
 		std::array<std::array<float, 4>, 2> eyeProjectionTangents{};
 		std::array<vr::HmdMatrix34_t, 2> eyeToHeadTransforms{};

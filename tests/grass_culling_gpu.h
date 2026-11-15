@@ -1,5 +1,5 @@
 // Included after the shader compiler helpers in grass_batch_shader_test.cpp.
-void RunCullingShader(bool vr)
+void RunCullingShader(bool vr, bool reversed = false)
 {
 	ComPtr<ID3D11Device> device;
 	ComPtr<ID3D11DeviceContext> context;
@@ -8,6 +8,8 @@ void RunCullingShader(bool vr)
 	std::vector<D3D_SHADER_MACRO> defines{ { "GRASS_DIAGNOSTICS", "1" } };
 	if (vr)
 		defines.push_back({ "VR", "1" });
+	if (reversed)
+		defines.push_back({ "REVERSE_Z", "1" });
 	auto code = Compile(L"features/Grass Optimizations/Shaders/GrassOptimizations/GrassCullingCS.hlsl", "cs_5_0", defines);
 	ComPtr<ID3D11ShaderReflection> reflection;
 	Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
@@ -29,6 +31,12 @@ void RunCullingShader(bool vr)
 	Check(parameterReflection->GetVariableByName("FarDensity")->GetDesc(&farLayout));
 	Check(parameterReflection->GetVariableByName("FarPolicyEnabled")->GetDesc(&policyLayout));
 	Require(farLayout.StartOffset == 208 && farLayout.Size == 16 && policyLayout.StartOffset == 224, "Far billboard policy changed the CPU parameter layout");
+	D3D11_SHADER_VARIABLE_DESC projectionModesLayout{}, projectionAsymptoteLayout{};
+	Check(parameterReflection->GetVariableByName("ProjectionModes")->GetDesc(&projectionModesLayout));
+	Check(parameterReflection->GetVariableByName("ProjectionAsymptote")->GetDesc(&projectionAsymptoteLayout));
+	Require(projectionModesLayout.StartOffset == 156 && projectionModesLayout.Size == 4 &&
+				projectionAsymptoteLayout.StartOffset == 232 && projectionAsymptoteLayout.Size == 8,
+		"Projection classification changed the CPU parameter layout");
 	const UINT eyes = vr ? 2 : 1, capacity = 128;
 	using Record = std::array<uint32_t, 8>;
 	const std::array<Record, 3> records{ Record{ 0, 0x3c003800, 0x3c00, 0, 0x3c000000, 0x3c000000, 0, 0 },
@@ -95,10 +103,10 @@ void RunCullingShader(bool vr)
 	depthDesc.Format = DXGI_FORMAT_R32_FLOAT;
 	depthDesc.SampleDesc.Count = 1;
 	depthDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-	std::vector<float> depth(depthDesc.Width * 4, .2f);
+	std::vector<float> depth(depthDesc.Width * 4, reversed ? .8f : .2f);
 	if (vr)
 		for (UINT y = 0; y < 4; ++y)
-			for (UINT x = 4; x < 8; ++x) depth[y * 8 + x] = 1;
+			for (UINT x = 4; x < 8; ++x) depth[y * 8 + x] = reversed ? 0.f : 1.f;
 	D3D11_SUBRESOURCE_DATA depthData{ depth.data(), depthDesc.Width * 4, 0 };
 	ComPtr<ID3D11Texture2D> depthTexture;
 	ComPtr<ID3D11ShaderResourceView> depthSRV;
@@ -111,13 +119,36 @@ void RunCullingShader(bool vr)
 	std::array<float, 32> matrices{};
 	for (UINT eye = 0; eye < eyes; ++eye)
 		for (UINT axis = 0; axis < 4; ++axis) matrices[eye * 16 + axis * 5] = 1;
+	auto projections = matrices;
+	if (reversed)
+		for (UINT eye = 0; eye < eyes; ++eye) {
+			projections[eye * 16 + 10] = -1;
+			projections[eye * 16 + 11] = 1;
+		}
+	const auto setProjection = [&](const std::array<float, 32>& value) {
+		std::array<float, 2> asymptotes{};
+		uint32_t modes = 0;
+		for (uint32_t eye = 0; eye < eyes; ++eye) {
+			const auto projection = GrassOcclusionPolicy::ClassifyProjection(std::span<const float, 16>{ value.data() + eye * 16, 16 });
+			asymptotes[eye] = projection.asymptote;
+			modes |= uint32_t(projection.mode) << (eye * 2);
+		}
+		params.SetVariable("ProjectionAsymptote", asymptotes);
+		params.SetVariable("ProjectionModes", modes);
+		if (vr)
+			native.SetVariable("WorldViewProj", value);
+		else {
+			std::array<float, 16> single{};
+			std::copy_n(value.begin(), 16, single.begin());
+			native.SetVariable("WorldViewProj", single);
+		}
+	};
+	setProjection(projections);
 	if (vr) {
-		native.SetVariable("WorldViewProj", matrices);
 		native.SetVariable("World", matrices);
 	} else {
 		std::array<float, 16> single{};
 		std::copy_n(matrices.begin(), 16, single.begin());
-		native.SetVariable("WorldViewProj", single);
 		native.SetVariable("World", single);
 	}
 	std::unique_ptr<D3D11ShaderTest::ConstantBuffer> stereo;
@@ -237,6 +268,67 @@ void RunCullingShader(bool vr)
 	Require(counts[10] == 2 * eyes && counts[11] == 0 && counts[18] > 0, "Hi-Z eligible and depth-cell diagnostics do not reconcile");
 	if (vr)
 		Require(counts[16] == 2, "Uncovered VR eye depth was not classified");
+	{
+		constexpr float nearPlane = 5, farPlane = 100000;
+		const float a = reversed ? -nearPlane / (farPlane - nearPlane) : farPlane / (farPlane - nearPlane);
+		const float b = (reversed ? 1 : -1) * nearPlane * farPlane / (farPlane - nearPlane);
+		auto perspective = matrices;
+		for (UINT eye = 0; eye < eyes; ++eye) {
+			perspective[eye * 16 + 2] = eye == 0 ? -.15f : .15f;
+			perspective[eye * 16 + 10] = a + (eye == 0 ? 0.f : reversed ? .1f :
+																		  -.1f);
+			perspective[eye * 16 + 11] = b;
+			perspective[eye * 16 + 14] = 1;
+			perspective[eye * 16 + 15] = 0;
+		}
+		setProjection(perspective);
+		native.Bind(context.Get());
+		auto distant = records;
+		distant[0][1] = (distant[0][1] & 0xffff0000u) | DirectX::PackedVector::XMConvertFloatToHalf(20000);
+		context->UpdateSubresource(input.Get(), 0, nullptr, distant.data(), 0, 0);
+		params.SetVariable("InstanceCount", 1u);
+		params.SetVariable("SliceCount", 1u);
+		for (UINT occludedEye = 0; occludedEye < eyes; ++occludedEye) {
+			std::vector<float> distantDepth(depth.size(), reversed ? 0.f : 1.f);
+			for (UINT y = 0; y < 4; ++y)
+				for (UINT x = 0; x < 4; ++x) distantDepth[y * depthDesc.Width + occludedEye * 4 + x] = perspective[occludedEye * 16 + 10] + b / 10000;
+			context->UpdateSubresource(depthTexture.Get(), 0, nullptr, distantDepth.data(), depthDesc.Width * 4, 0);
+			for (float tolerance : { 0.f, .001f, .05f }) {
+				params.SetVariable("DepthBias", tolerance);
+				params.SetVariable("DepthUVScale", std::array<float, 4>{ 1, 1, 0, 0 });
+				values = dispatch(false, false, true, false);
+				for (UINT eye = 0; eye < eyes; ++eye)
+					Require(values[eye * 8 + 4] == (eye == occludedEye ? 0u : 1u), "Distant grass occlusion lost coverage or crossed the stereo seam");
+				params.SetVariable("DepthUVScale", std::array<float, 4>{ 1, 1, .001f, 0 });
+				values = dispatch(false, false, true, false);
+				for (UINT eye = 0; eye < eyes; ++eye)
+					Require(values[eye * 8 + 4] == 1, "Relative margin scaled away absolute viewport protection");
+			}
+		}
+		std::vector<float> coveredDepth(depth.size());
+		for (UINT y = 0; y < 4; ++y)
+			for (UINT x = 0; x < depthDesc.Width; ++x)
+				coveredDepth[y * depthDesc.Width + x] = perspective[(x / 4) * 16 + 10] + b / 10000;
+		context->UpdateSubresource(depthTexture.Get(), 0, nullptr, coveredDepth.data(), depthDesc.Width * 4, 0);
+		params.SetVariable("DepthUVScale", std::array<float, 4>{ 1, 1, 0, 0 });
+		for (UINT invalidEye = 0; invalidEye < eyes; ++invalidEye) {
+			auto oblique = perspective;
+			oblique[invalidEye * 16 + 8] = .01f;
+			setProjection(oblique);
+			native.Bind(context.Get());
+			values = dispatch(false, false, true, false);
+			for (UINT eye = 0; eye < eyes; ++eye)
+				Require(values[eye * 8 + 4] == (eye == invalidEye ? 1u : 0u), "Invalid projection affected the other eye's occlusion policy");
+		}
+		context->UpdateSubresource(input.Get(), 0, nullptr, records.data(), 0, 0);
+		context->UpdateSubresource(depthTexture.Get(), 0, nullptr, depth.data(), depthDesc.Width * 4, 0);
+		params.SetVariable("InstanceCount", 3u);
+		params.SetVariable("SliceCount", 2u);
+		params.SetVariable("DepthBias", .001f);
+		params.SetVariable("DepthUVScale", std::array<float, 4>{ 1, 1, 0, 0 });
+		setProjection(projections);
+		native.Bind(context.Get());
+	}
 	values = dispatch(true, false, false, true);
 	for (UINT eye = 0; eye < eyes; ++eye) Require(values[(2 * eyes + eye) * 8 + 4] == 2 && values[eye * 8 + 4] == 0, "Far LOD selection lost or duplicated instances");
 	params.SetVariable("MeshWeights", std::array<float, 4>{ 16, 8, 1, 1 });
@@ -575,6 +667,8 @@ void RunCullingShader(bool vr)
 			std::vector<D3D_SHADER_MACRO> boundaryDefines;
 			if (vr)
 				boundaryDefines.push_back({ "VR", "1" });
+			if (reversed)
+				boundaryDefines.push_back({ "REVERSE_Z", "1" });
 			if (diagnostic)
 				boundaryDefines.push_back({ "GRASS_DIAGNOSTICS", "1" });
 			auto boundaryCode = Compile(L"features/Grass Optimizations/Shaders/GrassOptimizations/GrassCullingCS.hlsl", "cs_5_0", boundaryDefines);

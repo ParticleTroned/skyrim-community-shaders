@@ -11,14 +11,17 @@
 #include <condition_variable>
 #include <cstdint>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <ranges>
 #include <set>
 #include <source_location>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -66,15 +69,22 @@ namespace RE
 			DistantTree,
 			Sky,
 			Effect,
+			Utility,
 			Total
 		};
 		struct TypeValue
 		{
 			Type value;
 			Type get() const { return value; }
+			bool operator==(Type other) const { return value == other; }
 		} shaderType{ Lighting };
 		std::string fxpFilename = "Shared";
 		std::array<D3D_SHADER_MACRO, 64> macros{};
+		struct NativePixelShader
+		{
+			uint32_t id;
+		};
+		std::vector<NativePixelShader*> pixelShaders;
 	};
 }
 
@@ -150,6 +160,7 @@ namespace SIE
 		std::unordered_set<size_t> forgotten;
 		void Add(const ShaderCompilationTask& task);
 		void DropPrecompilesLocked();
+		void NotifyIfComplete() {}
 		void ClearTypeLocked(RE::BSShader::Type a_type);
 		void ReleaseDispatchSlot(const ShaderCompilationTask& a_task);
 		bool IsInProgress(size_t a_id)
@@ -168,9 +179,19 @@ namespace SIE
 #include "shader_capture_declarations.h"
 #include "shader_capture_state.h"
 #include "shader_category_flag.h"
+#include "shader_pbr_lighting_flags.h"
+#include "shader_pbr_utility_flags.h"
 		std::vector<uint32_t> pixelRequests;
 		std::atomic_bool backgroundCompilation{ false };
-		void GetPixelShader(const RE::BSShader&, uint32_t descriptor, PixelShaderLookup = PixelShaderLookup::Compile) { pixelRequests.push_back(descriptor); }
+		void* GetPixelShader(const RE::BSShader& shader, uint32_t descriptor, PixelShaderLookup a_lookup = PixelShaderLookup::Compile)
+		{
+			// Assume an asynchronous cache miss; keep production intent and queue admission.
+#include "shader_prewarm_lookup_gate.h"
+			pixelRequests.push_back(descriptor);
+#include "shader_prewarm_lookup_queue.h"
+			return nullptr;
+		}
+		bool SetBackgroundCompilation(bool value);
 		void PrewarmDeferredPixelShaders(const RE::BSShader& shader, uint32_t descriptor, bool categories, bool a_precompile = false);
 		struct Blob
 		{
@@ -208,6 +229,7 @@ namespace globals
 		bool IsDeveloperMode() const { return developer; }
 		uint64_t definesGeneration = 0;
 		uint64_t GetShaderDefinesGeneration() const { return definesGeneration; }
+		void ModifyShaderLookup(const RE::BSShader&, uint32_t&, uint32_t&) {}
 	} stateStorage;
 	struct Deferred
 	{
@@ -221,6 +243,7 @@ namespace globals
 
 namespace SIE
 {
+#include "shader_background_mode.h"
 #include "shader_capture_tracking_under_test.h"
 #include "shader_capture_under_test.h"
 #include "shader_category_prewarm.h"
@@ -250,6 +273,29 @@ struct Upscaling
 	}
 };
 #include "shader_category_demand.h"
+
+namespace globals::features
+{
+	Upscaling upscaling;
+	struct TerrainBlending
+	{
+		bool loaded = true;
+		struct
+		{
+			bool Enabled = true, LandscapeSeams = false;
+		} settings;
+	} terrainBlending;
+}
+struct TruePBR
+{
+	bool loaded = true;
+	struct
+	{
+		bool Enabled = true;
+	} settings;
+	void GenerateShaderPermutations(RE::BSShader* shader);
+};
+#include "shader_pbr_prewarm.h"
 
 namespace
 {
@@ -614,6 +660,74 @@ namespace
 		}
 	}
 
+	void TestPBRBackgroundAdmission()
+	{
+		constexpr auto deferred = static_cast<uint32_t>(ShaderCache::LightingShaderFlags::Deferred);
+		constexpr auto seams = static_cast<uint32_t>(ShaderCache::LightingShaderFlags::LandscapeSeams);
+		constexpr auto land = static_cast<uint32_t>(ShaderCache::LightingShaderTechniques::MTLand) << 24;
+		const auto category = ShaderCache::GetCharacterCategoryFlag(RE::BSShader::Lighting);
+		for (const auto type : { RE::BSShader::Lighting, RE::BSShader::Utility }) {
+			for (bool categories : { false, true }) {
+				for (bool landscapeSeams : { false, true }) {
+					ShaderCache cache;
+					globals::shaderCache = &cache;
+					globals::features::upscaling.settings.neuralRenderingEnabled = categories;
+					globals::features::upscaling.settings.neuralCharacterRenderingEnabled = categories;
+					globals::features::upscaling.settings.neuralCharacterVisualIsolationEnabled = categories;
+					globals::features::terrainBlending.settings.LandscapeSeams = landscapeSeams;
+					RE::BSShader shader;
+					shader.shaderType.value = type;
+					RE::BSShader::NativePixelShader nativeLand{ land | 1u };
+					shader.pixelShaders = { &nativeLand };
+					TruePBR pbr;
+					pbr.GenerateShaderPermutations(&shader);
+					auto& queue = cache.compilationSet;
+					const auto generated = queue.availableTasks.size();
+					Require(generated > 2 && queue.totalTasks == generated);
+					const std::set<uint32_t> requested(cache.pixelRequests.begin(), cache.pixelRequests.end());
+					Require(requested.size() == generated);
+					bool sawForward = false, sawDeferred = false, sawCategory = false, sawSeams = false;
+					for (const auto descriptor : requested) {
+						const auto task = queue.availableTasks.find({ ShaderClass::Pixel, shader, descriptor });
+						Require(task != queue.availableTasks.end() && task->IsPrecompile() && task->GetType() == type);
+						sawForward |= !(descriptor & deferred);
+						sawDeferred |= (descriptor & deferred) != 0;
+						sawCategory |= (descriptor & category) != 0;
+						sawSeams |= (descriptor & seams) != 0;
+					}
+					if (type == RE::BSShader::Lighting) {
+						Require(sawForward && sawDeferred && sawCategory == categories && sawSeams == landscapeSeams);
+						if (landscapeSeams) {
+							Require(queue.availableTasks.contains({ ShaderClass::Pixel, shader, nativeLand.id | seams }));
+							Require(queue.availableTasks.contains({ ShaderClass::Pixel, shader, nativeLand.id | seams | deferred }));
+						}
+					} else {
+						Require(generated == 8);
+					}
+					const auto running = *queue.availableTasks.find({ ShaderClass::Pixel, shader, *requested.begin() });
+					queue.tasksInProgress.insert(queue.availableTasks.extract(running));
+					const auto demandedDescriptor = *std::next(requested.begin());
+					const auto demanded = *queue.availableTasks.find({ ShaderClass::Pixel, shader, demandedDescriptor });
+					cache.GetPixelShader(shader, demandedDescriptor, ShaderCache::PixelShaderLookup::Draw);
+					Require(!queue.availableTasks.find(demanded)->IsPrecompile());
+					Require(!cache.SetBackgroundCompilation(true));
+					Require(queue.availableTasks.size() == 1 && queue.availableTasks.contains(demanded));
+					Require(queue.tasksInProgress.size() == 1 && queue.tasksInProgress.contains(running));
+					Require(queue.totalTasks == 2 && queue.totalPriorityWeight == running.GetPriority() + demanded.GetPriority() + 2);
+					pbr.GenerateShaderPermutations(&shader);
+					Require(queue.availableTasks.size() == 1 && queue.totalTasks == 2);
+					queue.Add({ ShaderClass::Pixel, shader, 0xDEADBEEFu, true });
+					Require(queue.availableTasks.size() == 1 && queue.totalTasks == 2);
+					Require(cache.SetBackgroundCompilation(false));
+					pbr.GenerateShaderPermutations(&shader);
+					Require(queue.availableTasks.size() == generated - 1 && queue.totalTasks == generated);
+					Require(!queue.availableTasks.find(demanded)->IsPrecompile());
+					globals::shaderCache = nullptr;
+				}
+			}
+		}
+	}
+
 	void TestStageAndTypeIdentity()
 	{
 		ShaderCache cache;
@@ -655,6 +769,7 @@ int main()
 		TestUntruncatedTypeEpoch();
 		TestCategoryVariantIdentity();
 		TestCategoryPrewarm();
+		TestPBRBackgroundAdmission();
 		std::cout << "Shader cache variant checks passed\n";
 		return 0;
 	} catch (const std::exception& error) {

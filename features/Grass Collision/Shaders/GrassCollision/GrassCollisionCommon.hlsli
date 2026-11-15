@@ -10,6 +10,8 @@ namespace GrassCollision
 		uint2 PreviousArrayOrigin;
 		float CompressionHeight, CollisionStrength, PreviousCollisionStrength, MaximumCompressibleGrassHeight;
 		float MaximumBend, PreviousMaximumBend, PreviousCompressionHeight, PreviousMaximumCompressibleGrassHeight;
+		float CurrentHeightOffset, PreviousHeightOffset;
+		float2 ContactPadding;
 	}
 	float3 RotateVector(float3 value, float3 axis, float angle)
 	{

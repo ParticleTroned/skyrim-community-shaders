@@ -331,6 +331,12 @@ class PreparedSelectionContract(unittest.TestCase):
         start = upscaling.index("bool Upscaling::PrepareFullResolutionNeuralInputs(")
         body = upscaling[start:upscaling.index("\n}\n", start)]
         self.assertLess(body.index("IsCurrentSelectionEmpty("), body.index("CopyRawDepthRegion("))
+        copies = body[body.index("const auto copyGuides ="):]
+        self.assertLess(copies.index("stateGuard.emplace(context)"), copies.index("CopyRawDepthRegion("))
+        reference_scope = body[body.index("#ifdef DEVBENCH_BRIDGE_ENABLED"):body.index("uint32_t emptyEyeMask")]
+        self.assertIn("Point::NeuralPreparation", reference_scope)
+        self.assertIn("referenceStateGuard.emplace(context)", reference_scope)
+        self.assertIn("#else\n\t\tNeuralRendering::ComputeStateGuard<1> stateGuard(context);\n#endif", copies)
         self.assertIn("if (emptyEyeMask != (1u << eyeCount) - 1u && !copyGuides())", body)
         self.assertIn("args.depthGuideSRV = skippedGuides ? nullptr", upscaling)
         source = read("src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp")

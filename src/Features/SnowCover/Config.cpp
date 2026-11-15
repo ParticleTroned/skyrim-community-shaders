@@ -1,46 +1,15 @@
 #include "Config.h"
 #include "Utils/FileSystem.h"
+#include "Utils/SettingsValidation.h"
 #include "Utils/StringUtils.h"
 
 namespace SnowConfig
 {
 	void Validate(const json& value, const json& schema, const std::string& path)
 	{
-		const auto type = schema.at("type").get<std::string>();
-		if (type == "object") {
-			if (!value.is_object())
-				throw std::invalid_argument(path + " must be an object");
-			const auto& properties = schema.at("properties");
-			for (const auto& [key, field] : value.items()) {
-				if (!properties.contains(key))
-					throw std::invalid_argument(path + ": unknown setting " + key);
-				Validate(field, properties.at(key), path + "." + key);
-			}
-			if (schema.contains("required"))
-				for (const auto& key : schema.at("required"))
-					if (!value.contains(key.get<std::string>()))
-						throw std::invalid_argument(path + ": incomplete vector");
-		} else if (type == "array") {
-			if (!value.is_array() || value.size() != schema.at("minItems").get<size_t>())
-				throw std::invalid_argument(path + " has the wrong vector length");
-			for (const auto& item : value) Validate(item, schema.at("items"), path);
-		} else if (type == "boolean") {
-			if (!value.is_boolean())
-				throw std::invalid_argument(path + " must be boolean");
-		} else if (type == "string") {
-			if (!value.is_string() || value.get_ref<const std::string&>().size() > schema.at("maxLength").get<size_t>())
-				throw std::invalid_argument(path + " must be a bounded string");
-			const auto& text = value.get_ref<const std::string&>();
-			if (text.find('\0') != std::string::npos)
-				throw std::invalid_argument(path + " contains a null byte");
+		Util::ValidateSettingsSchema<float>(value, schema, path, [](const std::string& text, const json&) {
 			Util::JoinRelativePath(Util::PathHelpers::GetDataPath(), std::filesystem::path(text));
-		} else {
-			if (!value.is_number() || (type == "integer" && !value.is_number_integer()))
-				throw std::invalid_argument(path + " has the wrong numeric type");
-			const double number = value.get<double>();
-			if (!std::isfinite(number) || number < schema.at("minimum").get<float>() || number > schema.at("maximum").get<float>())
-				throw std::invalid_argument(path + " is outside its finite range");
-		}
+		});
 	}
 
 	const json& Schemas()
@@ -66,6 +35,7 @@ namespace SnowConfig
 			result["settings"]["properties"]["SurvivalEnabled"] = json::parse(R"({"type":"boolean"})");
 			result["world"] = { { "type", "object" }, { "additionalProperties", false }, { "properties", json::object() } };
 			result["world"]["properties"]["EnableSnowCover"] = json::parse(R"({"type":"boolean"})");
+			result["world"]["properties"]["UseLandscapeSnowColor"] = json::parse(R"({"type":"boolean","default":false,"description":"Follow installed main/alternate snow texture-set paths, seasonal swaps and PBR classification for color, retaining configured normal/material maps and tints. Standard snow01/snow02 paths are used when canonical records are unavailable. Failed color loads retain the configured material color."})");
 			result["world"]["properties"]["AffectGrassTint"] = json::parse(R"({"type":"integer","minimum":0,"maximum":1})");
 			result["world"]["properties"]["AffectTreeTint"] = json::parse(R"({"type":"integer","minimum":0,"maximum":1})");
 			result["world"]["properties"]["MaxSummerMonth"] = json::parse(R"({"type":"integer","minimum":0,"maximum":11})");

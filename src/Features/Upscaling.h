@@ -3753,6 +3753,8 @@ public:
 	// Queue ownership protects admission, deadlines, and deferred notifications.
 	std::atomic_bool vrRenderScalePresentationFallbackAdmissionActive{ false };
 	uint64_t vrRenderScalePresentationRecoveryStartTickMs = 0;
+	uint64_t vrRenderScalePresentationRecoveryMenuEpoch = 0;
+	uint64_t vrRenderScalePresentationRecoveryLastMenuTickMs = 0;
 	bool vrRenderScalePresentationResumeAttempted = false;
 	bool deferredVRRenderScaleRelatchAfterPresentation = false;
 	bool deferredVRRenderScalePostLoadResetAfterPresentation = false;

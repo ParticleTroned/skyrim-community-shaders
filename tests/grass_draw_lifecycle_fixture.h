@@ -1,7 +1,10 @@
 #pragma once
 
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
 #include "Features/GrassOptimizations/GrassPassCache.h"
 #include "Features/GrassOptimizations/GrassPolicy.h"
+#include "Utils/GrassGroupLock.h"
 #include <array>
 #include <atomic>
 #include <bit>
@@ -188,10 +191,10 @@ namespace RE
 }
 namespace GrassRuntime
 {
-	struct GroupReadLock
+	inline volatile uint32_t groupWord = 0;
+	struct GroupReadLock : Util::GrassGroupLock
 	{
-		GroupReadLock() {}
-		~GroupReadLock() {}
+		GroupReadLock() : GrassGroupLock(groupWord) {}
 	};
 	using SetupGeometry = void (*)(RE::BSShader*, RE::BSRenderPass*, uint32_t);
 	inline auto& GetPropertyData(RE::BSGrassShaderProperty* property, bool) { return *property; }
@@ -442,6 +445,15 @@ public:
 		uint64_t residentRevision = 0, cpuRecordBytes = 0;
 		std::unordered_map<unsigned, std::weak_ptr<Queue>> queues;
 		std::vector<std::shared_ptr<const QueuedGroup>> queuedGroups;
+		struct TextureCache
+		{
+			uint32_t frameCalls = 0, lastFrame = 0;
+			void EndFrame(uint32_t frame) noexcept
+			{
+				++frameCalls;
+				lastFrame = frame;
+			}
+		} textureCache;
 		GrassPolicy::Settings frameSettings;
 		bool geometryCPUValid = false, failed = false, ready = false, cullingPrepared = false, throwOnPrepare = false;
 		bool allCulled = false, throwOnUpload = false;
@@ -468,6 +480,7 @@ public:
 		void ClearDrawContext() noexcept;
 		bool HasActiveDrawContext() const noexcept;
 		void UpdateLODDemand(const GrassPolicy::Settings&) {}
+		void PollLODLoads() {}
 		void EndBackgroundPreparation(const GrassPolicy::Settings&) {}
 		void PrepareCulling(RE::BSRenderPass*, RE::BSShader*, uint32_t, GrassRuntime::SetupGeometry);
 		void CopyGeometryConstants();

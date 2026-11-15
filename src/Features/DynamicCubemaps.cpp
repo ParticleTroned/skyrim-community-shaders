@@ -1215,7 +1215,10 @@ void DynamicCubemaps::SetupResourcesImpl()
 	}
 
 	{
-		DirectX::CreateDDSTextureFromFile(device, L"Data\\Shaders\\DynamicCubemaps\\defaultcubemap.dds", nullptr, &defaultCubemap);
+		winrt::com_ptr<ID3D11Resource> defaultCubemapResource;
+		DirectX::CreateDDSTextureFromFile(device, L"Data\\Shaders\\DynamicCubemaps\\defaultcubemap.dds", defaultCubemapResource.put(), &defaultCubemap);
+		Util::SetResourceName(defaultCubemapResource.get(), "DynamicCubemaps::DefaultCubemap");
+		Util::SetResourceName(defaultCubemap, "DynamicCubemaps::DefaultCubemap SRV");
 	}
 	captureResourcesReady = true;
 }

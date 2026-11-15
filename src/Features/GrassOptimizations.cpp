@@ -244,7 +244,7 @@ void GrassOptimizations::DrawControls(bool advanced, std::string_view section)
 			Util::AddTooltip("Skip grass hidden behind solid objects. Depending on the scene, this can save work or have a small performance cost.", tooltipFlags);
 			if (advanced && next.EnableOcclusionCulling) {
 				changed |= Util::Widgets::SliderFloat("Grass occlusion tolerance", &next.OcclusionBias, 0.0f, 0.05f, "%.4f");
-				Util::AddTooltip("Make hidden-grass skipping more cautious. Increase this if grass disappears incorrectly; higher values keep more grass and can cost performance.", tooltipFlags);
+				Util::AddTooltip("Relative distance margin for hidden-grass skipping: 0.001 means 0.1% of the nearest grass distance. Increase this if grass disappears incorrectly; higher values keep more grass and can cost performance.", tooltipFlags);
 			}
 		}
 	}

@@ -12,6 +12,8 @@
 #include "GpuPass.h"
 #include "LocationContext.h"
 #include "Profiler.h"
+#include "ReverseZ.h"
+#include "ShaderCache.h"
 #include "State.h"
 #include "Upscaling.h"
 #include "Util.h"
@@ -425,9 +427,13 @@ void ScreenSpaceGI::DrawSettings()
 		Util::AddTooltip("Shows extra tuning controls. Hiding them keeps their current values and does not change image quality.");
 	}
 	if (page.Is("coverage") && !isVR) {
-		auto guard = Util::DisableGuard(!settings.Enabled);
-		Util::Widgets::Checkbox("Vanilla SSAO", &settings.EnableVanillaSSAO);
-		Util::AddTooltip("Adds Skyrim's original soft contact shadows on top of this effect. Usually leave off to avoid making corners and creases too dark.");
+		const bool reverseDepth = globals::features::reverseZ.IsActive();
+		auto guard = Util::DisableGuard(!settings.Enabled || reverseDepth);
+		bool enabled = !reverseDepth && settings.EnableVanillaSSAO;
+		if (Util::Widgets::Checkbox("Vanilla SSAO", &enabled))
+			settings.EnableVanillaSSAO = enabled;
+		Util::AddTooltip(reverseDepth ? "Unavailable while Reverse Z is active. Screen Space GI's own ambient occlusion remains available." :
+										"Adds Skyrim's original soft contact shadows on top of this effect. Usually leave off to avoid making corners and creases too dark.");
 	}
 
 	///////////////////////////////
@@ -1634,6 +1640,24 @@ void ScreenSpaceGI::UpdateSB()
 	ssgiCB->Update(data);
 }
 
+void ScreenSpaceGI::SyncVanillaSSAO()
+{
+	const bool reverseDepth = globals::features::reverseZ.IsActive();
+	if (!reverseDepth && (!loaded || !globals::shaderCache || !globals::shaderCache->IsEnabled()))
+		return;
+	if (REL::Module::IsVR())
+		settings.EnableVanillaSSAO = false;
+	const bool enableVanillaSSAO = !reverseDepth && settings.EnableVanillaSSAO;
+	if (auto* setting = RE::GetINISetting("bSAOEnable:Display"); setting && setting->data.b != enableVanillaSSAO)
+		setting->data.b = enableVanillaSSAO;
+	if (auto* imageSpaceManager = RE::ImageSpaceManager::GetSingleton()) {
+		GET_INSTANCE_MEMBER(BSImagespaceShaderISSAOBlurH, imageSpaceManager);
+		// Native SSAO reconstructs standard depth, even when SSGI is not loaded.
+		if (auto* sao = BSImagespaceShaderISSAOBlurH; sao && sao->enableSAO != enableVanillaSSAO)
+			sao->enableSAO = enableVanillaSSAO;
+	}
+}
+
 void ScreenSpaceGI::DrawSSGI()
 {
 	const bool wasEnabled = settings.Enabled;
@@ -1651,18 +1675,6 @@ void ScreenSpaceGI::DrawSSGI()
 	const int resolutionMode = ClampResolutionMode(settings.ResolutionMode);
 	const float centerScale = ResolveFoveatedSharedMaskScale(settings);
 	const bool foveatedSsgiActive = IsRuntimeFoveatedActive(settings);
-	const bool enableVanillaSSAO = settings.EnableVanillaSSAO;
-
-	if (auto* setting = RE::GetINISetting("bSAOEnable:Display"); setting && setting->data.b != enableVanillaSSAO)
-		setting->data.b = enableVanillaSSAO;
-
-	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
-	GET_INSTANCE_MEMBER(BSImagespaceShaderISSAOBlurH, imageSpaceManager);
-
-	// Keep the live params in sync so the toggle applies immediately rather than
-	// waiting for the next ImageSpaceManager reinitialization.
-	if (auto* sao = BSImagespaceShaderISSAOBlurH; sao && sao->enableSAO != enableVanillaSSAO)
-		sao->enableSAO = enableVanillaSSAO;
 
 	const auto location = LocationContext::Get();
 	const bool allowAOSpace = LocationContext::AllowsInteriorOnly(settings.AOInteriorsOnly, location);

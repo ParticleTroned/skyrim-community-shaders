@@ -61,8 +61,13 @@
                     ]
                 },
                 "dominantEye": { "enum": ["left", "right"] },
-                "width": { "type": "integer", "minimum": 1 },
-                "height": { "type": "integer", "minimum": 1 },
+                "resolution": {
+                    "enum": ["4k", "native"],
+                    "default": "4k",
+                    "description": "Framed views only. 4k saves 3840 x 2160. Native uses the selected eye's largest 16:9 crop, at least 4K; combined views use the dominant eye. Native dimensions resolve after acquisition, with a maximum source dimension of 16384. Omit width and height for native. Explicit legacy 2560 x 1440 remains supported when resolution is omitted."
+                },
+                "width": { "type": "integer", "enum": [2560, 3840] },
+                "height": { "type": "integer", "enum": [1440, 2160] },
                 "crop": {
                     "type": ["object", "null"],
                     "properties": {
@@ -76,6 +81,41 @@
                 },
                 "encoding": { "$ref": "#/$defs/encoding" },
                 "nameSuffix": { "type": "string", "maxLength": 48 }
+            },
+            "if": {
+                "properties": {
+                    "view": { "enum": ["framed_left", "framed_right", "framed_combined"] }
+                }
+            },
+            "then": {
+                "properties": { "crop": { "type": "null" } },
+                "anyOf": [
+                    {
+                        "required": ["resolution"],
+                        "properties": { "resolution": { "const": "native" } },
+                        "not": { "anyOf": [{ "required": ["width"] }, { "required": ["height"] }] }
+                    },
+                    {
+                        "properties": {
+                            "resolution": { "const": "4k" },
+                            "width": { "const": 3840 },
+                            "height": { "const": 2160 }
+                        }
+                    },
+                    {
+                        "not": { "required": ["resolution"] },
+                        "properties": { "width": { "const": 2560 }, "height": { "const": 1440 } }
+                    }
+                ]
+            },
+            "else": {
+                "not": {
+                    "anyOf": [
+                        { "required": ["width"] },
+                        { "required": ["height"] },
+                        { "required": ["resolution"] }
+                    ]
+                }
             },
             "additionalProperties": false
         },

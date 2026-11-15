@@ -1939,7 +1939,14 @@ namespace Hooks
 					auto type = currentShader->shaderType.get();
 					if (state->ShaderEnabled(type) && !UseNativeWaterShaders(*currentShader)) {
 						RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*currentShader, state->modifiedPixelDescriptor, SIE::ShaderCache::PixelShaderLookup::Draw);
-						if (pixelShader) {
+						using UtilityFlags = SIE::ShaderCache::UtilityShaderFlags;
+						constexpr auto paraboloidFlags = static_cast<uint32_t>(UtilityFlags::RenderShadowmap) | static_cast<uint32_t>(UtilityFlags::RenderShadowmapPb);
+						const bool paraboloidCaster = type == RE::BSShader::Type::Utility &&
+						                              (state->modifiedPixelDescriptor & (paraboloidFlags | static_cast<uint32_t>(UtilityFlags::OpaqueEffect))) == paraboloidFlags;
+						// The near-caster cutoff needs the extra interpolant from the selected custom vertex shader.
+						const auto& selected = state->techniqueShaderSelection;
+						const bool compatibleVertex = !paraboloidCaster || (selected.vertex && selected.vertexDescriptor == state->modifiedVertexDescriptor);
+						if (pixelShader && compatibleVertex) {
 							globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
 							state->techniqueShaderSelection.pixel = pixelShader;
 							state->techniqueShaderSelection.pixelDescriptor = state->modifiedPixelDescriptor;

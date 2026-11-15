@@ -250,6 +250,7 @@ namespace SIE
 	{
 #include "category_flag.h"
 #include "lighting_flags.h"
+#include "utility_flags.h"
 		std::array<std::unordered_map<uint32_t, std::unique_ptr<RE::BSGraphics::PixelShader>>,
 			static_cast<unsigned>(RE::BSShader::Type::Total)>
 			pixelShaders;
@@ -791,6 +792,56 @@ void TestPixelFamilyProof()
 	Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, descriptor, descriptor, false));
 	Require(f.context.bound == f.native.shader && f.state.selectedCustomPixelShaderType == RE::BSShader::Type::None);
 }
+void TestParaboloidStageCompatibility()
+{
+	using Flags = SIE::ShaderCache::UtilityShaderFlags;
+	constexpr auto paraboloid = static_cast<uint32_t>(Flags::RenderShadowmap) | static_cast<uint32_t>(Flags::RenderShadowmapPb);
+	Fixture f;
+	f.shader.shaderType.value = RE::BSShader::Type::Utility;
+	f.state.modifiedVertexDescriptor = paraboloid;
+	ID3D11VertexShader nativeVS, customVS;
+	RE::BSGraphics::VertexShader nativeVertex{ &nativeVS }, customVertex{ &customVS };
+	Hooks::BSShader__BeginTechnique_SetVertexShader::thunk(nullptr, &nativeVertex);
+	f.Bind(paraboloid);
+	Require(f.context.vertex == &nativeVS && f.context.bound == f.native.shader);
+	Require(f.cache.compilationSet.requests.contains(paraboloid));
+	Require(!f.state.deferredPixelShaderMissing && f.state.techniqueShaderSelection.pixel == nullptr);
+	auto* pixel = f.cache.Add(f.shader, paraboloid);
+	f.Bind(paraboloid);
+	Require(f.context.bound == f.native.shader && f.state.selectedCustomPixelShaderType == RE::BSShader::Type::None);
+	// A vertex arriving in the cache cannot supply an interpolant until actually selected.
+	f.cache.vertex = &customVertex;
+	f.Bind(paraboloid);
+	Require(f.context.bound == f.native.shader && f.cache.vertexLookups == 1);
+	Hooks::BSShader__BeginTechnique_SetVertexShader::thunk(nullptr, &nativeVertex);
+	f.Bind(paraboloid);
+	Require(f.context.vertex == &customVS && f.context.bound == pixel->shader);
+	Require(f.state.techniqueShaderSelection.pixel == pixel && f.current == &f.native);
+	Require(f.state.selectedCustomPixelShaderType == RE::BSShader::Type::Utility);
+	++f.state.modifiedVertexDescriptor;
+	f.Bind(paraboloid);
+	Require(f.context.bound == f.native.shader && f.state.techniqueShaderSelection.pixel == nullptr);
+	--f.state.modifiedVertexDescriptor;
+	f.cache.vertex = nullptr;
+	Hooks::BSShader__BeginTechnique_SetVertexShader::thunk(nullptr, &nativeVertex);
+	f.Bind(paraboloid);
+	Require(f.context.vertex == &nativeVS && f.context.bound == f.native.shader);
+	Require(f.state.techniqueShaderSelection.vertex == nullptr && f.cache.compiles == 0);
+	// The shared bit is an alpha-mask flag outside the paraboloid caster technique.
+	for (auto descriptor : { static_cast<uint32_t>(Flags::AdditionalAlphaMask),
+			 paraboloid | static_cast<uint32_t>(Flags::OpaqueEffect),
+			 static_cast<uint32_t>(Flags::RenderShadowmap) }) {
+		auto* other = f.cache.Add(f.shader, descriptor);
+		f.Bind(descriptor);
+		Require(f.context.bound == other->shader);
+	}
+	for (auto type : { RE::BSShader::Type::Lighting, RE::BSShader::Type::Effect }) {
+		f.shader.shaderType.value = type;
+		auto* other = f.cache.Add(f.shader, paraboloid);
+		f.Bind(paraboloid);
+		Require(f.context.bound == other->shader);
+	}
+}
 void TestSeamTechniqueFallback()
 {
 	constexpr auto seams = static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::LandscapeSeams);
@@ -1112,6 +1163,7 @@ int main()
 			TestTechniqueAdmission();
 			TestReverseTechniqueSelection();
 			TestPixelFamilyProof();
+			TestParaboloidStageCompatibility();
 			TestSeamTechniqueFallback();
 			TestPrecompileLookupContract();
 			TestWaterRuntimeDescriptor();

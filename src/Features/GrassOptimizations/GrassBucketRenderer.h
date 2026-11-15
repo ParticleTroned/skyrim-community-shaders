@@ -12,7 +12,7 @@ public:
 	void InstallHooks();
 	void SetupResources();
 	void ClearShaderCache();
-	/** @brief Retire frame plans and unused LOD assets even when no grass is drawn. */
+	/** @brief Retire frame resources and prepare post-draw changes for the next grass frame. */
 	void EndFrame();
 	/** @brief Preserve geometry inputs and pre-setup wind history for batching at the native draw boundary. */
 	void PrepareGeometry(RE::BSRenderPass*, RE::BSShader*, uint32_t, GrassRuntime::SetupGeometry, std::optional<uint32_t> nativeWindTimer);

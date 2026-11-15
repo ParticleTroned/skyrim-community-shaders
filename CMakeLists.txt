@@ -2223,6 +2223,10 @@ if(BUILD_CONTROLLER_TESTS)
         "${_adaptive_balance_test_dir}/adaptive_balance_point_lights_under_test.h"
         "${_adaptive_balance_test_dir}/adaptive_balance_point_light_members.h"
         "${_adaptive_balance_test_dir}/adaptive_balance_weather_hook_under_test.h"
+        "${_adaptive_balance_test_dir}/adaptive_balance_travel_members.h"
+        "${_adaptive_balance_test_dir}/adaptive_balance_travel_under_test.h"
+        "${_adaptive_balance_test_dir}/adaptive_balance_travel_ui_under_test.h"
+        "${_adaptive_balance_test_dir}/adaptive_balance_travel_menu_under_test.h"
     )
     add_custom_command(
         OUTPUT ${_adaptive_balance_test_headers}
@@ -2254,6 +2258,23 @@ if(BUILD_CONTROLLER_TESTS)
         DEPENDS ${_adaptive_balance_test_headers}
     )
     add_dependencies(adaptive_balance_toggle_test adaptive_balance_test_sources)
+    add_controller_test(
+        adaptive_balance_location_travel_test
+        AdaptiveBalanceLocationTravel
+        tests/adaptive_balance_location_travel_test.cpp
+    )
+    add_dependencies(
+        adaptive_balance_location_travel_test
+        adaptive_balance_test_sources
+    )
+    target_include_directories(
+        adaptive_balance_location_travel_test
+        PRIVATE "${_adaptive_balance_test_dir}"
+    )
+    target_link_libraries(
+        adaptive_balance_location_travel_test
+        PRIVATE imgui::imgui nlohmann_json::nlohmann_json
+    )
     target_include_directories(
         adaptive_balance_toggle_test
         PRIVATE "${_adaptive_balance_test_dir}"

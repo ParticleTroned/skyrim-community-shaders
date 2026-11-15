@@ -1,8 +1,17 @@
 #include <Windows.h>
+#include <string>
 
 namespace
 {
 	bool denyInspection{};
+	std::wstring simulatedLoadedModule;
+	HMODULE ProbeModuleHandle(LPCWSTR name)
+	{
+		if (!simulatedLoadedModule.empty() && CompareStringOrdinal(name, -1, simulatedLoadedModule.c_str(), -1, TRUE) == CSTR_EQUAL)
+			return GetModuleHandleW(L"kernel32.dll");
+		return GetModuleHandleW(name);
+	}
+
 	DWORD ProbeAttributes(LPCWSTR path)
 	{
 		if (!denyInspection)
@@ -13,7 +22,9 @@ namespace
 }
 
 #define GetFileAttributesW ProbeAttributes
+#define GetModuleHandleW ProbeModuleHandle
 #include "Compatibility.h"
+#undef GetModuleHandleW
 #undef GetFileAttributesW
 #include <algorithm>
 #include <format>
@@ -23,7 +34,6 @@ namespace
 #include <list>
 #include <optional>
 #include <stdexcept>
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -115,21 +125,47 @@ namespace
 		Require(reported, "startup errors must immediately use the native fatal-reporting path");
 	}
 
+	void ExpectBlockedPlugin(const Compatibility::IncompatiblePlugin& plugin)
+	{
+		errors.clear();
+		logged.clear();
+		ExpectStartupFailure([] { CheckIncompatiblePlugins(); }, plugin.reason.empty() ? "Incompatible DLL" : plugin.reason);
+		Require(errors.size() == 1 && logged.size() == 1, "each blacklisted DLL must stop startup immediately");
+		Require(errors.front().find(stl::utf16_to_utf8(plugin.dll).value()) != std::string::npos,
+			"startup failure must identify the conflicting plugin path");
+	}
+
 	void Run()
 	{
 		Fixture fixture;
 		const auto plugins = gameData / L"SKSE" / L"Plugins";
 		const auto& shadow = Compatibility::shadowFixes;
-		Require(std::ranges::count_if(Compatibility::incompatiblePlugins, [&](const auto& plugin) {
-			return std::wstring_view(plugin.dll) == shadow.dll;
-		}) == 1,
-			"Shadow Fixes must have exactly one blacklist entry");
+		for (const auto* required : { &shadow, &Compatibility::externalReverseZ })
+			Require(std::ranges::count_if(Compatibility::incompatiblePlugins, [&](const auto& plugin) {
+				return std::wstring_view(plugin.dll) == required->dll;
+			}) == 1,
+				"Shadow Fixes and external Reverse Z must each have exactly one blacklist entry");
 		auto probe = Compatibility::ProbePlugin(shadow, plugins);
 		Require(!probe.present && !probe.error, "absent plugin reported as conflict or probe failure");
 		probe = Compatibility::ProbePlugin(shadow, fixture.root / L"absent" / L"plugins");
 		Require(!probe.present && !probe.error, "missing parent directory is not a probe failure");
 		CheckIncompatiblePlugins();
 		Require(errors.empty() && logged.empty(), "clean startup acquired errors");
+		for (const auto* module : { L"SPS.dll", L"po3_MoonMod.dll", L"po3_SplashesOfStorms.dll", L"HorizonFix.dll" }) {
+			const auto file = plugins / module;
+			{
+				std::ofstream stream(file);
+				stream << "feature-local compatibility fixture";
+				Require(stream.good(), "could not create the companion plugin fixture");
+			}
+			for (bool loaded : { false, true }) {
+				simulatedLoadedModule = loaded ? module : L"";
+				CheckIncompatiblePlugins();
+				Require(errors.empty() && logged.empty(), "feature-local or supported companion DLL must not block CSX startup");
+			}
+			simulatedLoadedModule.clear();
+			fs::remove(file);
+		}
 
 		const auto installed = plugins / L"sHaDoWfIxEs.DlL";
 		fs::create_directory(installed);
@@ -167,6 +203,11 @@ namespace
 		denyInspection = true;
 		probe = Compatibility::ProbePlugin(loaded, fixture.root / L"missing");
 		Require(probe.present && !probe.error, "loaded modules must take precedence over file-inspection errors");
+		for (const auto* relativePath : { L"skyrim-runtime-extender/KeRnEl32.DlL", L"skyrim-runtime-extender\\KeRnEl32.DlL" }) {
+			const Compatibility::IncompatiblePlugin nestedLoaded{ relativePath };
+			probe = Compatibility::ProbePlugin(nestedLoaded, fixture.root / L"missing");
+			Require(probe.present && !probe.error, "nested plugin paths must detect loaded modules by basename");
+		}
 		probe = Compatibility::ProbePlugin(shadow, plugins);
 		Require(!probe.present && probe.error, "inspection failure must not masquerade as absence");
 		ExpectStartupFailure([] { CheckIncompatiblePlugins(); }, "Cannot check incompatible DLL");
@@ -174,13 +215,23 @@ namespace
 		denyInspection = false;
 
 		for (const auto& plugin : Compatibility::incompatiblePlugins) {
-			errors.clear();
-			logged.clear();
 			const auto file = plugins / plugin.dll;
-			std::ofstream(file) << "unloadable conflict";
-			ExpectStartupFailure([] { CheckIncompatiblePlugins(); }, "Incompatible DLL");
-			Require(errors.size() == 1 && logged.size() == 1, "each blacklisted DLL must stop startup immediately");
+			fs::create_directories(file.parent_path());
+			fs::create_directory(file);
+			probe = Compatibility::ProbePlugin(plugin, plugins);
+			Require(!probe.present && !probe.error, "a plugin-named directory is not an installed DLL");
 			fs::remove(file);
+			{
+				std::ofstream stream(file);
+				stream << "unloadable conflict";
+				Require(stream.good(), "could not create the installed conflict fixture");
+			}
+			ExpectBlockedPlugin(plugin);
+			Require(!Compatibility::IsLoaded(plugin), "detection must never load an installed conflict");
+			fs::remove(file);
+			simulatedLoadedModule = file.filename().wstring();
+			ExpectBlockedPlugin(plugin);
+			simulatedLoadedModule.clear();
 		}
 	}
 

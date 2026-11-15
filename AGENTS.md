@@ -284,6 +284,11 @@ contradict this policy.
     distinct timing and authorization rules. A tooling audit does not authorize
     starting an assay.
 
+-   For recorded CSX/Open Shaders comparisons, select a runtime-compatible
+    route from [standard comparison replays](docs/development/tooling.md#standard-comparison-replays)
+    and use the existing controls and collectors. In VR, match headset pose
+    as well as the recorded player route.
+
 -   When the user invokes `gameft-sw`, follow
     the maintained automation protocol and its locally retained guide: ask
     its exact save-number question and

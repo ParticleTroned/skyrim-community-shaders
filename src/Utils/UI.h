@@ -68,6 +68,7 @@ namespace Util
 		LoadSettings,
 		RestoreDefaults,
 		ClearCache,
+		Teleport,
 		Close
 	};
 	/** Draw an action symbol within its button bounds using the current theme colour. */

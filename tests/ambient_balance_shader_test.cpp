@@ -81,7 +81,7 @@ namespace
 		static constexpr Pixel envValue{ 0.1f, 0.2f, 0.3f, 1 };
 		static constexpr Pixel fullValue{ 0.4f, 0.5f, 0.6f, 1 };
 
-		Fixture(ID3D11Device* device, ID3D11DeviceContext* context, bool vr) :
+		Fixture(ID3D11Device* device, ID3D11DeviceContext* context, bool vr, bool effect = false, bool specialized = false) :
 			context(context),
 			output(device, "Output", static_cast<UINT>(Pixels{}.size()), D3D11_BIND_UNORDERED_ACCESS), staging(device, "Readback", static_cast<UINT>(Pixels{}.size()), 0),
 			envSH(device, "EnvironmentSH", 3, D3D11_BIND_SHADER_RESOURCE, envCoefficients.data()),
@@ -93,6 +93,10 @@ namespace
 			std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "LIGHTING", "1" }, { "SKYLIGHTING", "1" }, { "IBL", "1" } };
 			if (vr)
 				defines.push_back({ "VR", "1" });
+			if (effect)
+				defines.push_back({ "EFFECT", "1" });
+			if (specialized)
+				defines.push_back({ "AMBIENT_WORLD_EFFECT_LIGHTING", "1" });
 			defines.push_back({ nullptr, nullptr });
 			ComPtr<ID3DBlob> bytecode, errors;
 			const auto compiled = D3DCompileFromFile(L"tests/ambient_balance.hlsl", defines.data(), &includes, "main", "cs_5_0",
@@ -164,6 +168,66 @@ namespace
 			return pixels;
 		}
 	};
+
+	unsigned VerifyEffectSpecialization(ID3D11Device* device, ID3D11DeviceContext* context, bool vr)
+	{
+		Fixture general(device, context, vr, true), specialized(device, context, vr, true, true);
+		unsigned cases = 0;
+		for (bool linear : { false, true })
+			for (uint32_t interior : { 0u, 1u })
+				for (float saturation : { 0.0f, 1.0f, 2.0f }) {
+					for (auto* fixture : { &general, &specialized }) {
+						fixture->permutation->SetVariable("Permutation::ExtraShaderDescriptor", uint32_t(1));
+						fixture->feature->SetMember("SharedData::linearLightingSettings", "enableLinearLighting", uint32_t(linear));
+						fixture->shared->SetVariable("SharedData::InInterior", interior);
+						fixture->feature->SetMember("SharedData::iblSettings", "EnableIBL", uint32_t(1));
+						fixture->feature->SetMember("SharedData::iblSettings", "DALCMode", uint32_t(0));
+						fixture->feature->SetMember("SharedData::iblSettings", "DALCAmount", 0.0f);
+						auto appearance = AdaptiveBalanceTest::NeutralAppearance();
+						appearance[2] = saturation;
+						fixture->feature->SetMember("SharedData::adaptiveBalanceSettings", "appearance", appearance);
+					}
+					for (float ambient : { 0.0f, 0.7f, 1.0f, 1.7f }) {
+						const auto expected = general.Draw(ambient);
+						const auto actual = specialized.Draw(ambient);
+						for (size_t output = 0; output < actual.size(); ++output)
+							for (size_t channel = 0; channel < 4; ++channel)
+								if (!std::isfinite(actual[output][channel]) || std::abs(actual[output][channel] - expected[output][channel]) > 2e-5f * (std::max)(1.0f, std::abs(expected[output][channel])))
+									throw std::runtime_error("Effect IBL specialization changed ambient, fog or color response");
+						++cases;
+					}
+				}
+		return cases;
+	}
+
+	void CompileEffectVariants(bool vr)
+	{
+		for (int technique = 0; technique < 3; ++technique)
+			for (bool specialized : { false, true }) {
+				Includes includes;
+				std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "IBL", "1" }, { "DYNAMIC_CUBEMAPS", "1" },
+					{ "SKYLIGHTING", "1" }, { "TEXTURE", "1" }, { "TEXCOORD", "1" } };
+				if (vr)
+					defines.push_back({ "VR", "1" });
+				if (specialized)
+					defines.push_back({ "AMBIENT_WORLD_EFFECT_LIGHTING", "1" });
+				if (technique == 0)
+					defines.push_back({ "LIGHTING", "1" });
+				else {
+					defines.push_back({ technique == 1 ? "SKY_OBJECT" : "MEMBRANE", "1" });
+					defines.push_back({ "DEFERRED", "1" });
+					defines.push_back({ "CHARACTER_CATEGORY", "1" });
+				}
+				defines.push_back({ nullptr, nullptr });
+				ComPtr<ID3DBlob> bytecode, errors;
+				const auto result = D3DCompileFromFile(L"package/Shaders/Effect.hlsl", defines.data(), &includes, "main", "ps_5_0",
+					D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+					0, bytecode.GetAddressOf(), errors.GetAddressOf());
+				if (errors)
+					std::cerr << static_cast<const char*>(errors->GetBufferPointer());
+				Check(result);
+			}
+	}
 
 	unsigned Verify(Fixture& fixture)
 	{
@@ -342,6 +406,8 @@ int main()
 			D3D11_SDK_VERSION, device.GetAddressOf(), nullptr, context.GetAddressOf()));
 		unsigned cases = 0;
 		for (bool vr : { false, true }) {
+			CompileEffectVariants(vr);
+			cases += VerifyEffectSpecialization(device.Get(), context.Get(), vr);
 			Fixture fixture(device.Get(), context.Get(), vr);
 			cases += VerifyFog(fixture);
 			for (uint32_t ibl : { 0u, 1u }) {

@@ -448,9 +448,9 @@ string(REGEX MATCHALL
 foreach(_append IN LISTS _appended_actions)
     string(REGEX MATCH "\"([a-z_]+)\"\\)" _action_match "${_append}")
     set(_action "${CMAKE_MATCH_1}")
-    string(FIND "${_bridge}" "if (action == \"${_action}\")" _handler_position)
-    if(_handler_position EQUAL -1)
-        message(FATAL_ERROR "Appended menu action has no direct handler: ${_action}")
+    string(REGEX MATCH "if \\([^\r\n]*action == \"${_action}\"" _handler_match "${_bridge}")
+    if(NOT _handler_match)
+        message(FATAL_ERROR "Appended menu action has no handler: ${_action}")
     endif()
     list(APPEND _accepted_actions "${_action}")
     list(APPEND _schema_actions "${_action}")
@@ -465,7 +465,8 @@ if(
 )
     message(
         FATAL_ERROR
-        "Menu DevBench accepted, supported and schema actions differ"
+        "Menu DevBench accepted, supported and schema actions differ:\n"
+        "accepted: ${_accepted_actions}\nsupported: ${_supported_actions}\nschema: ${_schema_actions}"
     )
 endif()
 

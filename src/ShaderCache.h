@@ -1,6 +1,7 @@
 #pragma once
 
 #include <BS_thread_pool.hpp>
+#include <ankerl/unordered_dense.h>
 #include <array>
 #include <atomic>
 #include <condition_variable>
@@ -24,6 +25,8 @@
 #include "Utils/ContentHash.h"
 #include "Utils/ShaderAllocation.h"
 #include "Utils/ShaderContentReuse.h"
+#include "Utils/ShaderInclude.h"
+#include "Utils/ShaderSpecializationRequests.h"
 #include "Utils/ShaderTrackingKeyCache.h"
 #include "Utils/WinApi.h"
 
@@ -234,7 +237,8 @@ namespace SIE
 		{
 			Pending,
 			Failed,
-			Completed
+			Completed,
+			Deferred
 		};
 		ShaderCompilationTask(ShaderClass shaderClass, const RE::BSShader& shader,
 			uint32_t descriptor, bool a_precompile = false);
@@ -654,7 +658,8 @@ namespace SIE
 		void ResolvePendingFailure(
 			const std::string& key,
 			RE::BSShader::Type a_type,
-			std::optional<uint64_t> a_taskGeneration = std::nullopt);
+			std::optional<uint64_t> a_taskGeneration = std::nullopt,
+			bool a_deferred = false);
 
 		ID3DBlob* GetCompletedShader(const std::string& a_key);
 		ID3DBlob* GetCompletedShader(const SIE::ShaderCompilationTask& a_task);
@@ -704,18 +709,42 @@ namespace SIE
 			}
 		}
 
-		/** Cached lookups never schedule compilation; draw lookups permit compatible deferred fallback. */
+		/** Cached lookups never compile; specialization lookups queue exact variants without fallback. */
 		enum class PixelShaderLookup
 		{
 			Compile,
 			Precompile,
 			Draw,
+			Specialization,
 			Cached
 		};
 
 		/** Draw lookups may use the other deferred category layout while the exact variant compiles. */
 		RE::BSGraphics::PixelShader* GetPixelShader(const RE::BSShader& shader,
 			uint32_t descriptor, PixelShaderLookup a_lookup = PixelShaderLookup::Compile);
+		/** Binds a compatible per-draw lighting variant, retaining the technique shader while it compiles. */
+		void SelectLightingPixelShader(const RE::BSShader& shader, uint32_t specializationFlags);
+		/** Suppresses new optional lighting preparation after startup; required shaders retain their policy. */
+		void SetResidentOnlyLightingSpecializations(bool enabled);
+		/** Does not cancel work already queued or invalidate resident shaders. */
+		bool ResidentOnlyLightingSpecializations() const { return residentOnlyLightingSpecializations.load(std::memory_order_relaxed); }
+		/** Includes background boot after DataLoaded, before startup work finishes. */
+		bool UsesRuntimeLightingSpecializationPolicy() const;
+		/** Optional source compilation is confined to blocking startup, including retry attempts. */
+		bool CanCompileOptionalShaderSources() const;
+		/** Records a current startup descriptor as an admissible base for discovery replay. */
+		void RegisterSpecializationBase(RE::BSShader::Type type, uint32_t descriptor);
+		/** Queues previously discovered variants only when their base is supported by this startup. */
+		void PrewarmDiscoveredPixelShaders(const RE::BSShader& shader);
+		/** Worker-only recording; persistence uses the cache writer and its save/load I/O gate. */
+		void RememberShaderSpecialization(Util::ShaderSpecializationRequest request) noexcept;
+		/** Returns the bounded history loaded before gameplay, excluding discoveries from this session. */
+		std::vector<Util::ShaderSpecializationRequest> GetStartupShaderSpecializations();
+		/** Returns discovery and preparation state without filesystem access. */
+		nlohmann::json GetSpecializationPreparationStatus() const;
+		/** Includes optional composite workers in the startup wait without changing graphics task counters. */
+		void BeginCompositePreparation() { pendingCompositePreparations.fetch_add(1, std::memory_order_acq_rel); }
+		void EndCompositePreparation();
 		RE::BSGraphics::ComputeShader* GetComputeShader(const RE::BSShader& shader,
 			uint32_t descriptor);
 
@@ -726,7 +755,7 @@ namespace SIE
 		RE::BSGraphics::ComputeShader* MakeAndAddComputeShader(const RE::BSShader& shader,
 			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
 
-		static std::string GetDefinesString(const RE::BSShader& shader, uint32_t descriptor);
+		static std::string GetDefinesString(const RE::BSShader& shader, uint32_t descriptor, ShaderClass shaderClass = ShaderClass::Pixel);
 
 		uint64_t GetCachedHitTasks();
 		uint64_t GetCompletedTasks();
@@ -821,6 +850,10 @@ namespace SIE
 		std::jthread managementJthread;  // dedicated thread for ManageCompilationSet (not in pool)
 		/** @brief Sets compilation mode and wakes the dispatcher; returns the previous mode. */
 		bool SetBackgroundCompilation(bool value);
+		/** Ends startup include retention and checkpoints the legacy manifest before gameplay. */
+		void FinishStartupPreparation();
+		/** Returns bounded include reuse only while optimized blocking startup is active. */
+		Util::ShaderInclude::StartupCache* GetStartupIncludeCache(bool developerMode);
 		std::atomic<bool> backgroundCompilation = false;
 		std::atomic<bool> menuLoaded = false;
 		// Set only after DataLoaded and the initial compilation batch have both
@@ -852,6 +885,23 @@ namespace SIE
 			MTLandLODBlend = 19,
 		};
 
+		static constexpr uint32_t kLightingDryWeather = 1u << 21;
+		static constexpr uint32_t kLightingSnowCoverInactive = 1u << 19;
+		static constexpr uint32_t kLightingNoMeshVariation = 1u << 7;
+		static constexpr uint32_t kLightingNoLocalLights = 1u << 8;
+		static constexpr uint32_t kLightingNoContactShadows = 1u << 13;
+		static constexpr uint32_t kLightingNoLegacySubsurface = 1u << 17;
+		static constexpr uint32_t kLightingSpecializationMask = kLightingDryWeather | kLightingSnowCoverInactive | kLightingNoMeshVariation |
+		                                                        kLightingNoLocalLights | kLightingNoContactShadows | kLightingNoLegacySubsurface;
+		static constexpr uint32_t kEffectAmbientWorldIBL = 1u << 28;
+		/** Optional pixel flags are separate from engine flags and category output layouts. */
+		static constexpr uint32_t GetPixelSpecializationMask(RE::BSShader::Type type)
+		{
+			return type == RE::BSShader::Type::Lighting ? kLightingSpecializationMask :
+			       type == RE::BSShader::Type::Effect   ? kEffectAmbientWorldIBL :
+			                                              0u;
+		}
+
 		enum class LightingShaderFlags : uint32_t
 		{
 			VC = 1 << 0,
@@ -863,6 +913,8 @@ namespace SIE
 			Deferred = 1 << 4,
 			// Bit 5 belongs to the character-category output layout.
 			LandscapeSeams = 1 << 6,
+			// Native DefShadow is stripped before custom pixel variants are selected.
+			DetailMaps = 1 << 14,
 			// CSX end
 			Specular = 1 << 9,
 			SoftLighting = 1 << 10,
@@ -883,6 +935,29 @@ namespace SIE
 			FurShells = 1u << 30,
 			FurShellsDepth = 1u << 31
 		};
+		static_assert((static_cast<uint32_t>(LightingShaderFlags::DetailMaps) & kLightingSpecializationMask) == 0);
+
+		/** Reports mesh techniques whose texture sampling can omit Terrain Variation. */
+		static constexpr bool SupportsMeshVariationVariant(uint32_t descriptor)
+		{
+			constexpr auto excluded = static_cast<uint32_t>(LightingShaderFlags::FurShells) |
+			                          static_cast<uint32_t>(LightingShaderFlags::Skinned) |
+			                          static_cast<uint32_t>(LightingShaderFlags::ProjectedUV) |
+			                          static_cast<uint32_t>(LightingShaderFlags::DoAlphaTest) |
+			                          static_cast<uint32_t>(LightingShaderFlags::AdditionalAlphaMask);
+			if (descriptor & excluded)
+				return false;
+			switch (static_cast<LightingShaderTechniques>((descriptor >> 24) & 0x3F)) {
+			case LightingShaderTechniques::None:
+			case LightingShaderTechniques::Envmap:
+			case LightingShaderTechniques::Glowmap:
+			case LightingShaderTechniques::Parallax:
+			case LightingShaderTechniques::ParallaxOcc:
+				return true;
+			default:
+				return false;
+			}
+		}
 
 		enum class BloodSplatterShaderTechniques
 		{
@@ -1201,7 +1276,8 @@ namespace SIE
 		bool isAsync = true;
 		bool isDump = false;
 		bool hideError = false;
-		bool useFileWatcher = false;
+		Util::ShaderInclude::StartupCache startupIncludeCache;
+		std::atomic<bool> useFileWatcher = false;
 		std::atomic_bool pendingClear{ false };
 
 		bool ShouldUseAsyncCompilation() const;
@@ -1210,6 +1286,15 @@ namespace SIE
 		std::atomic_uint64_t graphicsShaderRevision{ 0 };
 		std::mutex vertexShadersMutex;
 		std::mutex pixelShadersMutex;
+		std::atomic_bool residentOnlyLightingSpecializations{ false };
+		std::atomic_uint32_t pendingCompositePreparations{ 0 };
+		std::mutex specializationBasesMutex;
+		std::array<std::unordered_set<uint32_t>, 2> specializationBases;
+		std::mutex specializationMissMutex;
+		ankerl::unordered_dense::set<uint64_t> specializationMisses;
+		uint64_t specializationMissRevision = UINT64_MAX;
+		bool specializationMissLimitReported = false;
+		void RecordLightingSpecializationMiss(RE::BSShader::Type type, uint32_t descriptor, bool suppressed) noexcept;
 		std::mutex computeShadersMutex;
 		CompilationSet compilationSet;
 		ankerl::unordered_dense::map<std::string, ShaderCacheResult> shaderMap{};
@@ -1226,6 +1311,7 @@ namespace SIE
 		std::deque<std::string> deferredDiskWriteOrder;
 		static constexpr std::size_t kMaximumDeferredDiskWrites = 8192;
 		static constexpr std::size_t kDeferredDiskWriteBatchSize = 64;
+		static constexpr auto kSpecializationFlushDelay = std::chrono::milliseconds(250);
 		std::mutex deferredDiskWritesMutex;
 		std::condition_variable_any deferredDiskWritesCV;
 		std::jthread deferredDiskWriterJthread;
@@ -1234,6 +1320,9 @@ namespace SIE
 		std::atomic_bool saveLoadDiskPersistenceBlocked{ false };
 		std::size_t deferredDiskWritesInFlight = 0;  // guarded by deferredDiskWritesMutex
 		bool deferredManifestFlushPending = false;   // guarded by deferredDiskWritesMutex
+		bool deferredSpecializationFlushPending = false;
+		void QueueSpecializationHistoryFlush();
+		void FlushSpecializationHistory();
 
 		// efsw file watcher
 		efsw::FileWatcher* fileWatcher = nullptr;

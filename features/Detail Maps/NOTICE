@@ -1,0 +1,11 @@
+Detail Maps is adapted from InTheBottle's Bottled Shaders:
+https://github.com/InTheBottle/Bottled-Shaders/tree/Bottle-Compendium
+
+The original feature implementation and shader are covered by the
+repository's GPL-3.0-or-later license and exceptions (COPYING and
+EXCEPTIONS.md). CSX adapts rendering integration for SE, AE and VR.
+
+The separate Detail Maps texture and rule pack is available at:
+https://www.nexusmods.com/skyrimspecialedition/mods/197436
+Its author identifies the source materials as CC0. No pack textures
+are redistributed with this feature.

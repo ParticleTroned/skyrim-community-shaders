@@ -129,7 +129,8 @@ namespace
 		expected = Strip(std::move(expected));
 		const auto before = fixture.Digest();
 		std::optional<SharedCompile> owner;
-		TrackingIncludeHandler preprocessing(fixture.root), compilation(fixture.root);
+		Util::ShaderInclude::StartupCache startupCache;
+		TrackingIncludeHandler preprocessing(fixture.root, &startupCache), compilation(fixture.root);
 		winrt::com_ptr<ID3DBlob> compiled;
 		const auto digest = Util::ShaderSourceProvenance::CompileWithStableDigest(
 			[&](bool a_refresh) { return a_refresh ? fixture.Digest() : before; },
@@ -149,7 +150,7 @@ namespace
 		assert(Equal(compiled.get(), expected.get()));
 		owner->ticket->Publish(compiled->GetBufferPointer(), compiled->GetBufferSize());
 
-		TrackingIncludeHandler changedIncludes(fixture.root);
+		TrackingIncludeHandler changedIncludes(fixture.root, &startupCache);
 		auto changed = AcquireSharedCompile(fixture.root.wstring(), fixture.root.string(), secondDefines,
 			"ps_5_0", flags, false, changedIncludes);
 		assert(changed.ticket && !changed.blob);
@@ -162,7 +163,7 @@ namespace
 		changed.ticket->Publish(changedBlob->GetBufferPointer(), changedBlob->GetBufferSize());
 
 		Fixture::Write(fixture.include, "#define VALUE 1\n");
-		TrackingIncludeHandler reuseIncludes(fixture.root);
+		TrackingIncludeHandler reuseIncludes(fixture.root, &startupCache);
 		auto reused = AcquireSharedCompile(fixture.root.wstring(), fixture.root.string(), secondDefines,
 			"ps_5_0", flags, false, reuseIncludes);
 		assert(reused.blob && !reused.ticket && !reuseIncludes.includes.empty());
@@ -202,16 +203,17 @@ namespace
 	void RuntimeMacrosAndFallback()
 	{
 		Fixture fixture;
-		Fixture::Write(fixture.root, "#ifdef VR\n#define OUTPUT 2\n#else\n#define OUTPUT 1\n#endif\nfloat4 main() : SV_Target { return OUTPUT; }\n");
+		Fixture::Write(fixture.include, "#ifdef VR\n#define VALUE 2\n#else\n#define VALUE 1\n#endif\n");
+		Util::ShaderInclude::StartupCache startupCache;
 		winrt::com_ptr<ID3DBlob> last;
 		for (const bool vr : { false, true }) {
 			D3D_SHADER_MACRO macros[]{ { "VR", nullptr }, {} };
 			const auto* defines = vr ? macros : nullptr;
-			TrackingIncludeHandler includes(fixture.root);
+			TrackingIncludeHandler includes(fixture.root, &startupCache), reference(fixture.root);
 			auto shared = AcquireSharedCompile(fixture.root.wstring(), fixture.root.string(), defines, "ps_5_0", flags, false, includes);
 			assert(shared.ticket && !shared.blob);
 			winrt::com_ptr<ID3DBlob> expected, compiled, errors;
-			assert(SUCCEEDED(D3DCompileFromFile(fixture.root.c_str(), defines, &includes, "main", "ps_5_0", flags, 0, expected.put(), errors.put())));
+			assert(SUCCEEDED(D3DCompileFromFile(fixture.root.c_str(), defines, &reference, "main", "ps_5_0", flags, 0, expected.put(), errors.put())));
 			errors = nullptr;
 			assert(SUCCEEDED(shared.Compile(fixture.root.wstring(), fixture.root.string(), defines, "ps_5_0", flags, includes, compiled.put(), errors.put())));
 			expected = Strip(std::move(expected));
@@ -222,6 +224,7 @@ namespace
 			shared.ticket->Publish(compiled->GetBufferPointer(), compiled->GetBufferSize());
 			last = std::move(compiled);
 		}
+		assert(startupCache.GetUsage().entries == 1);
 		Fixture::Write(fixture.root, "#include \"Missing.hlsli\"\n");
 		TrackingIncludeHandler preprocessing(fixture.root), compilation(fixture.root);
 		auto failed = AcquireSharedCompile(fixture.root.wstring(), fixture.root.string(), nullptr, "ps_5_0", flags, false, preprocessing);

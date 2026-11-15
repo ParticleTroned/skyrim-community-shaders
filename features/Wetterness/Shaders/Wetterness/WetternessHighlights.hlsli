@@ -23,15 +23,22 @@ namespace Wetterness
 	}
 
 	/** Compress only the wet lobe's peak; its light colour, shadow and attenuation remain multiplicative. */
-	float GetPointLightHighlightScale(float response, float darkNightFactor)
+	float GetWetHighlightScale(float response, float reduction)
 	{
 		const float peakKnee = 0.25;
 		const float peakLimit = 1.0;
-		if (darkNightFactor <= 0.0 || response <= peakKnee)
+		if (reduction <= 0.0 || response <= peakKnee)
 			return 1.0;
 		const float excess = response - peakKnee;
 		const float compressed = peakKnee + excess / (1.0 + excess / (peakLimit - peakKnee));
-		return lerp(1.0, compressed / response, darkNightFactor);
+		return lerp(1.0, compressed / max(response, peakKnee), reduction);
+	}
+
+	/** Limit wet reflection weights before irradiance so forward and deferred paths use the same units. */
+	float3 CompressWetReflectance(float3 reflectance, float reduction)
+	{
+		float peak = max(reflectance.x, max(reflectance.y, reflectance.z));
+		return reflectance * GetWetHighlightScale(peak, reduction);
 	}
 }
 

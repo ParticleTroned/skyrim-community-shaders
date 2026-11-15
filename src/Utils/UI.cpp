@@ -144,6 +144,12 @@ namespace Util
 			line(.7f, .7f, 1, 1);
 			line(.7f, 1, 1, .7f);
 			break;
+		case ActionGlyph::Teleport:
+			rectangle(.48f, .06f, .92f, .94f);
+			line(.06f, .5f, .7f, .5f);
+			line(.48f, .28f, .7f, .5f);
+			line(.48f, .72f, .7f, .5f);
+			break;
 		case ActionGlyph::Close:
 			line(.05f, .05f, .95f, .95f);
 			line(.05f, .95f, .95f, .05f);
@@ -1582,7 +1588,7 @@ namespace Util
 		strncpy_s(buffer, searchString.c_str(), sizeof(buffer) - 1);
 		buffer[sizeof(buffer) - 1] = '\0';
 
-		if (ImGui::InputTextWithHint("##feature_search", "Search Features...", buffer, sizeof(buffer))) {
+		if (ImGui::InputTextWithHint("##feature_search", "Search settings and features...", buffer, sizeof(buffer))) {
 			searchString = buffer;
 		}
 

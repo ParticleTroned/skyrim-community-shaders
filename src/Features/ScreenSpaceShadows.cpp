@@ -461,8 +461,20 @@ void ScreenSpaceShadows::DrawShadows()
 
 	auto context = globals::d3d::context;
 
+	auto smState = globals::game::smState;
 	auto accumulator = *globals::game::currentAccumulator.get();
-	auto dirLight = skyrim_cast<RE::NiDirectionalLight*>(accumulator->GetRuntimeData().activeShadowSceneNode->GetRuntimeData().sunLight->light.get());
+	if (!smState || !accumulator)
+		return;
+
+	// Non-world accumulators can carry an opaque value in the scene-node slot.
+	const auto* scene = accumulator->GetRuntimeData().activeShadowSceneNode;
+	if (!scene || scene != smState->shadowSceneNode[0])
+		return;
+
+	const auto* sunLight = scene->GetRuntimeData().sunLight;
+	auto dirLight = sunLight ? skyrim_cast<RE::NiDirectionalLight*>(sunLight->light.get()) : nullptr;
+	if (!dirLight)
+		return;
 
 	auto& directionNi = dirLight->GetWorldDirection();
 	float3 light = { directionNi.x, directionNi.y, directionNi.z };

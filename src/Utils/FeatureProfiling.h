@@ -69,6 +69,7 @@ namespace Util::FeatureProfiling
 		{ "Wetterness", "Wetterness", materialPasses, false, "CPU: weather, wetness and puddle updates. GPU: shared rendering stages that include wetness shaders." },
 		{ "TruePBR", "", materialPasses, false, materialCoverage },
 		{ "ExtendedMaterials", "", materialPasses, false, materialCoverage },
+		{ "DetailMaps", "", materialPasses, false, materialCoverage },
 		{ "TerrainVariation", "", materialPasses, false, materialCoverage },
 		{ "ExtendedTranslucency", "", materialPasses, false, materialCoverage },
 		{ "FoliageLighting", "", materialPasses, false, materialCoverage },

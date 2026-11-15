@@ -601,6 +601,7 @@ namespace SIE
 		}
 
 		constexpr uint64_t kManifestFlushBatchSize = 25;
+		constexpr uint64_t kStartupManifestFlushBatchSize = 256;
 		std::atomic<uint64_t> g_manifestWriteCount = 0;
 		std::atomic<uint64_t> g_diskCacheGeneration = 0;
 		std::shared_mutex g_diskCacheMutationMutex;
@@ -662,7 +663,10 @@ namespace SIE
 			manifest.Set(manifestKey, combined.ToHex(), a_contentKey);
 
 			const auto writeCount = g_manifestWriteCount.fetch_add(1, std::memory_order_relaxed) + 1;
-			if (writeCount % kManifestFlushBatchSize == 0)
+			const auto batchSize = ShaderCache::Instance().CanCompileOptionalShaderSources() ?
+			                           kStartupManifestFlushBatchSize :
+			                           kManifestFlushBatchSize;
+			if (writeCount % batchSize == 0)
 				FlushShaderCacheManifestLocked();
 		}
 
@@ -1352,9 +1356,10 @@ namespace SIE
 		std::vector<std::unique_ptr<char[]>> buffers;
 		std::filesystem::path baseDir;
 		std::filesystem::path sourcePath;
+		Util::ShaderInclude::StartupCache* startupCache;
 
-		explicit TrackingIncludeHandler(const std::filesystem::path& source) :
-			baseDir(source.parent_path()), sourcePath(source) {}
+		explicit TrackingIncludeHandler(const std::filesystem::path& source, Util::ShaderInclude::StartupCache* cache = nullptr) :
+			baseDir(source.parent_path()), sourcePath(source), startupCache(cache) {}
 
 		HRESULT Open(D3D_INCLUDE_TYPE IncludeType, LPCSTR pFileName, LPCVOID /*pParentData*/, LPCVOID* ppData, UINT* pBytes) noexcept override
 		{
@@ -1380,7 +1385,7 @@ namespace SIE
 
 				Util::ShaderInclude::File contents;
 				Util::ShaderInclude::ReadError error;
-				if (!Util::ShaderInclude::Read(ec ? includePath : canonical, contents, error)) {
+				if (!Util::ShaderInclude::Read(ec ? includePath : canonical, contents, error, startupCache)) {
 					Util::ShaderInclude::Report(sourcePath, includePath, error);
 					return HRESULT_FROM_WIN32(error.code);
 				}
@@ -1406,7 +1411,6 @@ namespace SIE
 
 	namespace SShaderCache
 	{
-		static void GetShaderDefines(const RE::BSShader&, uint32_t, D3D_SHADER_MACRO*);
 		static std::string GetShaderString(ShaderClass, const RE::BSShader&, uint32_t, bool = false);
 		/**
 		 * @brief Resolve image-space shader descriptor when applicable.
@@ -1461,37 +1465,68 @@ namespace SIE
 			return 0x3F & (descriptor >> 24);
 		}
 
-		static void GetLightingShaderDefines(uint32_t descriptor, std::span<D3D_SHADER_MACRO> defines)
+		static void GetLightingShaderDefines(uint32_t descriptor, std::span<D3D_SHADER_MACRO> defines, ShaderClass shaderClass)
 		{
+			const bool dryWeather = shaderClass == ShaderClass::Pixel && (descriptor & ShaderCache::kLightingDryWeather) != 0;
+			const bool snowCoverInactive = (descriptor & ShaderCache::kLightingSnowCoverInactive) != 0;
+			const bool noMeshVariation = (descriptor & ShaderCache::kLightingNoMeshVariation) != 0;
+			const bool noLocalLights = (descriptor & ShaderCache::kLightingNoLocalLights) != 0;
+			const bool noContactShadows = (descriptor & ShaderCache::kLightingNoContactShadows) != 0;
+			const bool noLegacySubsurface = (descriptor & ShaderCache::kLightingNoLegacySubsurface) != 0;
+			descriptor &= ~(ShaderCache::kLightingSpecializationMask & ~ShaderCache::kLightingDryWeather);
+			if (dryWeather)
+				descriptor &= ~ShaderCache::kLightingDryWeather;
 			static_assert((static_cast<uint32_t>(ShaderCache::LightingShaderFlags::LandscapeSeams) &
 							  ShaderCache::GetCharacterCategoryFlag(RE::BSShader::Type::Lighting)) == 0);
 			static REL::Relocation<void(uint32_t, D3D_SHADER_MACRO*)> VanillaGetLightingShaderDefines(RELOCATION_ID(101631, 108698));
-			VanillaGetLightingShaderDefines(descriptor, defines.data());
+			VanillaGetLightingShaderDefines(descriptor & ~static_cast<uint32_t>(ShaderCache::LightingShaderFlags::DetailMaps), defines.data());
 
 			size_t lastIndex = std::ranges::find_if(defines, [](const D3D_SHADER_MACRO& macro) { return macro.Name == nullptr; }) - defines.begin();
+			if (lastIndex == defines.size())
+				throw std::length_error("Lighting shader macros are not terminated");
+			const auto appendDefine = [&](const char* name) {
+				if (lastIndex + 1 >= defines.size())
+					throw std::length_error("Lighting shader macro capacity exceeded");
+				defines[lastIndex++] = { name, nullptr };
+			};
+			if (dryWeather)
+				appendDefine("DRY_WEATHER");
+			if (snowCoverInactive)
+				appendDefine("SNOW_COVER_INACTIVE");
+			if (noMeshVariation)
+				appendDefine("NO_MESH_VARIATION");
+			if (noLocalLights)
+				appendDefine("LLF_NO_LOCAL_LIGHTS");
+			if (noContactShadows)
+				appendDefine("LLF_NO_CONTACT_SHADOWS");
+			if (noLegacySubsurface)
+				appendDefine("NO_LEGACY_SUBSURFACE");
 
 			if (descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::Deferred)) {
-				defines[lastIndex++] = { "DEFERRED", nullptr };
+				appendDefine("DEFERRED");
 			}
 			if ((descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::TruePbr)) != 0) {
-				defines[lastIndex++] = { "TRUE_PBR", nullptr };
+				appendDefine("TRUE_PBR");
 				if ((descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::AnisoLighting)) != 0) {
-					defines[lastIndex++] = { "GLINT", nullptr };
+					appendDefine("GLINT");
 				}
 			}
 
 			if ((descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::LandscapeSeams)) != 0)
-				defines[lastIndex++] = { "LANDSCAPE_SEAMS", nullptr };
+				appendDefine("LANDSCAPE_SEAMS");
 
 			if ((descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::FurShells)) != 0) {
-				defines[lastIndex++] = { "FUR_SHELLS", nullptr };
+				appendDefine("FUR_SHELLS");
 				if ((descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::FurShellsDepth)) != 0)
-					defines[lastIndex++] = { "FUR_SHELLS_DEPTH", nullptr };
+					appendDefine("FUR_SHELLS_DEPTH");
 			}
+
+			if ((descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::DetailMaps)) != 0)
+				appendDefine("DETAIL_MAPS");
 
 			for (auto* feature : Feature::GetFeatureList()) {
 				if (feature->loaded && feature->HasShaderDefine(RE::BSShader::Type::Lighting)) {
-					defines[lastIndex++] = { feature->GetShaderDefineName().data(), nullptr };
+					appendDefine(feature->GetShaderDefineName().data());
 				}
 			}
 
@@ -1689,9 +1724,11 @@ namespace SIE
 			defines[lastIndex] = { nullptr, nullptr };
 		}
 
-		static void GetEffectShaderDefines(uint32_t descriptor, std::span<D3D_SHADER_MACRO> defines)
+		static void GetEffectShaderDefines(uint32_t descriptor, std::span<D3D_SHADER_MACRO> defines, ShaderClass shaderClass)
 		{
 			size_t lastIndex = 0;
+			if (shaderClass == ShaderClass::Pixel && (descriptor & ShaderCache::kEffectAmbientWorldIBL))
+				defines[lastIndex++] = { "AMBIENT_WORLD_EFFECT_LIGHTING", nullptr };
 
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Vc)) {
 				defines[lastIndex++] = { "VC", nullptr };
@@ -2023,7 +2060,7 @@ namespace SIE
 			return;
 		}
 
-		static void GetShaderDefines(const RE::BSShader& shader, uint32_t descriptor, std::span<D3D_SHADER_MACRO> defines)
+		static void GetShaderDefines(const RE::BSShader& shader, uint32_t descriptor, std::span<D3D_SHADER_MACRO> defines, ShaderClass shaderClass)
 		{
 			const auto categoryFlag = ShaderCache::GetCharacterCategoryFlag(shader.shaderType.get());
 			const bool categories = (descriptor & categoryFlag) != 0;
@@ -2045,7 +2082,7 @@ namespace SIE
 				GetImagespaceShaderDefines(shader, defines);
 				break;
 			case RE::BSShader::Type::Lighting:
-				GetLightingShaderDefines(descriptor, defines);
+				GetLightingShaderDefines(descriptor, defines, shaderClass);
 				break;
 			case RE::BSShader::Type::DistantTree:
 				GetDistantTreeShaderDefines(descriptor, defines);
@@ -2054,7 +2091,7 @@ namespace SIE
 				GetParticleShaderDefines(descriptor, defines);
 				break;
 			case RE::BSShader::Type::Effect:
-				GetEffectShaderDefines(descriptor, defines);
+				GetEffectShaderDefines(descriptor, defines, shaderClass);
 				break;
 			case RE::BSShader::Type::Utility:
 				GetUtilityShaderDefines(descriptor, defines);
@@ -2685,7 +2722,7 @@ namespace SIE
 		static std::string GetShaderString(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor, bool hashkey)
 		{
 			std::array<D3D_SHADER_MACRO, 64> defines{};
-			GetShaderDefines(shader, descriptor, std::span{ defines });
+			GetShaderDefines(shader, descriptor, std::span{ defines }, shaderClass);
 			return GetShaderString(shaderClass, shader, descriptor, hashkey, defines);
 		}
 
@@ -2756,13 +2793,20 @@ namespace SIE
 			return result;
 		}
 
+		struct PreparationInfo
+		{
+			const char* source = "unavailable";
+			uint32_t sourceCompiles = 0;
+		};
+
 		static ID3DBlob* CompileShader(
 			ShaderClass shaderClass,
 			const RE::BSShader& shader,
 			uint32_t descriptor,
 			bool useDiskCache,
 			ShaderFileDependencyTracker* dependencyTracker,
-			std::optional<uint64_t> a_taskGeneration = std::nullopt)
+			std::optional<uint64_t> a_taskGeneration = std::nullopt,
+			PreparationInfo* preparation = nullptr)
 		{
 			if (!SShaderCache::ResolveImageSpaceDescriptor(shader, descriptor)) {
 				return nullptr;
@@ -2771,7 +2815,7 @@ namespace SIE
 			auto compileState = CaptureGlobalCompileState();
 			// Cache admission and compilation must use the same captured macros.
 			std::array<D3D_SHADER_MACRO, 64> descriptorDefines{};
-			GetShaderDefines(shader, descriptor, std::span{ descriptorDefines });
+			GetShaderDefines(shader, descriptor, std::span{ descriptorDefines }, shaderClass);
 			std::vector<D3D_SHADER_MACRO> defines;
 			if (shaderClass == ShaderClass::Vertex) {
 				defines.push_back({ "VSHADER", nullptr });
@@ -2817,6 +2861,8 @@ namespace SIE
 			// Failed requests remain terminal until invalidation.
 			auto [claimResult, cachedBlob] = cache.ClaimCompilation(key, type, a_taskGeneration);
 			if (claimResult == ShaderCache::ClaimResult::CacheHit) {
+				if (preparation)
+					preparation->source = "memory_bytecode";
 				cache.IncCacheHitTasks(type, a_taskGeneration);
 				return cachedBlob;
 			}
@@ -2837,6 +2883,8 @@ namespace SIE
 					shaderSourcePath,
 					packCompileStateDigest);
 				if (shaderBlob) {
+					if (preparation)
+						preparation->source = "disk_pack";
 					logger::debug("Loaded shader from managed pack: {}", Util::WStringToString(diskPath));
 					if (dependencyTracker && !IsSaveLoadSafeModeActive()) {
 						if (const auto dependencies = GetShaderDependencyPaths(shaderSourcePath, ShaderSourceRoot()))
@@ -2886,6 +2934,8 @@ namespace SIE
 				} else if (auto cached = ReadVerifiedCachedShaderBlob(diskPath); !cached) {
 					logger::error("Failed to load {} shader {}::{:X}", magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor);
 				} else {
+					if (preparation)
+						preparation->source = "disk_loose";
 					shaderBlob = cached.detach();
 					logger::debug("Loaded shader from {}", Util::WStringToString(diskPath));
 					if (!cache.AddCompletedShader(
@@ -2908,9 +2958,24 @@ namespace SIE
 			}
 
 			if (diskCacheProbeError) {
-				logger::debug("Failed to probe shader cache {}: {}; compiling from source",
+				logger::debug("Failed to probe shader cache {}: {}",
 					Util::WStringToString(diskPath), diskCacheProbeError.message());
 			}
+
+			const bool optionalSpecialization = shaderClass == ShaderClass::Pixel && (descriptor & ShaderCache::GetPixelSpecializationMask(type));
+			bool deferred = false;
+			const auto deferOptionalCompile = [&] {
+				if (!optionalSpecialization || cache.CanCompileOptionalShaderSources())
+					return false;
+				deferred = true;
+				if (preparation)
+					preparation->source = "deferred_until_startup";
+				cache.RememberShaderSpecialization({ type == RE::BSShader::Type::Lighting ? Util::SpecializationFamily::Lighting : Util::SpecializationFamily::Effect, descriptor });
+				cache.ResolvePendingFailure(key, type, a_taskGeneration, true);
+				return true;
+			};
+			if (deferOptionalCompile())
+				return nullptr;
 
 			const std::wstring path = shaderSourcePath;
 			auto pathString = Util::WStringToString(path);
@@ -2947,7 +3012,7 @@ namespace SIE
 			}
 
 			TrackingIncludeHandler includeHandler(path);
-			TrackingIncludeHandler preprocessHandler(path);
+			TrackingIncludeHandler preprocessHandler(path, useDiskCache ? cache.GetStartupIncludeCache(compileState.developerMode) : nullptr);
 			std::optional<SharedCompile> shared;
 			std::optional<Util::ShaderContentReuse::Identity> contentIdentity;
 			ContentReuseSource reuseSource = ContentReuseSource::None;
@@ -2956,6 +3021,8 @@ namespace SIE
 			const auto sourceDigest = Util::ShaderSourceProvenance::CompileWithStableDigest(
 				[&](bool a_refresh) { return GetShaderContentDigest(path, ShaderSourceRoot(), a_refresh); },
 				[&] {
+					if (deferOptionalCompile())
+						return false;
 					shared.emplace(AcquireSharedCompile(path, pathString, defines.data(), GetShaderProfile(shaderClass),
 						flags, compileState.developerMode, preprocessHandler));
 					if (shared->key) {
@@ -2969,12 +3036,20 @@ namespace SIE
 					shaderBlob = shared->blob.detach();
 					dedupeHit = shaderBlob != nullptr;
 					if (dedupeHit) {
+						if (preparation)
+							preparation->source = reuseSource == ContentReuseSource::None ? "shared_bytecode" : "disk_content";
 						if (reuseSource == ContentReuseSource::None)
 							cache.IncContentDedupeTasks(type, a_taskGeneration);
 						else
 							cache.IncContentReuseTasks(reuseSource == ContentReuseSource::PreviousCache, type, a_taskGeneration);
 						compileResult = S_OK;
 					} else {
+						if (deferOptionalCompile())
+							return false;
+						if (preparation) {
+							preparation->source = "source";
+							++preparation->sourceCompiles;
+						}
 						cache.IncSourceCompileTasks(type, a_taskGeneration);
 						cache.MarkCompilationPhaseStarted(type, a_taskGeneration);
 						compileResult = shared->Compile(path, pathString, defines.data(), GetShaderProfile(shaderClass),
@@ -2991,6 +3066,11 @@ namespace SIE
 						logger::warn("Cannot verify shader source content for {}; retaining compiled bytecode in memory", pathString);
 					}
 				});
+			if (deferred) {
+				if (shaderBlob)
+					shaderBlob->Release();
+				return nullptr;
+			}
 			const auto& capturedIncludes = shared->preprocessed ? preprocessHandler.includes : includeHandler.includes;
 			// Failed compiles still register includes; empty captures retain prior dependencies.
 			if (dependencyTracker && !capturedIncludes.empty()) {
@@ -3515,6 +3595,58 @@ namespace SIE
 		return RetainShaderResource<ID3D11PixelShader>(pixelShaders, pixelShadersMutex, shader.shaderType.get(), descriptor);
 	}
 
+	void ShaderCache::SetResidentOnlyLightingSpecializations(bool enabled)
+	{
+		if (residentOnlyLightingSpecializations.exchange(enabled, std::memory_order_relaxed) != enabled)
+			logger::info("[ShaderSpecialization] resident_only={} scope=optional-lighting queued_work=retained", enabled);
+	}
+
+	bool ShaderCache::UsesRuntimeLightingSpecializationPolicy() const
+	{
+		return ShaderCompilationSchedulingPolicy::UseRuntimeSpecializationPolicy(
+			startupCompilationComplete.load(std::memory_order_acquire), menuLoaded.load(std::memory_order_acquire), backgroundCompilation.load(std::memory_order_relaxed));
+	}
+
+	void ShaderCache::RecordLightingSpecializationMiss(RE::BSShader::Type type, uint32_t descriptor, bool suppressed) noexcept
+	try {
+		if (!spdlog::should_log(spdlog::level::info))
+			return;
+		constexpr size_t reportLimit = 8192;
+		uint64_t revision;
+		size_t ordinal;
+		bool limitReached = false;
+		{
+			const std::lock_guard lock(specializationMissMutex);
+			revision = GetGraphicsShaderRevision();
+			if (specializationMissRevision != revision) {
+				specializationMissRevision = revision;
+				specializationMisses.clear();
+				specializationMissLimitReported = false;
+			}
+			const uint64_t key = descriptor | (uint64_t(type) << 33) | (uint64_t(suppressed) << 32);
+			if (specializationMisses.contains(key))
+				return;
+			if (specializationMisses.size() >= reportLimit) {
+				if (specializationMissLimitReported)
+					return;
+				specializationMissLimitReported = limitReached = true;
+			} else {
+				specializationMisses.insert(key);
+			}
+			ordinal = specializationMisses.size();
+		}
+		// Info logging flushes to disk; keep it off the draw thread and outside cache locks.
+		compilationPool.detach_task([revision, ordinal, type, descriptor, suppressed, limitReached, reportLimit] {
+			if (limitReached)
+				logger::info("[ShaderSpecialization] revision={} miss_reporting=capped limit={} further_misses=unreported", revision, reportLimit);
+			else
+				logger::info("[ShaderSpecialization] revision={} miss={} family={} descriptor={:08X} flags={:08X} request={} source_compile=unknown",
+					revision, ordinal, magic_enum::enum_name(type), descriptor, descriptor & GetPixelSpecializationMask(type), suppressed ? "suppressed" : "allowed");
+		});
+	} catch (...) {
+		OutputDebugStringA("[ShaderSpecialization] Unable to queue miss diagnostics; shader fallback remains available.\n");
+	}
+
 	void ShaderCache::PrewarmDeferredPixelShaders(const RE::BSShader& shader, uint32_t descriptor, bool categories, bool a_precompile)
 	{
 		const auto categoryFlag = GetCharacterCategoryFlag(shader.shaderType.get());
@@ -3546,6 +3678,9 @@ namespace SIE
 			return nullptr;
 		}
 
+		if (precompile)
+			RegisterSpecializationBase(shader.shaderType.get(), descriptor);
+
 		if (developerMode || activeShaderCaptureFramesRemaining.load(std::memory_order_relaxed) > 0)
 			TrackActiveShader(ShaderClass::Pixel, shader, descriptor);
 
@@ -3570,13 +3705,22 @@ namespace SIE
 		}
 		if (a_lookup == PixelShaderLookup::Cached)
 			return nullptr;
-		if (!IsSaveLoadSafeModeActive()) {
-			if (ShouldUseAsyncCompilation() && (a_lookup != PixelShaderLookup::Draw || !globals::features::reverseZ.IsActive())) {
+		const auto specializationMask = GetPixelSpecializationMask(shader.shaderType.get());
+		const bool specializedLighting = (descriptor & specializationMask) != 0;
+		const bool gameplaySpecialization = specializedLighting && UsesRuntimeLightingSpecializationPolicy();
+		const bool suppressPreparation = gameplaySpecialization && ResidentOnlyLightingSpecializations();
+		if (gameplaySpecialization && !IsSaveLoadSafeModeActive())
+			RecordLightingSpecializationMiss(shader.shaderType.get(), descriptor, suppressPreparation);
+		if (!suppressPreparation && !IsSaveLoadSafeModeActive()) {
+			if (specializedLighting || (ShouldUseAsyncCompilation() && (a_lookup != PixelShaderLookup::Draw || !globals::features::reverseZ.IsActive()))) {
 				compilationSet.Add({ ShaderClass::Pixel, shader, descriptor, precompile });
 			} else if (auto* compiled = MakeAndAddPixelShader(shader, descriptor)) {
 				return compiled;
 			}
 		}
+
+		if (specializedLighting && a_lookup != PixelShaderLookup::Specialization)
+			return GetPixelShader(shader, descriptor & ~specializationMask, a_lookup);
 
 		auto* deferred = globals::deferred;
 		const auto categoryFlag = GetCharacterCategoryFlag(shader.shaderType.get());
@@ -3589,6 +3733,73 @@ namespace SIE
 		}
 
 		return nullptr;
+	}
+
+	void ShaderCache::SelectLightingPixelShader(const RE::BSShader& shader, uint32_t specializationFlags)
+	{
+		struct Variant
+		{
+			RE::BSGraphics::PixelShader* shader = nullptr;
+			uint32_t requestFrame = UINT32_MAX;
+		};
+		struct Selection
+		{
+			RE::BSGraphics::PixelShader* standard = nullptr;
+			RE::BSGraphics::PixelShader* bound = nullptr;
+			uint64_t revision = 0, sequence = 0;
+			std::array<Variant, 4> variants{};
+		};
+		static thread_local Selection selection;
+		auto& state = *globals::state;
+		const auto revision = GetGraphicsShaderRevision();
+		auto* standard = state.techniqueShaderSelection.pixel;
+		if (state.currentShader != &shader || shader.shaderType.get() != RE::BSShader::Type::Lighting ||
+			state.selectedCustomPixelShaderType != RE::BSShader::Type::Lighting || !standard ||
+			state.techniqueShaderRevision != revision) {
+			selection = {};
+			return;
+		}
+		// A temporary fallback must not seed its own mesh or local-light specializations.
+		if (standard->id != state.techniqueShaderSelection.pixelDescriptor) {
+			selection = {};
+			return;
+		}
+		if (selection.revision != revision || selection.standard != standard)
+			selection = { .standard = standard, .bound = standard, .revision = revision };
+		if (selection.sequence != state.techniqueShaderSequence) {
+			selection.sequence = state.techniqueShaderSequence;
+			selection.bound = standard;
+		}
+		auto* selected = standard;
+		const auto flags = blockedKeyIndex != -1 && !blockedKey.empty() ? 0u :
+		                                                                  specializationFlags & (kLightingNoMeshVariation | kLightingNoLocalLights);
+		if (flags) {
+			const size_t index = ((flags & kLightingNoMeshVariation) ? 1u : 0u) | ((flags & kLightingNoLocalLights) ? 2u : 0u);
+			auto& variant = selection.variants[index];
+			if (!variant.shader && variant.requestFrame != state.frameCount) {
+				variant.requestFrame = state.frameCount;
+				const auto descriptor = standard->id | flags;
+				auto* candidate = GetPixelShader(shader, descriptor, PixelShaderLookup::Specialization);
+				if (candidate && candidate->id == descriptor && candidate->constantTable == standard->constantTable &&
+					std::ranges::equal(standard->constantBuffers, candidate->constantBuffers, [](const auto& left, const auto& right) {
+						return left.buffer == right.buffer && (left.buffer || left.data == right.data);
+					}))
+					variant.shader = candidate;
+			}
+			if (variant.shader)
+				selected = variant.shader;
+		}
+		if (GetGraphicsShaderRevision() != revision)
+			return;
+		if (state.IsDeveloperMode() || activeShaderCaptureFramesRemaining.load(std::memory_order_relaxed) > 0)
+			TrackActiveShader(ShaderClass::Pixel, shader, selected->id);
+		if (selected == selection.bound)
+			return;
+		auto& engineShader = *globals::game::currentPixelShader;
+		if (engineShader == selection.bound)
+			engineShader = selected;
+		globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(selected->shader), nullptr, 0);
+		selection.bound = selected;
 	}
 
 	RE::BSGraphics::ComputeShader* ShaderCache::GetComputeShader(const RE::BSShader& shader,
@@ -3664,6 +3875,8 @@ namespace SIE
 			deferredDiskWritesCV.notify_all();
 			deferredDiskWriterJthread.join();
 		}
+		// The worker queue can be purged during teardown; retain discoveries after producers stop.
+		FlushSpecializationHistory();
 		{
 			std::lock_guard lock{ deferredDiskWritesMutex };
 			if (!deferredDiskWrites.empty()) {
@@ -3961,7 +4174,7 @@ namespace SIE
 		{
 			static bool IsPending(const ShaderCacheResult& a_entry) { return a_entry.status == ShaderCompilationTask::Status::Pending; }
 			static bool IsCompleted(const ShaderCacheResult& a_entry) { return a_entry.status == ShaderCompilationTask::Status::Completed; }
-			static bool IsFailed(const ShaderCacheResult& a_entry) { return a_entry.status == ShaderCompilationTask::Status::Failed; }
+			static bool IsFailed(const ShaderCacheResult& a_entry) { return a_entry.status == ShaderCompilationTask::Status::Failed || a_entry.status == ShaderCompilationTask::Status::Deferred; }
 			static bool HasPayload(const ShaderCacheResult& a_entry) { return a_entry.blob != nullptr; }
 			static uint64_t GetGeneration(const ShaderCacheResult& a_entry) { return a_entry.generation; }
 		};
@@ -4132,7 +4345,8 @@ namespace SIE
 	void ShaderCache::ResolvePendingFailure(
 		const std::string& key,
 		RE::BSShader::Type a_type,
-		std::optional<uint64_t> a_taskGeneration)
+		std::optional<uint64_t> a_taskGeneration,
+		bool a_deferred)
 	{
 		auto outcome = Util::GenerationClaim::PublishOutcome::RejectedStale;
 		{
@@ -4145,10 +4359,10 @@ namespace SIE
 					a_taskGeneration,
 					compilationSet.LiveGeneration(a_type),
 					false,
-					[](uint64_t a_generation, bool) {
+					[a_deferred](uint64_t a_generation, bool) {
 						return ShaderCacheResult{
 							nullptr,
-							ShaderCompilationTask::Status::Failed,
+							a_deferred ? ShaderCompilationTask::Status::Deferred : ShaderCompilationTask::Status::Failed,
 							system_clock::now(),
 							false,
 							a_generation
@@ -4236,7 +4450,8 @@ namespace SIE
 
 	bool ShaderCache::IsCompiling()
 	{
-		return compilationSet.totalTasks && compilationSet.completedTasks + compilationSet.failedTasks < compilationSet.totalTasks;
+		return pendingCompositePreparations.load(std::memory_order_acquire) != 0 ||
+		       (compilationSet.totalTasks && compilationSet.completedTasks + compilationSet.failedTasks < compilationSet.totalTasks);
 	}
 
 	void ShaderCache::TryCompleteStartupCompilationPhase()
@@ -4248,6 +4463,17 @@ namespace SIE
 
 		if (!startupCompilationComplete.exchange(true, std::memory_order_acq_rel))
 			logger::info("Shader compiler scheduling transitioned from startup-cooperative to in-game normal priority");
+	}
+
+	void ShaderCache::FinishStartupPreparation()
+	{
+		startupIncludeCache.Disable();
+		FlushShaderCacheManifest();
+	}
+
+	Util::ShaderInclude::StartupCache* ShaderCache::GetStartupIncludeCache(bool developerMode)
+	{
+		return !developerMode && !UseFileWatcher() && CanCompileOptionalShaderSources() ? &startupIncludeCache : nullptr;
 	}
 
 	void ShaderCache::StopCompilation()
@@ -4470,7 +4696,7 @@ namespace SIE
 							if (recorded && *recorded == Util::ContentHash::CombineHashes(*cachedDigest, key->looseDigest).ToHex()) {
 								cached = ReadVerifiedCachedShaderBlob(key->diskPath);
 								if (!cached)
-									logger::debug("Cannot read cached standalone shader {}; compiling from source", request.source.string());
+									logger::debug("Cannot read cached standalone shader {}", request.source.string());
 							}
 						}
 					}
@@ -4482,19 +4708,22 @@ namespace SIE
 		} catch (const std::exception& error) {
 			cached = nullptr;
 			key.reset();
-			logger::warn("Standalone shader cache lookup failed for {}; compiling from source: {}", request.source.string(), error.what());
+			logger::warn("Standalone shader cache lookup failed for {}: {}", request.source.string(), error.what());
 		} catch (...) {
 			cached = nullptr;
 			key.reset();
-			logger::warn("Standalone shader cache lookup failed for {}; compiling from source", request.source.string());
+			logger::warn("Standalone shader cache lookup failed for {}", request.source.string());
 		}
 		if (cached) {
 			if (createShader(cached.get())) {
 				logger::debug("Loaded standalone shader from cache: {}", request.source.string());
 				return true;
 			}
-			logger::warn("Cached standalone shader was rejected by D3D; recompiling {}", request.source.string());
+			logger::warn("Cached standalone shader was rejected by D3D: {}", request.source.string());
 		}
+
+		if (request.cacheOnly)
+			return false;
 
 		winrt::com_ptr<ID3DBlob> blob;
 		const auto sourceDigest = Util::ShaderSourceProvenance::CompileWithStableDigest(
@@ -4618,6 +4847,8 @@ namespace SIE
 
 	bool ShaderCache::SetBackgroundCompilation(bool value)
 	{
+		if (value)
+			startupIncludeCache.Disable();
 		bool previousValue;
 		{
 			// Serialize mode changes with the predicate check and transition into wait.
@@ -5565,16 +5796,17 @@ namespace SIE
 
 	bool ShaderCache::UseFileWatcher() const
 	{
-		return useFileWatcher;
+		return useFileWatcher.load(std::memory_order_acquire);
 	}
 
 	void ShaderCache::SetFileWatcher(bool value)
 	{
-		auto oldValue = useFileWatcher;
-		useFileWatcher = value;
-		if (useFileWatcher && !oldValue)
+		if (value)
+			startupIncludeCache.Disable();
+		const bool oldValue = useFileWatcher.exchange(value, std::memory_order_acq_rel);
+		if (value && !oldValue)
 			StartFileWatcher();
-		else if (!useFileWatcher && oldValue)
+		else if (!value && oldValue)
 			StopFileWatcher();
 	}
 
@@ -5609,7 +5841,7 @@ namespace SIE
 	{
 		logger::info("Stopping FileWatcher");
 		// Set flag first so processQueue()'s loop condition becomes false before we join.
-		useFileWatcher = false;
+		useFileWatcher.store(false, std::memory_order_release);
 		if (fileWatcher) {
 			fileWatcher->removeWatch(watchID);
 			fileWatcher = nullptr;
@@ -5720,10 +5952,23 @@ namespace SIE
 	RE::BSGraphics::PixelShader* ShaderCache::MakeAndAddPixelShader(const RE::BSShader& shader,
 		uint32_t descriptor, std::optional<uint64_t> a_taskGeneration)
 	{
+		const auto specialization = descriptor & GetPixelSpecializationMask(shader.shaderType.get());
+		const bool report = specialization &&
+		                    spdlog::should_log(spdlog::level::info) && ShaderCompilationSchedulingPolicy::UseRuntimeSpecializationPolicy(startupCompilationComplete.load(std::memory_order_acquire), menuLoaded.load(std::memory_order_acquire), backgroundCompilation.load(std::memory_order_relaxed));
+		const auto revision = report ? GetGraphicsShaderRevision() : 0;
+		const auto started = report ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+		SShaderCache::PreparationInfo preparation;
+		bool published = false;
+		const SKSE::stl::scope_exit reportPreparation([&] {
+			if (report)
+				logger::info("[ShaderSpecialization] prepared revision={} family={} descriptor={:08X} flags={:08X} source={} source_compiles={} published={} elapsed_ms={:.3f}",
+					revision, magic_enum::enum_name(shader.shaderType.get()), descriptor, specialization, preparation.source, preparation.sourceCompiles, published,
+					std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
+		});
 		if (!a_taskGeneration)
 			a_taskGeneration = compilationSet.LiveGeneration(shader.shaderType.get());
 		if (const auto shaderBlob =
-				SShaderCache::CompileShader(ShaderClass::Pixel, shader, descriptor, IsDiskCacheActive(), dependencyTracker.get(), a_taskGeneration)) {
+				SShaderCache::CompileShader(ShaderClass::Pixel, shader, descriptor, IsDiskCacheActive(), dependencyTracker.get(), a_taskGeneration, report ? &preparation : nullptr)) {
 			if (IsTaskStale(a_taskGeneration, shader.shaderType.get())) {
 				return nullptr;
 			}
@@ -5738,6 +5983,8 @@ namespace SIE
 			if (FAILED(result)) {
 				logger::error("Failed to create pixel shader {}::{:X}",
 					magic_enum::enum_name(shader.shaderType.get()), descriptor);
+				if (specialization)
+					RememberShaderSpecialization({ shader.shaderType.get() == RE::BSShader::Type::Lighting ? Util::SpecializationFamily::Lighting : Util::SpecializationFamily::Effect, descriptor });
 				return nullptr;
 			}
 			Util::SetResourceName(driverShader.get(), "ShaderCache::Pixel %u:%X",
@@ -5753,11 +6000,14 @@ namespace SIE
 			}
 			// Publication is shared with synchronous draws, so an existing wrapper must survive.
 			auto& typeCache = pixelShaders[static_cast<size_t>(shader.shaderType.get())];
-			if (const auto existing = typeCache.find(descriptor); existing != typeCache.end())
+			if (const auto existing = typeCache.find(descriptor); existing != typeCache.end()) {
+				published = true;
 				return existing->second.get();
+			}
 			auto& entry = typeCache[descriptor];
 			entry = std::move(newShader);
 			entry->shader = reinterpret_cast<decltype(entry->shader)>(driverShader.detach());
+			published = true;
 			return entry.get();
 		}
 		return nullptr;
@@ -5809,10 +6059,10 @@ namespace SIE
 		return nullptr;
 	}
 
-	std::string ShaderCache::GetDefinesString(const RE::BSShader& shader, uint32_t descriptor)
+	std::string ShaderCache::GetDefinesString(const RE::BSShader& shader, uint32_t descriptor, ShaderClass shaderClass)
 	{
 		std::array<D3D_SHADER_MACRO, 64> defines{};
-		SIE::SShaderCache::GetShaderDefines(shader, descriptor, std::span{ defines });
+		SIE::SShaderCache::GetShaderDefines(shader, descriptor, std::span{ defines }, shaderClass);
 
 		return SIE::SShaderCache::MergeDefinesString(defines, true);
 	}
@@ -6187,7 +6437,7 @@ namespace SIE
 			return;
 
 		std::array<D3D_SHADER_MACRO, 64> defines{};
-		SShaderCache::GetShaderDefines(shader, descriptor, std::span{ defines });
+		SShaderCache::GetShaderDefines(shader, descriptor, std::span{ defines }, shaderClass);
 		std::lock_guard lock(activeShadersMutex);
 		const auto definesGeneration = globals::state->GetShaderDefinesGeneration();
 		if (definesGeneration != activeShaderKeysDefinesGeneration) {
@@ -6289,17 +6539,25 @@ namespace SIE
 		for (;;) {
 			std::deque<DeferredDiskWrite> writes;
 			bool flushManifest = false;
+			bool flushSpecializations = false;
 			std::size_t extractedWrites = 0;
 			{
 				std::unique_lock lock{ deferredDiskWritesMutex };
 				deferredDiskWritesCV.wait(lock, stoken, [this, stoken] {
 					const bool hasPendingWork =
-						!deferredDiskWrites.empty() || deferredManifestFlushPending;
+						!deferredDiskWrites.empty() || deferredManifestFlushPending || deferredSpecializationFlushPending;
 					const bool persistenceBlocked =
 						saveLoadDiskPersistenceBlocked.load(std::memory_order_acquire);
 					return stoken.stop_requested() ||
 					       (hasPendingWork && !persistenceBlocked);
 				});
+				if (deferredSpecializationFlushPending && deferredDiskWrites.empty() && !deferredManifestFlushPending) {
+					// Batch discovery bursts without delaying shader bytecode writes or shutdown.
+					deferredDiskWritesCV.wait_for(lock, stoken, kSpecializationFlushDelay, [this, stoken] {
+						return stoken.stop_requested() || !deferredDiskWrites.empty() || deferredManifestFlushPending ||
+						       saveLoadDiskPersistenceBlocked.load(std::memory_order_acquire);
+					});
+				}
 				if (stoken.stop_requested()) {
 					if (!deferredDiskWrites.empty()) {
 						logger::warn(
@@ -6311,6 +6569,8 @@ namespace SIE
 					deferredManifestFlushPending = false;
 					break;
 				}
+				if (saveLoadDiskPersistenceBlocked.load(std::memory_order_acquire))
+					continue;
 
 				while (!deferredDiskWriteOrder.empty() && writes.size() < kDeferredDiskWriteBatchSize) {
 					auto key = std::move(deferredDiskWriteOrder.front());
@@ -6325,6 +6585,7 @@ namespace SIE
 				}
 				flushManifest = deferredManifestFlushPending;
 				deferredManifestFlushPending = false;
+				flushSpecializations = std::exchange(deferredSpecializationFlushPending, false);
 			}
 
 			std::size_t durableWrites = 0;
@@ -6435,6 +6696,13 @@ namespace SIE
 				} else {
 					FlushShaderCacheManifest();
 				}
+			}
+
+			if (flushSpecializations) {
+				if (saveLoadDiskPersistenceBlocked.load(std::memory_order_acquire))
+					QueueSpecializationHistoryFlush();
+				else
+					FlushSpecializationHistory();
 			}
 
 			if (durableWrites != 0 || skippedWrites != 0) {
@@ -6804,6 +7072,7 @@ namespace SIE
 
 		// Determine whether this task was resolved from the disk cache or actually compiled.
 		bool wasDiskHit = cache.IsShaderLoadedFromDisk(key);
+		const bool wasDeferred = cache.GetShaderStatus(key) == ShaderCompilationTask::Status::Deferred;
 
 		// Perform all completion operations under one mutex acquisition
 		{
@@ -6819,7 +7088,10 @@ namespace SIE
 			QueryPerformanceCounter(&now);
 
 			// Update task counters
-			if (shaderBlob) {
+			if (wasDeferred) {
+				logger::debug("Optional shader deferred until startup: {}", key);
+				completedTasks++;
+			} else if (shaderBlob) {
 				logger::debug("Compiling Task succeeded: {}", key);
 				completedTasks++;
 			} else {

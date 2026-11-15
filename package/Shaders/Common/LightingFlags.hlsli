@@ -10,8 +10,8 @@ namespace Lighting
 	{
 #if !defined(LIGHTING) || defined(LODOBJECTS) || defined(LODOBJECTSHD) || defined(LODLANDSCAPE)
 		uint flags = 0;
-#elif defined(LANDSCAPE)
-		// Other lighting maps alias landscape normal textures.
+#elif defined(LANDSCAPE) || defined(NO_LEGACY_SUBSURFACE)
+		// Landscape aliases auxiliary maps; inactive scattering needs only specular.
 		uint flags = pixelDescriptor & Permutation::LightingFlags::Specular;
 #else
 		uint flags = pixelDescriptor & (Permutation::LightingFlags::Specular | Permutation::LightingFlags::SoftLighting | Permutation::LightingFlags::RimLighting | Permutation::LightingFlags::BackLighting);

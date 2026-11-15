@@ -1203,6 +1203,9 @@ bool GrassCollision::UpdateCollisionTexture(const UpdateConstants& constants, bo
 		fieldIndex = next;
 		return false;
 	}
+	// Both histories remain zero until a collider starts the simulation.
+	if (fieldsCleared && constants.BoundingBoxCount == 0 && queuedCollisions.empty())
+		return false;
 	auto* shader = GetCollisionUpdateCS();
 	if (!shader) {
 		failedMode.store(resourceMode.load(std::memory_order_relaxed), std::memory_order_relaxed);

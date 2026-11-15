@@ -51,12 +51,12 @@ Texture2D<float4> SsgiSpecularTexture : register(t13);
 
 void SampleSSGI(uint2 pixCoord, float3 normalWS, out float ao, out float3 il)
 {
-	ao = 1 - SsgiAoTexture[pixCoord];
+	ao = 1 - SsgiAoTexture[pixCoord].x;
 	float4 ssgiIlYSh = SsgiYTexture[pixCoord];
 	// without ZH hallucination
 	// float ssgiIlY = SphericalHarmonics::FuncProductIntegral(ssgiIlYSh, SphericalHarmonics::EvaluateCosineLobe(normalWS));
 	float ssgiIlY = SphericalHarmonics::SHHallucinateZH3Irradiance(ssgiIlYSh, normalWS);
-	float2 ssgiIlCoCg = SsgiCoCgTexture[pixCoord];
+	float2 ssgiIlCoCg = SsgiCoCgTexture[pixCoord].xy;
 	il = max(0, Color::YCoCgToRGB(float3(ssgiIlY, ssgiIlCoCg)));
 }
 
@@ -138,7 +138,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 	float3 directionalAmbientColor = 0;
 
 #	if defined(IBL)
-	if (SharedData::iblSettings.EnableIBL) {
+	if (ImageBasedLighting::IsEnabled()) {
 		float3 vanillaDALC = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
 
 #		if defined(SKYLIGHTING)
@@ -217,14 +217,14 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 		sh2 skylightingSH = Skylighting::Sample(positionMS.xyz, R);
 		skylightingSpecular = Skylighting::EvaluateSpecular(skylightingSH, specularLobe);
 #		if defined(IBL)
-		if (!SharedData::InInterior && SharedData::iblSettings.EnableIBL && SharedData::iblSettings.DALCMode == 3) {
+		if (!SharedData::InInterior && ImageBasedLighting::IsEnabled() && ImageBasedLighting::GetDALCMode() == 3) {
 			skylightingVisibility = Skylighting::EvaluateVisibility(skylightingSH);
 		}
 #		endif
 #	endif
 
 #	if defined(IBL)
-		if (SharedData::iblSettings.EnableIBL) {
+		if (ImageBasedLighting::IsEnabled()) {
 			finalIrradiance = ImageBasedLighting::ComputeSpecularIBL(
 				EnvTexture,
 				EnvReflectionsTexture,

@@ -57,9 +57,9 @@ struct SnowDeformation : Feature
 		bool IncludeNPCs = true;
 		bool IncludeObjects = true;
 		bool IncludeHands = true;
-		bool WeightResponse = false;
-		bool SnowDrag = false;
-		bool DensityFloor = false;
+		bool WeightResponse = true;
+		bool SnowDrag = true;
+		bool DensityFloor = true;
 		float SnowDragStrength = 3.0f;
 		bool SnowSlowsMovers = false;
 		float SnowSlowStrength = 0.4f;
@@ -331,6 +331,7 @@ private:
 		float clearance = 0.0f;
 		uint8_t physics = 0;
 		float depression = 0.0f;
+		float impact = 1.0f;
 	};
 
 	struct CachedShape

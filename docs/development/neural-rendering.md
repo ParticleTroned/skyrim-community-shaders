@@ -655,13 +655,32 @@ directory. Initialization commits ownership only after parameter allocation
 completes. Any earlier failure releases allocated parameters, shuts down a
 successfully initialized NGX session, restores the IAT, and unloads the modules.
 
-## Eye-staggered reuse
+## Flat and per-eye frame reuse
 
-VR only, off by default; the Performance profile turns it on. The stagger evaluates Feature 18
-for one eye per frame (the even frames eye 0, the odd frames eye 1) and reuses
-the other eye's gain, so a frame runs one model dispatch instead of two. That
-is the whole point: the model is the pass's dominant cost, roughly 4.4-5.0 ms
-of VR's 11.1 ms frame budget, and this halves it.
+VR **Alternate eyes** enables gain reuse (`skipFrameReuse`, off by default).
+**Model Every Nth Frame (Per Eye)** sets `skipFrameInterval` from 2 to 4, with
+2 as the default. With valid histories, eye 0 runs when the engine frame modulo
+the interval is 0, and eye 1 when it is 1. Interval 2 alternates one model
+evaluation per frame; intervals 3 and 4 also have frames where both eyes reuse
+their stored gains. A missing or invalid gain forces that eye to evaluate
+regardless of its scheduled turn. The Performance profile selects Alternate
+eyes and changes an interval still at its default of 2 to 3.
+
+On SE/AE, **Model Every Nth Frame** sets `flatReuseInterval` from 1 to 4. The
+default, 1, evaluates every frame. Higher values evaluate on engine frames
+divisible by the interval and reuse the stored gain between them. The model
+also evaluates when its gain is unavailable or when camera motion exceeds the
+flat reuse thresholds. The developer controls default to 1 degree of turning
+or 12 world units of movement since the previous frame; setting a threshold to
+0 disables that test. Non-finite camera samples force an evaluation.
+
+Both reuse routes require native model dimensions and frame generation off.
+A reduced model grid (`lowWidth != 0`) disables reuse, including an active
+peripheral-compression grid at Model Scale 1.
+Selecting a flat reuse interval above 1 therefore does not skip model frames
+while reduction or compression is active. Side by side evaluation also
+disables reuse. VR Alternate eyes keeps Model Scale at 1 and does not admit
+peripheral compression.
 
 What is reused is only the model's brightness change, never its pixels. The
 composite already treats the model as a per-pixel luminance gain on the
@@ -677,37 +696,46 @@ dropped, giving no gain rather than a stale one, when its depth differs by more
 than `kReuseDepthTolerance` from the depth stored beside the gain, or when the
 input luminance differs by more than `kReuseLumaTolerance` in log2, which is what
 a light change or a flash looks like. The remaining taps keep their bilinear
-weights, renormalised, and a sample whose taps all fail (or that reprojected off
-screen) falls back to the other eye's gain and then to `kReuseFallbackStrength`
-of the gain stored at the same pixel when its depth agrees. Both depths are read
+weights, renormalised. In VR, a sample whose taps all fail (or that reprojected
+off screen) can use the other eye's gain when **Fill Gaps From The Other Eye**
+is enabled and that eye evaluated this frame. There is no fresh other-eye
+fallback on frames where both eyes reuse, or on SE/AE. With no accepted tap or
+other-eye sample, the pass uses `kReuseFallbackStrength` of the gain stored at
+the same pixel when its depth agrees. Both depths are read
 as linear view-space distances through the engine's own projection terms, and the
 guide's depth convention arrives as a runtime value, so a Reverse Z guide is
 handled without a second shader permutation.
 
-Anything that makes a stored gain unreprojectable evaluates both eyes for that
-frame: a history reset of any kind, resource recreation, a change of the
+Anything that makes a stored gain unreprojectable evaluates every active eye
+for that frame: a history reset of any kind, resource recreation, a change of the
 evaluated crop, a material-lane or material-strength change, the dialogue
 suspend/resume transition, a running crop calibration, a non-production colour
 conversion, and the diagnostics that isolate history (bypass evaluation, copy
-input to output, interop round trip, force reset, zero motion). Frame generation
-switches the stagger off entirely while it is active, and logs that once.
+input to output, interop round trip, force reset, zero motion). Combat
+pause/resume also requests a history reset. Frame generation switches both
+reuse routes off while it is active.
 
-An eye the model skipped runs again two frames after its last run, so it is
-missing one frame of its own history. **Gap Handling** picks what it is told:
-the default doubles that call's motion scale and frame time, so one frame of
-motion covers both, and the other resets that eye's history instead.
+Both routes use `skipFrameGapMode`; its **Gap Handling** control is shown under
+VR Alternate eyes. The default, **Notify the model**, multiplies motion scale
+and frame time by the actual number of engine frames since that eye's previous
+model evaluation, rather than always doubling them. This accounts for the
+selected interval and evaluations outside the scheduled turn; frame time still
+uses the existing 250 ms cap. **Reset the eye's history** instead requests a
+reset when that gap is greater than one frame.
 
-The cost model is one model dispatch per frame plus two small compute passes,
-against two model dispatches. Measured with Tracy on VR (Dragonsreach, frame
-generation off), NR GPU time fell from 5.32 to 3.16 ms per frame, and the two
-added passes cost 0.04 ms.
+At VR interval 2 with valid histories, the cost model is one model dispatch per
+frame plus two small compute passes, against two model dispatches. Earlier
+Tracy measurements at that cadence on VR (Dragonsreach, frame generation off)
+showed NR GPU time falling from 5.32 to 3.16 ms per frame, with 0.04 ms for the
+two added passes. These measurements do not establish the cost or image
+quality of the longer intervals or the flat reuse route.
 
 To measure the reuse error, run `captureNeuralRendering` with
-`verifyReuse: true` while the stagger is active. That frame also runs the model
-on the eye that would have reused, and writes `NR_verify_input`,
-`NR_verify_model` and `NR_verify_reuse` for it, so the reused gain can be
-compared with the model's own gain on the same frame. The next frame evaluates
-normally.
+`verifyReuse: true` while a reuse route is active. That frame also runs the
+model for each eye that would have reused, and writes `NR_verify_input`,
+`NR_verify_model` and `NR_verify_reuse` with the eye suffix, so the reused gain
+can be compared with the model's own gain on the same frame. The next frame
+returns to the normal cadence.
 
 ## Verification boundary
 

@@ -2,7 +2,7 @@
 
 This branch combines the four independent Neural Rendering changes for testing
 against Open Shaders `dev` at
-`72441aa923f4f582449c4b06ab4190a6fd894d70`. It includes the complete feature code
+`d9e807cf562e34d54e112538dd992963ce63ae0a`. It includes the complete feature code
 and the merge resolutions needed to use the features together. Keep the
 upstream PRs in draft until runtime testing is complete.
 
@@ -17,15 +17,15 @@ target `alandtse/open-shaders:dev`.
 
 The integration merges these branch heads in the same order as their upstream
 PRs were opened. Each feature branch independently incorporates the upstream
-`dev` commit above; the PRs are not stacked on each other. The November 11
+`dev` commit above; the PRs are not stacked on each other. The November 15
 rebase preserves the earlier implementation and follow-up fixes in each PR.
 
 | Order | Implementation                                                                                 | Feature branch                                                                                                                         | Included head                              |
 | ----- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| 1     | [RGB-guided reconstruction (#1053)](https://github.com/alandtse/open-shaders/pull/1053)        | [Guided reconstruction](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-guided-reconstruction-20261031)   | `89571abdd5b7486d9bdcdd6f5929237939896a9b` |
-| 2     | [Peripheral compression (#1054)](https://github.com/alandtse/open-shaders/pull/1054)           | [Peripheral compression](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-peripheral-compression-20261031) | `40e161132f12381f96e66de50a53569bede17aa6` |
-| 3     | [Pause NR during combat (#1055)](https://github.com/alandtse/open-shaders/pull/1055)           | [Combat pause](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-combat-pause-20261031)                     | `c3450c81fb50bed0f056d11e403f3c5970ea6b26` |
-| 4     | [Reduced-model material selection (#1056)](https://github.com/alandtse/open-shaders/pull/1056) | [Scene selection](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-scene-selection-20261031)               | `5161e9a019933317cf3a676a1417240ae6045fb9` |
+| 1     | [RGB-guided reconstruction (#1053)](https://github.com/alandtse/open-shaders/pull/1053)        | [Guided reconstruction](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-guided-reconstruction-20261031)   | `83f270b59add225bc41be835b7f6b7d05a1d8612` |
+| 2     | [Peripheral compression (#1054)](https://github.com/alandtse/open-shaders/pull/1054)           | [Peripheral compression](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-peripheral-compression-20261031) | `16da57855fd553de432e95b119aa53a9ccbf2d6b` |
+| 3     | [Pause NR during combat (#1055)](https://github.com/alandtse/open-shaders/pull/1055)           | [Combat pause](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-combat-pause-20261031)                     | `da68ba5dfd91d36aa4dd81b4dc8e34a374095b6a` |
+| 4     | [Reduced-model material selection (#1056)](https://github.com/alandtse/open-shaders/pull/1056) | [Scene selection](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-scene-selection-20261031)               | `223fd7eaeeac8ef7f9600d08dcb7a030f3c9e22f` |
 
 The refresh uses `main-VR` at
 `75799ca034562ea124b9aa19e94e531a639a9ec3` as its source baseline. It brings
@@ -51,6 +51,16 @@ feature PR:
 -   Current-dev colour-strength and ordinary crop-motion compensation remain in
     place. Compressed crops keep strict history resets because the upstream
     motion compensation does not apply to reduced model inputs.
+-   Upstream flat and per-eye frame reuse, motion-based fallback and actual-gap
+    scaling remain intact. Reduced or compressed model grids evaluate every
+    frame, including compression-only grids at Model Scale 1; upstream excludes
+    these grids from frame reuse. Returning to a native model grid restores the
+    saved reuse setting where the existing eye-mode and frame-generation rules
+    allow it.
+-   Reconstruction, compression preparation and material-mask dispatches use
+    upstream's RenderDoc-safe compute-state handling. Compression's mapping
+    constant buffer is bound after the pipeline is cleared and is included in
+    state restoration.
 
 The original rectangular NR coverage, source-space feather and final foveated
 upscaler fill/blend remain in use. Follow Foveation uses the current per-eye
@@ -76,7 +86,7 @@ the original source pixel and alpha.
 4. Supply your NR runtime locally at
    `Data/Shaders/Upscaling/Streamline/nvngx_dlssnr.dll`, using a validated build
    accepted by the existing NR runtime checks. See the
-   [upstream NR guide](https://github.com/alandtse/open-shaders/blob/72441aa923f4f582449c4b06ab4190a6fd894d70/docs/development/neural-rendering.md#enable)
+   [upstream NR guide](https://github.com/alandtse/open-shaders/blob/d9e807cf562e34d54e112538dd992963ce63ae0a/docs/development/neural-rendering.md#enable)
    for version requirements.
 5. Enable Neural Rendering in the Upscaling panel. Leave Developer Mode off
    and logging at Info. Model Scale and Peripheral Compression are available
@@ -94,7 +104,7 @@ grids need no reconstruction; an unavailable RGB shader retains the existing
 bilinear fallback.
 
 The single **Improve low-resolution NR** checkbox appears only in Developer Mode
-(Debug/Trace). Its saved `modelGuidedUpsample` preference still applies at Info,
+(the explicit developer toggle or Debug/Trace logging). Its saved `modelGuidedUpsample` preference still applies at Info,
 including an explicit off value. The old independent `modelRgbGuidedUpsample` key
 is ignored and is no longer written when settings are saved. There is no separate
 RGB switch.
@@ -123,6 +133,10 @@ resolution, upscaler and NR runtime when comparing modes. Record the runtime
 build and effective NR diagnostics so a fallback cannot masquerade as a test
 of the requested feature.
 
+For repeatable DevBench coverage, use `DragonsreachTorchThirdPerson` indoors on
+SE/AE/VR and `GuardianStonesToWhiterun` for the flat outdoor route. Keep the same
+route and camera motion for baseline and combined runs.
+
 Start with NR enabled, Model Scale 1, compression 0, combat pause off, all
 materials selected, and no actor crop, calibration, mirrored-eye or diagnostic
 input transforms. Keep **Use resolution-scaled NR motion** enabled, diagnostic
@@ -146,6 +160,7 @@ route and is not the mode for testing compression.
 | Rectangular coverage            | Repeat combined case with Follow Foveation on/off; enable Follow eye gaze in VR when available                    | Actual per-eye gaze rectangles must drive the NR crop. Move gaze across crop boundaries, interrupt tracking and verify the saved rectangle resumes correctly. Preserve the existing full-view fill/blend; compare its settings separately from reconstruction. |
 | Density and alignment           | Hold compression fixed and lower Model Scale in small steps, including low compression near an alignment boundary | Reported model dimensions must not grow on fallback. Check admission reasons, the fixed source-density floor and rounded single-axis savings.                                                                                                                  |
 | Motion donors                   | Move foreground geometry across a distant background with compression active                                      | Colour, depth and motion should describe the same source support. Check periphery and depth edges for sliding or inconsistent motion; repeat supported forward/reverse-Z configurations and bright/dark scenes.                                                |
+| Frame reuse transitions         | Flat Model Every Nth Frame or VR Alternate eyes at native scale; then test reduced scale or admitted compression in compatible eye modes | Native-grid reuse follows upstream cadence and motion fallback. Reduced/compressed grids evaluate every frame. Returning to native size restores the saved cadence; combat resume and mode changes force fresh evaluation. |
 | Combat gate                     | Combined rendering case; Pause NR During Combat on                                                                | Enter combat: NR suspends for both eyes while ordinary upscaling continues. Leave combat: NR resumes with fresh history after three continuous peaceful, unpaused seconds.                                                                                     |
 | Interrupted recovery            | Open a menu during the combat recovery delay                                                                      | The pending peaceful interval is interrupted. Closing the menu requires a fresh continuous recovery interval; a menu during already peaceful operation does not create a combat suspension.                                                                    |
 | Settings and transitions        | Save/reload; toggle NR and each added setting                                                                     | Settings persist, both eyes change together, effective-mode/mapping changes reset history, and no healthy runtime is needlessly recreated by the combat gate.                                                                                                  |
@@ -166,12 +181,13 @@ compositor.
 
 ## Evidence and remaining validation
 
-Focused local checks passed for the November 11 rebase:
+Focused local checks passed for the November 15 rebase:
 
 -   Production-header Catch2 checks passed independently for all four PRs,
-    covering actual-grid RGB admission, density/alignment fallback, combat
-    recovery and material provider/compositor behavior.
--   The combined portable Catch2 suites passed 61 cases and 3,977,443 assertions.
+    covering actual-grid RGB admission, density/alignment fallback, upstream
+    cadence and eye modes, combat recovery and material provider/compositor
+    behavior.
+-   The combined portable Catch2 suites passed 82 cases and 3,977,713 assertions.
     The ROI and runtime-decision suites require the Windows SDK and run in the
     integration workflow's C++ test job.
 -   19 combined shader-test entry points compiled under strict flags, including finite

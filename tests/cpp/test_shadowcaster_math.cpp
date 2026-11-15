@@ -10,16 +10,19 @@
 using Catch::Approx;
 using ShadowCasterManager::DemandStreakBucket;
 using ShadowCasterManager::EngineShadowSliceCount;
+using ShadowCasterManager::FacingRotation;
 using ShadowCasterManager::FrameTimePercentile;
 using ShadowCasterManager::HashCombine;
 using ShadowCasterManager::HashCombineFloat;
 using ShadowCasterManager::HemisphereSeamMargin;
 using ShadowCasterManager::IsPlausibleShadowLightPtr;
 using ShadowCasterManager::kShadowSizeToTexels;
+using ShadowCasterManager::kSlotHoldMargin;
 using ShadowCasterManager::kTileScaleFloor;
 using ShadowCasterManager::kVanillaShadowSliceCount;
 using ShadowCasterManager::QuantizeFloat;
 using ShadowCasterManager::SliceCappedLightCount;
+using ShadowCasterManager::SlotHeldScore;
 using ShadowCasterManager::SphereWhollyBehindPlane;
 using ShadowCasterManager::StallBucket;
 using ShadowCasterManager::TileScaleForCoverage;
@@ -89,6 +92,25 @@ TEST_CASE("HemisphereSeamMargin floors a small light radius", "[scm]")
 	// Degenerate and small radii clamp to the floor instead of collapsing to 0.
 	REQUIRE(HemisphereSeamMargin(0.0f) == Approx(1.0f));
 	REQUIRE(HemisphereSeamMargin(100.0f) == Approx(1.0f));
+}
+
+TEST_CASE("FacingRotation aims its X column and stays a rotation", "[scm]")
+{
+	float r[3][3]{};
+	REQUIRE(FacingRotation(30.0f, -40.0f, 0.0f, r));
+	REQUIRE(r[0][0] == Approx(0.6f));
+	REQUIRE(r[1][0] == Approx(-0.8f));
+	REQUIRE(r[2][0] == Approx(0.0f).margin(1e-6));
+	REQUIRE(r[2][1] == Approx(1.0f));
+	const float det = r[0][0] * (r[1][1] * r[2][2] - r[1][2] * r[2][1]) - r[0][1] * (r[1][0] * r[2][2] - r[1][2] * r[2][0]) +
+	                  r[0][2] * (r[1][0] * r[2][1] - r[1][1] * r[2][0]);
+	REQUIRE(det == Approx(1.0f));
+	// Straight up has no upright: it still makes a rotation.
+	REQUIRE(FacingRotation(0.0f, 0.0f, 10.0f, r));
+	REQUIRE(r[2][0] == Approx(1.0f));
+	REQUIRE(FacingRotation(0.0f, 0.0f, -10.0f, r));
+	REQUIRE(r[2][0] == Approx(-1.0f));
+	REQUIRE_FALSE(FacingRotation(0.1f, 0.0f, 0.0f, r));
 }
 
 TEST_CASE("SphereWhollyBehindPlane splits straddling from wholly behind", "[scm]")
@@ -234,8 +256,33 @@ TEST_CASE("SliceCappedLightCount keeps the highest point index inside the array"
 			REQUIRE(SliceCappedLightCount(count, slices) < slices);
 }
 
+TEST_CASE("SlotHeldScore keeps a holder against a near-equal challenger", "[scm]")
+{
+	REQUIRE(SlotHeldScore(0.5, false) == 0.5);
+	REQUIRE(SlotHeldScore(0.5, true) == Approx(0.5 * kSlotHoldMargin));
+	// A challenger inside the margin stays below the holder; one past it wins at once.
+	REQUIRE(SlotHeldScore(0.5, true) > SlotHeldScore(0.5 * (kSlotHoldMargin - 0.01), false));
+	REQUIRE(SlotHeldScore(0.5, true) < SlotHeldScore(0.5 * (kSlotHoldMargin + 0.01), false));
+	// A user formula can score at or below zero, where scaling would demote the holder.
+	REQUIRE(SlotHeldScore(0.0, true) == 0.0);
+	REQUIRE(SlotHeldScore(-2.0, true) == -2.0);
+}
+
 TEST_CASE("Every light count fits the slices allocated for it", "[scm]")
 {
 	for (int32_t count = 0; count <= 127; ++count)
 		REQUIRE(SliceCappedLightCount(count, EngineShadowSliceCount(count)) == count);
+}
+
+TEST_CASE("PerFrameCache works a key out once per frame and drops it on the next", "[scm]")
+{
+	ShadowCasterManager::PerFrameCache<int, int> cache;
+	int made = 0;
+	const auto make = [&made] { return ++made; };
+	REQUIRE(cache.Get(10, 1, make) == 1);
+	REQUIRE(cache.Get(10, 1, make) == 1);
+	REQUIRE(cache.Get(10, 2, make) == 2);
+	REQUIRE(made == 2);
+	REQUIRE(cache.Get(11, 1, make) == 3);
+	REQUIRE(cache.entries.size() == 1);
 }

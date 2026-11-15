@@ -8,6 +8,13 @@ on:
 permissions:
     contents: read
 
+env:
+    NR_UPSTREAM_DEV: d9e807cf562e34d54e112538dd992963ce63ae0a
+    NR_GUIDED_HEAD: 83f270b59add225bc41be835b7f6b7d05a1d8612
+    NR_PERIPHERAL_HEAD: 16da57855fd553de432e95b119aa53a9ccbf2d6b
+    NR_COMBAT_HEAD: da68ba5dfd91d36aa4dd81b4dc8e34a374095b6a
+    NR_SCENE_HEAD: 223fd7eaeeac8ef7f9600d08dcb7a030f3c9e22f
+
 concurrency:
     group: nr-integration-${{ github.ref }}
     cancel-in-progress: true
@@ -26,6 +33,21 @@ jobs:
               with:
                   ref: ${{ github.sha }}
                   persist-credentials: false
+                  fetch-depth: 0
+            - name: Verify rebased source ancestry
+              shell: pwsh
+              run: |
+                  $ErrorActionPreference = 'Stop'
+                  $head = (git rev-parse HEAD).Trim()
+                  if ($head -ne $env:GITHUB_SHA) { throw 'Checkout does not match the workflow commit.' }
+                  git merge-base --is-ancestor $env:NR_UPSTREAM_DEV $head
+                  if ($LASTEXITCODE -ne 0) { throw 'Integration does not contain the pinned upstream dev commit.' }
+                  foreach ($prHead in @($env:NR_GUIDED_HEAD, $env:NR_PERIPHERAL_HEAD, $env:NR_COMBAT_HEAD, $env:NR_SCENE_HEAD)) {
+                    git merge-base --is-ancestor $env:NR_UPSTREAM_DEV $prHead
+                    if ($LASTEXITCODE -ne 0) { throw "PR head is not rebased on pinned dev: $prHead" }
+                    git merge-base --is-ancestor $prHead $head
+                    if ($LASTEXITCODE -ne 0) { throw "Integration does not contain pinned PR head: $prHead" }
+                  }
             - uses: actions/setup-python@v6
               with:
                   python-version: "3.11"
@@ -83,6 +105,7 @@ jobs:
             run-shader-validation: true
             run-shader-tests: true
             run-cpp-tests: true
+            run-full-config-validation: true
             release-parity-validation: true
             cache-artifacts: false
             upload-compiled-shaders: false
@@ -176,17 +199,17 @@ jobs:
                   $manifest = [ordered]@{
                     repository = $env:INTEGRATION_REPOSITORY
                     integrationCommit = $env:INTEGRATION_SHA
-                    upstreamDevCommit = '72441aa923f4f582449c4b06ab4190a6fd894d70'
+                    upstreamDevCommit = $env:NR_UPSTREAM_DEV
                     sourceMainVrCommit = '75799ca034562ea124b9aa19e94e531a639a9ec3'
                     workflowRun = "https://github.com/$env:INTEGRATION_REPOSITORY/actions/runs/$env:INTEGRATION_RUN_ID"
                     preset = 'ALL'
                     runtimes = @('SE', 'AE', 'VR')
                     devBenchBridge = $true
                     changesInOrder = @(
-                      @{ feature = 'Guided model reconstruction'; originalCommit = 'edf95c6253b53aa45e541e6c0b5e730457dc2e68'; prHead = '89571abdd5b7486d9bdcdd6f5929237939896a9b' }
-                      @{ feature = 'Peripheral compression'; originalCommit = 'd7d640ac48553310db01d0a8af6d56e70ffe24c6'; prHead = '40e161132f12381f96e66de50a53569bede17aa6' }
-                      @{ feature = 'Combat pause'; originalCommit = 'e83a0a72bbdb830757b9da03236809c6952c2553'; prHead = 'c3450c81fb50bed0f056d11e403f3c5970ea6b26' }
-                      @{ feature = 'Scene selection'; originalCommit = '0a7b11ac2aacbe19bcfc28115548c270adf85088'; prHead = '5161e9a019933317cf3a676a1417240ae6045fb9' }
+                      @{ feature = 'Guided model reconstruction'; originalCommit = 'edf95c6253b53aa45e541e6c0b5e730457dc2e68'; prHead = $env:NR_GUIDED_HEAD }
+                      @{ feature = 'Peripheral compression'; originalCommit = 'd7d640ac48553310db01d0a8af6d56e70ffe24c6'; prHead = $env:NR_PERIPHERAL_HEAD }
+                      @{ feature = 'Combat pause'; originalCommit = 'e83a0a72bbdb830757b9da03236809c6952c2553'; prHead = $env:NR_COMBAT_HEAD }
+                      @{ feature = 'Scene selection'; originalCommit = '0a7b11ac2aacbe19bcfc28115548c270adf85088'; prHead = $env:NR_SCENE_HEAD }
                     )
                     inputAio = $archive.Name
                     inputAioSha256 = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()

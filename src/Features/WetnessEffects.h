@@ -94,6 +94,7 @@ public:
 		Flow,
 		Surfaces,
 		Weapons,
+		Environment,
 		Count
 	};
 	static_assert(sizeof(Settings) == 176);
@@ -152,6 +153,8 @@ public:
 	 * Animation and retained-wetness state advance at most once per rendered frame, however often this is called.
 	 */
 	PerFrame GetCommonBufferData() const;
+	/** @brief Builds the uploaded constants and selects the matching dry-weather lighting permutation. */
+	PerFrame PrepareFrameData() const;
 
 	/** @brief Updates wetness state and binds the per-frame constant buffer. */
 	virtual void Prepass() override;
@@ -217,7 +220,8 @@ public:
 	bool ShouldClassifyCharacterRainSurfaces() const
 	{
 		const bool characterEffectsEnabled = settings.EnableWetnessEffects && settings.EnableCharacterRainSpots;
-		const bool characterWaterVisible = characterSurfaceWetness > 0.0f || settings.CharacterSpotDebug != 0u;
+		const bool characterWaterVisible = characterSurfaceWetness > 0.0f || (settings.CharacterSpotDebug != 0u &&
+																				 settings.CharacterSpotDebug != static_cast<std::uint32_t>(CharacterDebugMode::Environment));
 		return loaded && characterEffectsEnabled && characterWaterVisible;
 	}
 

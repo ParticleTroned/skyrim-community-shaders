@@ -65,6 +65,7 @@ add_executable(
     test_dynamicnearclip.cpp
     test_camera_reprojection.cpp
     test_dlssg_dynamic.cpp
+    test_dlssg_preset.cpp
     test_subrect.cpp
     test_gaze_math.cpp
     test_perfutils.cpp
@@ -97,6 +98,7 @@ add_executable(
     test_shadercacheclear.cpp
     test_generationclaim.cpp
     test_framelatch.cpp
+    test_dlssg_input_fence.cpp
     test_lightattachgate.cpp
     test_pointersearch.cpp
     test_splitlatchbackoff.cpp

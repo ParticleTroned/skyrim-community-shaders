@@ -2,6 +2,7 @@
 
 #include "../../Buffer.h"
 #include "../../State.h"
+#include "DLSSGInputFence.h"
 
 #include <cstdint>
 #include <d3d11_4.h>
@@ -49,13 +50,22 @@ public:
 	uint32_t dlssgMaxFramesToGenerate = 1;
 	// DLSSGState::bIsDynamicMFGSupported, queried alongside dlssgMaxFramesToGenerate.
 	bool dlssgDynamicSupported = false;
+	static constexpr REL::Version kDLSSGPresetCMinimumVersion{ 310, 9, 16, 0 };  ///< First nvngx_dlssg.dll that accepts Preset C.
+	bool dlssgPresetCKnownUnsupported = false;                                   ///< pluginDir's nvngx_dlssg.dll was read and is older than kDLSSGPresetCMinimumVersion (DX12 instance only).
+
+	/** @brief False only when the installed DLL is known to predate Preset C, so an unreadable DLL never discards a saved preset. */
+	bool PresetCSupported() const { return !dlssgPresetCKnownUnsupported; }
 	// Last slDLSSGGetState results, cached for GetDiagnostics (querying there would
 	// steal the since-last-query frame counter from the present path).
 	sl::DLSSGStatus lastDLSSGStatus = sl::DLSSGStatus::eOk;
 	uint32_t lastDLSSGFramesPresented = 0;
+	uint32_t dlssgFramesPresentedSinceConfigure = 0;  ///< Frames TrackDLSSGInputFence's query consumed; ConfigureDLSSG adds them back so its count still spans the whole frame.
 	sl::DLSSGMode lastSentDLSSGMode = sl::DLSSGMode::eOff;
 	uint32_t lastSentDLSSGFrames = 0;
 	float lastSentDLSSGTargetFPS = -1.0f;
+	DLSSGInputFenceTracker<ID3D12Fence> dlssgInputFence;  ///< DLSS-G input fence and the value of the last present (DX12 instance only).
+	uint64_t dlssgInputTargetsTracked = 0;                ///< Successful TrackDLSSGInputFence calls; tells a later target from an older one.
+	bool dlssgInputTargetStale = false;                   ///< The last present's state query failed, so dlssgInputFence holds an older present's target.
 	bool featureReflex = false;
 	bool featurePCL = false;
 	bool reflexSupportedOnCurrentAdapter = false;
@@ -176,6 +186,17 @@ public:
 	/** @brief Reads the driver's "Smooth Motion" DRS setting (see NvApiDrs::kKeySmoothMotionEnable) for this executable; not a Streamline feature. */
 	static bool IsSmoothMotionEnabledForProfile();
 
+	/**
+	 * @brief Writes a change of the selected DLSS-G preset (DLSSGPreset::Preset) to the driver
+	 * profile's DLSS-FG preset key; nvngx_dlssg.dll reads it when frame generation starts, so it
+	 * applies on the next launch. Preset C is not written unless a_presetCSupported.
+	 * @return False when the driver profile could not be written; nothing to write counts as success.
+	 */
+	static bool ApplyDLSSGPresetToDriverProfile(uint32_t a_previousPreset, uint32_t a_preset, bool a_presetCSupported);
+
+	/** @brief Reads the driver profile's DLSS-FG preset key; empty when the key is unset or the profile is unreadable. */
+	static std::optional<uint32_t> ReadDLSSGPresetFromDriverProfile();
+
 	/** @brief Binds DLSS and Reflex feature functions after the D3D device is created. */
 	void PostDevice();
 
@@ -194,6 +215,13 @@ public:
 	 * index is how DLSS-G's pacer matches presents to constants -- structural for FG.
 	 */
 	void EmitPCLMarker(sl::PCLMarker a_marker);
+	/** @brief Records the input fence value DLSS-G signals once it has consumed the frame just presented. */
+	void TrackDLSSGInputFence();
+	/**
+	 * @brief Makes a_queue wait, on the GPU, until DLSS-G has read the inputs of the last present.
+	 * Submit before work that overwrites DLSS-G's input copies; skipped when DLSS-G is not behind.
+	 */
+	void QueueWaitForDLSSGInputs(ID3D12CommandQueue* a_queue);
 	void TagDX12Resources(ID3D12GraphicsCommandList* cmdList,
 		ID3D12Resource* depth, ID3D12Resource* mvec, ID3D12Resource* hudLessColor,
 		ID3D12Resource* uiColorAndAlpha, uint32_t width, uint32_t height);

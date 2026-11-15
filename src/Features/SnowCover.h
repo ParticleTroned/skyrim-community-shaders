@@ -133,10 +133,12 @@ public:
 
 		float ObjectFadeEnd = DEFAULT_OBJECT_FADE_END;
 		float ObjectFadeAmount = DEFAULT_OBJECT_FADE_AMOUNT;
-		uint pad[2]{};
+		uint LandscapeSnowColorMask = 0;
+		uint pad = 0;
 	};
 	static_assert(sizeof(WorldSettings) % 16 == 0);
 	static_assert(sizeof(WorldSettings) == 144);
+	static_assert(offsetof(WorldSettings, LandscapeSnowColorMask) == 136);
 
 	struct FireMeltData
 	{
@@ -219,6 +221,8 @@ public:
 	std::filesystem::path mapTexture;
 	std::filesystem::path mainTexture;
 	std::filesystem::path alternateTexture;
+	bool useLandscapeSnowColor = false;
+	std::array<std::string, 2> landscapeSnowColorPaths{};
 	char mapTextureInput[256] = "";
 	char mainTextureInput[256] = "";
 	char alternateTextureInput[256] = "";
@@ -232,7 +236,7 @@ public:
 	float SummerHeightOffset = DEFAULT_SUMMER_HEIGHT_OFFSET;
 	float WinterHeightOffset = DEFAULT_WINTER_HEIGHT_OFFSET;
 
-	double lastGameHours = -1.0;
+	float lastGameHours = -1.0f;
 	Util::FrameChecker frame;
 	Util::FrameChecker fireFrame;
 	float timeSnowing = 0.0f;
@@ -244,8 +248,6 @@ public:
 	void SetupResources() override;
 	/** @brief Applies the master switch without recompiling shaders. */
 	void Reset() override;
-	/** Resets timeline state on an actual save load, preserving it through travel loading screens. */
-	void ResetRuntimeStateAfterGameLoad();
 	void Prepass() override;
 	/** @brief Binds snow textures for cubemap materials. */
 	void ReflectionsPrepass() override { Prepass(); }
@@ -275,7 +277,7 @@ public:
 		draw();
 	}
 	bool IsActive() const { return loaded && active.load(std::memory_order_relaxed) && texturesLoaded && wsettings.EnableSnowCover; }
-	std::string_view GetShaderCacheAbiVersion() override { return "2"; }
+	std::string_view GetShaderCacheAbiVersion() override { return "5"; }
 	bool SupportsPerformanceCostMeasurement() const override { return true; }
 	bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enable != 0; }
 	void SetPerformanceCostMeasurementEnabled(bool value) override { settings.Enable = value; }
@@ -303,7 +305,7 @@ private:
 	void ResetRuntimeState();
 	void UpdateFrame();
 	void LoadGeometryLists();
-	bool LoadWorldConfig(const json& config, bool worldTransition = false);
+	bool LoadWorldConfig(const json& config);
 	bool LoadTextures();
 	bool TryLoadTextures();
 	void ValidateSettings();

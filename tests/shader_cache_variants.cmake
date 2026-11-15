@@ -9,6 +9,12 @@ foreach(
         shader_category_flag.h
         shader_category_prewarm.h
         shader_category_demand.h
+        shader_pbr_lighting_flags.h
+        shader_pbr_utility_flags.h
+        shader_pbr_prewarm.h
+        shader_prewarm_lookup_gate.h
+        shader_prewarm_lookup_queue.h
+        shader_background_mode.h
         shader_task_declarations.h
         shader_task_comparison.h
         shader_capture_declarations.h
@@ -35,6 +41,7 @@ add_custom_command(
         src/ShaderCache.cpp
         src/ShaderCacheSmartClear.cpp
         src/Features/Upscaling.cpp
+        src/TruePBR.cpp
         tests/extract_shader_cache_variants.cmake
         tests/extract_source_region.cmake
     VERBATIM

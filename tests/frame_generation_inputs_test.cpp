@@ -245,6 +245,12 @@ struct UI
 	bool paused = false;
 	bool GameIsPaused() const { return paused; }
 };
+struct Menu
+{
+	bool initialized = false, swallowsInput = false, previewFlying = false;
+	bool ShouldSwallowInput() const { return swallowsInput; }
+	bool IsPreviewFlying() const { return previewFlying; }
+};
 struct State
 {
 	bool loading = false;
@@ -328,6 +334,8 @@ struct Upscaling
 
 namespace globals
 {
+	Menu menuStorage;
+	Menu* menu = &menuStorage;
 	State stateStorage;
 	State* state = &stateStorage;
 	namespace game
@@ -374,6 +382,8 @@ namespace
 		std::destroy_at(&upscaling);
 		std::construct_at(&upscaling);
 		upscaling.settings.frameGenerationMode = 1;
+		globals::menuStorage = {};
+		globals::menu = &globals::menuStorage;
 		globals::stateStorage = {};
 		globals::state = &globals::stateStorage;
 		globals::game::isVR = false;
@@ -434,6 +444,60 @@ namespace
 			u.PrepareFrameGenerationInputs();
 			Check(u.ShouldUseFrameGenerationThisFrame(), "allow-in-menus setting was ignored");
 		}
+	}
+
+	void CommunityShadersMenu()
+	{
+		struct MenuCase
+		{
+			bool present, initialized, swallowsInput, previewFlying, permitsGeneration;
+		};
+		constexpr std::array cases{
+			MenuCase{ false, false, false, false, true },
+			MenuCase{ true, false, true, false, true },
+			MenuCase{ true, true, false, false, true },
+			MenuCase{ true, true, true, false, false },
+			MenuCase{ true, true, true, true, true }
+		};
+		for (const auto& menuCase : cases) {
+			for (const bool allowInMenus : { false, true }) {
+				auto& u = Reset();
+				globals::menuStorage = { menuCase.initialized, menuCase.swallowsInput, menuCase.previewFlying };
+				if (!menuCase.present)
+					globals::menu = nullptr;
+				u.settings.frameGenerationAllowInMenus = allowInMenus;
+				u.PrepareFrameGenerationInputs();
+				const bool expected = allowInMenus || menuCase.permitsGeneration;
+				Check(u.ShouldUseFrameGenerationThisFrame() == expected,
+					"CS menu visibility, preview flight or allow-in-menus gate failed");
+				Check(globals::d3d::context->copies == (expected ? 1 : 0) &&
+						  globals::d3d::context->draws == (expected ? 1 : 0),
+					"CS menu gate did not control input preparation");
+			}
+		}
+
+		auto& u = Reset();
+		u.PrepareFrameGenerationInputs();
+		globals::menuStorage = { true, true, false };
+		Check(u.ShouldUseFrameGenerationThisFrame(), "opening CS menu changed an already prepared frame");
+		u.PrepareFrameGenerationInputs();
+		Check(!u.ShouldUseFrameGenerationThisFrame(), "CS menu retained the previous frame's inputs");
+		globals::menu->previewFlying = true;
+		Check(!u.ShouldUseFrameGenerationThisFrame(), "preview flight enabled generation without fresh inputs");
+		u.PrepareFrameGenerationInputs();
+		Check(u.ShouldUseFrameGenerationThisFrame(), "preview flight did not prepare fresh inputs");
+		globals::game::ui->paused = true;
+		u.PrepareFrameGenerationInputs();
+		Check(!u.ShouldUseFrameGenerationThisFrame(), "preview flight bypassed the paused-game gate");
+		globals::game::ui->paused = false;
+		globals::state->loading = true;
+		u.PrepareFrameGenerationInputs();
+		Check(!u.ShouldUseFrameGenerationThisFrame(), "preview flight bypassed the loading-menu gate");
+		globals::state->loading = false;
+		globals::menu->swallowsInput = false;
+		Check(!u.ShouldUseFrameGenerationThisFrame(), "closing CS menu enabled generation without fresh inputs");
+		u.PrepareFrameGenerationInputs();
+		Check(u.ShouldUseFrameGenerationThisFrame(), "closing CS menu did not permit fresh input preparation");
 	}
 
 	void MissingInputs()
@@ -507,6 +571,7 @@ namespace
 			}
 			Check(!u.ShouldUseFrameGenerationThisFrame(), "latched inputs bypassed a live safety gate");
 			globals::d3d::context->copies = 0;
+			u.settings.frameGenerationAllowInMenus = true;
 			u.PrepareFrameGenerationInputs();
 			Check(!u.ShouldUseFrameGenerationThisFrame() && globals::d3d::context->copies == 0,
 				"disabled runtime prepared frame generation");
@@ -594,6 +659,7 @@ int main()
 	try {
 		RuntimeSettings();
 		MenuTransitions();
+		CommunityShadersMenu();
 		MissingInputs();
 		SafetyGates();
 		PresentLifetime();

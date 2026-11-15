@@ -10,8 +10,10 @@
 
 struct SeasonalWeather : Feature
 {
+	// Retain persisted settings and package identifiers across display-name changes.
 	std::string GetName() override { return "Seasonal Weather"; }
 	std::string GetShortName() override { return "SeasonalWeather"; }
+	std::string GetDisplayName() override { return "Seasonal Weathers"; }
 	std::string_view GetCategory() const override { return FeatureCategories::kSky; }
 	bool SupportsVR() override { return true; }
 	bool IsCore() const override { return true; }
@@ -36,6 +38,7 @@ private:
 	Plan BuildPlan(RE::TESRegion* region) const;
 	json Inspect(RE::TESRegion* region, bool includeSettings = true) const;
 	void Apply(const json& patch);
+	void ApplyEditorEdits(const SeasonalWeatherConfig::Settings& original, const SeasonalWeatherConfig::Settings& edited);
 	RE::FormID ResolveConfiguredForm(const std::string& key) const;
 
 	mutable std::mutex mutex;
@@ -45,6 +48,7 @@ private:
 	std::atomic_bool enabled{ false };
 	std::atomic_bool available{ false };
 	std::atomic_bool faulted{ false };
+	std::atomic_bool frameworkDetected{ false };
 	std::string installationError;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	std::atomic_uint64_t adjustedSelections{ 0 };

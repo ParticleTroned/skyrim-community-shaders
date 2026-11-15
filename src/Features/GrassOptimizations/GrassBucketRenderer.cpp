@@ -2,6 +2,7 @@
 
 #include "Buffer.h"
 #include "Features/GrassCollision.h"
+#include "Features/GrassLighting.h"
 #include "Features/GrassOptimizations.h"
 #include "Globals.h"
 #include "GpuPass.h"
@@ -10,10 +11,13 @@
 #include "GrassFadeHistory.h"
 #include "GrassFrustum.h"
 #include "GrassHiZ.h"
+#include "GrassHiZPolicy.h"
 #include "GrassLODCache.h"
+#include "GrassOcclusionPolicy.h"
 #include "GrassPassCache.h"
 #include "GrassRuntime.h"
 #include "GrassTelemetry.h"
+#include "GrassTextureCache.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
@@ -168,7 +172,8 @@ namespace
 		uint32_t depthWidth, depthHeight, depthMips, collision;
 		std::array<float, 4> depthScale;
 		float meshCostBias, costBiasStartDistance, invisibleFadeCull, renderDistance;
-		float edgeFadeStart, simpleShadingPixelSize, qualityRadius, padding;
+		float edgeFadeStart, simpleShadingPixelSize, qualityRadius;
+		uint32_t projectionModes;
 		uint32_t overrideDistance;
 		float collisionDistance;
 		uint32_t sliceOffset = 0;
@@ -177,11 +182,12 @@ namespace
 		std::array<float, 4> meshWeights{};
 		std::array<float, 4> farDensity{};
 		uint32_t farPolicy = 0, proportionalFade = 0;
-		std::array<uint32_t, 2> policyPadding{};
+		std::array<float, 2> projectionAsymptote{};
 	};
-	static_assert(sizeof(Parameters) == 240 && offsetof(Parameters, collisionStrength) == 172 &&
+	static_assert(sizeof(Parameters) == 240 && offsetof(Parameters, projectionModes) == 156 && offsetof(Parameters, collisionStrength) == 172 &&
 				  offsetof(Parameters, indexCounts) == 176 && offsetof(Parameters, meshWeights) == 192 &&
-				  offsetof(Parameters, farDensity) == 208 && offsetof(Parameters, farPolicy) == 224);
+				  offsetof(Parameters, farDensity) == 208 && offsetof(Parameters, farPolicy) == 224 &&
+				  offsetof(Parameters, projectionAsymptote) == 232);
 	using LODLookup = std::tuple<std::string_view, uint64_t, uintptr_t, uint32_t>;
 	struct LODKey
 	{
@@ -207,7 +213,6 @@ namespace
 	struct Mesh
 	{
 		RE::NiPointer<RE::NiNode> owner;
-		RE::NiPointer<RE::NiSourceTexture> texture;
 		winrt::com_ptr<ID3D11Buffer> vertices, indices;
 		uint64_t descriptor = 0;
 		uint32_t indexCount = 0;
@@ -268,14 +273,14 @@ namespace
 		FrustumParameters frustum;
 		Parameters params{};
 		std::array<Mesh, 3> meshes;
-		winrt::com_ptr<ID3D11InputLayout> layout;
+		std::array<winrt::com_ptr<ID3D11InputLayout>, 3> layouts;
 		uint32_t slot = 0;
 		bool prepared = false, empty = false;
 		/** @brief Release draw owners; constants are overwritten before the plan is prepared again. */
 		void Retire()
 		{
 			meshes = {};
-			layout = nullptr;
+			layouts = {};
 			prepared = empty = false;
 		}
 	};
@@ -403,6 +408,16 @@ namespace
 		return true;
 	}
 	bool Finite(const RE::NiPoint3& point) { return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z); }
+	bool ValidMeshDescriptor(uint64_t descriptor)
+	{
+		const auto desc = std::bit_cast<RE::BSGraphics::VertexDesc>(descriptor);
+		using Vertex = RE::BSGraphics::Vertex;
+		if (!desc.HasFlag(Vertex::VF_VERTEX) || !desc.HasFlag(Vertex::VF_UV) || !desc.HasFlag(Vertex::VF_NORMAL) || !desc.HasFlag(Vertex::VF_COLORS))
+			return false;
+		const bool fullPosition = desc.HasFlag(Vertex::VF_FULLPREC) || desc.GetAttributeOffset(Vertex::VA_TEXCOORD0) >= 16;
+		return GrassPolicy::MeshAttributesValid(GrassPolicy::MeshStride(descriptor), fullPosition ? 16u : 8u,
+			desc.GetAttributeOffset(Vertex::VA_TEXCOORD0), desc.GetAttributeOffset(Vertex::VA_NORMAL), desc.GetAttributeOffset(Vertex::VA_COLOR));
+	}
 	bool Identity(const RE::NiTransform& transform)
 	{
 		if (transform.scale != 1 || !Finite(transform.translate))
@@ -652,6 +667,20 @@ struct GrassBucketRenderer::Impl
 	uint64_t resultBytes = 0;
 	uint64_t lastResultTrimFrame = UINT64_MAX;
 	GrassLOD::Cache<LODKey, Mesh> lodMeshes;
+	static constexpr size_t kMaxLODLoads = 8;
+	static constexpr uint32_t kLODRequestRetryFrames = 120;
+	struct LODLoad
+	{
+		LODKey key;
+		Mesh mesh;
+		std::atomic_bool cancelled{ false };
+		std::future<bool> result;
+		bool completed = false, usable = false, publishFailed = false;
+		explicit LODLoad(const LODKey& requested) : key(requested) {}
+	};
+	std::vector<std::unique_ptr<LODLoad>> lodLoads;
+	std::unique_ptr<BS::thread_pool<>> lodWorker;
+	std::optional<uint32_t> lodRequestFailureFrame;
 	uint64_t lodRevision = UINT64_MAX;
 	uint32_t lodMode = 0;
 	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> layouts;
@@ -659,6 +688,7 @@ struct GrassBucketRenderer::Impl
 	winrt::com_ptr<ID3D11DeviceContext1> context;
 	Util::LazyShader<ID3D11ComputeShader> cullShader;
 	GrassHiZ hiZ;
+	GrassTextureCache textureCache;
 	std::unique_ptr<Buffer> table, disabled;
 	std::array<float, 152> geometryCPU{};
 	bool geometryCPUValid = false;
@@ -766,8 +796,11 @@ struct GrassBucketRenderer::Impl
 	ID3D11InputLayout* Layout(uint64_t descriptor);
 	void CompileSignature();
 	void UpdateLODDemand(const GrassPolicy::Settings& settings);
+	void CancelRetiredLODLoads();
+	void RequestLODMesh(const LODLookup& key);
+	void PollLODLoads();
 	std::array<const Mesh*, 2> LODMeshes(const Source& source);
-	static Mesh LoadLODMesh(const LODKey& key);
+	static bool LoadLODMesh(const LODKey& key, Mesh& mesh);
 	bool HasBatchShader() const;
 	bool PrepareDrawShaders();
 	void CullSlices(const Bucket& bucket, float radius, uint32_t eyes, uint32_t& instances);
@@ -784,6 +817,9 @@ struct GrassBucketRenderer::Impl
 GrassBucketRenderer::GrassBucketRenderer() : impl(std::make_unique<Impl>()) {}
 GrassBucketRenderer::~GrassBucketRenderer()
 {
+	for (const auto& load : impl->lodLoads) load->cancelled.store(true, std::memory_order_relaxed);
+	impl->lodWorker.reset();
+	impl->lodLoads.clear();
 	// A worker borrows its snapshot; join before releasing native owners on this thread.
 	impl->preparationWorker.reset();
 	impl->preparationJob.reset();
@@ -1354,6 +1390,7 @@ void GrassBucketRenderer::SetupResources()
 	try {
 		// Grass plugins finish applying their INI overrides before the first visibility pass.
 		impl->nativeSettingsReady = false;
+		impl->textureCache.Reset();
 		DX::ThrowIfFailed(globals::d3d::context->QueryInterface(__uuidof(ID3D11DeviceContext1), impl->context.put_void()));
 		D3D11_SUBRESOURCE_DATA data{};
 		D3D11_BUFFER_DESC desc = ConstantBufferDesc(64, false);
@@ -1402,6 +1439,7 @@ void GrassBucketRenderer::ClearShaderCache()
 	impl->signature = nullptr;
 	impl->layouts.clear();
 	impl->hiZ.Reset();
+	impl->textureCache.Reset();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	impl->diagnosticShader.Reset();
 #endif
@@ -1423,6 +1461,8 @@ void GrassBucketRenderer::EndFrame()
 	const auto settings = globals::features::grassOptimizations.GetSettings();
 	impl->EndBackgroundPreparation(settings);
 	impl->UpdateLODDemand(settings);
+	impl->PollLODLoads();
+	impl->textureCache.EndFrame(globals::state->frameCount);
 }
 
 void GrassBucketRenderer::Impl::PrepareFrame()
@@ -2061,17 +2101,11 @@ ID3D11InputLayout* GrassBucketRenderer::Impl::Layout(uint64_t descriptor)
 {
 	if (auto found = layouts.find(descriptor); found != layouts.end())
 		return found->second.get();
+	if (!ValidMeshDescriptor(descriptor))
+		return nullptr;
 	auto desc = std::bit_cast<RE::BSGraphics::VertexDesc>(descriptor);
 	using Vertex = RE::BSGraphics::Vertex;
-	if (!desc.HasFlag(Vertex::VF_VERTEX) || !desc.HasFlag(Vertex::VF_UV) || !desc.HasFlag(Vertex::VF_NORMAL) || !desc.HasFlag(Vertex::VF_COLORS))
-		return nullptr;
-	const auto stride = GrassPolicy::MeshStride(descriptor);
 	const bool fullPosition = desc.HasFlag(Vertex::VF_FULLPREC) || desc.GetAttributeOffset(Vertex::VA_TEXCOORD0) >= 16;
-	if (stride < (fullPosition ? 16u : 8u) ||
-		desc.GetAttributeOffset(Vertex::VA_TEXCOORD0) + 4 > stride ||
-		desc.GetAttributeOffset(Vertex::VA_NORMAL) + 4 > stride ||
-		desc.GetAttributeOffset(Vertex::VA_COLOR) + 4 > stride)
-		return nullptr;
 	CompileSignature();
 	std::array<D3D11_INPUT_ELEMENT_DESC, 8> elements{};
 	elements[0] = { "POSITION", 0, fullPosition ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 };
@@ -2080,7 +2114,12 @@ ID3D11InputLayout* GrassBucketRenderer::Impl::Layout(uint64_t descriptor)
 	elements[3] = { "COLOR", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, desc.GetAttributeOffset(Vertex::VA_COLOR), D3D11_INPUT_PER_VERTEX_DATA, 0 };
 	for (UINT i = 0; i < 4; ++i) elements[4 + i] = { "TEXCOORD", 4 + i, DXGI_FORMAT_R32_FLOAT, 1, 0, D3D11_INPUT_PER_INSTANCE_DATA, 1 };
 	winrt::com_ptr<ID3D11InputLayout> result;
-	DX::ThrowIfFailed(globals::d3d::device->CreateInputLayout(elements.data(), UINT(elements.size()), signature->GetBufferPointer(), signature->GetBufferSize(), result.put()));
+	const auto status = globals::d3d::device->CreateInputLayout(elements.data(), UINT(elements.size()), signature->GetBufferPointer(), signature->GetBufferSize(), result.put());
+	if (FAILED(status)) {
+		layouts.emplace(descriptor, winrt::com_ptr<ID3D11InputLayout>{});
+		logger::warn("Grass vertex layout {:X} unavailable; retaining compatible meshes: {:08X}", descriptor, uint32_t(status));
+		return nullptr;
+	}
 	Util::SetResourceName(result.get(), "GrassOptimizations::InputLayout");
 	auto raw = result.get();
 	layouts.emplace(descriptor, std::move(result));
@@ -2109,13 +2148,84 @@ void GrassBucketRenderer::Impl::UpdateLODDemand(const GrassPolicy::Settings& set
 			}
 		lock.unlock();
 		lodMeshes.SetDemand(std::move(demand));
+		CancelRetiredLODLoads();
 		lodRevision = revision;
 		lodMode = mode;
 	} catch (const std::bad_alloc&) {
 		// Optional LOD demand must not disable culling when its allocation fails.
 		lodMeshes.Clear();
+		CancelRetiredLODLoads();
 		lodRevision = UINT64_MAX;
 		logger::warn("Grass LOD demand allocation failed; released cached meshes");
+	}
+}
+
+void GrassBucketRenderer::Impl::CancelRetiredLODLoads()
+{
+	for (const auto& load : lodLoads)
+		if (!lodMeshes.Requested(load->key))
+			load->cancelled.store(true, std::memory_order_relaxed);
+}
+
+void GrassBucketRenderer::Impl::RequestLODMesh(const LODLookup& key)
+{
+	if (lodRequestFailureFrame && uint32_t(frame - *lodRequestFailureFrame) < kLODRequestRetryFrames)
+		return;
+	const auto requested = lodMeshes.Requested(key);
+	if (!requested || lodMeshes.Find(key) || lodLoads.size() >= kMaxLODLoads)
+		return;
+	for (const auto& load : lodLoads)
+		if (!load->cancelled.load(std::memory_order_relaxed) && load->key.Lookup() == key)
+			return;
+	try {
+		lodLoads.reserve(kMaxLODLoads);
+		auto load = std::make_unique<LODLoad>(*requested);
+		if (!lodWorker)
+			lodWorker = std::make_unique<BS::thread_pool<>>(1);
+		load->result = lodWorker->submit_task([job = load.get()] {
+			return !job->cancelled.load(std::memory_order_relaxed) && LoadLODMesh(job->key, job->mesh);
+		});
+		// Reserved storage keeps the worker's owner alive even under allocation pressure.
+		lodLoads.push_back(std::move(load));
+		lodRequestFailureFrame.reset();
+	} catch (const std::exception& error) {
+		lodRequestFailureFrame = frame;
+		logger::warn("Grass LOD request unavailable; retaining full detail: {}", error.what());
+	}
+}
+
+void GrassBucketRenderer::Impl::PollLODLoads()
+{
+	for (auto it = lodLoads.begin(); it != lodLoads.end();) {
+		auto& load = **it;
+		if (!load.completed) {
+			if (load.result.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+				++it;
+				continue;
+			}
+			load.completed = true;
+			try {
+				load.usable = load.result.get();
+			} catch (const std::exception& error) {
+				logger::warn("Grass LOD load failed for {} tier {}: {}", load.key.model, load.key.tier, error.what());
+			} catch (...) {
+				logger::warn("Grass LOD load failed for {} tier {} with an unknown exception", load.key.model, load.key.tier);
+			}
+		}
+		if (!load.cancelled.load(std::memory_order_relaxed) && lodMeshes.Requested(load.key)) {
+			try {
+				if (!load.usable)
+					load.mesh = {};
+				lodMeshes.Publish(load.key, std::move(load.mesh));
+			} catch (const std::bad_alloc&) {
+				if (!load.publishFailed)
+					logger::warn("Grass LOD publication deferred under memory pressure");
+				load.publishFailed = true;
+				++it;
+				continue;
+			}
+		}
+		it = lodLoads.erase(it);
 	}
 }
 
@@ -2123,16 +2233,20 @@ std::array<const Mesh*, 2> GrassBucketRenderer::Impl::LODMeshes(const Source& so
 {
 	const auto find = [&](uint32_t tier) -> const Mesh* {
 		const LODLookup key{ source.model, source.descriptor, reinterpret_cast<uintptr_t>(source.texture.get()), tier };
-		return lodMeshes.FindOrLoad(key, [&](const LODKey& requested) { return LoadLODMesh(requested); });
+		const auto mesh = lodMeshes.Find(key);
+		if (!mesh)
+			RequestLODMesh(key);
+		return mesh;
 	};
 	const auto compatible = [&](const Mesh* mesh) {
-		return mesh && mesh->vertices && mesh->indices && mesh->descriptor == source.descriptor &&
-		       mesh->texture && mesh->texture.get() == source.property->GetBaseTexture();
+		// LOD geometry uses the source material; its authored texture object need not match.
+		return mesh && mesh->vertices && mesh->indices && source.texture &&
+		       source.texture.get() == source.property->GetBaseTexture();
 	};
 	const Mesh* midMesh = frameSettings.EnableMidLOD ? find(0) : nullptr;
 	const Mesh* farMesh = frameSettings.EnableFarLOD ? find(1) : nullptr;
 	bool farValid = compatible(farMesh);
-	if (frameSettings.EnableFarLOD && !farValid && !frameSettings.EnableMidLOD) {
+	if (frameSettings.EnableFarLOD && farMesh && !farValid && !frameSettings.EnableMidLOD) {
 		midMesh = find(0);
 		farValid = compatible(farMesh);
 	}
@@ -2144,39 +2258,37 @@ std::array<const Mesh*, 2> GrassBucketRenderer::Impl::LODMeshes(const Source& so
 	return { frameSettings.EnableMidLOD ? midMesh : nullptr, frameSettings.EnableFarLOD ? farMesh : nullptr };
 }
 
-Mesh GrassBucketRenderer::Impl::LoadLODMesh(const LODKey& key)
+bool GrassBucketRenderer::Impl::LoadLODMesh(const LODKey& key, Mesh& mesh)
 {
-	Mesh mesh;
 	const auto path = "LOD\\Grass\\" + std::filesystem::path(key.model).stem().string() + (key.tier ? "_LOD1.nif" : "_LOD0.nif");
 	RE::BSModelDB::DBTraits::ArgsType args{};
 	args.unk8 = false;
 	args.unkA = false;
 	args.postProcess = false;
 	if (RE::BSModelDB::Demand(path.c_str(), mesh.owner, args) != RE::BSResource::ErrorCode::kNone || !mesh.owner)
-		return {};
+		return false;
 	auto shape = SingleShape(mesh.owner.get());
 	if (!shape)
-		return {};
+		return false;
 	auto& geometry = shape->GetGeometryRuntimeData();
-	if (!geometry.rendererData || !geometry.shaderProperty)
-		return {};
-	mesh.texture.reset(geometry.shaderProperty->GetBaseTexture());
+	if (!geometry.rendererData)
+		return false;
 	mesh.descriptor = std::bit_cast<uint64_t>(geometry.vertexDesc) | 0x8000000000000080ull;
-	if (mesh.descriptor != key.descriptor || !mesh.texture || mesh.texture.get() != key.texture.get())
-		return {};
+	if (!ValidMeshDescriptor(mesh.descriptor))
+		return false;
 	mesh.indexCount = shape->GetTrishapeRuntimeData().triangleCount * 3;
 	const auto bound = shape->GetModelData().modelBound;
 	if (!mesh.indexCount || !Finite(bound.center) || !std::isfinite(bound.radius) || bound.radius <= 0)
-		return {};
+		return false;
 	mesh.radius = bound.center.Length() + bound.radius;
 	mesh.coverageRadius = bound.radius;
 	mesh.farLOD = key.tier == 1;
 	if (!std::isfinite(mesh.radius))
-		return {};
+		return false;
 	mesh.vertices.copy_from(reinterpret_cast<ID3D11Buffer*>(geometry.rendererData->vertexBuffer));
 	mesh.indices.copy_from(reinterpret_cast<ID3D11Buffer*>(geometry.rendererData->indexBuffer));
 	if (!mesh.vertices || !mesh.indices)
-		return {};
+		return false;
 	D3D11_BUFFER_DESC vertices{}, indices{};
 	mesh.vertices->GetDesc(&vertices);
 	mesh.indices->GetDesc(&indices);
@@ -2184,8 +2296,8 @@ Mesh GrassBucketRenderer::Impl::LoadLODMesh(const LODKey& key)
 	if (!stride || !(vertices.BindFlags & D3D11_BIND_VERTEX_BUFFER) || !(indices.BindFlags & D3D11_BIND_INDEX_BUFFER) ||
 		uint64_t(stride) * shape->GetTrishapeRuntimeData().vertexCount > vertices.ByteWidth ||
 		uint64_t(mesh.indexCount) * 2 > indices.ByteWidth)
-		return {};
-	return mesh;
+		return false;
+	return true;
 }
 
 bool GrassBucketRenderer::Impl::HasBatchShader() const
@@ -2528,20 +2640,24 @@ bool GrassBucketRenderer::Impl::PrepareBucket(Bucket& bucket)
 	meshes[0].indices = representative.indices;
 	meshes[0].descriptor = representative.descriptor;
 	meshes[0].indexCount = representative.triangles * 3;
+	std::array<winrt::com_ptr<ID3D11InputLayout>, 3> meshLayouts;
+	meshLayouts[0].copy_from(Layout(representative.descriptor));
+	if (!meshLayouts[0])
+		return GRASS_DRAW_REJECT(Layout);
 	float radius = representative.bound.radius;
 	if (frameSettings.EnableMeshLOD && !representative.model.empty()) {
 		const auto lod = LODMeshes(representative);
 		for (size_t tier = 1; tier < meshes.size(); ++tier) {
 			if (lod[tier - 1]) {
+				meshLayouts[tier].copy_from(Layout(lod[tier - 1]->descriptor));
+				if (!meshLayouts[tier])
+					continue;
 				meshes[tier] = *lod[tier - 1];
 				radius = std::max(radius, meshes[tier].radius + representative.bound.center.Length());
 			}
 		}
 	}
 	const uint32_t eyes = globals::game::isVR ? 2 : 1;
-	auto layout = Layout(representative.descriptor);
-	if (!layout)
-		return GRASS_DRAW_REJECT(Layout);
 	if (!geometryCPUValid)
 		return GRASS_DRAW_REJECT(GeometryConstants);
 	const size_t wind = GrassPolicy::WindVectorOffset(eyes == 2);
@@ -2593,7 +2709,7 @@ bool GrassBucketRenderer::Impl::PrepareBucket(Bucket& bucket)
 	bucket.plan.geometry = geometryCPU;
 	bucket.plan.frustum = frustumData;
 	bucket.plan.meshes = std::move(meshes);
-	bucket.plan.layout.copy_from(layout);
+	bucket.plan.layouts = std::move(meshLayouts);
 	bucket.plan.prepared = true;
 	return true;
 #undef GRASS_DRAW_REJECT
@@ -2602,10 +2718,14 @@ bool GrassBucketRenderer::Impl::PrepareBucket(Bucket& bucket)
 void GrassBucketRenderer::Impl::UploadCulling()
 {
 	cullingBuckets.clear();
+	uint64_t candidateIndexWork = 0;
 	for (auto& bucket : buckets)
 		if (bucket.plan.prepared && !bucket.plan.empty) {
 			bucket.plan.slot = uint32_t(cullingBuckets.size());
 			cullingBuckets.push_back(&bucket);
+			const auto& params = bucket.plan.params;
+			candidateIndexWork = GrassHiZPolicy::AddCandidateIndexWork(candidateIndexWork,
+				params.instances, params.eyes, *std::max_element(params.indexCounts.begin(), params.indexCounts.end()));
 		}
 	const auto slots = uint32_t(cullingBuckets.size());
 	if (!slots)
@@ -2617,7 +2737,7 @@ void GrassBucketRenderer::Impl::UploadCulling()
 	if (diagnostics.load(std::memory_order_relaxed))
 		++cullingUploadMaps;
 #endif
-	const bool useHiZ = frameSettings.EnableOcclusionCulling && hiZ.Build(context.get(), frame);
+	const bool useHiZ = frameSettings.EnableOcclusionCulling && hiZ.Build(context.get(), frame, candidateIndexWork);
 	const uint32_t pages = (slots + kSlotsPerPage - 1) / kSlotsPerPage;
 	while (frameConstants.size() < pages)
 		frameConstants.push_back(std::make_unique<Buffer>(ConstantBufferDesc(kSlotsPerPage * kFrameSlotBytes), nullptr, "GrassOptimizations::FrameConstants"));
@@ -2639,7 +2759,14 @@ void GrassBucketRenderer::Impl::UploadCulling()
 				params.depthHeight = hiZ.Height();
 				params.depthMips = hiZ.Mips();
 				params.depthScale = hiZ.Scale();
-				params.bias += hiZ.DepthViewportSlack();
+				params.depthScale[2] = hiZ.DepthViewportSlack();
+				params.projectionModes = 0;
+				for (uint32_t eye = 0; eye < params.eyes; ++eye) {
+					const auto projection = GrassOcclusionPolicy::ClassifyProjection(
+						std::span<const float, 16>{ plan.geometry.data() + eye * 16, 16 });
+					params.projectionModes |= uint32_t(projection.mode) << (eye * 2);
+					params.projectionAsymptote[eye] = projection.asymptote;
+				}
 			}
 			auto bytes = static_cast<uint8_t*>(mapped.pData) + (plan.slot % kSlotsPerPage) * kFrameSlotBytes;
 			std::memset(bytes, 0, kFrameSlotBytes);
@@ -2791,13 +2918,20 @@ void GrassBucketRenderer::Impl::EmitDraws(const Bucket& bucket)
 	auto geometry = frameConstants[bucket.plan.slot / kSlotsPerPage]->resource.get();
 	const UINT geometryFirst = (bucket.plan.slot % kSlotsPerPage) * (kFrameSlotBytes / 16), geometryCount = eyes == 2 ? 48u : 32u;
 	context->VSSetConstantBuffers1(2, 1, &geometry, &geometryFirst, &geometryCount);
-	context->IASetInputLayout(bucket.plan.layout.get());
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	const std::array<ID3D11ShaderResourceView*, 2> sources{ bucket.result.extras->srv.get(), bucket.records->srv.get() };
+	ID3D11ShaderResourceView* normalLength = nullptr;
+	if ((globals::features::grassLighting.loaded && globals::features::grassLighting.settings.Enabled) || meshes[2].farLOD) {
+		// Classify the bound atlas so replacement texture views match pixel sampling.
+		winrt::com_ptr<ID3D11ShaderResourceView> texture;
+		context->PSGetShaderResources(0, 1, texture.put());
+		normalLength = textureCache.Get(context.get(), texture.get(), frame);
+	}
+	const std::array<ID3D11ShaderResourceView*, 3> sources{ bucket.result.extras->srv.get(), bucket.records->srv.get(), normalLength };
 	context->VSSetShaderResources(2, UINT(sources.size()), sources.data());
 	for (UINT tier = 0; tier < 3; ++tier) {
 		if (!meshes[tier].vertices || !meshes[tier].indices)
 			continue;
+		context->IASetInputLayout(bucket.plan.layouts[tier].get());
 		const UINT stride = GrassPolicy::MeshStride(meshes[tier].descriptor);
 		auto vertices = meshes[tier].vertices.get();
 		UINT meshOffset = 0;
@@ -2860,9 +2994,13 @@ void GrassBucketRenderer::DrawRenderPass(RE::BSRenderPass* pass, uint32_t techni
 	}
 	if (queued && queued->representative != pass->geometry)
 		queued.reset();
-	if (queued)
+	if (queued) {
+		// Retaining the shape does not retain groups read by native setup and drawing.
+		const GrassRuntime::GroupReadLock groupsLock;
 		impl->MakeNativeVisible(static_cast<RE::BSMultiStreamInstanceTriShape*>(pass->geometry));
-	draw(pass, technique, alphaTest, flags);
+		draw(pass, technique, alphaTest, flags);
+	} else
+		draw(pass, technique, alphaTest, flags);
 	if (impl->current == pass->geometry && impl->currentAdmission.bucket < impl->buckets.size() && impl->currentMainPass) {
 		auto& bucket = impl->buckets.at(impl->currentAdmission.bucket);
 		if (bucket.outcomes.MainOutcome() == Outcome::Batched)
@@ -2877,9 +3015,9 @@ void GrassBucketRenderer::DrawRenderPass(RE::BSRenderPass* pass, uint32_t techni
 		auto* shape = member.shape.get();
 		if (shape == pass->geometry || !member.lifetime->alive.load(std::memory_order_acquire))
 			continue;
+		const GrassRuntime::GroupReadLock groupsLock;
 		RE::NiPointer<RE::BSShaderProperty> property;
 		{
-			const GrassRuntime::GroupReadLock groupsLock;
 			std::scoped_lock lock(impl->captureMutex);
 			property = shape->GetGeometryRuntimeData().shaderProperty;
 			if (!property || property->GetRTTI() != REL::Relocation<const RE::NiRTTI*>{ RE::NiRTTI_BSGrassShaderProperty }.get())

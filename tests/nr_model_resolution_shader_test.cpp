@@ -1,3 +1,4 @@
+#include "Features/Upscaling/FoveatedInputBundle.h"
 #include "Features/Upscaling/NeuralRendering/ComputeStateGuard.h"
 #include "Features/Upscaling/NeuralRendering/ModelResolution.h"
 #include "GpuPass.h"
@@ -177,6 +178,12 @@ namespace CSX::Diagnostics::Stutters
 	Scope::~Scope() noexcept = default;
 }
 #endif
+
+namespace
+{
+#include "depth_encode_texture_desc.h"
+}
+#include "depth_encode_source_descriptions.h"
 
 namespace
 {

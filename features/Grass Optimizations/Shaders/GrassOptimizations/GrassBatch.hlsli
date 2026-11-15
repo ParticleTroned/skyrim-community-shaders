@@ -14,6 +14,14 @@ cbuffer GrassBatch : register(b9)
 
 StructuredBuffer<GrassInstanceExtra> GrassInstanceExtras : register(t2);
 ByteAddressBuffer GrassSourceRecords : register(t3);
+StructuredBuffer<float> GrassTextureNormalLength : register(t4);
+
+float GetGrassBatchTextureNormalLength()
+{
+	float normalLength = 0;
+	[branch] if (GrassBatchEnabled) normalLength = GrassTextureNormalLength[0];
+	return normalLength;
+}
 
 void LoadGrassBatchInstance(inout float4 data1, inout float4 data2, inout float4 data3, inout float4 data4)
 {

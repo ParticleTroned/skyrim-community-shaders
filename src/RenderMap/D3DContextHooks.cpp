@@ -7,6 +7,11 @@
 #include <algorithm>
 #include <array>
 
+#if defined(DEVBENCH_BRIDGE_ENABLED) && !defined(CSX_RENDER_MAP_CONTEXT_TESTING)
+#	include "Diagnostics/GpuCrashDiagnostics.h"
+#	include "Globals.h"
+#endif
+
 namespace CSX::RenderMap
 {
 #ifdef CSX_RENDER_MAP_CONTEXT_TESTING
@@ -808,6 +813,30 @@ namespace CSX::RenderMap
 			static inline ContextOriginal<decltype(thunk)> func;
 		};
 
+#if defined(DEVBENCH_BRIDGE_ENABLED) && !defined(CSX_RENDER_MAP_CONTEXT_TESTING)
+		// Dispatch slots are shared with crash diagnostics, including late arming.
+		class GpuCrashDispatchScope
+		{
+		public:
+			GpuCrashDispatchScope(ID3D11DeviceContext* a_context, std::string_view a_name,
+				UINT a_x, UINT a_y, UINT a_z, ID3D11Buffer* a_arguments = nullptr, UINT a_offset = 0) noexcept
+			{
+				if (a_context == globals::d3d::context && Diagnostics::GpuCrash::IsEnabled()) {
+					token = Diagnostics::GpuCrash::BeginPass(a_name);
+					Diagnostics::GpuCrash::RecordDispatch(a_name, 0, a_x, a_y, a_z, false, a_arguments, a_offset);
+				}
+			}
+
+			~GpuCrashDispatchScope() { Diagnostics::GpuCrash::EndPass(token); }
+
+			GpuCrashDispatchScope(const GpuCrashDispatchScope&) = delete;
+			GpuCrashDispatchScope& operator=(const GpuCrashDispatchScope&) = delete;
+
+		private:
+			std::uint64_t token = 0;
+		};
+#endif
+
 		struct ID3D11DeviceContext_Dispatch
 		{
 			static void thunk(ID3D11DeviceContext* a_context, UINT a_threadGroupCountX,
@@ -817,6 +846,9 @@ namespace CSX::RenderMap
 				RecordDispatchWithEffectiveState(a_context, call.Generation(),
 					DispatchOperation::kDispatch, a_threadGroupCountX, a_threadGroupCountY,
 					a_threadGroupCountZ);
+#if defined(DEVBENCH_BRIDGE_ENABLED) && !defined(CSX_RENDER_MAP_CONTEXT_TESTING)
+				const GpuCrashDispatchScope diagnostics(a_context, "D3D11::Dispatch", a_threadGroupCountX, a_threadGroupCountY, a_threadGroupCountZ);
+#endif
 				call.InvokeNative(func, a_context, a_threadGroupCountX, a_threadGroupCountY, a_threadGroupCountZ);
 			}
 			static inline ContextOriginal<decltype(thunk)> func;
@@ -831,6 +863,9 @@ namespace CSX::RenderMap
 				RecordDispatchWithEffectiveState(a_context, call.Generation(),
 					DispatchOperation::kDispatchIndirect,
 					reinterpret_cast<std::uintptr_t>(a_argumentBuffer), a_alignedByteOffset);
+#if defined(DEVBENCH_BRIDGE_ENABLED) && !defined(CSX_RENDER_MAP_CONTEXT_TESTING)
+				const GpuCrashDispatchScope diagnostics(a_context, "D3D11::DispatchIndirect", 0, 0, 0, a_argumentBuffer, a_alignedByteOffset);
+#endif
 				call.InvokeNative(func, a_context, a_argumentBuffer, a_alignedByteOffset);
 			}
 			static inline ContextOriginal<decltype(thunk)> func;

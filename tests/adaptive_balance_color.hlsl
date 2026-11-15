@@ -83,7 +83,8 @@ RWTexture2D<float4> Result : register(u0);
 #elif defined(FIRE_TEST)
 	float3 graded = AdaptiveBalanceFire::Apply(color);
 	float diagnostic = SharedData::adaptiveBalanceSettings.fireIntensity +
-	                   8.0 * AdaptiveBalanceFire::IsFire() + 16.0 * Color::IsSceneColorDraw();
+	                   8.0 * AdaptiveBalanceFire::IsFire() + 16.0 * Color::IsSceneColorDraw() +
+	                   32.0 * AdaptiveBalanceFire::IsLightSprite();
 	Result[id.xy] = float4(graded, diagnostic);
 #elif defined(POINT_LIGHT_SATURATION_TEST)
 	bool isLinear = lightParameters.x != 0;

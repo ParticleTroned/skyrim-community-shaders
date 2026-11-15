@@ -35,6 +35,7 @@ class CsxDistributionTests(unittest.TestCase):
         self.assertNotIn("CSUtility", by_short_name)
         self.assertNotIn("OSUtility", by_short_name)
         self.assertEqual(by_short_name["AdaptiveBrightness"]["display_name"], "Adaptive Balance")
+        self.assertEqual(by_short_name["SeasonalWeather"]["display_name"], "Seasonal Weathers")
         for name in ("TruePBR", "Screenshot", "ScreenSpaceGI"):
             self.assertTrue(by_short_name[name]["description"])
         self.assertIn("Roughness, metallic, and displacement map support", by_short_name["TruePBR"]["key_features"])
@@ -90,28 +91,28 @@ class CsxDistributionTests(unittest.TestCase):
                         self.assertEqual(stripped, prose)
                         self.assertEqual(release.strip_feature_audit(stripped), prose)
 
-    def test_performance_tuning_version_reaches_both_header_registries(self):
-        self.assert_feature_header_registries('Performance Tuning', 'PerformanceTuning')
-
-    def test_grass_optimizations_version_reaches_both_header_registries(self):
-        self.assert_feature_header_registries('Grass Optimizations', 'GrassOptimizations')
-
-    def test_reverse_z_version_reaches_both_header_registries(self):
-        self.assert_feature_header_registries('ReverseZ', 'ReverseZ')
-
-    def assert_feature_header_registries(self, folder, short_name):
-        ini = ROOT / 'features' / folder / 'Shaders/Features' / f'{short_name}.ini'
-        version = audit.get_version_from_ini(ini)
-        self.assertIsNotNone(version)
-        self.assertTrue(audit.get_feature_ini_metadata(ini)['audit_version'])
+    def test_all_feature_versions_and_core_flags_match_inis(self):
+        expected_versions = {}
+        expected_core = set()
         cmake = (ROOT / 'CMakeLists.txt').read_text(encoding='utf-8')
         start = cmake.index('file(', cmake.index('# # Feature version detection'))
         end = cmake.index('target_sources(', start)
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / 'source'
             build = Path(directory) / 'build'
-            source.mkdir()
-            shutil.copytree(ROOT / 'features' / folder, source / 'features' / folder)
+            for ini in sorted((ROOT / 'features').glob('*/Shaders/Features/*.ini')):
+                short_name = ini.stem
+                version = audit.get_version_from_ini(ini)
+                self.assertIsNotNone(version, ini)
+                self.assertNotIn(short_name, expected_versions)
+                expected_versions[short_name] = version
+                destination = source / ini.relative_to(ROOT)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ini, destination)
+                if (ini.parents[2] / 'CORE').is_file():
+                    expected_core.add(short_name)
+                    (destination.parents[2] / 'CORE').touch()
+            self.assertTrue(expected_versions)
             (source / 'cmake').mkdir()
             shutil.copyfile(ROOT / 'cmake/FeatureVersions.h.in', source / 'cmake/FeatureVersions.h.in')
             (source / 'CMakeLists.txt').write_text(
@@ -126,10 +127,13 @@ class CsxDistributionTests(unittest.TestCase):
             for header in (build / 'cmake/FeatureVersions.h', ROOT / 'include/FeatureVersions.h'):
                 with self.subTest(header=header):
                     text = header.read_text(encoding='utf-8')
-                    registered = re.search(r'\{"' + re.escape(short_name) + r'"sv,\s*\{(\d+),\s*(\d+),\s*(\d+)\}\}', text)
-                    self.assertIsNotNone(registered)
-                    self.assertEqual(tuple(map(int, registered.groups())), version)
-                    self.assertIn(f'"{short_name}"sv', text.split('FEATURE_CORE_NAMES', 1)[1])
+                    entries = re.findall(r'\{\s*"([^"\n]+)"sv,\s*\{(\d+),\s*(\d+),\s*(\d+)\}\s*\}', text)
+                    registered = {name: tuple(map(int, version)) for name, *version in entries}
+                    self.assertEqual(len(entries), len(registered), 'Duplicate feature version')
+                    self.assertEqual(registered, expected_versions)
+                    core = re.findall(r'"([^"\n]+)"sv', text.split('FEATURE_CORE_NAMES', 1)[1])
+                    self.assertEqual(len(core), len(set(core)), 'Duplicate core feature')
+                    self.assertEqual(set(core), expected_core)
 
     def test_nexus_matrix_is_one_aio_without_inherited_targets(self):
         legacy = [{"name": "Wetterness", "is_core": False, "mod_id": "123", "auto_upload": True}]

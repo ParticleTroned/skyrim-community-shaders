@@ -2,6 +2,7 @@
 
 #include "Utils/D3DContextProtection.h"
 #include "Utils/RendererContextAccess.h"
+#include "Utils/ResourceName.h"
 #include "Utils/StringUtils.h"
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
@@ -347,6 +348,7 @@ bool Flowmap::GenerateFlowmap(bool useMips, std::filesystem::path& generatedPath
 		logger::error("[Unified Water] [Flowmap] Failed to create texture");
 		return false;
 	}
+	Util::SetResourceName(flowmap.get(), "UnifiedWater::Flowmap");
 
 	for (const auto& [x, y, flowTex] : cells) {
 		D3D11_TEXTURE2D_DESC srcDesc{};

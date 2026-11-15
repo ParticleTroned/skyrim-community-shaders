@@ -9,7 +9,7 @@ extract_between("${_source}" "int32_t VolumetricLighting::ClampQualityIndex(" "b
 extract_between("${_source}" "bool VolumetricLighting::TryGetActiveGodrayProfile(" "VolumetricLighting::GodrayProfile VolumetricLighting::GetRuntimeGodrayProfile()" vl_runtime_profile.h)
 extract_between("${_source}" "bool VolumetricLighting::IsPerformanceCostMeasurementEnabled()" "void VolumetricLighting::SetPerformanceToggleEnabled(" vl_runtime_measurement.h)
 extract_between("${_source}" "void VolumetricLighting::SetExteriorEnabled(" "void VolumetricLighting::PostPostLoad()" vl_runtime_api.h)
-extract_between("${_source}" "void VolumetricLighting::EarlyPrepass()" "void VolumetricLighting::ClearVolumetricLightingTargets()" vl_runtime_apply.h)
+extract_between("${_source}" "void VolumetricLighting::EarlyPrepass()" "bool VolumetricLighting::IsDepthDispatchRejected()" vl_runtime_apply.h)
 set(_runtime "")
 foreach(_part limits settings_methods profile measurement api apply)
     file(READ "${OUTPUT_DIRECTORY}/vl_runtime_${_part}.h" _text)

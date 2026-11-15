@@ -85,6 +85,8 @@ namespace LightLimitFixDetail::LightAttach
 		/** Move retired references into empty caller storage, to be released after unlocking. */
 		std::size_t Retire(std::uint32_t a_frame, bool a_all, std::span<Owner, Capacity> a_retired)
 		{
+			if (size == 0)
+				return 0;
 			std::size_t count = 0;
 			for (auto& entry : entries) {
 				if (entry.owner.get() && (a_all || !entry.valid || a_frame < entry.lastSeen || a_frame - entry.lastSeen > 1)) {

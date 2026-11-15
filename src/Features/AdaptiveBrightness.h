@@ -41,6 +41,7 @@ struct AdaptiveBrightness : Feature
 	virtual inline std::string GetShortName() override { return std::string(kFeatureShortName); }
 	virtual inline std::string GetDisplayName() override { return std::string(kFeatureDisplayName); }
 	virtual inline std::string_view GetShaderDefineName() override { return "ADAPTIVE_BALANCE"; }
+	std::string_view GetShaderCacheAbiVersion() override { return "2"; }
 	virtual bool HasShaderDefine(RE::BSShader::Type a_shaderType) override
 	{
 		return a_shaderType == RE::BSShader::Type::Lighting ||

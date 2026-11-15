@@ -9,6 +9,7 @@
 #include "Common/SharedData.hlsli"
 
 #if defined(PSHADER)
+#	include "Common/GrassTexture.hlsli"
 #	if defined(PBR_GRASS) && defined(GRASS_LIGHTING)
 #		define TRUE_PBR
 #	endif
@@ -48,6 +49,9 @@ struct VS_OUTPUT
 	float4 HPosition: SV_POSITION0;
 	float4 Color: COLOR0;
 	float VertexMult: COLOR1;
+#	ifdef GRASS_OPTIMIZATIONS
+	nointerpolation float TextureNormalLength: COLOR2;
+#	endif
 	float3 TexCoord: TEXCOORD0;
 	float3 ViewSpacePosition:
 #	if !defined(VR)
@@ -79,6 +83,9 @@ struct VS_OUTPUT
 	float VertexMult: COLOR1;
 	float3 TexCoord: TEXCOORD0;
 	float4 AmbientColor: TEXCOORD1;
+#	ifdef GRASS_OPTIMIZATIONS
+	nointerpolation float TextureNormalLength: COLOR2;
+#	endif
 	float3 ViewSpacePosition: TEXCOORD2;
 #	if defined(RENDER_DEPTH)
 	float2 Depth: TEXCOORD3;
@@ -302,6 +309,7 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.Color.w = distanceFade * perInstanceFade;
 	vsout.VertexMult = input.InstanceData1.w;
 #		ifdef GRASS_OPTIMIZATIONS
+	vsout.TextureNormalLength = GetGrassBatchTextureNormalLength();
 	if (GrassBatchEnabled) {
 		vsout.Color.w = perInstanceFade;
 		vsout.VertexMult = GetGrassBatchShading(input.InstanceID);
@@ -408,6 +416,7 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.Color.w = distanceFade * perInstanceFade;
 	vsout.VertexMult = input.InstanceData1.w;
 #		ifdef GRASS_OPTIMIZATIONS
+	vsout.TextureNormalLength = GetGrassBatchTextureNormalLength();
 	if (GrassBatchEnabled) {
 		vsout.Color.w = perInstanceFade;
 		vsout.VertexMult = GetGrassBatchShading(input.InstanceID);
@@ -551,9 +560,6 @@ cbuffer AlphaTestRefCB : register(b11)
 #		define BASIC_SNOW_COVER
 #		define SampColorSampler SampBaseSampler
 #		include "SnowCover/SnowCover.hlsli"
-#		if defined(WETTERNESS)
-#			include "Wetterness/SnowMelt.hlsli"
-#		endif
 #	endif
 
 #	define LinearSampler SampBaseSampler
@@ -567,21 +573,6 @@ float3 ApplyGrassWetDarkening(float3 baseColor)
 	return baseColor * (1.0 - wetDarkening);
 }
 
-#	if defined(SNOW_COVER)
-float3 ApplyGrassSnowMeltDarkening(float3 color, SnowCover::CoverageInputs footprint)
-{
-#		if defined(WETTERNESS)
-	float localWetness = Wetterness::GetSnowMeltWetness(footprint, float3(0, 1, 0)).x;
-	float rainWetness = saturate(SharedData::wetternessSettings.GrassWetnessPhase);
-	float strength = saturate(SharedData::wetternessSettings.GrassWetDarkeningStrength);
-	// Rain darkening is already applied; only add the stronger local melt response.
-	if (localWetness > rainWetness)
-		color *= (1 - localWetness * strength) / max(0.001, 1 - rainWetness * strength);
-#		endif
-	return color;
-}
-#	endif
-
 #	ifdef GRASS_OPTIMIZATIONS
 #		define GRASS_DETAILED(condition) (!(input.VertexMult < 0) && (condition))
 #		define GRASS_BILLBOARD (input.VertexMult < -1.5)
@@ -590,21 +581,24 @@ float3 ApplyGrassSnowMeltDarkening(float3 color, SnowCover::CoverageInputs footp
 #		define GRASS_BILLBOARD false
 #	endif
 
-float4 SampleGrassLightingBaseColor(float2 texCoord, out bool complex, bool fullTexture = false)
+float4 SampleGrassLightingBaseColor(PS_INPUT input, out bool complex, bool fullTexture = false)
 {
-	float x, y;
-	TexBaseSampler.GetDimensions(x, y);
-	float3 complexTest = TexBaseSampler.Load(int3(0, int(y) - 1, 0)).xyz * 2.0 - 1.0;
-	complex = abs(length(complexTest) - 1.0) < SharedData::grassLightingSettings.ComplexGrassThreshold;
+	float normalLength = 0;
+#	ifdef GRASS_OPTIMIZATIONS
+	normalLength = input.TextureNormalLength;
+#	endif
+	[branch] if (!(normalLength > 0))
+		normalLength = GetGrassTextureNormalLength(TexBaseSampler);
+	complex = abs(normalLength - 1.0) < SharedData::grassLightingSettings.ComplexGrassThreshold;
 #	if defined(PBR_GRASS)
 	fullTexture = fullTexture || (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::PBRGrass);
 #	endif
 	complex = complex && !fullTexture;
 	float4 baseColor;
 	if (complex) {
-		baseColor = TexBaseSampler.SampleBias(SampBaseSampler, float2(texCoord.x, texCoord.y * 0.5), SharedData::MipBias);
+		baseColor = TexBaseSampler.SampleBias(SampBaseSampler, float2(input.TexCoord.x, input.TexCoord.y * 0.5), SharedData::MipBias);
 	} else {
-		baseColor = TexBaseSampler.SampleBias(SampBaseSampler, texCoord, SharedData::MipBias);
+		baseColor = TexBaseSampler.SampleBias(SampBaseSampler, input.TexCoord.xy, SharedData::MipBias);
 	}
 	return baseColor;
 }
@@ -615,11 +609,11 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 	PS_OUTPUT psout = (PS_OUTPUT)0;
 
 	const bool billboard = GRASS_BILLBOARD;
+	const bool pbrTexture = billboard && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::PBRGrass);
+	bool complex = false;
 	float4 baseColor;
 	if (billboard) {
-		bool complex;
-		const bool pbrTexture = Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::PBRGrass;
-		baseColor = SampleGrassLightingBaseColor(input.TexCoord.xy, complex, pbrTexture);
+		baseColor = SampleGrassLightingBaseColor(input, complex, pbrTexture);
 		if (pbrTexture)
 			baseColor.xyz = Color::PBRDiffuse(baseColor.xyz);
 		else
@@ -656,13 +650,13 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 	float dirShadow = ShadowSampling::HasDirectionalShadows() ? shadowColor.x : 1.0;
 	float dirDetailShadow = 1.0;
 
+	if (dirShadow > 0.0 && ShadowSampling::HasDirectionalShadows())
+		dirShadow *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
+
 	if (GRASS_DETAILED(dirShadow > 0.0 && ShadowSampling::HasDirectionalShadows())) {
 #		if defined(SCREEN_SPACE_SHADOWS)
 		dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition.xyz, screenUV, screenNoise, eyeIndex);
 #		endif  // SCREEN_SPACE_SHADOWS
-
-		if (dirShadow != 0.0)
-			dirShadow *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
 
 #		if defined(WATER_LIGHTING)
 		if (dirShadow > 0.0) {
@@ -782,9 +776,7 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 #			else
 		float snowSkyVisibility = 1.0;
 #			endif
-		SnowCover::GrassSnowState snow = SnowCover::GetGrassSnowState(normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, false, eyeIndex, TexBaseSampler);
-		albedo = ApplyGrassSnowMeltDarkening(albedo, snow.footprint);
-		SnowCover::ApplyGrassSnow(albedo, snow, false, false);
+		SnowCover::ApplyGrassSnow(albedo, normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, complex, eyeIndex, TexBaseSampler, pbrTexture, billboard);
 	}
 #		endif
 
@@ -858,7 +850,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	PS_OUTPUT psout = (PS_OUTPUT)0;
 
 	bool complex;
-	float4 baseColor = SampleGrassLightingBaseColor(input.TexCoord.xy, complex);
+	float4 baseColor = SampleGrassLightingBaseColor(input, complex);
 
 	baseColor.xyz = Color::Diffuse(baseColor.xyz);
 
@@ -920,14 +912,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float dirShadow = ShadowSampling::HasDirectionalShadows() ? shadowColor.x : 1.0;
 	float dirDetailShadow = 1.0;
 
+	if (dirShadow > 0.0 && ShadowSampling::HasDirectionalShadows())
+		dirShadow *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
+
 	if (GRASS_DETAILED(dirShadow > 0.0 && ShadowSampling::HasDirectionalShadows())) {
 #			if defined(SCREEN_SPACE_SHADOWS)
 		if (dirLightAngle >= 0.0 || SharedData::foliageLightingSettings.EnableGrassScattering != 0)
 			dirDetailShadow = ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition.xyz, screenUV, screenNoise, eyeIndex);
 #			endif  // SCREEN_SPACE_SHADOWS
-
-		if (dirShadow != 0.0)
-			dirShadow *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust[eyeIndex].xyz, eyeIndex);
 
 #			if defined(WATER_LIGHTING)
 		if (dirShadow > 0.0) {
@@ -980,9 +972,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				else
 		float snowSkyVisibility = 1.0;
 #				endif
-		SnowCover::GrassSnowState snow = SnowCover::GetGrassSnowState(normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, complex, eyeIndex, TexBaseSampler);
-		albedo = ApplyGrassSnowMeltDarkening(albedo, snow.footprint);
-		SnowCover::ApplyGrassSnow(albedo, snow);
+		SnowCover::ApplyGrassSnow(albedo, normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, complex, eyeIndex, TexBaseSampler);
 	}
 #			endif
 

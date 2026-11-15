@@ -74,7 +74,6 @@ PS_OUTPUT main(PS_INPUT input)
 		FrameBuffer::GetPreviousDynamicResolutionAdjustedScreenPosition(motionScreenPosition);
 	float4 waterHistory =
 		waterHistoryTex.Sample(waterHistorySampler, motionAdjustedScreenPosition).xyzw;
-	waterHistory.xyz = LogToLinear(waterHistory.xyz) - LogToLinear(0);
 
 	float3 finalColor = sourceColor;
 	if (
@@ -94,16 +93,16 @@ PS_OUTPUT main(PS_INPUT input)
 				0.1, 0.95);
 			historyFactor = NearFar_Menu_DistanceFactor.w * (distanceFactor * (waterMask * -0.85 + 0.95));
 		}
-		// Un-premultiply history so bilinear filtering against cleared pixels does not darken water edges.
-		float3 historyColor = waterHistory.xyz / max(waterHistory.w, EPSILON_DIVISION);
+		// Normalize coverage in encoded space so cleared texels cannot bias the decoded color.
+		float3 historyColor = LogToLinear(saturate(waterHistory.xyz / max(waterHistory.w, EPSILON_DIVISION))) - LogToLinear(0);
 
 		historyFactor *= waterHistory.w;
 		finalColor = lerp(sourceColor, historyColor, historyFactor);
 	}
 
 	float waterCoverage = WaterBlend::GetWaterCoverage(waterMask);
-	// Store premultiplied history so transparent clears filter without dark outlines.
-	psout.Color1 = float4(LinearToLog(finalColor * waterCoverage + LogToLinear(0)), waterCoverage);
+	// Premultiply encoded color because the history texture is filtered before decoding.
+	psout.Color1 = float4(LinearToLog(finalColor + LogToLinear(0)) * waterCoverage, waterCoverage);
 	psout.Color = finalColor;
 
 	return psout;

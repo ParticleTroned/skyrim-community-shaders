@@ -100,7 +100,7 @@ void GrassCollision::DrawPerformanceSettings(bool)
 void GrassCollision::DrawAdvancedControl()
 {
 	Util::Widgets::Checkbox("Enable Advanced Grass Collision", &settings.EnableAdvancedGrassCollision);
-	Util::AddTooltip("On: adds flattening, lingering bends and spring recovery. Off: uses simpler Basic bending. Advanced uses about 24 MiB of graphics memory versus 2 MiB for Basic.");
+	Util::AddTooltip("On: adds flattening, lingering bends and spring recovery. Off: uses simpler Basic bending. Advanced uses about 32 MiB of graphics memory versus 2 MiB for Basic.");
 }
 
 void GrassCollision::DrawStrengthControl()
@@ -480,13 +480,11 @@ float GrassCollision::GetCullingStrength() const
 void GrassCollision::ReleaseResources()
 {
 	if (vertexResourcesBound) {
-		ID3D11ShaderResourceView* empty[2]{};
+		ID3D11ShaderResourceView* empty[4]{};
 		ID3D11Buffer* buffer = nullptr;
-		ID3D11SamplerState* sampler = nullptr;
 		auto* context = computeContext ? computeContext.get() : globals::d3d::context;
-		context->VSSetShaderResources(100, 2, empty);
+		context->VSSetShaderResources(100, 4, empty);
 		context->VSSetConstantBuffers(5, 1, &buffer);
-		context->VSSetSamplers(15, 1, &sampler);
 		vertexResourcesBound = false;
 	}
 	deformation = {};
@@ -495,7 +493,6 @@ void GrassCollision::ReleaseResources()
 	updateConstants.reset();
 	collisionBoundingBoxes.reset();
 	collisionInstances.reset();
-	fieldSampler = nullptr;
 	computeContext = nullptr;
 	published = {};
 	fieldInitialized = fieldsCleared = false;
@@ -555,16 +552,20 @@ void GrassCollision::Update()
 			const float cellSize = (advanced ? kWorldSize : kBasicWorldSize) / fieldSize;
 			const bool simulate = GetRequestedMode() == resourceMode.load(std::memory_order_relaxed);
 			const float2 cell{ std::round(camera.x / cellSize), std::round(camera.y / cellSize) };
-			ID3D11ShaderResourceView* empty[2]{};
-			context->VSSetShaderResources(100, 2, empty);
+			ID3D11ShaderResourceView* empty[4]{};
+			context->VSSetShaderResources(100, 4, empty);
 			const bool reset = resetRequested.exchange(false);
 			if (reset || queuedMode != resourceMode.load(std::memory_order_relaxed)) {
 				queuedBoundingBoxes.clear();
 				queuedCollisions.clear();
 				queuedBasicCollisions.clear();
 			}
-			if (reset || !consecutive || (!fieldInitialized && settings.EnableGrassCollision))
+			if (reset || !consecutive || (!fieldInitialized && settings.EnableGrassCollision) ||
+				(advanced && std::abs(camera.z - fieldHeightOrigin) > kWorldSize))
 				ClearFields();
+			// A fixed origin prevents repeated half-float rounding as the camera changes height.
+			if (!fieldInitialized)
+				fieldHeightOrigin = camera.z;
 			UpdateConstants constants{};
 			constants.PosOffset = cell * cellSize - float2{ camera.x, camera.y };
 			constants.ArrayOrigin = { uint32_t(int32_t(cell.x) - fieldSize / 2) & (fieldSize - 1), uint32_t(int32_t(cell.y) - fieldSize / 2) & (fieldSize - 1) };
@@ -579,6 +580,7 @@ void GrassCollision::Update()
 				constants.MaximumBend = DirectX::XMConvertToRadians(settings.MaximumBend);
 				constants.MaximumCompression = settings.MaximumCompression;
 				constants.CompressionRecovery = settings.CompressionRecovery;
+				constants.HeightOffset = camera.z - fieldHeightOrigin;
 			}
 			const auto shift = queuedCamera - camera;
 			for (auto& box : queuedBoundingBoxes) {
@@ -614,6 +616,8 @@ void GrassCollision::Update()
 			next.PreviousMaximumBend = published.MaximumBend;
 			next.PreviousCompressionHeight = published.CompressionHeight;
 			next.PreviousMaximumCompressibleGrassHeight = published.MaximumCompressibleGrassHeight;
+			next.CurrentHeightOffset = constants.HeightOffset;
+			next.PreviousHeightOffset = published.CurrentHeightOffset;
 			perFrame->Update(next);
 			published = next;
 			currentDeformationActive.store(next.CollisionStrength > 0, std::memory_order_relaxed);
@@ -643,10 +647,10 @@ void GrassCollision::Update()
 	context->VSSetConstantBuffers(5, 1, &buffer);
 	const bool advanced = resourceMode.load(std::memory_order_relaxed) == GrassCollisionMode::Mode::Advanced;
 	ID3D11ShaderResourceView* fields[]{ deformation[fieldIndex] ? deformation[fieldIndex]->srv.get() : nullptr,
-		advanced && deformation[1 - fieldIndex] ? deformation[1 - fieldIndex]->srv.get() : nullptr };
-	context->VSSetShaderResources(100, 2, fields);
-	auto* sampler = fieldSampler.get();
-	context->VSSetSamplers(15, 1, &sampler);
+		advanced && deformation[1 - fieldIndex] ? deformation[1 - fieldIndex]->srv.get() : nullptr,
+		advanced && velocity[fieldIndex] ? velocity[fieldIndex]->srv.get() : nullptr,
+		advanced && velocity[1 - fieldIndex] ? velocity[1 - fieldIndex]->srv.get() : nullptr };
+	context->VSSetShaderResources(100, 4, fields);
 	vertexResourcesBound = true;
 }
 
@@ -763,7 +767,9 @@ json GrassCollision::GetDiagnostics() const
 							  { "nativeChecks", draw.nativeChecks }, { "disabledShaderChecks", draw.disabledShaderChecks }, { "residualCollisionShaderChecks", draw.residualCollisionShaderChecks }, { "batchedChecks", draw.batchedChecks },
 							  { "missingConstantBuffer", draw.missingConstantBuffer }, { "wrongConstantBuffer", draw.wrongConstantBuffer },
 							  { "missingTexture", draw.missingTexture }, { "missingPreviousTexture", draw.missingPreviousTexture },
-							  { "wrongPreviousTexture", draw.wrongPreviousTexture }, { "missingSampler", draw.missingSampler }, { "wrongSampler", draw.wrongSampler }, { "wrongTexture", draw.wrongTexture },
+							  { "wrongPreviousTexture", draw.wrongPreviousTexture }, { "wrongTexture", draw.wrongTexture },
+							  { "missingContact", draw.missingContact }, { "wrongContact", draw.wrongContact },
+							  { "missingPreviousContact", draw.missingPreviousContact }, { "wrongPreviousContact", draw.wrongPreviousContact },
 							  { "collisionShaderChecks", draw.collisionShaderChecks }, { "missingCollisionShaderInputs", draw.missingCollisionShaderInputs },
 							  { "unidentifiedVertexShaders", draw.unidentifiedVertexShaders }, { "shaderReflectionFailures", draw.shaderReflectionFailures } } }
 	};
@@ -776,14 +782,14 @@ try {
 		return;
 	auto* context = globals::d3d::context;
 	winrt::com_ptr<ID3D11Buffer> buffer;
-	winrt::com_ptr<ID3D11ShaderResourceView> texture, previousTexture;
-	winrt::com_ptr<ID3D11SamplerState> sampler;
+	winrt::com_ptr<ID3D11ShaderResourceView> texture, previousTexture, contact, previousContact;
 	winrt::com_ptr<ID3D11VertexShader> vertex;
 	context->VSGetShader(vertex.put(), nullptr, nullptr);
 	context->VSGetConstantBuffers(5, 1, buffer.put());
 	context->VSGetShaderResources(100, 1, texture.put());
 	context->VSGetShaderResources(101, 1, previousTexture.put());
-	context->VSGetSamplers(15, 1, sampler.put());
+	context->VSGetShaderResources(102, 1, contact.put());
+	context->VSGetShaderResources(103, 1, previousContact.put());
 	std::scoped_lock lock(diagnosticsMutex);
 	if (!DiagnosticsActive(frame))
 		return;
@@ -801,7 +807,7 @@ try {
 		return;
 	}
 	const bool basic = shader ? (shader->descriptor & uint32_t(SIE::ShaderCache::GrassShaderFlags::BasicCollision)) != 0 : GetVertexMode() == GrassCollisionMode::Mode::Basic;
-	const uint8_t expectedInputs = basic ? 3 : 15;
+	const uint8_t expectedInputs = basic ? 3 : 31;
 	if (shader && shader->inputs == expectedInputs && !NeedsVertexDeformation())
 		++draw.residualCollisionShaderChecks;
 	if (!buffer)
@@ -816,10 +822,14 @@ try {
 		++draw.missingPreviousTexture;
 	else if (!basic && (!deformation[1 - fieldIndex] || previousTexture.get() != deformation[1 - fieldIndex]->srv.get()))
 		++draw.wrongPreviousTexture;
-	if (!basic && !sampler)
-		++draw.missingSampler;
-	else if (!basic && sampler.get() != fieldSampler.get())
-		++draw.wrongSampler;
+	if (!basic && !contact)
+		++draw.missingContact;
+	else if (!basic && (!velocity[fieldIndex] || contact.get() != velocity[fieldIndex]->srv.get()))
+		++draw.wrongContact;
+	if (!basic && !previousContact)
+		++draw.missingPreviousContact;
+	else if (!basic && (!velocity[1 - fieldIndex] || previousContact.get() != velocity[1 - fieldIndex]->srv.get()))
+		++draw.wrongPreviousContact;
 	if (!shader)
 		++draw.unidentifiedVertexShaders;
 	else if (shader->inputs == UINT8_MAX)
@@ -864,8 +874,10 @@ GrassCollision::DiagnosticShader* GrassCollision::GetDiagnosticShader(ID3D11Vert
 				shader.inputs |= 2;
 			if (binding.Type == D3D_SIT_TEXTURE && binding.BindPoint == 101)
 				shader.inputs |= 4;
-			if (binding.Type == D3D_SIT_SAMPLER && binding.BindPoint == 15)
+			if (binding.Type == D3D_SIT_TEXTURE && binding.BindPoint == 102)
 				shader.inputs |= 8;
+			if (binding.Type == D3D_SIT_TEXTURE && binding.BindPoint == 103)
+				shader.inputs |= 16;
 		}
 	}
 	shader.bytes = std::make_shared<const std::vector<uint8_t>>(std::move(bytes));
@@ -1086,20 +1098,10 @@ void GrassCollision::SetupResources()
 			deformation[i]->CreateUAV(uav);
 			if (!advanced)
 				continue;
-			desc.Format = srv.Format = uav.Format = DXGI_FORMAT_R16G16_FLOAT;
+			// Contact bounds share the existing velocity ping-pong resources.
 			velocity[i] = eastl::make_unique<Texture2D>(desc, std::format("GrassCollision::Velocity{}", i).c_str());
 			velocity[i]->CreateSRV(srv);
 			velocity[i]->CreateUAV(uav);
-		}
-		if (advanced) {
-			D3D11_SAMPLER_DESC sampler{};
-			sampler.Filter = D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT;
-			sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
-			sampler.ComparisonFunc = D3D11_COMPARISON_NEVER;
-			sampler.MaxAnisotropy = 1;
-			sampler.MaxLOD = D3D11_FLOAT32_MAX;
-			DX::ThrowIfFailed(globals::d3d::device->CreateSamplerState(&sampler, fieldSampler.put()));
-			Util::SetResourceName(fieldSampler.get(), "GrassCollision::FieldSampler");
 		}
 		const auto makeStructured = [](uint32_t stride, uint32_t count, const char* name) {
 			D3D11_BUFFER_DESC desc{};
@@ -1127,7 +1129,7 @@ void GrassCollision::SetupResources()
 		ClearFields();
 		perFrame->Update(published);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		fieldResourceBytes.store(advanced ? uint64_t(kFieldSize) * kFieldSize * 24 : uint64_t(kBasicFieldSize) * kBasicFieldSize * 8, std::memory_order_relaxed);
+		fieldResourceBytes.store(advanced ? uint64_t(kFieldSize) * kFieldSize * 32 : uint64_t(kBasicFieldSize) * kBasicFieldSize * 8, std::memory_order_relaxed);
 #endif
 	} catch (const std::exception& error) {
 		failedMode.store(mode, std::memory_order_relaxed);

@@ -8,6 +8,7 @@
 
 #include "BuildProvenance.h"
 #include "Deferred.h"
+#include "Diagnostics/PerformanceCostExperiments.h"
 #include "Features/LightLimitFix.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
@@ -75,6 +76,7 @@
 #include <cfloat>
 #include <tuple>
 #ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Diagnostics/GpuCrashDiagnostics.h"
 #	include <chrono>
 #endif
 #include <cmath>
@@ -15653,6 +15655,10 @@ bool Upscaling::PrepareVRMenuNativeFallback(ID3D11RenderTargetView* a_target, ui
 
 	// Pin a ready-to-draw fallback before suppression; recovery cannot allocate or map.
 	Util::ScopedDeviceContextState restoreState(vrMenuNativeFallbackContext.get(), vrMenuNativeFallbackState.get());
+	if (!restoreState) {
+		vrMenuNativeFallbackUnavailable = true;
+		return false;
+	}
 	auto* context = vrMenuNativeFallbackContext.get();
 	context->ClearState();
 	context->OMSetRenderTargets(1, &a_target, nullptr);
@@ -15680,15 +15686,20 @@ void Upscaling::RestoreVRMenuNativeDrawOrder(const char* a_reason)
 		CS_GPU_PASS("Upscaling::VRMenuNativeFallback");
 		const CSX::Api::SuppressAcceptedDraw suppressAcceptedDraw;
 		Util::ScopedDeviceContextState restoreState(vrMenuNativeFallbackContext.get(), vrMenuNativeFallbackState.get());
-		vrMenuParallelBridgeDrawInProgress = true;
-		auto restoreReplayFlag = ScopeExit([&]() { vrMenuParallelBridgeDrawInProgress = false; });
-		vrMenuNativeFallbackContext->Draw(3, 0);
-		vrMenuNativeFallbackContext->ClearState();
+		if (restoreState) {
+			vrMenuParallelBridgeDrawInProgress = true;
+			auto restoreReplayFlag = ScopeExit([&]() { vrMenuParallelBridgeDrawInProgress = false; });
+			vrMenuNativeFallbackContext->Draw(3, 0);
+			vrMenuNativeFallbackContext->ClearState();
+		} else {
+			vrMenuNativeFallbackUnavailable = true;
+			logger::warn("[VRMenuComposite] Discarded pending menu fallback because context-state isolation is unavailable");
+		}
 	}
 	vrMenuNativeFallbackPending = false;
 	vrMenuNativeFallbackTarget = 0;
 	InvalidateVRMenuCommittedLayer(a_reason);
-	// The original target now owns the prefix; leave all later draws in native order.
+	// Later draws remain native after the deferred layer is resolved or discarded.
 	vrMenuFrameTransaction.nativeMenuFallback = true;
 	vrMenuFrameTransaction.menuLayerRequired = false;
 	vrMenuFrameTransaction.recognizedOperations = 0;
@@ -45417,8 +45428,8 @@ FidelityFX::UpscaleResult Upscaling::DispatchSingleFoveatedVendorEye(UpscaleMeth
 		!NeuralRendering::RunsBeforeDlss(GetNeuralRenderingArrangement());
 	const bool validateStagedResources =
 		neuralCenterPhase == NeuralCenterPhase::Resolve;
+	// Face redistribution reads these immutable sources into separate model targets.
 	const bool borrowEligible = neuralRenderingRequested &&
-	                            settings.neuralRenderingFaceDetailProtectionPercent == 0 &&
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	                            settings.neuralReconstructionTuning == NeuralRendering::ReconstructionTuning{} &&
 #endif
@@ -47471,7 +47482,11 @@ bool Upscaling::PrepareFullResolutionNeuralInputs(uint32_t inputWidthPerEye, uin
 			profile.centerHorizontalScale, GetRuntimeUpscaleMethod(), false,
 			useSharedFovMask ? &sharedMaskProfile : nullptr))
 		return false;
-	NeuralRendering::ComputeStateGuard<1> stateGuard(context);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	std::optional<NeuralRendering::ComputeStateGuard<1>> referenceStateGuard;
+	if (CSX::Diagnostics::PerformanceCosts::ReferenceEnabled(CSX::Diagnostics::PerformanceCosts::Point::NeuralPreparation))
+		referenceStateGuard.emplace(context);
+#endif
 	uint32_t emptyEyeMask = 0;
 	for (uint32_t eye = 0; eye < eyeCount; ++eye) {
 		const auto& rect = foveatedRectCache.rects[eye];
@@ -47500,6 +47515,13 @@ bool Upscaling::PrepareFullResolutionNeuralInputs(uint32_t inputWidthPerEye, uin
 		}
 	}
 	const auto copyGuides = [&]() {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::optional<NeuralRendering::ComputeStateGuard<1>> stateGuard;
+		if (!referenceStateGuard)
+			stateGuard.emplace(context);
+#else
+		NeuralRendering::ComputeStateGuard<1> stateGuard(context);
+#endif
 		const auto capture = CaptureNeuralStage(role, 2u, globals::state->frameCount,
 			sourceWorldFrame, generation, "full_resolution_guide_preparation");
 		CS_GPU_PASS_CAPTURE("NeuralRendering::PrepareFullResolutionGuides", capture);
@@ -52315,20 +52337,22 @@ void Upscaling::SetupResources()
 	}
 
 	DX::ThrowIfFailed(device->CreateDepthStencilState(&depthStencilDesc, upscaleDepthStencilState.put()));
+	Util::SetResourceName(upscaleDepthStencilState.get(), "Upscaling::DepthUpscaleDepthStencilState");
 	D3D11_DEPTH_STENCIL_DESC menuCaptureDepthDesc{};
 	menuCaptureDepthDesc.DepthEnable = false;
 	menuCaptureDepthDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
 	menuCaptureDepthDesc.DepthFunc = D3D11_COMPARISON_ALWAYS;
 	menuCaptureDepthDesc.StencilEnable = false;
 	DX::ThrowIfFailed(device->CreateDepthStencilState(&menuCaptureDepthDesc, vrMenuCaptureDepthDisabledState.put()));
+	Util::SetResourceName(vrMenuCaptureDepthDisabledState.get(), "Upscaling::VRMenuCaptureDepthDisabledState");
 
 	// Create jitter offset constant buffer for depth upscaling
 	delete jitterCB;
-	jitterCB = new ConstantBuffer(ConstantBufferDesc<JitterCB>());
+	jitterCB = new ConstantBuffer(ConstantBufferDesc<JitterCB>(), "Upscaling::JitterCB");
 
 	// Create upscaling data constant buffer for encode textures compute shader
 	delete upscalingDataCB;
-	upscalingDataCB = new ConstantBuffer(ConstantBufferDesc<UpscalingDataCB>());
+	upscalingDataCB = new ConstantBuffer(ConstantBufferDesc<UpscalingDataCB>(), "Upscaling::UpscalingDataCB");
 	delete cameraMotionVectorsCB;
 	cameraMotionVectorsCB = new ConstantBuffer(ConstantBufferDesc<CameraMotionVectorsCB>(), "Upscaling::CameraMotionVectorsCB");
 	menuCameraMVsValid = false;
@@ -52355,6 +52379,7 @@ void Upscaling::SetupResources()
 	blendDesc.RenderTarget[0].BlendEnable = false;
 	blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
 	DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, upscaleBlendState.put()));
+	Util::SetResourceName(upscaleBlendState.get(), "Upscaling::DepthUpscaleBlendState");
 
 	D3D11_BLEND_DESC menuLayerCaptureBlendDesc{};
 	menuLayerCaptureBlendDesc.AlphaToCoverageEnable = false;
@@ -52368,10 +52393,12 @@ void Upscaling::SetupResources()
 	menuLayerCaptureBlendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
 	menuLayerCaptureBlendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
 	DX::ThrowIfFailed(device->CreateBlendState(&menuLayerCaptureBlendDesc, vrMenuLayerCaptureBlendState.put()));
+	Util::SetResourceName(vrMenuLayerCaptureBlendState.get(), "Upscaling::VRMenuLayerCaptureBlendState");
 
 	D3D11_BLEND_DESC menuCompositeBlendDesc = menuLayerCaptureBlendDesc;
 	menuCompositeBlendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
 	DX::ThrowIfFailed(device->CreateBlendState(&menuCompositeBlendDesc, vrMenuCompositeBlendState.put()));
+	Util::SetResourceName(vrMenuCompositeBlendState.get(), "Upscaling::VRMenuCompositeBlendState");
 
 	// Create rasterizer state for fullscreen rendering
 	D3D11_RASTERIZER_DESC rasterizerDesc = {};
@@ -52386,6 +52413,7 @@ void Upscaling::SetupResources()
 	rasterizerDesc.MultisampleEnable = false;
 	rasterizerDesc.AntialiasedLineEnable = false;
 	DX::ThrowIfFailed(device->CreateRasterizerState(&rasterizerDesc, upscaleRasterizerState.put()));
+	Util::SetResourceName(upscaleRasterizerState.get(), "Upscaling::DepthUpscaleRasterizerState");
 
 	CheckResources(GetRuntimeUpscaleMethod());
 	RefreshRuntimeResolutionState();
@@ -52834,17 +52862,18 @@ bool Upscaling::IsFrameGenerationDx12PathActive() const
 
 bool Upscaling::ShouldPrepareFrameGeneration() const
 {
+	if (!IsFrameGenerationDx12PathActive() || !settings.frameGenerationMode ||
+		!fidelityFX.IsFrameGenerationRuntimeReady() || streamline.IsFrameGenerationQuarantinedByReflex())
+		return false;
+	if (settings.frameGenerationAllowInMenus)
+		return true;
+
 	auto* ui = globals::game::ui;
 	auto* state = globals::state;
 	const bool pausedMenuOpen = ui && ui->GameIsPaused();
 	const bool mainOrLoadingMenuOpen = state && state->IsMainOrLoadingMenuOpen(ui);
-	const bool menuOpen = pausedMenuOpen || mainOrLoadingMenuOpen;
-
-	return IsFrameGenerationDx12PathActive() &&
-	       settings.frameGenerationMode &&
-	       fidelityFX.IsFrameGenerationRuntimeReady() &&
-	       !streamline.IsFrameGenerationQuarantinedByReflex() &&
-	       (settings.frameGenerationAllowInMenus || !menuOpen);
+	return !pausedMenuOpen && !mainOrLoadingMenuOpen &&
+	       !(IsCommunityShadersMenuOpen() && !globals::menu->IsPreviewFlying());
 }
 
 bool Upscaling::ShouldUseFrameGenerationThisFrame() const
@@ -56871,21 +56900,32 @@ void Upscaling::ServiceVRRenderScalePresentationRecovery(
 	}
 	const auto mutation = GetVRRenderScalePhysicalMutationSnapshot();
 	const uint64_t now = ::GetTickCount64();
+	if (IsSubmitStageDeviceLost()) {
+		vrRenderScalePresentationRecoveryStage.store(Stage::Quarantined, std::memory_order_release);
+		LogVRRenderScalePresentationStall(a_epoch, "device quarantine", a_context);
+		return;
+	}
+	if (IsKnownGameMenuContextActive()) {
+		// Menu presentation intentionally withholds stereo promotion, so it cannot
+		// consume a gameplay recovery deadline or its one-shot fallback quota.
+		vrRenderScalePresentationRecoveryMenuEpoch = a_epoch;
+		vrRenderScalePresentationRecoveryLastMenuTickMs = now;
+		vrRenderScalePresentationRecoveryStartTickMs = now;
+		return;
+	}
+	const uint64_t lastProgressTickMs = vrRenderScalePresentationRecoveryMenuEpoch == a_epoch ?
+	                                        std::max(mutation.lastProgressTickMs, vrRenderScalePresentationRecoveryLastMenuTickMs) :
+	                                        mutation.lastProgressTickMs;
 	const bool stalled = VRVendorRelatchPolicy::HasPostMutationEmergencyRecoveryStalled({
 		.progressPhase = mutation.progressPhase,
 		.mutationStartTickMs = mutation.startTickMs,
-		.lastProgressTickMs = mutation.lastProgressTickMs,
+		.lastProgressTickMs = lastProgressTickMs,
 		.currentTickMs = now,
 		.initialDelayMs = kVRRenderScalePostMutationEmergencyAttemptDelayMilliseconds,
 		.progressingStallDelayMs = kVRRenderScalePostMutationStalledDeadlineMilliseconds,
 	});
 	if (stage == Stage::None && !stalled)
 		return;
-	if (IsSubmitStageDeviceLost()) {
-		vrRenderScalePresentationRecoveryStage.store(Stage::Quarantined, std::memory_order_release);
-		LogVRRenderScalePresentationStall(a_epoch, "device quarantine", a_context);
-		return;
-	}
 	if (stage == Stage::NativeFallback) {
 		if (VRVendorRelatchPolicy::HasElapsedMonotonicDeadline(
 				vrRenderScalePresentationRecoveryStartTickMs, now,
@@ -57458,6 +57498,10 @@ void Upscaling::MarkSubmitStageDeviceLost(HRESULT a_result, const char* a_contex
 	if (!deviceReportedLoss && !IsD3DDeviceRemovedResult(a_result))
 		return;
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	CSX::Diagnostics::GpuCrash::ReportFailure(loggedResult,
+		a_context && *a_context ? a_context : "submit-stage device loss");
+#endif
 	VRVendorRelatchPolicy::InvalidateStartupNativeFallbackRetry(
 		vrStartupRenderScaleNativeFallbackState);
 	const bool alreadyMarked = submitStageDeviceLost.exchange(true, std::memory_order_acq_rel);

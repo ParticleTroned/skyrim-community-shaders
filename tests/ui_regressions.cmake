@@ -26,6 +26,15 @@ foreach(target IN ITEMS ui_input_regression_test ui_persistence_regression_test 
 endforeach()
 add_controller_test(device_context_state_test DeviceContextState tests/device_context_state_test.cpp)
 target_link_libraries(device_context_state_test PRIVATE d3d11 dxguid runtimeobject)
+add_d3d_shader_test(device_context_hook_test DeviceContextHook tests/device_context_hook_test.cpp)
+target_include_directories(device_context_hook_test PRIVATE ${DETOURS_INCLUDE_DIRS})
+target_compile_definitions(device_context_hook_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(device_context_hook_test PRIVATE ${DETOURS_LIBRARY} windowsapp.lib)
+add_test(NAME DeviceContextHookVTable COMMAND device_context_hook_test vtable)
+add_test(NAME DeviceContextHookClone COMMAND device_context_hook_test clone)
+add_test(NAME DeviceContextHookPublicationFailure COMMAND device_context_hook_test publication_failure)
+set_tests_properties(DeviceContextHookVTable DeviceContextHookClone DeviceContextHookPublicationFailure PROPERTIES
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "ControllerTests" TIMEOUT 60)
 
 add_controller_test(background_blur_initialization_test BackgroundBlurInitialization tests/background_blur_initialization_test.cpp)
 add_dependencies(background_blur_initialization_test ui_regression_sources)

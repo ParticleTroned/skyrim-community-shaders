@@ -109,8 +109,12 @@ struct GrassBucketRenderer {
         std::unordered_map<uintptr_t, Admission> admitted;
         std::vector<Bucket> buckets, dormantBuckets;
         std::vector<std::shared_ptr<const QueuedGroup>> queuedGroups;
+        struct LODLoad { std::atomic_bool cancelled{false}; };
+        std::vector<std::unique_ptr<LODLoad>> lodLoads;
+        std::unique_ptr<int> lodWorker;
         void ClearDrawContext() {}
         void UpdateLODDemand(const GrassPolicy::Settings&) {}
+        void PollLODLoads() {}
         void ReuseRecordBuffers(std::vector<Bucket>&) {}
         void RefreshFades() {
             for (const auto& bucket : buckets) for (const auto& source : bucket.sources) {

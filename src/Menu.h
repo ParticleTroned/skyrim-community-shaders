@@ -116,7 +116,8 @@ public:
 	void Load(json& o_json);
 	void Save(json& o_json);
 
-	void LoadTheme(json& o_json);
+	/** Loads a validated theme and its saved baseline; returns false without changing them on failure. */
+	bool LoadTheme(json& o_json);
 	void SaveTheme(json& o_json);
 
 	// Multi-theme support

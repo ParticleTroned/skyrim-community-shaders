@@ -1,4 +1,5 @@
 #include "Features/LightLimitFix/ShadowCullingPolicy.h"
+#include "Features/SeasonalWeatherConfig.h"
 #include "PresetCompatibility.h"
 
 #include <nlohmann/json.hpp>
@@ -10,6 +11,17 @@
 
 namespace
 {
+	void VerifySeasonalSettings(const nlohmann::json& preset)
+	{
+		const auto defaults = SeasonalWeatherConfig::Serialize({});
+		const auto& settings = preset.at("Seasonal Weather");
+		assert(settings.size() == defaults.size());
+		for (const auto& [key, value] : defaults.items())
+			assert(settings.contains(key));
+		assert(SeasonalWeatherConfig::Serialize(SeasonalWeatherConfig::Parse(settings)) == defaults);
+		assert(preset.at("Disable at Boot").at("SeasonalWeather") == false);
+	}
+
 	nlohmann::json CompatiblePreset()
 	{
 		return {
@@ -41,6 +53,9 @@ int main(int argc, char** argv)
 	std::ifstream policyInput(std::filesystem::path(argv[1]) / "docs/development/unified-preset-policy.json");
 	assert(policyInput.is_open());
 	const auto policy = nlohmann::json::parse(policyInput);
+	std::ifstream baseInput(std::filesystem::path(argv[1]) / policy.at("baseTemplate").at("path").get<std::string>());
+	assert(baseInput.is_open());
+	VerifySeasonalSettings(nlohmann::json::parse(baseInput));
 	std::size_t profileCount = 0;
 	for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::path(argv[1]) / "MGO-Presets")) {
 		const auto path = entry.path() / "SKSE/Plugins/CommunityShaders/SettingsUser.json";
@@ -49,6 +64,7 @@ int main(int argc, char** argv)
 		std::ifstream input(path);
 		assert(input.is_open());
 		const auto preset = nlohmann::json::parse(input);
+		VerifySeasonalSettings(preset);
 		const auto& marker = preset.at("Preset Compatibility");
 		assert(marker.at("contractVersion") == policy.at("presetCompatibility").at("contractVersion"));
 		assert(marker.at("presetVersion") == policy.at("packageVersion"));

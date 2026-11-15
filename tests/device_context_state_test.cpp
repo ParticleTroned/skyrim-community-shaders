@@ -30,9 +30,33 @@ static void Require(bool value, const char* message)
 		throw std::runtime_error(message);
 }
 static void Check(HRESULT result) { winrt::check_hresult(result); }
+
+static void TestIsolationFallback()
+{
+	winrt::com_ptr<ID3D11Device> device;
+	winrt::com_ptr<ID3D11DeviceContext> context;
+	Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, device.put(), nullptr, context.put()));
+	winrt::com_ptr<ID3D11DeviceContext1> context1;
+	winrt::com_ptr<ID3DDeviceContextState> state;
+	Require(Util::CreateIsolatedDeviceContextState(device.get(), context.get(), context1, state, "Test::BeforeHooks"), "create state before hooks");
+	Util::RegisterDeviceContextStateForHooks(context.get());
+	Util::DisableDeviceContextStateIsolation(context.get());
+	Util::RegisterDeviceContextStateForHooks(context.get());
+	auto* previous = state.get();
+	Require(!Util::CreateIsolatedDeviceContextState(device.get(), context.get(), context1, state, "Invalid") && state.get() == previous,
+		"latched fallback rejects later state creation without replacing existing resources");
+	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP);
+	const Util::ScopedDeviceContextState guard(context1.get(), state.get());
+	Require(!static_cast<bool>(guard), "latched fallback rejects previously created isolated states");
+	D3D11_PRIMITIVE_TOPOLOGY topology{};
+	context->IAGetPrimitiveTopology(&topology);
+	Require(topology == D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP, "rejected isolation preserves context state");
+}
 int main()
 {
 	try {
+		Util::RegisterDeviceContextStateForHooks(nullptr);
+		TestIsolationFallback();
 		winrt::com_ptr<ID3D11Device> device;
 		winrt::com_ptr<ID3D11DeviceContext> context;
 		Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, device.put(), nullptr, context.put()));
@@ -128,6 +152,12 @@ int main()
 			context->GetPredication(restoredPredicate.put(), &value);
 			Require(restoredPredicate.get() == predicate.get() && value, "restore predication");
 		};
+		Util::RegisterDeviceContextStateForHooks(context.get());
+		verify();
+		Util::resourceName = "NoRepeatedCreation";
+		Util::RegisterDeviceContextStateForHooks(context.get());
+		Require(Util::resourceName == "NoRepeatedCreation", "context registration does not allocate native states");
+		verify();
 		for (int iteration = 0; iteration < 2; ++iteration) {
 			{
 				Util::ScopedDeviceContextState guard(context1.get(), isolated.get());

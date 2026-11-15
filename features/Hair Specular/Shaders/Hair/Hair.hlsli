@@ -181,7 +181,7 @@ namespace Hair
 				const float shift = TexTangentShift.SampleLevel(SampColorSampler, uv, 0).x - 0.5;
 				T = ShiftTangent(T, N, shift);
 			}
-			float3 L = normalize(V - T * dot(V, T));
+			float3 L = GetViewFacingNormal(T, V, N);
 
 			lobeWeights.diffuse = D_Marschner(L, V, T, 1 - saturate(material.Shininess * 0.01), material.BaseColor, 0.2, 0) * Math::PI * SharedData::hairSpecularSettings.SpecularIndirectMult;
 			lobeWeights.diffuse += GetHairDiffuseAttenuationKajiyaKay(T, V, L, 1, material.BaseColor) * Math::PI * SharedData::hairSpecularSettings.DiffuseIndirectMult;

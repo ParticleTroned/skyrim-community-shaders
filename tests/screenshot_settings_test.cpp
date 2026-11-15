@@ -48,6 +48,7 @@ struct ScreenshotFeature
 	CaptureEye screenshotEye = CaptureEye::Left, frameCaptureEye = CaptureEye::Left;
 	VRCaptureSource vrCaptureSource = VRCaptureSource::HMDSubmission;
 	VRFramedView vrFramedView = VRFramedView::Left;
+	bool vrFramedNativeResolution = false;
 	vr::EVREye vrFramedDominantEye = vr::Eye_Left;
 	std::string screenshotPath = "Pictures", frameCapturePath = "Videos";
 	struct
@@ -154,6 +155,8 @@ int main()
 		check(sequence["outputs"].size() == (eye == Eye::Both ? 2 : 1), "sequence added unwanted outputs");
 		check(sequence["outputs"][0]["view"] == (eye == Eye::Right ? "right_eye" : "left_eye"), "sequence eye not used");
 		check(sequence["outputs"][0]["encoding"]["format"] == "bmp" && sequence["clipboard"] == "none", "sequence inherited still encoding/clipboard");
+		const auto emptyOutputs = api.NormalizeCaptureDescriptor(feature, { { "useSettings", true }, { "capture", { { "outputs", json::array() } } } }, true);
+		check(emptyOutputs["outputs"] == sequence["outputs"], "empty outputs lost sequence eye or encoding settings");
 		check(sequence["destination"]["resolvedDirectory"] == "Videos", "sequence resolved the still destination");
 		check(sequence["source"]["fallback"] == "reject", "HMD capture allowed implicit desktop fallback");
 	}
@@ -169,9 +172,56 @@ int main()
 	feature.vrFramedDominantEye = vr::Eye_Right;
 	const auto framed = api.NormalizeCaptureDescriptor(feature, { { "useSettings", true } }, true);
 	check(framed["outputs"].size() == 1 && framed["outputs"][0]["dominantEye"] == "right", "framed combined lost dominant eye");
+	check(framed["outputs"][0]["width"] == 3840 && framed["outputs"][0]["height"] == 2160, "framed default is not 4K");
+	json nativeSettings = { { "VRFramedNativeResolution", true } };
+	feature.LoadSettings(nativeSettings);
+	feature.LoadSettings(partial);
+	check(feature.vrFramedNativeResolution, "partial load lost native framing");
+	for (const auto eye : { Eye::Left, Eye::Right, Eye::Both }) {
+		feature.frameCaptureEye = eye;
+		const auto native = api.NormalizeCaptureDescriptor(feature, { { "useSettings", true } }, true);
+		check(native["outputs"][0]["resolution"] == "native" && !native["outputs"][0].contains("width"), "native dimensions resolved before acquisition");
+		const auto emptyOutputs = api.NormalizeCaptureDescriptor(feature, { { "useSettings", true }, { "capture", { { "outputs", json::array() } } } }, true);
+		check(emptyOutputs["outputs"][0]["resolution"] == "native", "empty outputs lost native framing setting");
+	}
+	for (const auto resolution : { "4k", "native" }) {
+		const json patch = { { "VR", { { "FramedResolution", resolution } } } };
+		check(api.ValidateSettingsPatch(patch)["valid"], "valid framed settings rejected");
+		api.ApplySettingsPatch(feature, patch);
+		check(feature.vrFramedNativeResolution == (std::string_view(resolution) == "native"), "framed setting patch ignored");
+	}
+	for (const auto invalid : { json("8k"), json(42), json(nullptr) })
+		check(!api.ValidateSettingsPatch({ { "VR", { { "FramedResolution", invalid } } } })["valid"].get<bool>(), "invalid framed setting accepted");
+	auto explicitFrame = [&](const json& output) {
+		return api.NormalizeCaptureDescriptor(feature, { { "capture", { { "source", { { "kind", "hmd_submission" } } }, { "outputs", json::array({ output }) } } } });
+	};
+	for (const auto view : { "framed_left", "framed_right", "framed_combined" }) {
+		const auto current = explicitFrame({ { "view", view } });
+		check(current["outputs"][0]["width"] == 3840 && current["outputs"][0]["height"] == 2160, "explicit frame default is not 4K");
+		const auto legacy = explicitFrame({ { "view", view }, { "width", 2560 }, { "height", 1440 } });
+		check(legacy["outputs"][0]["width"] == 2560 && legacy["outputs"][0]["height"] == 1440, "explicit legacy dimensions changed");
+		for (const auto invalid : {
+				 json{ { "view", view }, { "resolution", "native" }, { "width", 3840 } },
+				 json{ { "view", view }, { "resolution", "4k" }, { "width", 2560 } },
+				 json{ { "view", view }, { "resolution", "8k" } },
+				 json{ { "view", view }, { "width", -1 } },
+				 json{ { "view", view }, { "width", 4294971136ull } },
+				 json{ { "view", view }, { "width", 3840.0 } },
+				 json{ { "view", "left_eye" }, { "resolution", "native" } } }) {
+			bool rejected = false;
+			try {
+				(void)explicitFrame(invalid);
+			} catch (const std::exception&) {
+				rejected = true;
+			}
+			check(rejected, "invalid framed descriptor accepted");
+		}
+	}
 	globals::game::isVR = false;
 	const auto desktop = api.NormalizeCaptureDescriptor(feature, { { "useSettings", true } }, true);
 	check(desktop["source"]["kind"] == "desktop_mirror" && desktop["outputs"][0]["view"] == "source_native", "SE/AE generated HMD-only output");
+	const auto desktopEmpty = api.NormalizeCaptureDescriptor(feature, { { "useSettings", true }, { "capture", { { "outputs", json::array() } } } });
+	check(desktopEmpty["outputs"] == desktop["outputs"], "empty SE/AE outputs inherited HMD framing");
 	globals::game::isVR = true;
 	for (const auto patch : { json{ { "VR", { { "Eye", "bad" } } } }, json{ { "Sequence", { { "Eye", 9 } } } }, json{ { "Sequence", { { "Encoding", { { "Format", "jpeg" } } } } } } })
 		check(!api.ValidateSettingsPatch(patch)["valid"].get<bool>(), "invalid eye/encoding accepted");

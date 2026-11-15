@@ -4,6 +4,7 @@
 
 #include "Buffer.h"
 #include "Utils/DepthPyramid.h"
+#include "Utils/DepthPyramidPolicy.h"
 
 /** @brief Current main-depth max pyramid; incompatible targets fail open. */
 class GrassHiZ
@@ -11,7 +12,8 @@ class GrassHiZ
 public:
 	void SetupResources();
 	void Reset();
-	bool Build(ID3D11DeviceContext1* context, uint32_t frame);
+	/** @brief Build optional occlusion only when its workload estimate admits the candidates. */
+	bool Build(ID3D11DeviceContext1* context, uint32_t frame, uint64_t candidateIndexWork);
 	ID3D11ShaderResourceView* SRV() const { return pyramid.SRV(); }
 	uint32_t Width() const { return width; }
 	uint32_t Height() const { return height; }
@@ -58,6 +60,7 @@ private:
 	std::array<std::atomic_uint32_t, 11> observed{};
 #endif
 	DepthPyramid pyramid;
+	DepthPyramidPolicy::AllocationRetention allocationRetention;
 	winrt::com_ptr<ID3D11Resource> sourceIdentity;
 	winrt::com_ptr<ID3D11Resource> depthViewIdentity;
 	winrt::com_ptr<ID3D11ShaderResourceView> depthView;

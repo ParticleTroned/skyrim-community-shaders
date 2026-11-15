@@ -494,7 +494,7 @@ void TruePBR::SetupGlintsTexture()
 		.Texture2D = { .MipSlice = 0 }
 	};
 
-	glintsNoiseTexture = eastl::make_unique<Texture2D>(tex_desc);
+	glintsNoiseTexture = eastl::make_unique<Texture2D>(tex_desc, "TruePBR::GlintsNoise");
 	glintsNoiseTexture->CreateSRV(srv_desc);
 	glintsNoiseTexture->CreateUAV(uav_desc);
 
@@ -748,7 +748,7 @@ void TruePBR::GenerateShaderPermutations(RE::BSShader* shader)
 			auto pixelShaderDescriptor = descriptor;
 			state->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
 			if (pixelShaderDescriptor & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::Deferred))
-				shaderCache->PrewarmDeferredPixelShaders(*shader, pixelShaderDescriptor, categories);
+				shaderCache->PrewarmDeferredPixelShaders(*shader, pixelShaderDescriptor, categories, true);
 			else
 				std::ignore = shaderCache->GetPixelShader(*shader, pixelShaderDescriptor, SIE::ShaderCache::PixelShaderLookup::Precompile);
 		}
@@ -1199,13 +1199,10 @@ struct BSLightingShaderProperty_GetRenderPasses_LocalMap
 
 bool TruePBR::UsesCustomMaterialSetup(uint32_t rawTechnique) const
 {
-	if (!loaded || !settings.Enabled)
-		return false;
-
 	using enum SIE::ShaderCache::LightingShaderTechniques;
 	const auto lightingType = static_cast<SIE::ShaderCache::LightingShaderTechniques>((rawTechnique >> 24) & 0x3F);
-	return lightingType != LODLand && lightingType != LODLandNoise &&
-	       (rawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr)) != 0;
+	return (rawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr)) != 0 &&
+	       lightingType != LODLand && lightingType != LODLandNoise && loaded && settings.Enabled;
 }
 
 bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material)

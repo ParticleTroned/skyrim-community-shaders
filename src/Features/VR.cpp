@@ -952,6 +952,7 @@ void VR::PostPostLoad()
 
 void VR::DataLoaded()
 {
+	VRDepthCullingTemporal::RegisterMapEvents();
 	// Initialize occlusion culling based on user settings and current interior/exterior state.
 	UpdateDepthBufferCulling();
 	TryApplyDepthBufferCullingCacheRefresh();

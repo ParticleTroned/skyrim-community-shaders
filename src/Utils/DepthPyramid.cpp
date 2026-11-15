@@ -41,8 +41,7 @@ void DepthPyramid::Allocate(uint32_t nextWidth, uint32_t nextHeight, uint32_t ey
 		!std::has_single_bit(nextWidth / eyes) || !std::has_single_bit(nextHeight) ||
 		nextWidth > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION || nextHeight > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION)
 		throw std::invalid_argument("Invalid depth pyramid dimensions");
-	const UINT complete = UINT(std::min(std::bit_width(nextWidth / eyes), std::bit_width(nextHeight)));
-	const UINT levels = maximumMips ? std::min(complete, maximumMips) : complete;
+	const UINT levels = DepthPyramidPolicy::MipCount({ nextWidth, nextHeight }, eyes, maximumMips);
 	D3D11_TEXTURE2D_DESC desc{};
 	desc.Width = nextWidth;
 	desc.Height = nextHeight;

@@ -1,4 +1,5 @@
 #include "State.h"
+#include "Diagnostics/PerformanceCostExperiments.h"
 #include "Features/ReverseZ.h"
 #include "Features/UnifiedWater.h"
 #if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
@@ -9,6 +10,7 @@
 #include "Features/TextureStreaming.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Diagnostics/EngineStutterMonitor.h"
+#	include "Diagnostics/GpuCrashDiagnostics.h"
 #endif
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -21,6 +23,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -44,7 +47,6 @@
 #include "Features/LightLimitFix.h"
 #include "Features/LightLimitFix/LightAttach.h"
 #include "Features/PerformanceOverlay.h"
-#include "Features/SnowCover.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
@@ -75,6 +77,9 @@
 
 #ifdef TRACY_ENABLE
 static thread_local std::vector<TracyCZoneCtx> s_tracyPerfZones;
+#endif
+#ifdef DEVBENCH_BRIDGE_ENABLED
+static thread_local std::vector<uint64_t> s_gpuCrashPerfZones;
 #endif
 
 namespace
@@ -520,7 +525,6 @@ void State::Draw()
 			globals::features::lightLimitFix.Reset();
 			globals::features::interiorSun.isInteriorWithSun = false;
 			globals::features::wetterness.ResetRuntimeStateAfterGameLoad();
-			globals::features::snowCover.ResetRuntimeStateAfterGameLoad();
 			globals::features::grassCollision.ResetRuntimeStateAfterGameLoad();
 			pendingPostLoadRuntimeReset = false;
 			logger::info("Applied deferred post-load runtime reset");
@@ -877,6 +881,9 @@ void State::UpdateSaveLoadSafeMode()
 
 void State::Reset()
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	CSX::Diagnostics::PerformanceCosts::ProcessPendingChanges();
+#endif
 	selectedCustomPixelShaderType = RE::BSShader::Type::None;
 	if (globals::game::isVR)
 		globals::profiler->EndFrame(frameCount);
@@ -907,6 +914,9 @@ void State::Reset()
 	std::memset(&permutationDataPrevious, 0xFF, sizeof(PermutationCB));
 	frameCount++;
 	frameCountAtomic.store(frameCount, std::memory_order_relaxed);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	CSX::Diagnostics::GpuCrash::Checkpoint("Frame::Reset");
+#endif
 	UpdateSaveLoadSafeMode();
 	LODBlendRingFix::GetInstance().Update();
 
@@ -1539,7 +1549,7 @@ void State::SaveToJson(
 	json advanced;
 	advanced["Dump Shaders"] = shaderCache->IsDump();
 	advanced["Log Level"] = logLevel;
-	advanced["Shader Defines"] = GetShaderDefinesSnapshot()->canonicalText;
+	advanced["Shader Defines"] = GetShaderDefinesSnapshot()->authoredText;
 	advanced["Compiler Threads"] = shaderCache->compilationThreadCount;
 	advanced["Background Compiler Threads"] = shaderCache->backgroundCompilationThreadCount;
 	advanced["Use FileWatcher"] = shaderCache->UseFileWatcher();
@@ -1879,7 +1889,7 @@ void State::SetDefines(std::string a_defines)
 			continue;
 		}
 		auto name = pystring::strip(token[0]);
-		if (name == "REVERSE_Z" || name.starts_with("CSX_DEPTH_ORDER_TEST_")) {
+		if (name == "REVERSE_Z" || name.starts_with("CSX_DEPTH_ORDER_TEST_") || name == "CSX_PERF_REFERENCE_FLAGS") {
 			logger::warn("Depth convention defines are renderer-owned; ignoring {}", name);
 			continue;
 		}
@@ -1897,6 +1907,16 @@ void State::SetDefines(std::string a_defines)
 		snapshot.defines.emplace_back(std::move(name), std::move(definition));
 	}
 
+	snapshot.authoredText = snapshot.canonicalText;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (const auto reference = CSX::Diagnostics::PerformanceCosts::ShaderReferenceMask()) {
+		const auto definition = std::to_string(reference);
+		if (!snapshot.canonicalText.empty())
+			snapshot.canonicalText += ";";
+		snapshot.canonicalText += "CSX_PERF_REFERENCE_FLAGS=" + definition;
+		snapshot.defines.emplace_back("CSX_PERF_REFERENCE_FLAGS", definition);
+	}
+#endif
 	auto immutableSnapshot =
 		std::make_shared<const ShaderDefinesSnapshot>(std::move(snapshot));
 	shaderDefinesSnapshot.store(immutableSnapshot, std::memory_order_release);
@@ -2027,11 +2047,11 @@ void State::SetupResources()
 	}
 #endif
 
-	permutationCB = new ConstantBuffer(ConstantBufferDesc<PermutationCB>());
-	sharedDataCB = new ConstantBuffer(ConstantBufferDesc<SharedDataCB>());
+	permutationCB = new ConstantBuffer(ConstantBufferDesc<PermutationCB>(), "State::PermutationCB");
+	sharedDataCB = new ConstantBuffer(ConstantBufferDesc<SharedDataCB>(), "State::SharedDataCB");
 
-	const auto featureDataSize = GetFeatureBufferCapacity();
-	featureDataCB = new ConstantBuffer(ConstantBufferDesc((uint32_t)featureDataSize));
+	const auto featureDataSize = GetFeatureBufferData(false).second;
+	featureDataCB = new ConstantBuffer(ConstantBufferDesc((uint32_t)featureDataSize), "State::FeatureDataCB");
 
 	// Grab main texture to get resolution
 	// VR cannot use viewport->screenWidth/Height as it's the desktop preview window's resolution and not HMD
@@ -2245,6 +2265,10 @@ void State::EndDrawEvent()
 
 void State::BeginPerfEvent(std::string_view title)
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (CSX::Diagnostics::GpuCrash::IsEnabled())
+		s_gpuCrashPerfZones.push_back(CSX::Diagnostics::GpuCrash::BeginPass(title));
+#endif
 #if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
 	NvPerf::PushRange(title);
 #endif
@@ -2268,6 +2292,12 @@ void State::BeginPerfEvent(std::string_view title)
 
 void State::EndPerfEvent()
 {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (!s_gpuCrashPerfZones.empty()) {
+		CSX::Diagnostics::GpuCrash::EndPass(s_gpuCrashPerfZones.back());
+		s_gpuCrashPerfZones.pop_back();
+	}
+#endif
 #if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
 	NvPerf::PopRange();
 #endif
@@ -2294,6 +2324,34 @@ void State::SetPerfMarker(std::string_view title)
 void State::SetAdapterDescription(const std::wstring& description)
 {
 	adapterDescription = stl::utf16_to_utf8(description).value_or("<GPU name conversion failed>");
+}
+
+void State::UpdateWaterData(SharedDataCB& a_data, bool a_inWorld)
+{
+	const bool hasOrigin = globals::game::shadowState != nullptr;
+	const auto origin = hasOrigin ? Util::GetEyePosition(0) : RE::NiPoint3{};
+	if (a_inWorld) {
+		worldWaterDataValid = false;
+		if (hasOrigin && std::isfinite(origin.x) && std::isfinite(origin.y) && std::isfinite(origin.z)) {
+			for (int i = -2; i <= 2; ++i) {
+				for (int k = -2; k <= 2; ++k) {
+					const int waterTile = (i + 2) + ((k + 2) * 5);
+					worldWaterData[waterTile] = Util::TryGetWaterData(static_cast<float>(i) * 4096.0f, static_cast<float>(k) * 4096.0f);
+				}
+			}
+			worldWaterDataOrigin = origin;
+			worldWaterDataFrame = frameCount;
+			worldWaterDataValid = true;
+		}
+	}
+
+	if (hasOrigin && worldWaterDataValid && worldWaterDataFrame == frameCount &&
+		worldWaterDataOrigin.x == origin.x && worldWaterDataOrigin.y == origin.y && worldWaterDataOrigin.z == origin.z) {
+		std::copy(std::begin(worldWaterData), std::end(worldWaterData), a_data.WaterData);
+	} else {
+		// Zero is a valid eye-height water plane, so unavailable samples must use the sentinel.
+		std::fill(std::begin(a_data.WaterData), std::end(a_data.WaterData), float4(1.0f, 1.0f, 1.0f, -std::numeric_limits<float>::max()));
+	}
 }
 
 void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] bool a_prepass)
@@ -2327,14 +2385,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.FrameCount = frameCount * temporal;
 		data.FrameCountAlwaysActive = frameCount;
 
-		if (a_inWorld) {
-			for (int i = -2; i <= 2; i++) {
-				for (int k = -2; k <= 2; k++) {
-					int waterTile = (i + 2) + ((k + 2) * 5);
-					data.WaterData[waterTile] = Util::TryGetWaterData((float)i * 4096.0f, (float)k * 4096.0f);
-				}
-			}
-		}
+		UpdateWaterData(data, a_inWorld);
 
 		// Fallback water height for the VR analytical mask when tile 12 returns the sentinel.
 		// Uses player->GetWaterHeight() (reads relevantWaterHeight from LOADED_REF_DATA,

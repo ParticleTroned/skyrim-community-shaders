@@ -19,6 +19,11 @@ only `CSX_AIO-*.7z`. Core-only, individual-feature and standalone-cache
 archives remain internal workflow artifacts. GitHub adds source ZIP and
 tar.gz links automatically; those are not install packages.
 
+Core and AIO packaging includes the repository's unchanged `COPYING`,
+`COPYING.LESSER`, and `EXCEPTIONS.md` files under
+`SKSE/Plugins/CommunityShaders/Licenses/`. Shader and third-party notices
+retain their existing payload locations.
+
 ## Feature inventory and release notes
 
 `tools/feature_version_audit.py` uses the same distribution profile as the

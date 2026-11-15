@@ -1,3 +1,4 @@
+#include "Common/PerformanceCostReference.hlsli"
 #include "Upscaling/NeuralRendering/ColorCommon.hlsli"
 Texture2D<float4> Baseline : register(t0);
 Texture2D<float4> Neural : register(t1);
@@ -44,15 +45,26 @@ float3 RoundPreserveSourceForStorage(float3 value)
 		Result[local] = baseline;
 		return;
 	}
+	const bool preserveSource = (ControlFlags & 1u) == 0u && ColorMode == 2;
+#if (CSX_PERF_REFERENCE_FLAGS & CSX_PERF_NEURAL_PREPARATION)
 	float3 candidate = Candidate(local, baseline.rgb);
-	if ((ControlFlags & 1u) != 0u || ColorMode != 2) {
+	if (!preserveSource) {
 		Result[local] = float4(candidate, baseline.a);
 		return;
 	}
-	if (DetailStrength == 0.0 && AppearanceMix == 0.0) {
+#endif
+	[branch] if (preserveSource && DetailStrength == 0.0 && AppearanceMix == 0.0)
+	{
 		Result[local] = baseline;
 		return;
 	}
+#if !(CSX_PERF_REFERENCE_FLAGS & CSX_PERF_NEURAL_PREPARATION)
+	float3 candidate = Candidate(local, baseline.rgb);
+	if (!preserveSource) {
+		Result[local] = float4(candidate, baseline.a);
+		return;
+	}
+#endif
 	if (AppearanceMix >= 1.0) {
 		Result[local] = float4(candidate, baseline.a);
 		return;
@@ -84,7 +96,8 @@ float3 RoundPreserveSourceForStorage(float3 value)
 		float residual = (log2(neuralY) - log2(baseY));
 		float acceptedResidual = residual;
 		// Zero preservation uses only the current residual, including resolved Neural Lighting.
-		[branch] if (LightingPreservation != 0.0) {
+		[branch] if (LightingPreservation != 0.0)
+		{
 			float weightedResidual = 0.0, totalWeight = 0.0;
 			// Adjacent taps preserve fine detail without reading another crop or atlas padding.
 			[unroll] for (int y = -1; y <= 1; ++y)

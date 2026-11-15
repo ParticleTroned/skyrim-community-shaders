@@ -19,6 +19,7 @@
 #include "Utils/VanityCamera.h"
 
 #include "Feature.h"
+#include "Features/DetailMaps.h"
 #include "Features/FurShells.h"
 #include "Features/GrassLighting.h"
 #include "Features/SnowCover.h"
@@ -958,6 +959,19 @@ namespace EffectExtensions
 	};
 }
 
+namespace SkyExtensions
+{
+	struct BSSkyShader_RestoreGeometry
+	{
+		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
+		{
+			globals::state->RestoreSunGlareBindings();
+			func(shader, pass, renderFlags);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+}
+
 namespace LightingExtensions
 {
 	struct BSLightingShader_SetupGeometry
@@ -979,6 +993,9 @@ namespace LightingExtensions
 
 			state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::IsTree);
 
+			if (globals::features::detailMaps.IsEnabled())
+				globals::features::detailMaps.BeginPass(shader, pass);
+
 			if (auto userData = pass->geometry->GetUserData())
 				if (auto baseObject = userData->GetBaseObject())
 					if (baseObject->As<RE::TESObjectTREE>())
@@ -995,8 +1012,11 @@ struct AcceptedDrawRestoreGeometry
 {
 	static void thunk(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_flags)
 	{
-		if constexpr (ShaderKind == 1)
+		if constexpr (ShaderKind == 1) {
+			if (globals::features::detailMaps.HasActivePass())
+				globals::features::detailMaps.EndPass();
 			TerrainSeams::GetInstance().Restore();
+		}
 		if (globals::game::isVR)
 			CSX::Api::SuspendAcceptedDrawGeometry();
 		func(a_shader, a_pass, a_flags);
@@ -1341,11 +1361,13 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 
 void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 {
+	// Release owned bindings before native state updates can replace their saved values.
+	globals::state->RestoreSunGlareBindings();
 	const auto callerRva = static_cast<uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - REL::Module::get().base());
 	if (!ShouldRecordCSFramePhaseDiag()) {
 		func(isCompute);
 		globals::features::terrainBlending.OnSetDirtyStates(isCompute, callerRva);
-		globals::state->Draw();
+		globals::state->Draw(isCompute);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (globals::features::upscaling.IsNeuralRenderingEnabled())
 			NeuralRendering::Color::ExposureCapture::Instance().ObserveGraphicsStateFlush(globals::d3d::context, isCompute);
@@ -1368,7 +1390,7 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 	RecordCSFrameHookPhase(CSFrameHookPhase::TerrainOnSetDirtyStates, frame, phaseEndTicks - phaseStartTicks);
 
 	phaseStartTicks = phaseEndTicks;
-	globals::state->Draw();
+	globals::state->Draw(isCompute);
 	phaseEndTicks = ReadFrameDiagCounterTicks();
 	RecordCSFrameHookPhase(CSFrameHookPhase::StateDraw, frame, phaseEndTicks - phaseStartTicks);
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -2649,6 +2671,7 @@ namespace Hooks
 		stl::write_thunk_call<TESWaterReflections_Update_Actor_GetLOSPosition>(REL::RelocationID(31373, 32160).address() + REL::Relocate(0x1AD, 0x1CA, 0x1ed));
 
 		logger::info("Installing SetupGeometry hooks");
+		stl::write_vfunc<0x7, SkyExtensions::BSSkyShader_RestoreGeometry>(RE::VTABLE_BSSkyShader[0]);
 		stl::write_vfunc<0x6, EffectExtensions::BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
 		stl::write_vfunc<0x6, LightingExtensions::BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 		stl::write_vfunc<0x7, AcceptedDrawRestoreGeometry<1>>(RE::VTABLE_BSLightingShader[0]);

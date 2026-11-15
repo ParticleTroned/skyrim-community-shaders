@@ -1184,6 +1184,24 @@ void TestEffectSpecializationFallback()
 	Require(f.deferred.captureReady && !f.state.deferredPixelShaderMissing);
 }
 
+void TestDetailMapsSpecializationFallback()
+{
+	using Cache = SIE::ShaderCache;
+	constexpr auto detail = static_cast<uint32_t>(Cache::LightingShaderFlags::DetailMaps);
+	Require((detail & Cache::kLightingSpecializationMask) == 0);
+	for (bool categories : { false, true }) {
+		Fixture f;
+		const auto category = categories ? Cache::GetCharacterCategoryFlag(RE::BSShader::Type::Lighting) : 0u;
+		const auto descriptor = 0x10011u | category | detail;
+		f.cache.startupCompilationComplete = true;
+		f.cache.residentOnly = true;
+		auto* general = f.cache.Add(f.shader, descriptor);
+		Require(f.cache.GetPixelShader(f.shader, descriptor | Cache::kLightingNoMeshVariation, Cache::PixelShaderLookup::Draw) == general);
+		Require(f.cache.compiles == 0 && f.cache.compilationSet.requests.empty());
+		Require(!f.state.deferredPixelShaderMissing);
+	}
+}
+
 void TestWaterRuntimeDescriptor()
 {
 	constexpr auto wading = static_cast<uint32_t>(SIE::ShaderCache::WaterShaderFlags::Wading);
@@ -1222,6 +1240,7 @@ int main()
 			TestWaterRuntimeDescriptor();
 			TestLightingSpecialization();
 			TestCombinedLightingSpecializations();
+			TestDetailMapsSpecializationFallback();
 			TestResidentLightingSpecializations();
 			TestEffectSpecializationFallback();
 			TestDiscoveredSpecializationReplay();

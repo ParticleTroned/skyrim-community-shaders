@@ -13,12 +13,14 @@
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <utility>
 
 using json = nlohmann::json;
 
 #include <FeatureBuffer.h>
 
+#include "Utils/SunGlareBindings.h"
 #include <Hooks.h>
 
 class State
@@ -110,6 +112,8 @@ public:
 	RE::BSShader* currentShader = nullptr;
 	// Only an explicitly bound custom pixel stage proves which shared resources it consumes.
 	RE::BSShader::Type selectedCustomPixelShaderType = RE::BSShader::Type::None;
+	/** @brief Release sun-glare vertex bindings before the engine restores geometry state. */
+	void RestoreSunGlareBindings() { sunGlareBindings.reset(); }
 	std::string adapterDescription = "";
 
 	uint32_t currentVertexDescriptor = 0;
@@ -156,7 +160,7 @@ public:
 		StartupHydration,
 	};
 
-	void Draw();
+	void Draw(bool isCompute);
 	void Debug();
 	void Reset();
 	void Setup();
@@ -611,6 +615,7 @@ public:
 	}
 
 private:
+	std::optional<SunGlare::ScopedBindings> sunGlareBindings;
 	/** Uses current world samples or the no-water sentinel for the shared upload. */
 	void UpdateWaterData(SharedDataCB& a_data, bool a_inWorld);
 	// Render-thread samples are camera-relative and cannot outlive their frame or eye-0 origin.

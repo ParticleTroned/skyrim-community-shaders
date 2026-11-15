@@ -133,6 +133,7 @@ namespace SIE
 		bool ResidentOnlyLightingSpecializations() const { return false; }
 		bool UsesRuntimeLightingSpecializationPolicy() const;
 		void RecordLightingSpecializationMiss(RE::BSShader::Type, uint32_t, bool) {}
+		void RegisterSpecializationBase(RE::BSShader::Type, uint32_t) {}
 		int blockedKeyIndex = -1;
 		std::string blockedKey;
 		std::vector<std::uint32_t> blockedIDs;

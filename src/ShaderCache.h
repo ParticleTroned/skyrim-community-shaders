@@ -913,6 +913,8 @@ namespace SIE
 			Deferred = 1 << 4,
 			// Bit 5 belongs to the character-category output layout.
 			LandscapeSeams = 1 << 6,
+			// Native DefShadow is stripped before custom pixel variants are selected.
+			DetailMaps = 1 << 14,
 			// CSX end
 			Specular = 1 << 9,
 			SoftLighting = 1 << 10,
@@ -933,6 +935,7 @@ namespace SIE
 			FurShells = 1u << 30,
 			FurShellsDepth = 1u << 31
 		};
+		static_assert((static_cast<uint32_t>(LightingShaderFlags::DetailMaps) & kLightingSpecializationMask) == 0);
 
 		/** Reports mesh techniques whose texture sampling can omit Terrain Variation. */
 		static constexpr bool SupportsMeshVariationVariant(uint32_t descriptor)

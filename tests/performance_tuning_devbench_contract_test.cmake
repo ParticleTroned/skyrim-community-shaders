@@ -305,6 +305,7 @@ foreach(_feature_short_name IN ITEMS
     VolumetricShadows
     TruePBR
     ExtendedMaterials
+    DetailMaps
     FoliageLighting
     GrassOptimizations
 )
@@ -321,6 +322,7 @@ foreach(_feature_file IN ITEMS
     "src/Features/CloudShadows"
     "src/Features/VolumetricShadows"
     "src/Features/ExtendedMaterials"
+    "src/Features/DetailMaps"
     "src/Features/FoliageLighting"
     "src/Features/GrassOptimizations"
     "src/TruePBR"

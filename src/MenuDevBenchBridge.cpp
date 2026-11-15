@@ -903,6 +903,31 @@ namespace
 				return result;
 			});
 		}
+		if (action == "adaptive_balance_locations" || action == "teleport_adaptive_balance_location") {
+			if (action == "teleport_adaptive_balance_location" &&
+				(!a_args.contains("locationKey") || !a_args["locationKey"].is_string() || a_args["locationKey"].get_ref<const std::string&>().empty()))
+				return { { "ok", false }, { "action", action }, { "error", "locationKey must be a saved override key" } };
+			const auto key = action == "teleport_adaptive_balance_location" ? a_args["locationKey"].get<std::string>() : std::string{};
+			return RunOnMainThread([action, key]() -> json {
+				auto& balance = globals::features::adaptiveBrightness;
+				if (!balance.loaded)
+					return { { "ok", false }, { "action", action }, { "error", "Adaptive Balance is unavailable" } };
+				if (action == "teleport_adaptive_balance_location") {
+					std::string error;
+					const bool queued = balance.TeleportToLocationOverride(key, error);
+					return { { "ok", queued }, { "action", action }, { "queued", queued }, { "locationKey", key }, { "error", error } };
+				}
+				json locations = json::array();
+				const auto* blockReason = balance.GetLocationTeleportBlockReason();
+				for (const auto& location : balance.settings.locationOverrides) {
+					const auto* error = balance.GetLocationTeleportError(location, blockReason);
+					locations.push_back({ { "key", location.key }, { "name", location.name }, { "cocCode", location.cocCode },
+						{ "canTeleport", error == nullptr }, { "disabledReason", error ? error : "" } });
+				}
+				const auto* travelStatus = balance.locationTeleportStatus.load(std::memory_order_acquire);
+				return { { "ok", true }, { "action", action }, { "locations", std::move(locations) }, { "travelStatus", travelStatus ? travelStatus : "" } };
+			});
+		}
 		if (action == "request_dynamic_cubemap_refresh") {
 			return RunOnMainThread([]() -> json {
 				auto& cubemaps = globals::features::dynamicCubemaps;
@@ -1592,6 +1617,23 @@ namespace MenuDevBenchBridge
 			auto& presetStatus = document["outputSchema"]["properties"]["adaptiveBalancePresets"]["properties"];
 			presetStatus["exportFolder"] = { { "type", "string" }, { "description", "Effective export folder; the default is the game's virtual Data path and remains subject to MO2 routing." } };
 			presetStatus["usesDefaultFolder"] = { { "type", "boolean" } };
+			for (const auto* action : { "adaptive_balance_locations", "teleport_adaptive_balance_location" })
+				document["inputSchema"]["properties"]["action"]["enum"].push_back(action);
+			document["inputSchema"]["properties"]["locationKey"] = {
+				{ "type", "string" }, { "minLength", 1 },
+				{ "description", "Saved override key returned by adaptive_balance_locations; required for teleport_adaptive_balance_location." }
+			};
+			document["inputSchema"]["allOf"].push_back({ { "if", { { "properties", { { "action", { { "const", "teleport_adaptive_balance_location" } } } } }, { "required", { "action" } } } },
+				{ "then", { { "required", { "locationKey" } } } } });
+			document["outputSchema"]["properties"]["locations"] = {
+				{ "type", "array" }, { "items", { { "type", "object" }, { "properties", { { "key", { { "type", "string" } } }, { "name", { { "type", "string" } } }, { "cocCode", { { "type", "string" } } },
+																							{ "canTeleport", { { "type", "boolean" } } }, { "disabledReason", { { "type", "string" } } } } } } }
+			};
+			document["outputSchema"]["properties"]["queued"] = { { "type", "boolean" } };
+			document["outputSchema"]["properties"]["locationKey"] = { { "type", "string" } };
+			document["outputSchema"]["properties"]["travelStatus"] = { { "type", "string" }, { "description", "Latest travel request state: queued, command dispatched, or a rejection/failure. Command dispatch does not establish completed travel." } };
+			document["description"] = document["description"].get<std::string>() +
+			                          " adaptive_balance_locations lists saved Adaptive Balance override keys, names, cocCode and travel availability, with travelStatus reporting the latest queued, dispatched or rejected request. teleport_adaptive_balance_location requires a nonempty locationKey and performs the same action as the doorway-arrow button immediately right of the saved coc value. It validates the ASCII cell EditorID and queues only that coc command on the SKSE main thread. queued=true means accepted, not completed travel; runtime and measurement gates are rechecked before execution. Travel is unavailable while a request is pending, without a loaded player cell, during save/load activity or recovery, main/loading menus, active performance measurements, or without the console/task queue. Copy remains clipboard-only. Settings are not saved or modified.";
 			document["description"] = document["description"].get<std::string>() +
 			                          " set_adaptive_balance_preset_ui accepts optional presetExportFolder to select an existing absolute export directory or an empty string to restore the default Presets folder. Selection is session-only and writes no files. Invalid paths preserve the prior destination. adaptiveBalancePresets reports exportFolder and usesDefaultFolder. Import lookup continues to use the default preset directories.";
 			document["inputSchema"]["properties"]["action"]["enum"].push_back("set_sky_sync_disabled_worldspaces");

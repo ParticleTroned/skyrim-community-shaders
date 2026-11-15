@@ -19,7 +19,7 @@
     },
     "runtimeSettingsContract": {
         "revision": 33,
-        "sourceTreeSha256": "422EEFD0C5498F46EF4BEB932F5EBDE2E630376FC455970142AF9797FFDCCECD",
+        "sourceTreeSha256": "6907896C661CA49FA95972E241928551B4E3F13978E74374022E79DA31F2A4A2",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -29,6 +29,7 @@
                 "src/Features/AdaptiveBalanceDepthOfField.h",
                 "src/Features/AdaptiveBalanceDepthOfFieldSettingsPolicy.h",
                 "src/Features/AdaptiveBalanceGodraySettings.h",
+                "src/Features/DetailMapsConfig.h",
                 "src/Features/FoveatedCommon.h",
                 "src/Features/GrassOptimizations/GrassPolicy.h",
                 "src/Features/LightLimitFix/ShadowCullingPolicy.h",
@@ -85,6 +86,9 @@
             "src/Features/CloudShadows.cpp",
             "src/Features/CloudShadows.h",
             "src/Features/CSEditor.cpp",
+            "src/Features/DetailMaps.cpp",
+            "src/Features/DetailMaps.h",
+            "src/Features/DetailMapsConfig.h",
             "src/Features/DynamicCubemaps.cpp",
             "src/Features/DynamicCubemaps.h",
             "src/Features/ExtendedMaterials.cpp",

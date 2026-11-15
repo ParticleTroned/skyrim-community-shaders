@@ -466,6 +466,8 @@ struct Fixture
 		globals::features::reverseZ.active = false;
 		nativeTechniqueVertex = nullptr;
 		nativeTechniqueClearPixel = nativeTechniqueChangeDescriptors = false;
+		// Independent cache fixtures must not share the selector's thread-local snapshot.
+		cache.SelectLightingPixelShader(shader, 0);
 	}
 	void Bind(uint32_t descriptor)
 	{
@@ -1054,6 +1056,99 @@ void TestLightingSpecialization()
 	Require(!Cache::SupportsMeshVariationVariant(static_cast<uint32_t>(Cache::LightingShaderTechniques::MultilayerParallax) << 24));
 }
 
+void TestFallbackLightingSpecializations()
+{
+	using Cache = SIE::ShaderCache;
+	constexpr uint32_t base = 0x10011u;
+	const auto category = Cache::GetCharacterCategoryFlag(RE::BSShader::Type::Lighting);
+	for (const auto missing : { category, Cache::kLightingDryWeather, Cache::kLightingSnowCoverInactive,
+			 Cache::kLightingNoContactShadows, Cache::kLightingNoLegacySubsurface, category | Cache::kLightingDryWeather }) {
+		for (const auto flags : { Cache::kLightingNoMeshVariation, Cache::kLightingNoLocalLights,
+				 Cache::kLightingNoMeshVariation | Cache::kLightingNoLocalLights }) {
+			for (bool cachedFallbackVariant : { false, true }) {
+				Fixture f;
+				auto* fallback = f.cache.Add(f.shader, base);
+				if (cachedFallbackVariant) {
+					auto* variant = f.cache.Add(f.shader, base | flags);
+					variant->constantBuffers = fallback->constantBuffers;
+					f.Bind(base);
+					++f.state.techniqueShaderSequence;
+					f.cache.SelectLightingPixelShader(f.shader, flags);
+					Require(f.context.bound == variant->shader);
+				}
+				const auto requested = base | missing;
+				f.Bind(requested);
+				++f.state.techniqueShaderSequence;
+				Require(f.state.techniqueShaderSelection.pixel == fallback);
+				Require(f.state.techniqueShaderSelection.pixelDescriptor == requested);
+				f.cache.compilationSet.requests.clear();
+				const auto binds = f.context.binds, locks = f.cache.pixelShadersMutex.locks;
+				f.cache.SelectLightingPixelShader(f.shader, flags);
+				f.cache.SelectLightingPixelShader(f.shader, 0);
+				Require(f.cache.pixelShadersMutex.locks == locks);
+				Require(f.cache.compilationSet.requests.empty() && f.cache.compiles == 0);
+				Require(f.context.binds == binds && f.context.bound == fallback->shader);
+				Require(f.current == &f.native);
+
+				auto* exact = f.cache.Add(f.shader, requested);
+				f.Bind(requested);
+				++f.state.techniqueShaderSequence;
+				f.cache.SelectLightingPixelShader(f.shader, flags);
+				Require(f.cache.compilationSet.requests == std::set<uint32_t>{ requested | flags });
+				Require(f.context.bound == exact->shader);
+				auto* variant = f.cache.Add(f.shader, requested | flags);
+				variant->constantBuffers = exact->constantBuffers;
+				++f.state.frameCount;
+				f.cache.SelectLightingPixelShader(f.shader, flags);
+				Require(f.context.bound == variant->shader);
+				f.cache.SelectLightingPixelShader(f.shader, 0);
+				Require(f.context.bound == exact->shader);
+			}
+		}
+	}
+}
+
+void TestStartupLightingDescriptors()
+{
+	using Cache = SIE::ShaderCache;
+	using Flags = Cache::LightingShaderFlags;
+	const auto category = Cache::GetCharacterCategoryFlag(RE::BSShader::Type::Lighting);
+	constexpr auto deferredFlag = static_cast<uint32_t>(Flags::Deferred);
+	for (const auto materialFlags : { 0u, static_cast<uint32_t>(Flags::SoftLighting),
+			 static_cast<uint32_t>(Flags::RimLighting), static_cast<uint32_t>(Flags::BackLighting) }) {
+		for (bool categories : { false, true }) {
+			Fixture f;
+			f.deferred.deferredPass = false;
+			RE::BSGraphics::PixelShader material;
+			material.id = 1u | materialFlags;
+			const auto* entry = &material;
+			auto* shader = &f.shader;
+			auto* shaderCache = &f.cache;
+			const auto prepareLookup = [](uint32_t& a_vertexDescriptor, uint32_t& a_pixelDescriptor, bool a_forceDeferred = false) {
+				auto* deferred = globals::deferred;
+				const uint32_t lightingPixelShaderFlags = 0;
+				switch (RE::BSShader::Type::Lighting) {
+#include "lighting_lookup.h"
+				}
+			};
+#include "startup_pixel_lookup.h"
+			Require(material.id == (1u | materialFlags));
+			std::set<uint32_t> expected{ 1u, 1u | deferredFlag };
+			if (categories)
+				expected.insert(1u | deferredFlag | category);
+			if (!materialFlags) {
+				expected.insert(1u | deferredFlag | Cache::kLightingNoLegacySubsurface);
+				if (categories)
+					expected.insert(1u | deferredFlag | category | Cache::kLightingNoLegacySubsurface);
+			}
+			Require(f.cache.compilationSet.requests == expected);
+			for (const auto descriptor : expected)
+				Require(f.cache.compilationSet.precompiles.at(descriptor));
+			Require(f.cache.compiles == 0);
+		}
+	}
+}
+
 void TestCombinedLightingSpecializations()
 {
 	using Cache = SIE::ShaderCache;
@@ -1239,6 +1334,8 @@ int main()
 			TestPrecompileLookupContract();
 			TestWaterRuntimeDescriptor();
 			TestLightingSpecialization();
+			TestFallbackLightingSpecializations();
+			TestStartupLightingDescriptors();
 			TestCombinedLightingSpecializations();
 			TestDetailMapsSpecializationFallback();
 			TestResidentLightingSpecializations();

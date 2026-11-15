@@ -768,8 +768,11 @@ struct BSShader_LoadShaders
 				}
 				auto vertexShaderDesriptor = entry->id;
 				auto pixelShaderDescriptor = entry->id;
-				prepareLookup(vertexShaderDesriptor, pixelShaderDescriptor);
-				shaderCache->GetPixelShader(*shader, pixelShaderDescriptor, SIE::ShaderCache::PixelShaderLookup::Precompile);
+				// Deferred normalization needs the material flags stripped by the forward lookup.
+				auto forwardVertexDescriptor = vertexShaderDesriptor;
+				auto forwardPixelDescriptor = pixelShaderDescriptor;
+				prepareLookup(forwardVertexDescriptor, forwardPixelDescriptor);
+				shaderCache->GetPixelShader(*shader, forwardPixelDescriptor, SIE::ShaderCache::PixelShaderLookup::Precompile);
 				prepareLookup(vertexShaderDesriptor, pixelShaderDescriptor, true);
 				shaderCache->PrewarmDeferredPixelShaders(*shader, pixelShaderDescriptor, categories, true);
 			}

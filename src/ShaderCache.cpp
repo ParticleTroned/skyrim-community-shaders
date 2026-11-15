@@ -3759,6 +3759,11 @@ namespace SIE
 			selection = {};
 			return;
 		}
+		// A temporary fallback must not seed its own mesh or local-light specializations.
+		if (standard->id != state.techniqueShaderSelection.pixelDescriptor) {
+			selection = {};
+			return;
+		}
 		if (selection.revision != revision || selection.standard != standard)
 			selection = { .standard = standard, .bound = standard, .revision = revision };
 		if (selection.sequence != state.techniqueShaderSequence) {

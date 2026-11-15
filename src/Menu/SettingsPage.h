@@ -57,6 +57,8 @@ namespace MenuUI
 	bool ChoiceSetting(const char* a_label, int* a_selected, std::span<const Choice> a_choices);
 	bool ChoiceSetting(const char* a_label, int* a_selected, const char* const a_items[], int a_count);
 	bool ChoiceSetting(const char* a_label, int* a_selected, const char* a_items);
+	/** Select a UI-only subpage, allowing search to reveal controls in it. */
+	bool NavigationChoice(const char* a_label, int* a_selected, const char* const a_items[], int a_count);
 	/** Visible group heading that preserves the page's left alignment. */
 	void SectionHeading(const char* a_label);
 	/** Body text at the shared detail-control size. */

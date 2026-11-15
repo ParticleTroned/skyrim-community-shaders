@@ -1,5 +1,6 @@
 #include "AdaptiveBrightness.h"
 #include "Menu/SettingsPage.h"
+#include "Menu/SettingsSearch.h"
 
 #include "Diagnostics/PerformanceCostExperiments.h"
 #include "Globals.h"
@@ -1677,7 +1678,7 @@ void AdaptiveBrightness::DrawProfileControls(
 	const auto selectionId = ImGui::GetID("AdjustmentGroup");
 	int selected = std::clamp(storage->GetInt(selectionId), 0, a_globalLayer ? 5 : 3);
 	constexpr const char* groups[] = { "Lighting", "Colour", "Bloom", "Water", "Depth of field", "Godrays" };
-	if (MenuUI::ChoiceSetting("Adjust", &selected, groups, a_globalLayer ? 6 : 4))
+	if (MenuUI::NavigationChoice("Adjust", &selected, groups, a_globalLayer ? 6 : 4))
 		storage->SetInt(selectionId, selected);
 	const auto disabled = Util::DisableGuard(!a_allowEdits);
 	switch (selected) {
@@ -2074,6 +2075,7 @@ namespace
 		MenuUI::SectionHeading("Appearance controls");
 		ImGui::TextWrapped("Gamma offsets are neutral at zero; negative values lift midtones and positive values darken them. Saturation is neutral at one. Point-light subtype adjustments compose with the shared Point Lights controls.");
 		for (const auto* group : groups) {
+			MenuUI::SettingsSearch::PrepareGroup(group);
 			if (!ImGui::CollapsingHeader(group))
 				continue;
 			if (std::string_view(group) == "Eyes")

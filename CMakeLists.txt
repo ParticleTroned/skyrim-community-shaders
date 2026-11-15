@@ -245,6 +245,7 @@ include(XSEPlugin)
 # always-run target by design: configure-time git metadata becomes stale after
 # a checkout, submodule update, or local edit in an existing build directory.
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/ControlCatalog.cmake")
 set(CSX_PROVENANCE_SCRIPT "${CMAKE_SOURCE_DIR}/tools/build_provenance.py")
 set(CSX_PROVENANCE_DIR
     "${CMAKE_CURRENT_BINARY_DIR}/generated/BuildProvenance/$<CONFIG>"
@@ -1680,6 +1681,15 @@ if(BUILD_CONTROLLER_TESTS)
         add_test(NAME ${TEST_NAME} COMMAND ${TARGET_NAME})
         set_tests_properties(${TEST_NAME} PROPERTIES LABELS "ControllerTests")
     endfunction()
+
+    add_controller_test(settings_search_test SettingsSearch tests/settings_search_test.cpp)
+    add_test(
+        NAME ControlCatalog
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/control_catalog_test.py"
+    )
+    set_tests_properties(ControlCatalog PROPERTIES LABELS "ControllerTests")
 
     set(_performance_cost_defines_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/performance-cost-defines"

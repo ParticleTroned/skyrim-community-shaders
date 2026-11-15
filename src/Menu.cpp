@@ -36,6 +36,7 @@
 #include "Menu/MenuHeaderRenderer.h"
 #include "Menu/OverlayRenderer.h"
 #include "Menu/PerformanceTuningRenderer.h"
+#include "Menu/SettingsSearch.h"
 #include "Menu/SettingsTabRenderer.h"
 #include "Menu/ThemeManager.h"
 #include "Plugin.h"
@@ -1418,6 +1419,7 @@ void Menu::OpenMenu(bool a_cancelUserMeasurement)
 		return;
 
 	IsEnabled = true;
+	MenuUI::SettingsSearch::Invalidate();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	MenuUI::DevBenchViewport::Invalidate();
 #endif
@@ -1440,6 +1442,7 @@ void Menu::CloseMenu()
 		editorWindow->UpdateOpenState();
 	}
 	IsEnabled = false;
+	MenuUI::SettingsSearch::CancelReveal();
 	globals::features::upscaling.EndFoveatedMaskVisualization();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	MenuUI::DevBenchViewport::Invalidate();

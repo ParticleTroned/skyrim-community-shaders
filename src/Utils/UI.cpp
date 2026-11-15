@@ -1582,7 +1582,7 @@ namespace Util
 		strncpy_s(buffer, searchString.c_str(), sizeof(buffer) - 1);
 		buffer[sizeof(buffer) - 1] = '\0';
 
-		if (ImGui::InputTextWithHint("##feature_search", "Search Features...", buffer, sizeof(buffer))) {
+		if (ImGui::InputTextWithHint("##feature_search", "Search settings and features...", buffer, sizeof(buffer))) {
 			searchString = buffer;
 		}
 

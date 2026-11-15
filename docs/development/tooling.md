@@ -43,6 +43,31 @@ an explicit `VIRTUALENV_OVERRIDE_APP_DATA` is preserved.
 The Prettier hook pins its Node runtime so a new cache does not select an
 unsupported prerelease from Node's download index.
 
+## Settings search metadata
+
+The DLL build runs `tools/generate-control-catalog.py` to produce immutable
+control metadata from feature settings methods and built-in menu pages.
+It follows literal labels through UI helpers, lambdas and typed field
+tables. It never runs a page to discover its controls. Dynamic asset names
+and arbitrary C++ expressions are not inferred; their containing feature
+remains searchable.
+
+The menu creates its index lazily and caches query results. Closed menus
+perform no search processing. Navigation selects existing pages and tabs;
+it never invokes a button or edits a feature setting. Use
+`MenuUI::NavigationChoice` only for UI subpage selectors, never for rendering
+values. Common widgets report their rectangles for scrolling and highlighting.
+Controls behind additional conditions can require manual navigation after
+opening the page. Add parser coverage when introducing another UI declaration
+pattern, rather than hard-coding a second list of labels.
+
+Run `python tests/control_catalog_test.py` to check extraction without a
+build. `SettingsSearch` and `SettingsUI` are controller tests for query policy
+and the shared widgets. The DevBench menu tool exposes `search_settings`,
+`reveal_setting` and `search_status`; revealing requires an already open menu
+and respects measurement, dialog and section guards. A queued result does
+not establish that its control is visible.
+
 ## Daily commands
 
 ```powershell

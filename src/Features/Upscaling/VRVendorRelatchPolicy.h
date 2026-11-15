@@ -9,6 +9,24 @@
 
 namespace VRVendorRelatchPolicy
 {
+	struct NativeResolutionPlanKey
+	{
+		std::uint64_t epoch = 0;
+		std::uint32_t generation = 0;
+		std::uint32_t displayEyeWidth = 0;
+		std::uint32_t displayEyeHeight = 0;
+
+		constexpr bool operator==(const NativeResolutionPlanKey&) const noexcept = default;
+	};
+
+	[[nodiscard]] constexpr bool CanReuseRuntimeResolutionPlan(
+		std::uint32_t a_cachedFrame, std::uint32_t a_currentFrame,
+		NativeResolutionPlanKey a_cachedNative, NativeResolutionPlanKey a_currentNative) noexcept
+	{
+		return a_currentFrame != std::numeric_limits<std::uint32_t>::max() &&
+		       a_cachedFrame == a_currentFrame && a_cachedNative == a_currentNative;
+	}
+
 	enum class PresentationRecoveryStage : std::uint8_t
 	{
 		None,

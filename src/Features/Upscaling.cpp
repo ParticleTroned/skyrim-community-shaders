@@ -24164,21 +24164,42 @@ float Upscaling::ResolveRuntimeMipBias(bool a_temporal)
 
 void Upscaling::RefreshRuntimeResolutionState()
 {
+	RefreshRuntimeResolutionState(GetGuardedNativeStabilizationProfile());
+}
+
+VRVendorRelatchPolicy::NativeResolutionPlanKey Upscaling::GetNativeResolutionPlanKey(
+	const std::optional<VRRenderScaleProfileSnapshot>& a_guardedNative) noexcept
+{
+	if (!a_guardedNative)
+		return {};
+	return {
+		a_guardedNative->transitionEpoch,
+		a_guardedNative->contractGeneration,
+		a_guardedNative->displayEyeWidth,
+		a_guardedNative->displayEyeHeight,
+	};
+}
+
+void Upscaling::RefreshRuntimeResolutionState(
+	const std::optional<VRRenderScaleProfileSnapshot>& a_guardedNative)
+{
 	const auto requestedUpscaleMethod = GetConfiguredUpscaleMethodForTransition();
 	perfMode.UpdateRestartRequiredState(settings, requestedUpscaleMethod);
-	RefreshRuntimeResolutionPlan();
+	RefreshRuntimeResolutionPlan(a_guardedNative);
 	runtimeResolutionStateLastRefreshFrame = GetFrameScopedUpscalingWorkFrame();
 }
 
 void Upscaling::EnsureRuntimeResolutionStateCurrent()
 {
 	const uint32_t currentFrame = GetFrameScopedUpscalingWorkFrame();
-	if (currentFrame != std::numeric_limits<uint32_t>::max() &&
-		runtimeResolutionStateLastRefreshFrame == currentFrame) {
+	const auto guardedNative = GetGuardedNativeStabilizationProfile();
+	if (VRVendorRelatchPolicy::CanReuseRuntimeResolutionPlan(
+			runtimeResolutionStateLastRefreshFrame, currentFrame,
+			runtimeResolutionPlan.nativeStabilization, GetNativeResolutionPlanKey(guardedNative))) {
 		return;
 	}
 
-	RefreshRuntimeResolutionState();
+	RefreshRuntimeResolutionState(guardedNative);
 }
 
 void Upscaling::InvalidateFrameScopedUpscalingState()
@@ -24302,10 +24323,11 @@ void Upscaling::CaptureSubmitTemporalSnapshot()
 	submitTemporalInputs.motion.copy_from(motion);
 }
 
-void Upscaling::RefreshRuntimeResolutionPlan()
+void Upscaling::RefreshRuntimeResolutionPlan(
+	const std::optional<VRRenderScaleProfileSnapshot>& guardedNative)
 {
 	RuntimeResolutionPlan plan{};
-	const auto guardedNative = GetGuardedNativeStabilizationProfile();
+	plan.nativeStabilization = GetNativeResolutionPlanKey(guardedNative);
 	plan.upscaleMethod = guardedNative ? guardedNative->method : GetRuntimeUpscaleMethod();
 	plan.qualityMode = GetRuntimeQualityMode();
 	plan.vendorMethod = IsVendorUpscalingMethod(plan.upscaleMethod);
@@ -36955,6 +36977,15 @@ bool Upscaling::PrepareVRNativeRestorePresentationObservation(
 		pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire) != 0 ||
 		HasUnresolvedVRFpsStabilizerSyncForCurrentLoad(*this)) {
 		return reject(VRNativeRestorePreparationReject::StabilizerPending);
+	}
+
+	// Submit proves the plan used by rendering, so it must not rebuild a stale plan.
+	const auto nativePlanKey = GetNativeResolutionPlanKey(GetGuardedNativeStabilizationProfile());
+	if (nativePlanKey != GetRuntimeResolutionPlan().nativeStabilization ||
+		(nativePlanKey.epoch != 0 &&
+			(nativePlanKey.epoch != applied.transitionEpoch ||
+				nativePlanKey.generation != applied.contractGeneration))) {
+		return reject(VRNativeRestorePreparationReject::ResolutionPlan);
 	}
 
 	const float2 nativeSize{

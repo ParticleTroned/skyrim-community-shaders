@@ -10,6 +10,31 @@ namespace
 {
 	using namespace VRVendorRelatchPolicy;
 
+	constexpr bool CoversSameFrameNativeResolutionOwnership()
+	{
+		constexpr auto frame = 22066u;
+		constexpr NativeResolutionPlanKey noNative{};
+		constexpr NativeResolutionPlanKey published{ 4, 5, 2048, 2160 };
+		auto cached = noNative;
+		if (!CanReuseRuntimeResolutionPlan(frame, frame, cached, noNative) ||
+			CanReuseRuntimeResolutionPlan(frame, frame, cached, published))
+			return false;
+
+		cached = published;
+		auto changed = published;
+		++changed.generation;
+		if (!CanReuseRuntimeResolutionPlan(frame, frame, cached, published) ||
+			CanReuseRuntimeResolutionPlan(frame, frame, cached, changed) ||
+			CanReuseRuntimeResolutionPlan(frame, frame, cached, noNative))
+			return false;
+
+		cached = noNative;
+		return CanReuseRuntimeResolutionPlan(frame, frame, cached, noNative) &&
+		       !CanReuseRuntimeResolutionPlan(frame, frame + 1, cached, noNative) &&
+		       !CanReuseRuntimeResolutionPlan(UINT32_MAX, UINT32_MAX, cached, noNative);
+	}
+	static_assert(CoversSameFrameNativeResolutionOwnership());
+
 	constexpr bool CoversRetainedSaveLoadDestination()
 	{
 		const RetainedSaveLoadDestination matched{ 7, 7, 7, 100, 101, 102, 103, false, true };

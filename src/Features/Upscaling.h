@@ -796,6 +796,7 @@ public:
 
 	struct RuntimeResolutionPlan
 	{
+		VRVendorRelatchPolicy::NativeResolutionPlanKey nativeStabilization{};
 		UpscaleMethod upscaleMethod = UpscaleMethod::kNONE;
 		ResolutionOwner owner = ResolutionOwner::Native;
 		UpscalingOutputTarget outputTarget = UpscalingOutputTarget::Main;
@@ -2748,11 +2749,9 @@ public:
 	bool SetFSRTemporalTuningSettings(const FSRTemporalTuningPolicy::Settings& a_settings);
 	// Refresh both the cached plan and restart-required state from the current VR render-scale settings.
 	void RefreshRuntimeResolutionState();
-	// Read-side helper: avoid rebuilding the cached plan multiple times in one frame.
+	// Reuse the plan only while both work-frame and native ownership match.
 	void EnsureRuntimeResolutionStateCurrent();
 	void InvalidateFrameScopedUpscalingState();
-	// Rebuild only the cached plan from already-latched state; backend dispatch code must only read the cached plan.
-	void RefreshRuntimeResolutionPlan();
 	bool IsRenderScaleModeRequested() const;
 	/** Return saved intent while native AA suspends physical Render Scale. */
 	bool GetVRRenderScaleModePreference() const;
@@ -4719,6 +4718,10 @@ private:
 	};
 	std::optional<VRRenderScaleProfileSnapshot> GetStableVRRenderScaleRuntimeProfile() const;
 	std::optional<VRRenderScaleProfileSnapshot> GetGuardedNativeStabilizationProfile() const;
+	static VRVendorRelatchPolicy::NativeResolutionPlanKey GetNativeResolutionPlanKey(
+		const std::optional<VRRenderScaleProfileSnapshot>& a_guardedNative) noexcept;
+	void RefreshRuntimeResolutionState(const std::optional<VRRenderScaleProfileSnapshot>& a_guardedNative);
+	void RefreshRuntimeResolutionPlan(const std::optional<VRRenderScaleProfileSnapshot>& a_guardedNative);
 	std::optional<VRRenderScaleRuntimeOptionsSnapshot> GetVRRenderScaleRuntimeOptions() const;
 	std::atomic<bool> vrRenderScaleStableRuntimeProfileAuthoritative{ false };
 	std::atomic<uint32_t> vrRenderScaleLastOutOfMemoryFailureFrame{ 0 };

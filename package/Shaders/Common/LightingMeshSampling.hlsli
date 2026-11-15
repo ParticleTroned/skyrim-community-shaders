@@ -1,7 +1,7 @@
 #ifndef LIGHTING_MESH_SAMPLING_HLSLI
 #define LIGHTING_MESH_SAMPLING_HLSLI
 
-#if defined(TERRAIN_VARIATION) && !(defined(LANDSCAPE) || defined(LODLANDSCAPE) || defined(LOD_LAND_BLEND) || defined(LOD) || defined(SKIN) || defined(SKINNED) || defined(HAIR) || defined(EYE) || defined(TREE_ANIM) || defined(LODOBJECTSHD) || defined(LODOBJECTS) || defined(DEPTH_WRITE_DECALS) || defined(DO_ALPHA_TEST) || defined(PROJECTED_UV) || defined(SPARKLE) || defined(MULTI_LAYER_PARALLAX))
+#if defined(TERRAIN_VARIATION) && !defined(NO_MESH_VARIATION) && !(defined(LANDSCAPE) || defined(LODLANDSCAPE) || defined(LOD_LAND_BLEND) || defined(LOD) || defined(SKIN) || defined(SKINNED) || defined(HAIR) || defined(EYE) || defined(TREE_ANIM) || defined(LODOBJECTSHD) || defined(LODOBJECTS) || defined(DEPTH_WRITE_DECALS) || defined(DO_ALPHA_TEST) || defined(PROJECTED_UV) || defined(SPARKLE) || defined(MULTI_LAYER_PARALLAX))
 #	define TERRAIN_VARIATION_MESH
 #	include "TerrainVariation/TerrainVariation.hlsli"
 #endif

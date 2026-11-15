@@ -3,6 +3,7 @@
 #include "Menu/MenuHeaderRenderer.h"
 #include "Menu/SettingsActions.h"
 #include "Menu/SettingsPage.h"
+#include "Menu/SettingsSearch.h"
 #include "Menu/StabilizerPage.h"
 
 #include <algorithm>
@@ -678,7 +679,7 @@ void FeatureListRenderer::RenderFeatureList(
 		selectedMenuEntryId.clear();
 		selectedMenu = 0;
 	}
-	auto menuList = BuildMenuList(featureSearch, categoryExpansionStates, drawGeneralSettings, drawAdvancedSettings);
+	auto menuList = BuildMenuList({}, categoryExpansionStates, drawGeneralSettings, drawAdvancedSettings);
 	if (!selectedMenuEntryId.empty() && !TrySelectMenuEntryById(menuList, selectedMenuEntryId, selectedMenu))
 		selectedMenu = menuList.size();
 
@@ -848,7 +849,6 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	return menuList;
 }
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
 std::string FeatureListRenderer::GetBuiltInPageMenuEntryId(const std::string& a_page)
 {
 	std::map<std::string, bool> categories;
@@ -859,7 +859,6 @@ std::string FeatureListRenderer::GetBuiltInPageMenuEntryId(const std::string& a_
 	}
 	return {};
 }
-#endif
 
 void FeatureListRenderer::HandlePendingFeatureSelection(
 	std::string& pendingFeatureSelection,
@@ -867,12 +866,10 @@ void FeatureListRenderer::HandlePendingFeatureSelection(
 	size_t& selectedMenu)
 {
 	if (!pendingFeatureSelection.empty()) {
-#ifdef DEVBENCH_BRIDGE_ENABLED
 		if (pendingFeatureSelection.starts_with("builtin:") && TrySelectMenuEntryById(menuList, pendingFeatureSelection, selectedMenu)) {
 			pendingFeatureSelection.clear();
 			return;
 		}
-#endif
 		for (size_t i = 0; i < menuList.size(); ++i) {
 			if (std::holds_alternative<Feature*>(menuList[i])) {
 				Feature* feature = std::get<Feature*>(menuList[i]);
@@ -924,19 +921,20 @@ void FeatureListRenderer::RenderLeftColumn(
 			return ImGui::GetFontSize() * .3f;
 		}();
 		ImGui::SetCursorPosX(searchLeft);
-		ImGui::TextColored(Util::Color::SecondaryText(), "FEATURES");
+		ImGui::TextColored(Util::Color::SecondaryText(), "FEATURES AND SETTINGS");
 		ImGui::SetCursorPosX(searchLeft);
 		Util::DrawFeatureSearchBar(featureSearch);
 
-		// Then render the rest (features and categories, but skip already rendered core menus)
-		for (size_t i = 0; i < menuList.size(); i++) {
-			if (std::holds_alternative<BuiltInMenu>(menuList[i])) {
-				const BuiltInMenu& menu = std::get<BuiltInMenu>(menuList[i]);
-				if (IsCoreMenu(menu.name)) {
-					continue;  // Skip, already rendered
+		if (!MenuUI::SettingsSearch::Draw(featureSearch)) {
+			for (size_t i = 0; i < menuList.size(); i++) {
+				if (std::holds_alternative<BuiltInMenu>(menuList[i])) {
+					const BuiltInMenu& menu = std::get<BuiltInMenu>(menuList[i]);
+					if (IsCoreMenu(menu.name)) {
+						continue;
+					}
 				}
+				std::visit(ListMenuVisitor{ i, selectedMenu, categoryExpansionStates }, menuList[i]);
 			}
-			std::visit(ListMenuVisitor{ i, selectedMenu, categoryExpansionStates }, menuList[i]);
 		}
 
 		ImGui::EndListBox();
@@ -1152,8 +1150,10 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
 				DrawFeatureHeader(menu.name, description);
 			}
 		}
-		if (ImGui::BeginChild("##BuiltInBody", { 0, -SettingsFooterHeight(pageId) - ImGui::GetStyle().ItemSpacing.y }, ImGuiChildFlags_None))
+		if (ImGui::BeginChild("##BuiltInBody", { 0, -SettingsFooterHeight(pageId) - ImGui::GetStyle().ItemSpacing.y }, ImGuiChildFlags_None)) {
+			const MenuUI::SettingsSearch::PageScope searchScope(pageId);
 			menu.func();
+		}
 		ImGui::EndChild();
 		DrawSettingsFooter(pageId);
 	}
@@ -1205,6 +1205,7 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 		{
 			MenuUI::FeatureScope featureScope(feat);
 			if (ImGui::BeginChild("##FeatureBody", { 0, -SettingsFooterHeight(featureName.c_str(), externalFooter ? &*externalFooter : nullptr) - requirementHeight - ImGui::GetStyle().ItemSpacing.y }, ImGuiChildFlags_None)) {
+				const MenuUI::SettingsSearch::PageScope searchScope(featureName);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				MenuUI::DevBenchViewport viewport(featureName, "legacy", !PerformanceTuningRenderer::HasActiveMeasurements());
 #endif

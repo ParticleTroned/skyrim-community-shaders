@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "E9990BBE811A13F32769B2A54AE1D139641D815790300AC1E672AE7064B57209"
+        "sha256": "55CA20594B1F70D959E5B42BF5E9B55245E60485E4F76F5F75EBF02178A75EE5"
     },
     "runtimeSettingsContract": {
         "revision": 33,
-        "sourceTreeSha256": "4923E8947AD0D0B0A16F05F0CB916487A3457207DC4456247758746DADBAC887",
+        "sourceTreeSha256": "6907896C661CA49FA95972E241928551B4E3F13978E74374022E79DA31F2A4A2",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -29,6 +29,7 @@
                 "src/Features/AdaptiveBalanceDepthOfField.h",
                 "src/Features/AdaptiveBalanceDepthOfFieldSettingsPolicy.h",
                 "src/Features/AdaptiveBalanceGodraySettings.h",
+                "src/Features/DetailMapsConfig.h",
                 "src/Features/FoveatedCommon.h",
                 "src/Features/GrassOptimizations/GrassPolicy.h",
                 "src/Features/LightLimitFix/ShadowCullingPolicy.h",
@@ -85,6 +86,9 @@
             "src/Features/CloudShadows.cpp",
             "src/Features/CloudShadows.h",
             "src/Features/CSEditor.cpp",
+            "src/Features/DetailMaps.cpp",
+            "src/Features/DetailMaps.h",
+            "src/Features/DetailMapsConfig.h",
             "src/Features/DynamicCubemaps.cpp",
             "src/Features/DynamicCubemaps.h",
             "src/Features/ExtendedMaterials.cpp",

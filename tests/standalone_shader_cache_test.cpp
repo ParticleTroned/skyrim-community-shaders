@@ -126,6 +126,9 @@ namespace SIE
 	{
 	public:
 		bool enabled = true, held = false, skipUnchanged = true;
+		bool optionalSourceAllowed = true;
+		mutable int optionalChecksRemaining = -1;
+		bool CanCompileOptionalShaderSources() const { return optionalSourceAllowed && (optionalChecksRemaining < 0 || optionalChecksRemaining-- > 0); }
 		struct Compilation
 		{
 			std::atomic_uint64_t generation = 0;
@@ -297,6 +300,7 @@ int main()
 		shader.attach(Util::CompileShader(L"Data/Shaders/test.hlsl", macros, "ps_5_0", entry, &timing));
 		assert(shader);
 		assert((timing.bytecodeCompilationQpcTicks > 0) == shouldCompile);
+		assert((timing.sourceCompiles > 0) == shouldCompile);
 		assert(timing.d3dObjectCreationQpcTicks > 0);
 		UINT length = 0;
 		assert(SUCCEEDED(shader->GetPrivateData(Util::WKPDID_D3DDebugObjectNameT, &length, nullptr)) && length > 0);
@@ -305,6 +309,19 @@ int main()
 	assert(SIE::writes == 1 && SIE::manifestFlushes == 1);
 	SIE::GetShaderCacheManifest().Load("Data/ShaderCache/Manifest.json");
 	run(false, defines);
+	{
+		globals::d3d::device = nullptr;
+		HRESULT result = E_FAIL;
+		Util::ShaderCompileTiming timing;
+		winrt::com_ptr<ID3D11DeviceChild> shader;
+		shader.attach(Util::CompileShaderOnDevice(device.get(), L"Data/Shaders/test.hlsl", defines,
+			"ps_5_0", "main", result, &timing));
+		assert(SUCCEEDED(result) && shader && timing.sourceCompiles == 0);
+		winrt::com_ptr<ID3D11Device> owner;
+		shader->GetDevice(owner.put());
+		assert(owner.get() == device.get());
+		globals::d3d::device = device.get();
+	}
 	const auto includeTime = std::filesystem::last_write_time("Data/Shaders/Common/value.hlsli");
 	Write("Data/Shaders/Common/value.hlsli", "#define VALUE 2\n");
 	std::filesystem::last_write_time("Data/Shaders/Common/value.hlsli", includeTime);
@@ -424,6 +441,61 @@ int main()
 		return create(blob);
 	}));
 	assert(compiles == warmCompiles + 1 && creations == warmCreates + 2);
+	{
+		const auto beforeCompiles = compiles;
+		auto cacheOnly = request;
+		cacheOnly.cacheOnly = true;
+		assert(cache.CompileStandaloneShaderCached(cacheOnly, compile, create));
+		assert(!cache.CompileStandaloneShaderCached(cacheOnly, compile, [](ID3DBlob*) { return false; }));
+		cacheOnly.entryPoint = "uncached";
+		assert(!cache.CompileStandaloneShaderCached(cacheOnly, compile, create));
+		cacheOnly = request;
+		cacheOnly.cacheOnly = true;
+		cache.skipUnchanged = false;
+		assert(!cache.CompileStandaloneShaderCached(cacheOnly, compile, create));
+		cache.skipUnchanged = true;
+		cache.enabled = false;
+		assert(!cache.CompileStandaloneShaderCached(cacheOnly, compile, create));
+		cache.enabled = true;
+		SIE::managed = SIE::managedAvailable = SIE::failRead = true;
+		assert(!cache.CompileStandaloneShaderCached(cacheOnly, compile, create));
+		SIE::managed = SIE::managedAvailable = SIE::failRead = false;
+		Write("Data/Shaders/Common/value.hlsli", "#define VALUE 4\n");
+		assert(!cache.CompileStandaloneShaderCached(cacheOnly, compile, create));
+		assert(compiles == beforeCompiles);
+		assert(cache.CompileStandaloneShaderCached(request, compile, create));
+		assert(compiles == beforeCompiles + 1);
+		assert(cache.CompileStandaloneShaderCached(cacheOnly, compile, create));
+		assert(compiles == beforeCompiles + 1);
+		cache.optionalSourceAllowed = false;
+		const auto beforeOptional = compilerCalls;
+		Util::ShaderCompileTiming timing;
+		HRESULT result = S_OK;
+		winrt::com_ptr<ID3D11DeviceChild> optional;
+		optional.attach(Util::CompileShaderOnDevice(device.get(), L"Data/Shaders/test.hlsl", defines,
+			"ps_5_0", "main", result, &timing, true));
+		assert(!optional && timing.deferred && !timing.sourceCompiles && compilerCalls == beforeOptional);
+		cache.optionalSourceAllowed = true;
+		for (int allowedChecks : { 1, 2 }) {
+			cache.optionalChecksRemaining = allowedChecks;
+			timing = {};
+			optional.attach(Util::CompileShaderOnDevice(device.get(), L"Data/Shaders/test.hlsl", defines,
+				"ps_5_0", "main", result, &timing, true));
+			assert(!optional && timing.deferred && !timing.sourceCompiles && compilerCalls == beforeOptional);
+		}
+		cache.optionalChecksRemaining = -1;
+		timing = {};
+		optional.attach(Util::CompileShaderOnDevice(device.get(), L"Data/Shaders/test.hlsl", defines,
+			"ps_5_0", "main", result, &timing, true));
+		assert(optional && !timing.deferred && timing.sourceCompiles == 1);
+		cache.optionalSourceAllowed = false;
+		timing = {};
+		optional = nullptr;
+		optional.attach(Util::CompileShaderOnDevice(device.get(), L"Data/Shaders/test.hlsl", defines,
+			"ps_5_0", "main", result, &timing, true));
+		assert(optional && !timing.deferred && !timing.sourceCompiles);
+		cache.optionalSourceAllowed = true;
+	}
 	const auto identity = SIE::BuildStandaloneCompileKey(request).packDigest;
 	auto variant = request;
 	variant.entryPoint = "alternate";

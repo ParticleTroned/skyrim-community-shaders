@@ -2,14 +2,17 @@
 #include "Features/ReverseZ.h"
 #include "NvidiaProject.h"
 #include "StreamlineConstants.h"
+#include "Utils/GraphicsCameraState.h"
 
 #include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cstddef>
 #include <dxgi.h>
 #include <dxgi1_3.h>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -31,6 +34,38 @@
 #include "NvidiaPipelinePolicy.h"
 #include "ReflexPolicy.h"
 #include "VRSubmitColorContract.h"
+
+namespace
+{
+	using CameraStateEntry = Util::GraphicsCamera::FlatStateEntry;
+
+	/** Reads the flat world camera, preferring its jittered entry; VR retains its stereo source. */
+	std::optional<UpscalingCamera::CameraFrame> GetWorldCameraFrame()
+	{
+		if (globals::game::isVR || !globals::game::graphicsState)
+			return std::nullopt;
+		const auto* camera = RE::Main::WorldRootCamera();
+		if (!camera)
+			return std::nullopt;
+		const auto& table = globals::game::graphicsState->GetRuntimeData().cameraDataCacheA;
+		const auto* entries = reinterpret_cast<const CameraStateEntry*>(table.data());
+		const CameraStateEntry* match = nullptr;
+		for (std::uint32_t i = 0; i < table.size(); ++i) {
+			const auto& entry = entries[i];
+			if (entry.referenceCamera != camera)
+				continue;
+			match = &entry;
+			if (entry.useJitter)
+				break;
+		}
+		if (!match)
+			return std::nullopt;
+		const auto& view = match->viewData;
+		return UpscalingCamera::FromCameraTable(view.viewMat, view.viewProjMatrixUnjittered, view.previousViewProjMatrixUnjittered,
+			float3(match->posAdjust.x, match->posAdjust.y, match->posAdjust.z),
+			float3(match->previousPosAdjust.x, match->previousPosAdjust.y, match->previousPosAdjust.z));
+	}
+}
 
 namespace
 {
@@ -1926,14 +1961,21 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 	slConstants.cameraNear = temporalSnapshot ? temporalSnapshot->scalars.cameraNear : *globals::game::cameraNear;
 	slConstants.cameraFar = temporalSnapshot ? temporalSnapshot->scalars.cameraFar : *globals::game::cameraFar;
 
-	auto viewMatrix = (temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].viewInverse : globals::game::frameBufferCached.GetCameraViewInverse(eyeIndex)).Transpose();
-	const auto& cameraPosition = temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].position : globals::game::frameBufferCached.GetCameraPosAdjust(eyeIndex);
-	const auto& previousCameraPosition = temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].previousPosition : globals::game::frameBufferCached.GetCameraPreviousPosAdjust(eyeIndex);
+	auto camera = temporalSnapshot ? std::nullopt : GetWorldCameraFrame();
+	if (!camera) {
+		const auto& frameBuffer = globals::game::frameBufferCached;
+		const auto& position = temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].position : frameBuffer.GetCameraPosAdjust(eyeIndex);
+		const auto& previousPosition = temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].previousPosition : frameBuffer.GetCameraPreviousPosAdjust(eyeIndex);
+		camera = UpscalingCamera::FromConstantBuffer(
+			temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].viewInverse : frameBuffer.GetCameraViewInverse(eyeIndex),
+			temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].viewProjectionUnjittered : frameBuffer.GetCameraViewProjUnjittered(eyeIndex),
+			temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].previousViewProjectionUnjittered : frameBuffer.GetCameraPreviousViewProjUnjittered(eyeIndex),
+			float3(position.x, position.y, position.z), float3(previousPosition.x, previousPosition.y, previousPosition.z));
+	}
+	const auto& viewMatrix = camera->viewInverse;
+	const auto& cameraPosition = camera->origin;
 	const auto cameraMatrices = UpscalingCamera::BuildReprojection(
-		viewMatrix,
-		(temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].viewProjectionUnjittered : globals::game::frameBufferCached.GetCameraViewProjUnjittered(eyeIndex)).Transpose(),
-		(temporalSnapshot ? temporalSnapshot->eyes[eyeIndex].previousViewProjectionUnjittered : globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered(eyeIndex)).Transpose(),
-		float3(cameraPosition.x - previousCameraPosition.x, cameraPosition.y - previousCameraPosition.y, cameraPosition.z - previousCameraPosition.z));
+		viewMatrix, camera->viewProjection, camera->previousViewProjection, camera->origin - camera->previousOrigin);
 	const auto fullCameraViewToClipSL = std::bit_cast<sl::float4x4>(cameraMatrices.cameraViewToClip);
 	const auto currentCropMatrix = ToStreamlineMatrix(currentCropAffine.fullClipToCrop);
 	sl::matrixMul(

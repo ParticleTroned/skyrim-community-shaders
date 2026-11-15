@@ -1,6 +1,9 @@
 #include "AdaptiveBrightness.h"
+#include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/SettingsPage.h"
+#include "Menu/SettingsSearch.h"
 
+#include "Api/MainThreadDispatchPolicy.h"
 #include "Diagnostics/PerformanceCostExperiments.h"
 #include "Globals.h"
 #include "InverseSquareLighting.h"
@@ -14,12 +17,14 @@
 #include "Utils/Form.h"
 #include "Utils/Game.h"
 #include "Utils/PointLightFlags.h"
+#include "Utils/RuntimeToggle.h"
 #include "Utils/StringUtils.h"
 #include "Utils/UI.h"
 #include "WeatherColorAdjustment.h"
 #include "WetternessLightingPolicy.h"
 
 #include "RE/B/BGSLocation.h"
+#include "RE/C/Console.h"
 #include "RE/P/PlayerCharacter.h"
 #include "RE/S/Sky.h"
 #include "RE/T/TES.h"
@@ -27,6 +32,7 @@
 #include "RE/T/TESObjectCELL.h"
 #include "RE/T/TESWeather.h"
 #include "RE/T/TESWorldSpace.h"
+#include "RE/U/UI.h"
 
 #include <imgui_stdlib.h>
 
@@ -39,6 +45,7 @@
 #include <format>
 #include <fstream>
 #include <initializer_list>
+#include <memory>
 #include <numeric>
 #include <system_error>
 #include <unordered_set>
@@ -1480,6 +1487,33 @@ namespace
 		return a_cocCode.empty() ? "-" : a_cocCode.c_str();
 	}
 
+	const char* GetCellEditorIDError(std::string_view a_editorID)
+	{
+		if (a_editorID.empty())
+			return "No cell EditorID was saved for this override.";
+		if (!std::ranges::all_of(a_editorID, [](unsigned char character) {
+				return (character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z') ||
+			           (character >= '0' && character <= '9') || character == '_';
+			}))
+			return "The saved cell EditorID contains invalid characters.";
+		return nullptr;
+	}
+
+	const char* GetCellTeleportRuntimeError()
+	{
+		if (Util::IsRuntimeToggleBlocked(globals::state) || globals::state->IsWorldLoadTransitionActive())
+			return "Finish saving or loading the game before teleporting.";
+		const auto* player = RE::PlayerCharacter::GetSingleton();
+		if (!player || !player->GetParentCell() || !globals::game::ui ||
+			globals::state->IsMainOrLoadingMenuOpen(globals::game::ui))
+			return "Load a game and finish loading before teleporting.";
+		if (PerformanceTuningRenderer::HasActiveMeasurements())
+			return "Finish or cancel the performance measurement before teleporting.";
+		if (!SKSE::GetTaskInterface() || globals::game::ui->menuStack.empty())
+			return "The game's console command queue is unavailable.";
+		return nullptr;
+	}
+
 	void DrawTableWrappedText(const char* a_text)
 	{
 		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
@@ -1677,7 +1711,7 @@ void AdaptiveBrightness::DrawProfileControls(
 	const auto selectionId = ImGui::GetID("AdjustmentGroup");
 	int selected = std::clamp(storage->GetInt(selectionId), 0, a_globalLayer ? 5 : 3);
 	constexpr const char* groups[] = { "Lighting", "Colour", "Bloom", "Water", "Depth of field", "Godrays" };
-	if (MenuUI::ChoiceSetting("Adjust", &selected, groups, a_globalLayer ? 6 : 4))
+	if (MenuUI::NavigationChoice("Adjust", &selected, groups, a_globalLayer ? 6 : 4))
 		storage->SetInt(selectionId, selected);
 	const auto disabled = Util::DisableGuard(!a_allowEdits);
 	switch (selected) {
@@ -2074,6 +2108,7 @@ namespace
 		MenuUI::SectionHeading("Appearance controls");
 		ImGui::TextWrapped("Gamma offsets are neutral at zero; negative values lift midtones and positive values darken them. Saturation is neutral at one. Point-light subtype adjustments compose with the shared Point Lights controls.");
 		for (const auto* group : groups) {
+			MenuUI::SettingsSearch::PrepareGroup(group);
 			if (!ImGui::CollapsingHeader(group))
 				continue;
 			if (std::string_view(group) == "Eyes")
@@ -2390,6 +2425,8 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 	DrawHintText(a_allowEdits ?
 					 "Overrides match worldspace, region, city, specific location or cell. Select a row to edit it." :
 					 "Overrides match worldspace, region, city, specific location or cell. Select a row to review it.");
+	if (const auto* status = locationTeleportStatus.load(std::memory_order_acquire))
+		ImGui::TextWrapped("%s", status);
 
 	if (settings.locationOverrides.empty()) {
 		ClearLocationOverrideSelection();
@@ -2467,6 +2504,7 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 		}
 
 		std::size_t deleteIndex = kInvalidLocationOverrideIndex;
+		const auto* teleportBlockReason = GetLocationTeleportBlockReason();
 
 		for (const auto overrideIndex : sortedIndices) {
 			auto& locationOverride = settings.locationOverrides[overrideIndex];
@@ -2500,7 +2538,16 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 			}
 
 			ImGui::TableSetColumnIndex(3);
-			DrawTableWrappedText(GetCocLabel(locationOverride.cocCode));
+			const float teleportButtonSize = ImGui::GetFrameHeight();
+			const float availableWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+			const float buttonWidth = std::min(teleportButtonSize, availableWidth);
+			const float buttonSpace = buttonWidth + ImGui::GetStyle().ItemSpacing.x;
+			const bool inlineButton = availableWidth >= buttonSpace + ImGui::CalcTextSize("M").x;
+			const float commandWidth = inlineButton ? availableWidth - buttonSpace : availableWidth;
+			ImGui::AlignTextToFramePadding();
+			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + commandWidth);
+			ImGui::TextUnformatted(GetCocLabel(locationOverride.cocCode));
+			ImGui::PopTextWrapPos();
 			selectOverride();
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				if (locationOverride.cocCode.empty()) {
@@ -2508,6 +2555,24 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 				} else {
 					ImGui::Text("Console: coc %s", locationOverride.cocCode.c_str());
 				}
+			}
+			if (inlineButton)
+				ImGui::SameLine();
+			const auto* teleportError = GetLocationTeleportError(locationOverride, teleportBlockReason);
+			{
+				const Util::DisableGuard disabled(teleportError != nullptr);
+				if (ImGui::Button("##Teleport", { buttonWidth, teleportButtonSize })) {
+					std::string error;
+					TeleportToLocationOverride(locationOverride.key, error);
+				}
+				Util::DrawActionGlyph(ImGui::GetWindowDrawList(), Util::ActionGlyph::Teleport,
+					ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), ImGui::GetColorU32(ImGuiCol_Text));
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				if (teleportError)
+					ImGui::TextUnformatted(teleportError);
+				else
+					ImGui::Text("Teleport to this saved cell: coc %s", locationOverride.cocCode.c_str());
 			}
 
 			ImGui::TableSetColumnIndex(4);
@@ -2559,6 +2624,78 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 	} else if (!selectedLocationOverrideKey.empty()) {
 		ClearLocationOverrideSelection();
 	}
+}
+
+const char* AdaptiveBrightness::GetLocationTeleportBlockReason() const
+{
+	if (locationTeleportPending.load(std::memory_order_acquire))
+		return "A teleport command is already queued.";
+	return GetCellTeleportRuntimeError();
+}
+
+const char* AdaptiveBrightness::GetLocationTeleportError(const LocationOverride& a_override, const char* a_blockReason)
+{
+	if (const auto* error = GetCellEditorIDError(a_override.cocCode))
+		return error;
+	return a_blockReason;
+}
+
+bool AdaptiveBrightness::TeleportToLocationOverride(const std::string& a_key, std::string& a_error)
+{
+	const auto* locationOverride = FindLocationOverride(a_key);
+	const auto* error = locationOverride ? GetLocationTeleportError(*locationOverride, GetLocationTeleportBlockReason()) : "No saved override matches this key.";
+	if (error) {
+		a_error = error;
+		if (!locationTeleportPending.load(std::memory_order_acquire))
+			locationTeleportStatus.store(error, std::memory_order_release);
+		return false;
+	}
+	if (locationTeleportPending.exchange(true, std::memory_order_acq_rel)) {
+		a_error = "A teleport command is already queued.";
+		return false;
+	}
+	locationTeleportStatus.store("Teleport command queued.", std::memory_order_release);
+	std::shared_ptr<CSX::Api::MainThreadDispatchClaim> dispatch;
+	try {
+		dispatch = std::make_shared<CSX::Api::MainThreadDispatchClaim>();
+		const auto transitionFrame = globals::state->worldLoadTransitionStartFrame.load(std::memory_order_acquire);
+		SKSE::GetTaskInterface()->AddTask([this, dispatch, transitionFrame, editorID = locationOverride->cocCode] {
+			if (!dispatch->TryClaim())
+				return;
+			const SKSE::stl::scope_exit releasePending([this, dispatch] {
+				dispatch->Complete();
+				locationTeleportPending.store(false, std::memory_order_release);
+			});
+			try {
+				if (globals::state && globals::state->worldLoadTransitionStartFrame.load(std::memory_order_acquire) != transitionFrame) {
+					locationTeleportStatus.store("Teleport cancelled because the loaded world changed.", std::memory_order_release);
+					return;
+				}
+				if (const auto* error = GetCellTeleportRuntimeError()) {
+					locationTeleportStatus.store(error, std::memory_order_release);
+					logger::warn("Adaptive Balance: skipped teleport to {}: {}", editorID, error);
+					return;
+				}
+				RE::Console::ExecuteCommand(std::format("coc {}", editorID).c_str());
+				locationTeleportStatus.store("Teleport command dispatched.", std::memory_order_release);
+			} catch (const std::exception& exception) {
+				locationTeleportStatus.store("Teleport command failed. See the CSX log for details.", std::memory_order_release);
+				logger::error("Adaptive Balance: teleport to {} failed: {}", editorID, exception.what());
+			}
+		});
+	} catch (const std::exception& exception) {
+		if (dispatch && !dispatch->TryCancel()) {
+			a_error.clear();
+			return true;
+		}
+		locationTeleportStatus.store("Unable to queue the teleport command.", std::memory_order_release);
+		locationTeleportPending.store(false, std::memory_order_release);
+		a_error = "Unable to queue the teleport command.";
+		logger::error("Adaptive Balance: teleport queue failed: {}", exception.what());
+		return false;
+	}
+	a_error.clear();
+	return true;
 }
 
 void AdaptiveBrightness::DrawPresets()

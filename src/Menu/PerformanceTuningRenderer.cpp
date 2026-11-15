@@ -60,7 +60,7 @@ namespace
 		kFeatureCostMeasurementBlockCount == 6 &&
 		kFeatureCostMeasurementBlockCount * kFeatureCostIntervalMilliseconds == kFeatureCostMeasurementMilliseconds);
 
-	constexpr std::array<std::string_view, 21> kPerformanceFeatureOrder = {
+	constexpr std::array<std::string_view, 22> kPerformanceFeatureOrder = {
 		"Upscaling",
 		"VR",
 		"AdaptiveBrightness",
@@ -78,6 +78,7 @@ namespace
 		"SubsurfaceScattering",
 		"TruePBR",
 		"ExtendedMaterials",
+		"DetailMaps",
 		"FoliageLighting",
 		"GrassOptimizations",
 		"GrassLighting",
@@ -2134,6 +2135,8 @@ namespace
 			return "True PBR material shading is switched off.";
 		if (shortName == "ExtendedMaterials")
 			return "complex materials, parallax, legacy terrain parallax, height blending, parallax shadows, and curvature correction are switched off.";
+		if (shortName == "DetailMaps")
+			return "detail texture lookups, detail shader selection and per-draw resource updates are bypassed; surfaces use their original lighting shaders.";
 		if (shortName == "FoliageLighting")
 			return "all Foliage Lighting contributions to tree foliage and grass are switched off.";
 		if (shortName == "GrassLighting")

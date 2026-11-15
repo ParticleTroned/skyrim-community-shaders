@@ -58,6 +58,24 @@ namespace
 		RequireMatrixNear(matrices.clipToPrevClip, Matrix::Identity);
 	}
 
+	void CameraTableConventions()
+	{
+		const Matrix projection(DirectX::XMMatrixPerspectiveFovLH(1.2f, 16.0f / 9.0f, 15.0f, 353840.0f));
+		const auto view = Matrix::CreateRotationY(0.3f) * Matrix::CreateRotationX(-0.1f);
+		const auto previousView = Matrix::CreateRotationY(0.28f) * Matrix::CreateRotationX(-0.1f);
+		const Vector3 origin(21366.6f, -3318.3f, -2584.2f);
+		const Vector3 previousOrigin(21360.0f, -3318.3f, -2580.0f);
+		const auto table = UpscalingCamera::FromCameraTable(view, view * projection, previousView * projection, origin, previousOrigin);
+		const auto buffer = UpscalingCamera::FromConstantBuffer(view.Invert().Transpose(), (view * projection).Transpose(),
+			(previousView * projection).Transpose(), origin, previousOrigin);
+		RequireMatrixNear(table.viewInverse, buffer.viewInverse);
+		RequireMatrixNear(table.viewProjection, buffer.viewProjection);
+		RequireMatrixNear(table.previousViewProjection, buffer.previousViewProjection);
+		RequireMatrixNear(table.viewInverse * table.viewProjection, projection);
+		Check(table.origin == buffer.origin && table.previousOrigin == buffer.previousOrigin,
+			"camera-table origins changed during conversion");
+	}
+
 	void MovementAndProjectionChanges()
 	{
 		const Matrix projection(DirectX::XMMatrixPerspectiveOffCenterLH(-10.0f, 13.0f, -8.0f, 9.0f, 15.0f, 370000.0f));
@@ -185,6 +203,7 @@ int main()
 {
 	try {
 		CapturedAEProjection();
+		CameraTableConventions();
 		MovementAndProjectionChanges();
 		FrozenStereoHistory();
 		CroppedCameraHistory();

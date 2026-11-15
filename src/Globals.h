@@ -22,6 +22,7 @@ struct LinearLighting;
 struct LODBlending;
 struct InteriorSun;
 struct FurShells;
+struct DetailMaps;
 struct SnowCover;
 struct SeasonalWeather;
 struct InverseSquareLighting;
@@ -92,6 +93,7 @@ namespace globals
 		extern LODBlending lodBlending;
 		extern InteriorSun interiorSun;
 		extern FurShells furShells;
+		extern DetailMaps detailMaps;
 		extern SnowCover snowCover;
 		extern SeasonalWeather seasonalWeather;
 		extern InverseSquareLighting inverseSquareLighting;

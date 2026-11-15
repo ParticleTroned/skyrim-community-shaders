@@ -603,6 +603,13 @@ IBL::CommonBufferData IBL::GetCommonBufferData() const
 	};
 }
 
+IBL::CommonBufferData IBL::PrepareFrameData()
+{
+	const auto data = GetCommonBufferData();
+	uploadedLuminanceRatio = data.EnableIBL && data.DALCMode == kDALCLuminanceRatioMode;
+	return data;
+}
+
 bool IBL::IsRuntimeEnabled() const
 {
 	const IBL::Settings runtimeSettings = GetSanitizedSettings(settings);

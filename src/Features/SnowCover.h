@@ -213,6 +213,8 @@ public:
 	void UploadFireMelt();
 
 	PerFrame GetCommonBufferData(bool inWorld);
+	/** Resolves uploaded snow settings and the matching inactive lighting variant. */
+	PerFrame PrepareFrameData(bool inWorld);
 
 	std::array<winrt::com_ptr<ID3D11ShaderResourceView>, 7> views;
 

@@ -2,6 +2,7 @@
 
 #include "GpuPass.h"
 #include "Profiler.h"
+#include "ShaderCache.h"
 #include "SnowCover/ColorSource.h"
 #include "SnowCover/Config.h"
 #include "SnowCover/Environment.h"
@@ -74,6 +75,17 @@ SnowCover::PerFrame SnowCover::GetCommonBufferData(bool inWorld)
 	if (frame.IsNewFrame())
 		UpdateFrame();
 	return perFrame;
+}
+
+SnowCover::PerFrame SnowCover::PrepareFrameData(bool inWorld)
+{
+	const auto data = GetCommonBufferData(inWorld);
+	auto& flags = globals::state->lightingPixelShaderFlags;
+	constexpr auto inactive = SIE::ShaderCache::kLightingSnowCoverInactive;
+	flags &= ~inactive;
+	if (loaded && !data.wsettings.EnableSnowCover)
+		flags |= inactive;
+	return data;
 }
 
 void SnowCover::UpdateFrame()

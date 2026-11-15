@@ -524,7 +524,9 @@ void SkySync::ProcessSun(const RE::Sun* sun, const float time, const float altit
 	RE::NiPoint3 dir;
 	float dist;
 
-	if (settings.UseAlternateSunPath) {
+	// Timing offsets can leave no valid night arc; retain the engine path in that case.
+	const float dayLength = timings.sunset - timings.sunrise;
+	if (settings.UseAlternateSunPath && dayLength > 0.0f && dayLength < HoursPerDay) {
 		CalculateAlternateSunDirectionAndDistance(dir, dist, time, timings.sunrise, timings.sunset, sunAngle);
 	} else
 		CalculateSunDirectionAndDistance(sun, dir, dist);
@@ -624,7 +626,13 @@ inline void SkySync::CalculateSunDirectionAndDistance(const RE::Sun* sun, RE::Ni
 
 inline void SkySync::CalculateAlternateSunDirectionAndDistance(RE::NiPoint3& outDir, float& outDist, const float time, const float sunrise, const float sunset, const float sunAngle)
 {
-	const float phi = DirectX::XM_PI * ((time - sunrise) / (sunset - sunrise));
+	const float dayLength = sunset - sunrise;
+	float hoursSinceSunrise = std::fmod(time - sunrise, HoursPerDay);
+	if (hoursSinceSunrise < 0.0f)
+		hoursSinceSunrise += HoursPerDay;
+	// Day and night each cover half the circle, including timing offsets across midnight.
+	const float phi = hoursSinceSunrise < dayLength ? DirectX::XM_PI * (hoursSinceSunrise / dayLength) :
+	                                                  DirectX::XM_PI * (1.0f + (hoursSinceSunrise - dayLength) / (HoursPerDay - dayLength));
 	float sinPhi, cosPhi;
 	DirectX::XMScalarSinCosEst(&sinPhi, &cosPhi, phi);
 

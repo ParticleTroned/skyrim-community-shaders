@@ -10,6 +10,7 @@
 #include "Features/AdaptiveBrightness.h"
 #include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
+#include "Features/DetailMaps.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
@@ -293,6 +294,7 @@ namespace
 			&globals::features::inverseSquareLighting,
 			&globals::features::hairSpecular,
 			&globals::features::furShells,
+			&globals::features::detailMaps,
 			&globals::features::snowCover,
 			&globals::features::seasonalWeather,
 			&globals::features::terrainVariation,

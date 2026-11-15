@@ -4,8 +4,11 @@ set(_shader_include_test_dir
 set(_tracking_include_header
     "${_shader_include_test_dir}/tracking_include_under_test.h"
 )
+set(_startup_include_lifecycle_header
+    "${_shader_include_test_dir}/startup_include_lifecycle.h"
+)
 add_custom_command(
-    OUTPUT "${_tracking_include_header}"
+    OUTPUT "${_tracking_include_header}" "${_startup_include_lifecycle_header}"
     COMMAND
         "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
         "-DOUTPUT_DIRECTORY=${_shader_include_test_dir}" -P
@@ -21,7 +24,7 @@ add_controller_test(
     ShaderInclude
     tests/shader_include_test.cpp
 )
-target_sources(shader_include_test PRIVATE "${_tracking_include_header}")
+target_sources(shader_include_test PRIVATE "${_tracking_include_header}" "${_startup_include_lifecycle_header}")
 target_include_directories(
     shader_include_test
     PRIVATE "${_shader_include_test_dir}"

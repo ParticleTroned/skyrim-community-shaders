@@ -245,6 +245,7 @@ include(XSEPlugin)
 # always-run target by design: configure-time git metadata becomes stale after
 # a checkout, submodule update, or local edit in an existing build directory.
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/ControlCatalog.cmake")
 set(CSX_PROVENANCE_SCRIPT "${CMAKE_SOURCE_DIR}/tools/build_provenance.py")
 set(CSX_PROVENANCE_DIR
     "${CMAKE_CURRENT_BINARY_DIR}/generated/BuildProvenance/$<CONFIG>"
@@ -1681,6 +1682,15 @@ if(BUILD_CONTROLLER_TESTS)
         set_tests_properties(${TEST_NAME} PROPERTIES LABELS "ControllerTests")
     endfunction()
 
+    add_controller_test(settings_search_test SettingsSearch tests/settings_search_test.cpp)
+    add_test(
+        NAME ControlCatalog
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/control_catalog_test.py"
+    )
+    set_tests_properties(ControlCatalog PROPERTIES LABELS "ControllerTests")
+
     set(_performance_cost_defines_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/performance-cost-defines"
     )
@@ -2223,6 +2233,10 @@ if(BUILD_CONTROLLER_TESTS)
         "${_adaptive_balance_test_dir}/adaptive_balance_point_lights_under_test.h"
         "${_adaptive_balance_test_dir}/adaptive_balance_point_light_members.h"
         "${_adaptive_balance_test_dir}/adaptive_balance_weather_hook_under_test.h"
+        "${_adaptive_balance_test_dir}/adaptive_balance_travel_members.h"
+        "${_adaptive_balance_test_dir}/adaptive_balance_travel_under_test.h"
+        "${_adaptive_balance_test_dir}/adaptive_balance_travel_ui_under_test.h"
+        "${_adaptive_balance_test_dir}/adaptive_balance_travel_menu_under_test.h"
     )
     add_custom_command(
         OUTPUT ${_adaptive_balance_test_headers}
@@ -2254,6 +2268,23 @@ if(BUILD_CONTROLLER_TESTS)
         DEPENDS ${_adaptive_balance_test_headers}
     )
     add_dependencies(adaptive_balance_toggle_test adaptive_balance_test_sources)
+    add_controller_test(
+        adaptive_balance_location_travel_test
+        AdaptiveBalanceLocationTravel
+        tests/adaptive_balance_location_travel_test.cpp
+    )
+    add_dependencies(
+        adaptive_balance_location_travel_test
+        adaptive_balance_test_sources
+    )
+    target_include_directories(
+        adaptive_balance_location_travel_test
+        PRIVATE "${_adaptive_balance_test_dir}"
+    )
+    target_link_libraries(
+        adaptive_balance_location_travel_test
+        PRIVATE imgui::imgui nlohmann_json::nlohmann_json
+    )
     target_include_directories(
         adaptive_balance_toggle_test
         PRIVATE "${_adaptive_balance_test_dir}"
@@ -2994,6 +3025,51 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_link_libraries(sharpener_bindings_test PRIVATE d3d11.lib)
     include("${PROJECT_SOURCE_DIR}/tests/d3d11_shader_test.cmake")
+    add_controller_test(detail_maps_policy_test DetailMapsPolicy tests/detail_maps_policy_test.cpp)
+    target_link_libraries(
+        detail_maps_policy_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    add_d3d_shader_test(detail_maps_shader_test DetailMapsShader tests/detail_maps_shader_test.cpp)
+    set_tests_properties(DetailMapsShader PROPERTIES TIMEOUT 300)
+    add_controller_test(detail_maps_reload_test DetailMapsReload tests/detail_maps_reload_test.cpp)
+    target_link_libraries(detail_maps_reload_test PRIVATE fmt::fmt)
+    set(_detail_maps_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/detail-maps"
+    )
+    set(_detail_maps_test_headers
+        "${_detail_maps_test_dir}/detail_maps_reload_under_test.h"
+        "${_detail_maps_test_dir}/detail_maps_bindings_under_test.h"
+        "${_detail_maps_test_dir}/detail_maps_bindings_decl_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_detail_maps_test_headers}
+        COMMAND
+            ${CMAKE_COMMAND} "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_detail_maps_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_detail_maps.cmake"
+        DEPENDS
+            src/Features/DetailMaps.cpp
+            src/Features/DetailMaps.h
+            tests/extract_detail_maps.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_custom_target(
+        detail_maps_test_headers
+        DEPENDS ${_detail_maps_test_headers}
+    )
+    foreach(
+        _detail_target
+        IN
+        ITEMS detail_maps_shader_test detail_maps_reload_test
+    )
+        add_dependencies(${_detail_target} detail_maps_test_headers)
+        target_include_directories(
+            ${_detail_target}
+            PRIVATE "${_detail_maps_test_dir}"
+        )
+    endforeach()
     add_d3d_shader_test(water_history_shader_test WaterHistoryShader tests/water_history_shader_test.cpp)
     target_sources(
         water_history_shader_test
@@ -3013,6 +3089,7 @@ if(BUILD_CONTROLLER_TESTS)
         wetterness_highlights_test WetternessHighlights
         tests/wetterness_highlights_test.cpp
     )
+    set_tests_properties(WetternessHighlights PROPERTIES TIMEOUT 300)
     include("${PROJECT_SOURCE_DIR}/tests/wetterness_runtime.cmake")
     add_d3d_shader_test(
         snow_cover_color_test SnowCoverColor tests/snow_cover_color_test.cpp
@@ -3097,6 +3174,9 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE xbyak::xbyak "${DETOURS_LIBRARY}"
     )
     add_d3d_shader_test(grass_d3d_state_test GrassD3DState tests/grass_d3d_state_test.cpp)
+    add_d3d_shader_test(sun_glare_shader_test SunGlareShader tests/sun_glare_shader_test.cpp)
+    target_link_libraries(sun_glare_shader_test PRIVATE windowsapp.lib)
+    target_compile_definitions(sun_glare_shader_test PRIVATE NOMINMAX)
     add_d3d_shader_test(fur_touch_shader_test FurTouchShader tests/fur_touch_shader_test.cpp)
     target_link_libraries(grass_d3d_state_test PRIVATE windowsapp.lib)
     target_compile_definitions(grass_d3d_state_test PRIVATE NOMINMAX)
@@ -4536,8 +4616,12 @@ if(BUILD_CONTROLLER_TESTS)
         "${CMAKE_CURRENT_BINARY_DIR}/generated/shader-block-formatting"
     )
     set(_shader_block_test_headers
+        "${_shader_block_test_dir}/shader_block_lookup_contract.h"
+        "${_shader_block_test_dir}/shader_block_lighting_constants.h"
         "${_shader_block_test_dir}/shader_block_vertex_under_test.h"
-        "${_shader_block_test_dir}/shader_block_pixel_compute_under_test.h"
+        "${_shader_block_test_dir}/shader_block_pixel_under_test.h"
+        "${_shader_block_test_dir}/shader_block_compute_under_test.h"
+        "${_shader_block_test_dir}/runtime_specialization_policy.h"
     )
     add_custom_command(
         OUTPUT ${_shader_block_test_headers}
@@ -4547,6 +4631,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${PROJECT_SOURCE_DIR}/tests/extract_shader_block_formatting.cmake"
         DEPENDS
             src/ShaderCache.cpp
+            src/ShaderCache.h
             tests/extract_shader_block_formatting.cmake
             tests/extract_source_region.cmake
         VERBATIM
@@ -4649,6 +4734,48 @@ if(BUILD_CONTROLLER_TESTS)
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_composite.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/shader_include.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/standalone_shader_cache.cmake")
+    add_controller_test(shader_specialization_requests_test ShaderSpecializationRequests tests/shader_specialization_requests_test.cpp)
+    set(_specialization_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/specialization-persistence"
+    )
+    set(_specialization_test_header
+        "${_specialization_test_dir}/discovery_history_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_specialization_test_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_specialization_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_shader_specialization_persistence.cmake"
+        DEPENDS
+            src/ShaderCacheSpecializations.cpp
+            tests/extract_shader_specialization_persistence.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(shader_specialization_persistence_test ShaderSpecializationPersistence tests/shader_specialization_persistence_test.cpp)
+    target_sources(
+        shader_specialization_persistence_test
+        PRIVATE "${_specialization_test_header}"
+    )
+    target_include_directories(
+        shader_specialization_persistence_test
+        PRIVATE "${_specialization_test_dir}"
+    )
+    foreach(
+        _target
+        IN
+        ITEMS
+            shader_specialization_requests_test
+            shader_specialization_persistence_test
+    )
+        target_link_libraries(${_target} PRIVATE nlohmann_json::nlohmann_json)
+        if(MSVC)
+            target_compile_options(${_target} PRIVATE /UNDEBUG /utf-8)
+        else()
+            target_compile_options(${_target} PRIVATE -UNDEBUG)
+        endif()
+    endforeach()
     add_controller_test(
         vr_depth_culling_enable_policy_test
         VRDepthCullingEnablePolicy

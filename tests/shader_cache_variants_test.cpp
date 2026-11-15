@@ -112,7 +112,7 @@ namespace SIE
 	namespace SShaderCache
 	{
 		unsigned keyBuilds = 0;
-		void GetShaderDefines(const RE::BSShader& a_shader, uint32_t, std::span<D3D_SHADER_MACRO> a_defines)
+		void GetShaderDefines(const RE::BSShader& a_shader, uint32_t, std::span<D3D_SHADER_MACRO> a_defines, ShaderClass)
 		{
 			std::copy(a_shader.macros.begin(), a_shader.macros.end(), a_defines.begin());
 		}
@@ -183,6 +183,11 @@ namespace SIE
 #include "shader_pbr_utility_flags.h"
 		std::vector<uint32_t> pixelRequests;
 		std::atomic_bool backgroundCompilation{ false };
+		struct
+		{
+			bool disabled = false;
+			void Disable() { disabled = true; }
+		} startupIncludeCache;
 		void* GetPixelShader(const RE::BSShader& shader, uint32_t descriptor, PixelShaderLookup a_lookup = PixelShaderLookup::Compile)
 		{
 			// Assume an asynchronous cache miss; keep production intent and queue admission.
@@ -710,7 +715,9 @@ namespace
 					const auto demanded = *queue.availableTasks.find({ ShaderClass::Pixel, shader, demandedDescriptor });
 					cache.GetPixelShader(shader, demandedDescriptor, ShaderCache::PixelShaderLookup::Draw);
 					Require(!queue.availableTasks.find(demanded)->IsPrecompile());
+					Require(!cache.startupIncludeCache.disabled);
 					Require(!cache.SetBackgroundCompilation(true));
+					Require(cache.startupIncludeCache.disabled);
 					Require(queue.availableTasks.size() == 1 && queue.availableTasks.contains(demanded));
 					Require(queue.tasksInProgress.size() == 1 && queue.tasksInProgress.contains(running));
 					Require(queue.totalTasks == 2 && queue.totalPriorityWeight == running.GetPriority() + demanded.GetPriority() + 2);
@@ -719,6 +726,7 @@ namespace
 					queue.Add({ ShaderClass::Pixel, shader, 0xDEADBEEFu, true });
 					Require(queue.availableTasks.size() == 1 && queue.totalTasks == 2);
 					Require(cache.SetBackgroundCompilation(false));
+					Require(cache.startupIncludeCache.disabled);
 					pbr.GenerateShaderPermutations(&shader);
 					Require(queue.availableTasks.size() == generated - 1 && queue.totalTasks == generated);
 					Require(!queue.availableTasks.find(demanded)->IsPrecompile());

@@ -13,12 +13,14 @@
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <utility>
 
 using json = nlohmann::json;
 
 #include <FeatureBuffer.h>
 
+#include "Utils/SunGlareBindings.h"
 #include <Hooks.h>
 
 class State
@@ -104,11 +106,14 @@ public:
 		uint32_t vertexDescriptor = 0, pixelDescriptor = 0;
 		bool pixelCleared = false;
 	} techniqueShaderSelection;
+	uint64_t techniqueShaderSequence = 0, techniqueShaderRevision = 0;
 	// A deferred draw must be withheld if neither compatible pixel variant is ready.
 	bool deferredPixelShaderMissing = false;
 	RE::BSShader* currentShader = nullptr;
 	// Only an explicitly bound custom pixel stage proves which shared resources it consumes.
 	RE::BSShader::Type selectedCustomPixelShaderType = RE::BSShader::Type::None;
+	/** @brief Release sun-glare vertex bindings before the engine restores geometry state. */
+	void RestoreSunGlareBindings() { sunGlareBindings.reset(); }
 	std::string adapterDescription = "";
 
 	uint32_t currentVertexDescriptor = 0;
@@ -155,7 +160,7 @@ public:
 		StartupHydration,
 	};
 
-	void Draw();
+	void Draw(bool isCompute);
 	void Debug();
 	void Reset();
 	void Setup();
@@ -344,6 +349,7 @@ public:
 	uint lastPixelDescriptor = 0;
 	uint modifiedVertexDescriptor = 0;
 	uint modifiedPixelDescriptor = 0;
+	uint32_t lightingPixelShaderFlags = 0;
 	uint lastModifiedVertexDescriptor = 0;
 	uint lastModifiedPixelDescriptor = 0;
 	uint lastExtraDescriptor = 0;
@@ -523,6 +529,8 @@ public:
 
 	PermutationCB permutationData{};
 	PermutationCB permutationDataPrevious{};
+	// Matches the effective feature data uploaded for the current scene pass.
+	bool effectAmbientIBLUploaded = false;
 
 	Util::FrameChecker frameChecker;
 	uint frameCount = 0;
@@ -607,6 +615,7 @@ public:
 	}
 
 private:
+	std::optional<SunGlare::ScopedBindings> sunGlareBindings;
 	/** Uses current world samples or the no-water sentinel for the shared upload. */
 	void UpdateWaterData(SharedDataCB& a_data, bool a_inWorld);
 	// Render-thread samples are camera-relative and cannot outlive their frame or eye-0 origin.

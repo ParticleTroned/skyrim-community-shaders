@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -71,7 +72,7 @@ namespace
 		ComPtr<ID3D11UnorderedAccessView> uav;
 		std::unique_ptr<ConstantBuffer> feature, inputs;
 
-		Fixture(ID3D11Device* device, bool vr, bool pbr, const char* entry = "main", bool reference = false)
+		Fixture(ID3D11Device* device, bool vr, bool pbr, const char* entry = "main", bool reference = false, const char* material = nullptr)
 		{
 			PackageIncludes includes("package/Shaders", "features/Wetterness/Shaders");
 			std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "WETTERNESS", "1" } };
@@ -81,6 +82,10 @@ namespace
 				defines.push_back({ "VR", "1" });
 			if (pbr)
 				defines.push_back({ "TRUE_PBR", "1" });
+			if (material) {
+				defines.push_back({ material, "1" });
+				defines.push_back({ "SKINNED", "1" });
+			}
 			defines.push_back({ nullptr, nullptr });
 			ComPtr<ID3DBlob> bytecode, errors;
 			const auto compiled = D3DCompileFromFile(L"tests/wetterness_highlights.hlsl", defines.data(), &includes, entry, "cs_5_0",
@@ -93,9 +98,10 @@ namespace
 			Check(device->CreateComputeShader(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), nullptr, shader.GetAddressOf()));
 			Util::SetResourceName(shader.Get(), "WetternessTest::CS");
 			Check(D3DReflect(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
-			if (std::strcmp(entry, "main") == 0) {
+			if (std::strcmp(entry, "main") == 0 || std::strcmp(entry, "CheckRainFilmSurface") == 0) {
 				feature = std::make_unique<ConstantBuffer>(device, reflection.Get(), "SharedData::FeatureData");
-				inputs = std::make_unique<ConstantBuffer>(device, reflection.Get(), "TestInputs");
+				if (std::strcmp(entry, "main") == 0)
+					inputs = std::make_unique<ConstantBuffer>(device, reflection.Get(), "TestInputs");
 				auto* wetnessType = reflection->GetConstantBufferByName("SharedData::FeatureData")->GetVariableByName("SharedData::wetternessSettings")->GetType();
 				D3D11_SHADER_TYPE_DESC night{};
 				Check(wetnessType->GetMemberTypeByName("NightFactor")->GetDesc(&night));
@@ -128,10 +134,45 @@ namespace
 				inputs->SetVariable("directionalLuminance", luminance);
 				inputs->SetVariable("lightScale", lightScale);
 			}
+			return Dispatch(context);
+		}
+
+		Samples RunSurface(ID3D11DeviceContext* context, bool preserve, float percent, float reduction = 2.5f,
+			float wetness = 1.0f, float rain = 1.0f, float puddles = 0.0f, float shore = 0.0f)
+		{
+			auto set = [&](const char* name, auto value) { feature->SetMember("SharedData::wetternessSettings", name, value); };
+			set("EnableWetnessEffects", 1u);
+			set("MaxRainWetness", 1.0f);
+			set("SkinWetness", 1.0f);
+			set("MaxPuddleWetness", 6.0f);
+			set("PuddleMaxAngle", 0.75f);
+			set("PuddleMinWetness", 0.25f);
+			set("PuddleWetness", puddles);
+			set("PuddleMaskMode", 0u);
+			set("Wetness", wetness);
+			set("Raining", rain);
+			set("PackedPostRainControl", (preserve ? 1u << 30 : 0u) | (rain > 0 ? 1023u << 20 : 0u));
+			set("PackedRainReflectionControl", 1u << 31);
+			set("WetnessDistanceFadeRangePacked", std::bit_cast<unsigned>(10000.0f));
+			set("RainContactWetnessScale", percent * 0.025f);
+			set("WetFilmSpecularFloorScale", 2.0f);
+			set("WetHighlightReduction", reduction);
+			set("StoneDryingMultiplier", 24.0f);
+			set("DirtDryingMultiplier", 24.0f);
+			set("GrassDryingMultiplier", 24.0f);
+			set("PostRainPuddleWaterStrength", 2.5f);
+			set("MaxShoreWetness", shore);
+			set("ShoreRange", 2000);
+			return Dispatch(context);
+		}
+
+		Samples Dispatch(ID3D11DeviceContext* context)
+		{
 			context->ClearState();
 			if (feature) {
 				feature->Bind(context);
-				inputs->Bind(context);
+				if (inputs)
+					inputs->Bind(context);
 			}
 			ID3D11UnorderedAccessView* target = uav.Get();
 			context->CSSetUnorderedAccessViews(0, 1, &target, nullptr);
@@ -234,6 +275,183 @@ namespace
 		Require(reduced > 0 && protectedFlat > 0, "Fixture did not exercise the reported sparkle regression");
 		std::cout << "PASS VR=" << vr << " PBR=" << pbr << " samples=" << compared << " reduced=" << reduced << " flatProtected=" << protectedFlat << " preservedBaselineNonfinite=" << baselineNonfinite << '\n';
 	}
+
+	void CheckPuddleSlopes(ID3D11Device* device, ID3D11DeviceContext* context)
+	{
+		Fixture fixture(device, false, false, "CheckPuddleSlopes");
+		const auto samples = fixture.Run(context, 0, 0, 0, 0);
+		float previous = 1;
+		for (size_t i = 0; i < 1024; ++i) {
+			const auto& sample = samples[i * 3];
+			Require(std::isfinite(sample[0]) && sample[0] >= 0 && sample[0] <= previous,
+				"Puddle slope coverage must decrease monotonically");
+			if (sample[1] <= 3)
+				Require(sample[0] == 1, "Nearly flat surfaces lost puddle eligibility");
+			else if (sample[1] >= 8)
+				Require(sample[0] == 0, "Standing puddles survived on a slope above 8 degrees");
+			else
+				Require(sample[0] > 0 && sample[0] < 1, "Puddle slope transition must fade smoothly");
+			Require(sample[2] == 0 && sample[3] == 0, "Downward or degenerate normals admitted puddles");
+			const auto& geometric = samples[i * 3 + 1];
+			Require(Close(geometric[0], sample[0]) && Close(geometric[1], sample[0]),
+				"Geometric puddle eligibility changed with distance or resolution");
+			Require(geometric[2] == 0 && geometric[3] == 0, "Downward or degenerate geometry admitted puddles");
+			Require(Close(samples[i * 3 + 2][0], sample[0]), "Geometric derivative orientation disagrees with the mesh slope");
+			previous = sample[0];
+		}
+		std::cout << "PASS: puddle slope coverage, samples=1024\n";
+	}
+
+	void CheckRainFilmSurface(ID3D11Device* device, ID3D11DeviceContext* context, bool vr, bool pbr)
+	{
+		Fixture fixture(device, vr, pbr, "CheckRainFilmSurface");
+		Samples previous{};
+		for (float percent : { 0.0f, 10.0f, 25.0f, 50.0f, 70.0f, 100.0f }) {
+			const auto lowReduction = fixture.RunSurface(context, true, percent, 0.25f);
+			const auto highReduction = fixture.RunSurface(context, true, percent, 10.0f);
+			for (size_t i = 0; i < 1024; ++i) {
+				const auto& actual = highReduction[i * 3];
+				const auto& facing = highReduction[(i / 32 * 32) * 3];
+				for (size_t c = 0; c < 4; ++c) {
+					Require(std::isfinite(actual[c]) && Close(actual[c], facing[c]), "Rain-film surface changed with viewing angle");
+					Require(Close(actual[c], lowReduction[i * 3][c]), "Highlight reduction changed coating coverage or roughness");
+				}
+				Require(actual[1] >= previous[i * 3][1] && actual[2] >= previous[i * 3][2], "Rain-film slider must increase coverage and darkening monotonically");
+				const bool sheltered = (i / 32) % 4 >= 2;
+				if (percent == 0 || sheltered)
+					Require(actual[1] == 0 && actual[2] == 0, "Disabled or sheltered rain film remained visible");
+				else
+					Require(actual[1] > 0 && actual[0] >= 0.18f && actual[0] <= 0.4f, "Exposed ground lost its bounded wet coating");
+			}
+			previous = highReduction;
+		}
+		const auto legacy = fixture.RunSurface(context, false, 70.0f);
+		Require(legacy[0][0] > legacy[31 * 3][0], "Legacy comparison no longer exercises grazing roughness");
+		const auto puddlesOff = fixture.RunSurface(context, true, 0, 2.5f, 1, 1, 1);
+		const auto puddlesOn = fixture.RunSurface(context, true, 100, 2.5f, 1, 1, 1);
+		for (size_t i = 0; i < 32 * 3; ++i)
+			for (size_t c = 0; c < 4; ++c)
+				Require(Close(puddlesOff[i][c], puddlesOn[i][c]), "Rain-film slider changed deep puddles");
+		Require(puddlesOn[32 * 3][1] > 0, "Puddle slope restriction removed rain film on sloping ground");
+		const auto shoreOnly = fixture.RunSurface(context, true, 0, 10, 1, 1, 0, 1);
+		const auto traceRain = fixture.RunSurface(context, true, 1e-5f, 10, 1, 1, 0, 1);
+		for (size_t i = 0; i < shoreOnly.size(); ++i)
+			for (size_t c = 0; c < 4; ++c)
+				Require(Close(shoreOnly[i][c], traceRain[i][c]), "Trace rain caused a discontinuous change to shoreline wetness");
+		float previousDrying = 1;
+		for (float wetness : { 1.0f, 0.7f, 0.3f, 0.0f }) {
+			const auto drying = fixture.RunSurface(context, true, 100, 2.5f, wetness, 0);
+			Require(drying[0][1] <= previousDrying, "Rain film intensified while drying");
+			previousDrying = drying[0][1];
+		}
+		Require(previousDrying == 0, "Rain film persisted after full drying");
+		std::cout << "PASS: rain-film surface, view invariance, slider, shelter, puddles and drying VR=" << vr << " PBR=" << pbr << '\n';
+	}
+
+	void CheckRainFilmHighlights(ID3D11Device* device, ID3D11DeviceContext* context, bool vr, bool pbr)
+	{
+		Fixture fixture(device, vr, pbr, "CheckRainFilmHighlights");
+		const auto samples = fixture.Run(context, 0, 0, 0, 0);
+		unsigned reduced = 0;
+		float previousReflectance = 0;
+		for (size_t i = 0; i < 1024; ++i) {
+			const auto& actual = samples[i * 3];
+			const auto& reference = samples[i * 3 + 1];
+			const auto& indirect = samples[i * 3 + 2];
+			for (size_t c = 0; c < 3; ++c)
+				Require(std::isfinite(actual[c]) && actual[c] >= 0 && actual[c] <= reference[c] + 1e-5f,
+					"Rain-film highlight compression increased or invalidated a highlight");
+			Require(actual[3] == 0 && indirect[0] < 1e-5f, "Peak compression changed diffuse lighting or light attenuation");
+			Require(Close(actual[1], actual[0] * 0.25f) && Close(actual[2], actual[0] * 0.0625f), "Rain-film highlight hue changed");
+			Require(std::isfinite(indirect[1]) && indirect[1] >= previousReflectance && indirect[1] <= 1.0f &&
+						Close(indirect[2], indirect[1] * 0.25f) && Close(indirect[3], indirect[1] * 0.0625f),
+				"Wet reflection compression lost its bound, ordering or hue");
+			previousReflectance = indirect[1];
+			reduced += actual[0] < reference[0] * 0.9f;
+		}
+		Require(reduced > 0, "Rain-film fixture did not exercise highlight peaks");
+		std::cout << "PASS: rain-film direct and indirect highlight compression VR=" << vr << " PBR=" << pbr << '\n';
+	}
+
+	void CheckRainFilmReflectivity(ID3D11Device* device, ID3D11DeviceContext* context, bool vr, bool pbr)
+	{
+		Fixture fixture(device, vr, pbr, "CheckRainFilmReflectivity");
+		const auto samples = fixture.Run(context, 0, 0, 0, 0);
+		for (size_t i = 0; i < 1024; ++i) {
+			const auto& reflected = samples[i * 3];
+			for (size_t c = 0; c < 3; ++c) {
+				Require(std::isfinite(reflected[c]) && Close(reflected[c], reflected[3]),
+					"Indirect film reflectivity disagrees with the direct wetness strength");
+				Require(Close(samples[i * 3 + 1][c] + reflected[c], 1) && Close(samples[i * 3 + 2][c] + reflected[c], 1),
+					"Wet reflection weights lost energy balance");
+			}
+			if (i % 32 == 0)
+				Require(reflected[0] == 0, "Dry coating retained a reflection");
+		}
+		std::cout << "PASS: rain-film direct/indirect reflectivity agreement VR=" << vr << " PBR=" << pbr << '\n';
+	}
+
+	void CheckCharacterScope(ID3D11Device* device, ID3D11DeviceContext* context, bool vr)
+	{
+		for (const char* material : { "SKIN", "HAIR" }) {
+			Fixture fixture(device, vr, false, "CheckRainFilmSurface", false, material);
+			const auto legacy = fixture.RunSurface(context, false, 70);
+			const auto corrected = fixture.RunSurface(context, true, 70);
+			Require(legacy[0][1] > 0, "Character scope fixture did not produce wet skin or hair");
+			for (size_t i = 0; i < legacy.size(); ++i)
+				for (size_t c = 0; c < 4; ++c)
+					Require(legacy[i][c] == corrected[i][c], "Rain-film toggle changed skin or hair shading");
+		}
+		std::cout << "PASS: rain-film toggle preserves skin and hair VR=" << vr << '\n';
+	}
+
+	void CheckWetnessPixelShaders()
+	{
+		struct Material
+		{
+			const char* define;
+			bool pbr, skinned;
+		};
+		const std::array materials{
+			Material{ "LANDSCAPE", false, false }, Material{ "MODELSPACENORMALS", false, false }, Material{ "ENVMAP", false, false },
+			Material{ "LANDSCAPE", true, false }, Material{ "MODELSPACENORMALS", true, true }, Material{ "VC", true, false },
+			Material{ "SKIN", false, true }, Material{ "HAIR", false, true }
+		};
+		for (bool vr : { false, true }) {
+			for (bool deferred : { false, true }) {
+				for (bool cubemaps : { false, true }) {
+					for (const auto& material : materials) {
+						PackageIncludes includes("package/Shaders", "features/Wetterness/Shaders", "features/Dynamic Cubemaps/Shaders");
+						std::vector<D3D_SHADER_MACRO> defines{
+							{ "PSHADER", "1" }, { "WETTERNESS", "1" }, { material.define, "1" }
+						};
+						if (vr)
+							defines.push_back({ "VR", "1" });
+						if (deferred)
+							defines.push_back({ "DEFERRED", "1" });
+						if (cubemaps)
+							defines.push_back({ "DYNAMIC_CUBEMAPS", "1" });
+						if (material.pbr)
+							defines.push_back({ "TRUE_PBR", "1" });
+						if (material.skinned)
+							defines.push_back({ "SKINNED", "1" });
+						defines.push_back({ nullptr, nullptr });
+						std::cout << "Compile wetness pixel shader VR=" << vr << " deferred=" << deferred << " PBR=" << material.pbr
+								  << " material=" << material.define << " skinned=" << material.skinned << " cubemaps=" << cubemaps << std::endl;
+						ComPtr<ID3DBlob> bytecode, errors;
+						// Full material permutations use the production compiler flags, including warning reporting.
+						const auto compiled = D3DCompileFromFile(L"package/Shaders/Lighting.hlsl", defines.data(), &includes, "main", "ps_5_0",
+							D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+							0, bytecode.GetAddressOf(), errors.GetAddressOf());
+						if (errors)
+							std::cerr << static_cast<const char*>(errors->GetBufferPointer());
+						Check(compiled);
+						std::cout << "PASS\n";
+					}
+				}
+			}
+		}
+	}
 }
 
 int main()
@@ -245,6 +463,16 @@ int main()
 		Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION,
 			device.GetAddressOf(), nullptr, context.GetAddressOf()));
 		CheckDistribution(device.Get(), context.Get());
+		CheckPuddleSlopes(device.Get(), context.Get());
+		for (bool vr : { false, true }) {
+			CheckCharacterScope(device.Get(), context.Get(), vr);
+			for (bool pbr : { false, true }) {
+				CheckRainFilmSurface(device.Get(), context.Get(), vr, pbr);
+				CheckRainFilmHighlights(device.Get(), context.Get(), vr, pbr);
+				CheckRainFilmReflectivity(device.Get(), context.Get(), vr, pbr);
+			}
+		}
+		CheckWetnessPixelShaders();
 		for (bool vr : { false, true })
 			for (bool pbr : { false, true })
 				CheckLighting(device.Get(), context.Get(), vr, pbr);

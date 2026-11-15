@@ -1,6 +1,7 @@
 #include "Deferred.h"
 
 #include <algorithm>
+#include <chrono>
 #include <format>
 #include <stdexcept>
 #include <type_traits>
@@ -8,7 +9,6 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include <array>
-#	include <chrono>
 #endif
 
 #include <DDSTextureLoader.h>
@@ -21,6 +21,7 @@
 #include "Features/DynamicCubemaps.h"
 #include "Features/FurShells.h"
 #include "Features/IBL.h"
+#include "Features/LinearLighting.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
@@ -186,8 +187,7 @@ void Deferred::SetupResources()
 	auto renderer = globals::game::renderer;
 	static ID3D11Device* shaderDevice = nullptr;
 	if (shaderDevice != globals::d3d::device) {
-		mainCompositeCS.Reset();
-		mainCompositeInteriorCS.Reset();
+		ClearShaderCache();
 		if (linearSampler) {
 			linearSampler->Release();
 			linearSampler = nullptr;
@@ -200,7 +200,6 @@ void Deferred::SetupResources()
 		perShadow = nullptr;
 		delete directionalShadowLights;
 		directionalShadowLights = nullptr;
-		copyShadowCS.Reset();
 		shaderDevice = globals::d3d::device;
 	}
 
@@ -933,69 +932,175 @@ void Deferred::ClearShaderCache()
 {
 	mainCompositeCS.Reset();
 	mainCompositeInteriorCS.Reset();
+	for (auto& scene : specializedComposites)
+		for (auto& shader : scene)
+			shader.Reset();
+	compositeMissReports = {};
+	++compositeRevision;
 	copyShadowCS.Reset();
 }
 
 ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 {
-	std::vector<std::pair<const char*, const char*>> defines;
-
-	if (globals::features::dynamicCubemaps.loaded)
-		defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
-
-	if (globals::features::skylighting.loaded)
-		defines.push_back({ "SKYLIGHTING", nullptr });
-
-	if (globals::features::screenSpaceGI.loaded) {
-		defines.push_back({ "SSGI", nullptr });
-		if (!globals::features::screenSpaceGI.HasGIResources())
-			defines.push_back({ "SSGI_AO_ONLY", nullptr });
-	}
-
-	if (globals::features::ibl.loaded)
-		defines.push_back({ "IBL", nullptr });
-
-	if (REL::Module::IsVR())
-		defines.push_back({ "FRAMEBUFFER", nullptr });
-
-	if (globals::features::terrainBlending.loaded)
-		defines.push_back({ "TERRAIN_BLENDING", nullptr });
-	return mainCompositeCS.Get(
-		L"Data\\Shaders\\DeferredCompositeCS.hlsl",
-		defines,
-		"cs_5_0",
-		"main",
-		"Deferred::MainCompositeCS");
+	return GetComputeMainComposite(false);
 }
 
 ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 {
-	std::vector<std::pair<const char*, const char*>> defines;
-	defines.push_back({ "INTERIOR", nullptr });
+	return GetComputeMainComposite(true);
+}
 
+static std::vector<std::pair<const char*, const char*>> BuildCompositeDefines(bool interior)
+{
+	std::vector<std::pair<const char*, const char*>> defines;
+	if (interior)
+		defines.push_back({ "INTERIOR", nullptr });
 	if (globals::features::dynamicCubemaps.loaded)
 		defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
-
+	if (!interior && globals::features::skylighting.loaded)
+		defines.push_back({ "SKYLIGHTING", nullptr });
 	if (globals::features::screenSpaceGI.loaded) {
 		defines.push_back({ "SSGI", nullptr });
 		if (!globals::features::screenSpaceGI.HasGIResources())
 			defines.push_back({ "SSGI_AO_ONLY", nullptr });
 	}
-
 	if (globals::features::ibl.loaded)
 		defines.push_back({ "IBL", nullptr });
-
 	if (REL::Module::IsVR())
 		defines.push_back({ "FRAMEBUFFER", nullptr });
-
 	if (globals::features::terrainBlending.loaded)
 		defines.push_back({ "TERRAIN_BLENDING", nullptr });
-	return mainCompositeInteriorCS.Get(
-		L"Data\\Shaders\\DeferredCompositeCS.hlsl",
-		defines,
-		"cs_5_0",
-		"main",
-		"Deferred::MainCompositeInteriorCS");
+	return defines;
+}
+
+ID3D11ComputeShader* Deferred::GetComputeMainComposite(bool interior)
+{
+	auto& general = interior ? mainCompositeInteriorCS : mainCompositeCS;
+	const bool luminanceRatio = globals::features::ibl.loaded && globals::features::dynamicCubemaps.loaded &&
+	                            globals::features::ibl.UsesLuminanceRatioComposite();
+	const bool linearLighting = globals::features::linearLighting.loaded && globals::features::linearLighting.UsesLinearLightingComposite();
+	const uint8_t specialization = (luminanceRatio ? kCompositeLuminanceRatio : 0u) | (linearLighting ? kCompositeLinearLighting : 0u);
+	if (specialization) {
+		if (auto* shader = specializedComposites[interior][specialization - 1].get())
+			return shader;
+	}
+	if (!general && !general.HasFailed()) {
+		general.Get(L"Data\\Shaders\\DeferredCompositeCS.hlsl", BuildCompositeDefines(interior), "cs_5_0", "main",
+			interior ? "Deferred::MainCompositeInteriorCS" : "Deferred::MainCompositeCS");
+	}
+	if (general && specialization && specializedComposites[interior][specialization - 1].CanPrepare())
+		RequestSpecializedComposite(interior, specialization);
+	return general.get();
+}
+
+void Deferred::PrewarmDiscoveredComposites()
+{
+	auto& cache = *globals::shaderCache;
+	if (!cache.CanCompileOptionalShaderSources() || !cache.IsDiskCacheActive())
+		return;
+	const auto requests = cache.GetStartupShaderSpecializations();
+	for (const auto& request : requests) {
+		if (request.family != Util::SpecializationFamily::Composite)
+			continue;
+		const auto specialization = static_cast<uint8_t>(request.descriptor & kCompositeSpecializationCount);
+		if ((specialization & kCompositeLuminanceRatio) && (!globals::features::ibl.loaded || !globals::features::dynamicCubemaps.loaded))
+			continue;
+		if ((specialization & kCompositeLinearLighting) && !globals::features::linearLighting.loaded)
+			continue;
+		RequestSpecializedComposite((request.descriptor & 4u) != 0, specialization);
+	}
+}
+
+void Deferred::RequestSpecializedComposite(bool interior, uint8_t specialization) noexcept
+try {
+	if (!specialization || specialization > kCompositeSpecializationCount)
+		return;
+	auto& variant = specializedComposites[interior][specialization - 1];
+	auto& cache = *globals::shaderCache;
+	if (!variant.CanPrepare() || globals::state->IsSaveLoadSafeModeActive())
+		return;
+	const bool gameplay = cache.UsesRuntimeLightingSpecializationPolicy();
+	const bool suppressed = gameplay && cache.ResidentOnlyLightingSpecializations();
+	const auto revision = compositeRevision;
+	const bool luminanceRatio = (specialization & kCompositeLuminanceRatio) != 0;
+	const bool linearLighting = (specialization & kCompositeLinearLighting) != 0;
+	const char* variantName = luminanceRatio ? (linearLighting ? "ibl_luminance_ratio_linear_lighting" : "ibl_luminance_ratio") : "linear_lighting";
+	const uint8_t reportBit = suppressed ? 2u : 1u;
+	auto& reportedMisses = compositeMissReports[interior][specialization - 1];
+	if (gameplay && !(reportedMisses & reportBit) && spdlog::should_log(spdlog::level::info)) {
+		reportedMisses |= reportBit;
+		cache.compilationPool.detach_task([revision, variantName, interior, suppressed] {
+			logger::info("[ShaderSpecialization] composite_revision={} variant={} interior={} request={} source_compile=unknown",
+				revision, variantName, interior, suppressed ? "suppressed" : "allowed");
+		});
+	}
+	if (suppressed)
+		return;
+	auto ticket = variant.BeginPreparation();
+	try {
+		winrt::com_ptr<ID3D11Device> device;
+		device.copy_from(globals::d3d::device);
+		const bool canCompile = device && !(device->GetCreationFlags() & D3D11_CREATE_DEVICE_SINGLETHREADED);
+		if (!canCompile)
+			device = nullptr;
+		auto macros = BuildCompositeDefines(interior);
+		if (luminanceRatio)
+			macros.push_back({ "IBL_LUMINANCE_RATIO", nullptr });
+		if (linearLighting)
+			macros.push_back({ "COMPOSITE_LINEAR_LIGHTING", nullptr });
+		const bool startupPreparation = cache.CanCompileOptionalShaderSources();
+		if (startupPreparation)
+			cache.BeginCompositePreparation();
+		try {
+			cache.compilationPool.detach_task([ticket, device, canCompile, macros = std::move(macros), variantName, interior, revision, specialization, startupPreparation] {
+				auto& cache = *globals::shaderCache;
+				const SKSE::stl::scope_exit completePreparation([&] {
+					if (startupPreparation)
+						cache.EndCompositePreparation();
+				});
+				winrt::com_ptr<ID3D11ComputeShader> shader;
+				Util::ShaderCompileTiming timing;
+				HRESULT result = canCompile ? E_ABORT : E_NOTIMPL;
+				const auto started = std::chrono::steady_clock::now();
+				try {
+					if (!ticket->IsCancelled() && canCompile) {
+						shader.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShaderOnDevice(device.get(),
+							L"Data\\Shaders\\DeferredCompositeCS.hlsl", macros, "cs_5_0", "main", result, &timing, true)));
+						if (shader)
+							Util::SetResourceName(shader.get(), "Deferred::MainComposite%s::%s", interior ? "Interior" : "", variantName);
+					}
+				} catch (...) {
+					shader = nullptr;
+					result = E_FAIL;
+				}
+				if (timing.deferred && !ticket->IsCancelled())
+					cache.RememberShaderSpecialization({ Util::SpecializationFamily::Composite, uint32_t(specialization) | (interior ? 4u : 0u) });
+				try {
+					logger::info("[ShaderSpecialization] prepared composite_revision={} variant={} interior={} source={} source_compiles={} ready={} cancelled={} result=0x{:08X} elapsed_ms={:.3f}",
+						revision, variantName, interior, timing.deferred ? "deferred_until_startup" : timing.sourceCompiles ? "source" :
+																								  shader                    ? "disk_cache" :
+																															  "none",
+						timing.sourceCompiles,
+						bool(shader) && !ticket->IsCancelled(), ticket->IsCancelled(), static_cast<uint32_t>(result),
+						std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
+				} catch (...) {
+					OutputDebugStringA("[ShaderSpecialization] Composite preparation result logging failed.\n");
+				}
+				ticket->Complete(std::move(shader));
+			});
+		} catch (...) {
+			if (startupPreparation)
+				cache.EndCompositePreparation();
+			throw;
+		}
+	} catch (...) {
+		ticket->Complete(nullptr);
+		throw;
+	}
+	return;
+} catch (...) {
+	OutputDebugStringA("[ShaderSpecialization] Unable to queue composite preparation; retaining general shading.\n");
+	return;
 }
 
 void Deferred::Hooks::Main_RenderShadowMaps::thunk()

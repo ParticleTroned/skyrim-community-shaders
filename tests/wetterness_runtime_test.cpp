@@ -148,6 +148,7 @@ namespace globals
 	struct State
 	{
 		uint32_t frameCount = 0;
+		uint32_t lightingPixelShaderFlags = 1u;
 	};
 	State* state = nullptr;
 	namespace game
@@ -194,6 +195,9 @@ struct Wetterness
 	PerFrame MakeDryPerFrameData() const;
 	bool IsRuntimeProcessingActive() const;
 	PerFrame GetCommonBufferData() const;
+	float GetRainFilmPercent() const;
+	void SetRainFilmPercent(float percent);
+	PerFrame PrepareFrameData() const;
 	void Prepass();
 };
 namespace
@@ -209,6 +213,14 @@ namespace
 #include "wetterness_activity.h"
 #include "wetterness_reset.h"
 #include "wetterness_update.h"
+namespace SIE
+{
+	struct ShaderCache
+	{
+		static constexpr uint32_t kLightingDryWeather = 1u << 21;
+	};
+}
+#include "wetterness_prepare.h"
 
 namespace
 {
@@ -257,7 +269,13 @@ namespace
 		{
 			calendar.seconds += seconds;
 			++state.frameCount;
-			auto data = wetness.GetCommonBufferData();
+			const auto otherFlags = state.lightingPixelShaderFlags & ~SIE::ShaderCache::kLightingDryWeather;
+			auto data = wetness.PrepareFrameData();
+			Require((state.lightingPixelShaderFlags & ~SIE::ShaderCache::kLightingDryWeather) == otherFlags,
+				"Wetness changed unrelated lighting variants");
+			Require(((state.lightingPixelShaderFlags & SIE::ShaderCache::kLightingDryWeather) != 0) ==
+						(wetness.loaded && data.settings.EnableWetterness == 0u),
+				"Lighting variant disagreed with the uploaded wetness state");
 			wetness.Prepass();
 			return data;
 		}
@@ -412,6 +430,59 @@ namespace
 		data = f.Step();
 		Require(data.settings.MaxShoreWetness == 0 && !f.wetness.IsRuntimeProcessingActive(), "Unloaded feature retained effects");
 	}
+
+	void CheckPuddleSlopeToggle()
+	{
+		Fixture f;
+		Require(!f.wetness.restrictPuddleSlopes, "Puddle slope restriction must default off");
+		f.Rain();
+		f.Step();
+		const auto original = f.Step(8 * 3600);
+		f.wetness.restrictPuddleSlopes = true;
+		const auto restricted = f.Step(0);
+		constexpr uint32_t slopeBit = 1u << 31;
+		Require((original.PackedRainReflectionControl & slopeBit) == 0 &&
+					restricted.PackedRainReflectionControl == (original.PackedRainReflectionControl | slopeBit),
+			"Slope toggle corrupted packed reflection or occlusion controls");
+		Require(original.Wetness == restricted.Wetness && original.PuddleWetness == restricted.PuddleWetness &&
+					original.Raining == restricted.Raining,
+			"Slope toggle changed accumulated rain or wetness");
+		f.wetness.restrictPuddleSlopes = false;
+		Require(f.Step(0).PackedRainReflectionControl == original.PackedRainReflectionControl,
+			"Disabling slope restriction did not restore the original shader controls");
+	}
+
+	void CheckRainFilmControls()
+	{
+		Fixture f;
+		Require(!f.wetness.preserveWetnessHighlights && f.wetness.GetRainFilmPercent() == 70.0f,
+			"Rain-film defaults changed the saved ground-film mapping");
+		f.Rain();
+		f.Step();
+		const auto original = f.Step(8 * 3600);
+		f.wetness.preserveWetnessHighlights = true;
+		const auto corrected = f.Step(0);
+		Require(corrected.PackedPostRainControl == (original.PackedPostRainControl | (1u << 30)) &&
+					corrected.PackedRainReflectionControl == original.PackedRainReflectionControl,
+			"Rain-film toggle corrupted another packed control");
+		for (float percent : { 0.0f, 25.0f, 70.0f, 100.0f }) {
+			f.wetness.SetRainFilmPercent(percent);
+			const auto changed = f.Step(0);
+			Require(f.wetness.GetRainFilmPercent() == percent && changed.RainContactWetnessScale == percent * 0.025f,
+				"Rain-film percentage did not update the cached shader settings");
+			Require(changed.Wetness == original.Wetness && changed.PuddleWetness == original.PuddleWetness && changed.Raining == original.Raining,
+				"Rain-film controls reset accumulated weather");
+		}
+		f.wetness.SetRainFilmPercent(-1.0f);
+		Require(f.wetness.GetRainFilmPercent() == 0.0f, "Negative film percentage was accepted");
+		f.wetness.SetRainFilmPercent(101.0f);
+		Require(f.wetness.GetRainFilmPercent() == 100.0f, "Excessive film percentage was accepted");
+		f.wetness.SetRainFilmPercent(std::numeric_limits<float>::quiet_NaN());
+		f.wetness.SetRainFilmPercent(std::numeric_limits<float>::infinity());
+		Require(f.wetness.GetRainFilmPercent() == 100.0f, "Nonfinite film input changed the previous setting");
+		f.wetness.preserveWetnessHighlights = false;
+		Require(f.Step(0).PackedPostRainControl == original.PackedPostRainControl, "Rain-film toggle failed to restore legacy controls");
+	}
 }
 
 int main()
@@ -421,6 +492,8 @@ int main()
 		CheckGrassAndClock();
 		CheckTransitionsAndOverrides();
 		CheckRainMetadata();
+		CheckPuddleSlopeToggle();
+		CheckRainFilmControls();
 		std::cout << "Wetterness runtime lifecycle passed\n";
 		return 0;
 	} catch (const std::exception& error) {

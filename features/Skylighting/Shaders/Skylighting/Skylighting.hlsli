@@ -41,6 +41,12 @@ namespace Skylighting
 		return max(params.ArrayDims.xyz, uint3(1, 1, 1));
 	}
 
+	/** Wraps a probe index whose components are less than twice the dimensions. */
+	uint3 WrapProbeIndexOnce(uint3 index, uint3 arrayDims)
+	{
+		return index >= arrayDims ? index - arrayDims : index;
+	}
+
 	float3 GetArraySize(SharedData::SkylightingSettings params)
 	{
 		return max(params.ProbeFieldSize, DEFAULT_PROBE_FIELD_SIZE) * float3(1, 1, 0.5);
@@ -123,10 +129,10 @@ namespace Skylighting
 #endif
 
 #if defined(PSHADER) || defined(SKYLIGHTING_PROBE_REGISTER)
-	float GetProbeTangentWeight(float3 cellCentreMS, float3 positionMS, float3 normalWS)
+	float GetProbeTangentWeight(float3 probeOffset, float3 normalWS)
 	{
-		// Favor probes on the receiver's side of the surface to limit light leaking.
-		return saturate(dot(normalize(cellCentreMS - positionMS), normalWS) * 0.5 + 0.5);
+		// Cubic probe cells preserve world-space direction in grid coordinates.
+		return saturate(dot(probeOffset, normalWS) * rsqrt(max(dot(probeOffset, probeOffset), EPSILON_WEIGHT_SUM)) * 0.5 + 0.5);
 	}
 
 	sh2 Sample(float3 positionMS, float3 normalWS)
@@ -151,6 +157,8 @@ namespace Skylighting
 		float3 cellVxCoord = uvw * arrayDims;
 		int3 cell000 = floor(cellVxCoord - 0.5);
 		float3 trilinearPos = cellVxCoord - 0.5 - cell000;
+		const uint3 lowerProbe = WrapProbeIndexOnce(uint3(max(cell000, 0)) + params.ArrayOrigin.xyz, arrayDims);
+		const uint3 upperProbe = WrapProbeIndexOnce(uint3(max(cell000 + 1, 0)) + params.ArrayOrigin.xyz, arrayDims);
 
 		sh2 sum = 0;
 		float wsum = 0;
@@ -163,14 +171,12 @@ namespace Skylighting
 					if (any(cellID < 0) || any((uint3)cellID >= arrayDims))
 						continue;
 
-					float3 cellCentreMS = (float3(cellID) + 0.5 - float3(arrayDims) * 0.5) * cellSize;
-
-					float tangentWeight = GetProbeTangentWeight(cellCentreMS, positionMSAdjusted, normalWS);
-
-					float3 trilinearWeights = 1 - abs(offset - trilinearPos);
+					float3 probeOffset = offset - trilinearPos;
+					float tangentWeight = GetProbeTangentWeight(probeOffset, normalWS);
+					float3 trilinearWeights = 1 - abs(probeOffset);
 					float w = trilinearWeights.x * trilinearWeights.y * trilinearWeights.z * tangentWeight;
 
-					uint3 cellTexID = (uint3(cellID) + params.ArrayOrigin.xyz) % arrayDims;
+					uint3 cellTexID = offset == 0 ? lowerProbe : upperProbe;
 					sh2 probe = SphericalHarmonics::Scale(SkylightingProbeArray[cellTexID], w);
 
 					sum = SphericalHarmonics::Add(sum, probe);
@@ -211,6 +217,8 @@ namespace Skylighting
 					float3 cellVxCoord = uvw * arrayDims;
 					int3 cell000 = floor(cellVxCoord - 0.5);
 					float3 trilinearPos = cellVxCoord - 0.5 - cell000;
+					const uint3 lowerProbe = WrapProbeIndexOnce(uint3(max(cell000, 0)) + params.ArrayOrigin.xyz, arrayDims);
+					const uint3 upperProbe = WrapProbeIndexOnce(uint3(max(cell000 + 1, 0)) + params.ArrayOrigin.xyz, arrayDims);
 					sh2 shSum = 0;
 					float shWeightSum = 0;
 					float shadowSum = 0;
@@ -224,11 +232,11 @@ namespace Skylighting
 								if (any(cellID < 0) || any((uint3)cellID >= arrayDims))
 									continue;
 
-								float3 trilinearWeights = 1 - abs(cellOffset - trilinearPos);
+								float3 probeOffset = cellOffset - trilinearPos;
+								float3 trilinearWeights = 1 - abs(probeOffset);
 								float triWeight = trilinearWeights.x * trilinearWeights.y * trilinearWeights.z;
-								uint3 cellTexID = ((uint3)cellID + params.ArrayOrigin.xyz) % arrayDims;
-								float3 cellCentreMS = (float3(cellID) + 0.5 - float3(arrayDims) * 0.5) * cellSize;
-								float tangentWeight = GetProbeTangentWeight(cellCentreMS, positionMSAdjusted, normalWS);
+								uint3 cellTexID = cellOffset == 0 ? lowerProbe : upperProbe;
+								float tangentWeight = GetProbeTangentWeight(probeOffset, normalWS);
 								float shWeight = triWeight * tangentWeight;
 
 								shSum = SphericalHarmonics::Add(shSum, SphericalHarmonics::Scale(SkylightingProbeArray[cellTexID], shWeight));
@@ -289,6 +297,8 @@ namespace Skylighting
 		float3 cellVxCoord = uvw * arrayDims;
 		int3 cell000 = floor(cellVxCoord - 0.5);
 		float3 trilinearPos = cellVxCoord - 0.5 - cell000;
+		const uint3 lowerProbe = WrapProbeIndexOnce(uint3(max(cell000, 0)) + params.ArrayOrigin.xyz, arrayDims);
+		const uint3 upperProbe = WrapProbeIndexOnce(uint3(max(cell000 + 1, 0)) + params.ArrayOrigin.xyz, arrayDims);
 
 		sh2 sum = 0;
 		float wsum = 0;
@@ -305,7 +315,7 @@ namespace Skylighting
 			float3 trilinearWeights = 1 - abs(offset - trilinearPos);
 			float w = trilinearWeights.x * trilinearWeights.y * trilinearWeights.z;
 
-			uint3 cellTexID = (uint3(cellID) + params.ArrayOrigin.xyz) % arrayDims;
+			uint3 cellTexID = offset == 0 ? lowerProbe : upperProbe;
 			sh2 probe = SphericalHarmonics::Scale(SkylightingProbeArray[cellTexID], w);
 
 			sum = SphericalHarmonics::Add(sum, probe);

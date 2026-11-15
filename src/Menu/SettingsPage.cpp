@@ -5,6 +5,7 @@
 #include "Menu.h"
 #include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/ProfilingRenderer.h"
+#include "Menu/SettingsSearch.h"
 #include "Utils/UI.h"
 #include <algorithm>
 #include <cmath>
@@ -426,12 +427,19 @@ namespace MenuUI
 		return ChoiceSetting(a_label, a_selected, choices.data(), static_cast<int>(choices.size()));
 	}
 
+	bool NavigationChoice(const char* a_label, int* a_selected, const char* const a_items[], int a_count)
+	{
+		const bool navigated = SettingsSearch::SelectNavigationChoice(a_label, *a_selected, a_items, a_count);
+		return ChoiceSetting(a_label, a_selected, a_items, a_count) || navigated;
+	}
+
 	void SectionHeading(const char* a_label)
 	{
 		ImGui::Spacing();
 		ImGui::PushFont(ImGui::GetFont(), ImGui::GetStyle().FontSizeBase * cardSummaryScale);
 		const SKSE::stl::scope_exit restore([] { ImGui::PopFont(); });
 		ImGui::TextUnformatted(a_label, ImGui::FindRenderedTextEnd(a_label));
+		SettingsSearch::NotifyControl(a_label);
 		ImGui::Separator();
 		ImGui::Spacing();
 	}

@@ -50,22 +50,26 @@ namespace FurShells
 
 	bool IsRootCovered(float4 rootPosition, float rootSlope, uint eyeIndex)
 	{
-		[branch] if (RootTest <= 0.0 || rootPosition.w <= 0.0) return false;
-		float2 uv = rootPosition.xy / rootPosition.w * float2(0.5, -0.5) + 0.5;
-		if (!all(uv >= 0.0) || !all(uv <= 1.0))
-			return false;
-		uint width, height;
-		TexDepth.GetDimensions(width, height);
-		float2 sampleUV = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(Stereo::ConvertToStereoUV(uv, eyeIndex));
+		bool covered = false;
+		[branch] if (!(RootTest <= 0.0 || rootPosition.w <= 0.0))
+		{
+			float2 uv = rootPosition.xy / rootPosition.w * float2(0.5, -0.5) + 0.5;
+			if (all(uv >= 0.0) && all(uv <= 1.0)) {
+				uint width, height;
+				TexDepth.GetDimensions(width, height);
+				float2 sampleUV = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(Stereo::ConvertToStereoUV(uv, eyeIndex));
 #	if defined(VR)
-		sampleUV = VRStereoEffects::ClampDynamicStereoUVToEyeTexel(sampleUV, eyeIndex, uint2(width, height), FrameBuffer::DynamicResolutionParams1.xy);
+				sampleUV = VRStereoEffects::ClampDynamicStereoUVToEyeTexel(sampleUV, eyeIndex, uint2(width, height), FrameBuffer::DynamicResolutionParams1.xy);
 #	endif
-		uint2 activeDimensions = min(max(uint2(float2(width, height) * FrameBuffer::DynamicResolutionParams1.xy), 1u), uint2(width, height));
-		int3 sampleCoord = int3(sampleUV * float2(width, height), 0);
-		sampleCoord.xy = clamp(sampleCoord.xy, int2(0, 0), int2(activeDimensions) - 1);
-		float sceneDepth = SharedData::GetScreenDepth(TexDepth.Load(sampleCoord).x);
-		float bias = 0.03 + rootSlope + 2e-8 * rootPosition.w * rootPosition.w;
-		return sceneDepth < rootPosition.w - bias;
+				uint2 activeDimensions = min(max(uint2(float2(width, height) * FrameBuffer::DynamicResolutionParams1.xy), 1u), uint2(width, height));
+				int3 sampleCoord = int3(sampleUV * float2(width, height), 0);
+				sampleCoord.xy = clamp(sampleCoord.xy, int2(0, 0), int2(activeDimensions) - 1);
+				float sceneDepth = SharedData::GetScreenDepth(TexDepth.Load(sampleCoord).x);
+				float bias = 0.03 + rootSlope + 2e-8 * rootPosition.w * rootPosition.w;
+				covered = sceneDepth < rootPosition.w - bias;
+			}
+		}
+		return covered;
 	}
 
 	static const float CoverageSpread = 0.75;
@@ -226,8 +230,10 @@ namespace FurShells
 	/** @brief Shell texture coordinate pulled toward its clump centre, more at the tip than at the root, so wet strands gather into wisps. */
 	float2 GetClumpedUv(float2 a_uv, float a_shell, float a_wet)
 	{
-		[branch] if (a_wet <= 0.0) return a_uv;
-		return lerp(a_uv, GetClumpCentre(a_uv), saturate(a_wet * WetClumpPull * a_shell));
+		float2 uv = a_uv;
+		[branch] if (!(a_wet <= 0.0))
+			uv = lerp(a_uv, GetClumpCentre(a_uv), saturate(a_wet * WetClumpPull * a_shell));
+		return uv;
 	}
 
 	/** @brief Fur length scale of wet fur, which loses volume as it mats down. */

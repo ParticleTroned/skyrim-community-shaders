@@ -323,7 +323,7 @@ int main()
 		Check(shared.maxAvg == 8 && shared.maxP95 == 8 && shared.maxP99 == 8, "shared table heat colours include an invisible inclusive aggregate");
 		Check(Draw("InteriorSun", 1).contains("DirectionalShadows"), "interior sun shared GPU shadow timing is missing");
 		Check(Draw("CloudShadows", 1).contains("CopyCubemap"), "cloud copy timing is missing");
-		for (const auto feature : { "TruePBR", "ExtendedMaterials", "TerrainVariation", "ExtendedTranslucency", "FoliageLighting", "GrassLighting", "HairSpecular", "WaterEffects" }) {
+		for (const auto feature : { "TruePBR", "ExtendedMaterials", "DetailMaps", "TerrainVariation", "ExtendedTranslucency", "FoliageLighting", "GrassLighting", "HairSpecular", "WaterEffects" }) {
 			const auto output = Draw(feature, 1);
 			Check(output.contains("Shared GPU pass timings") && !output.contains("Instrumented subtotal"), "shared shader page claims a feature cost subtotal");
 		}

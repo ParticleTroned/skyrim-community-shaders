@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -302,6 +303,8 @@ struct AdaptiveBrightness : Feature
 	std::string selectedLocationOverrideKey;
 	std::string locationOverridePresetName = kDefaultLocationOverridePresetName;
 	std::string locationOverridePresetStatus;
+	std::atomic_bool locationTeleportPending{ false };
+	std::atomic<const char*> locationTeleportStatus{ nullptr };
 	std::array<std::string, static_cast<std::size_t>(ContextProfileScope::Count)> contextPresetNames{
 		kDefaultLocationOverridePresetName,
 		kDefaultLocationOverridePresetName,
@@ -437,6 +440,12 @@ struct AdaptiveBrightness : Feature
 	void DrawWaterWindSettings(ProfileSettings& a_profile, bool a_globalLayer);
 	void DrawPresets();
 	void DrawLocationOverrides(bool a_includePresetControls = true, bool a_showAdvancedControls = true, bool a_allowEdits = true);
+	/** Snapshots shared travel restrictions once per UI table or automation listing. */
+	const char* GetLocationTeleportBlockReason() const;
+	/** Validates a saved COC destination against a shared travel-readiness snapshot. */
+	static const char* GetLocationTeleportError(const LocationOverride& a_override, const char* a_blockReason);
+	/** Queues the saved override's COC command on the game thread; success means queued. */
+	bool TeleportToLocationOverride(const std::string& a_key, std::string& a_error);
 	void SaveCurrentLocationOverride(const LocationOverrideTarget& a_target);
 	void ClearLocationOverrideSelection();
 	void InvalidateProfileTabSync();

@@ -126,6 +126,10 @@ struct LinearLighting : Feature
 	virtual void SetupResources() override;
 
 	PerFrameData GetCommonBufferData();
+	/** Captures the effective enable state alongside the settings sent to the GPU. */
+	PerFrameData PrepareFrameData();
+	/** Adaptive Balance color adjustments do not enable this specialization. */
+	bool UsesLinearLightingComposite() const { return uploadedLinearLighting; }
 	bool IsRuntimeEnabled() const;
 	bool IsDisabledForCurrentCell() const;
 
@@ -136,5 +140,6 @@ struct LinearLighting : Feature
 	struct Hooks;
 
 private:
+	bool uploadedLinearLighting = false;
 	static void SanitizeSettings(Settings& a_settings);
 };

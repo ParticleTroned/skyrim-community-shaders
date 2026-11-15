@@ -65,6 +65,7 @@
 #include "Utils/D3DContextProtection.h"
 #include "Utils/DeviceContextState.h"
 #include "Utils/FileSystem.h"
+#include "Utils/FullscreenPassState.h"
 #include "Utils/Game.h"
 #include "Utils/MenuLookup.h"
 #include "Utils/NormalizedCoordinates.h"
@@ -67633,103 +67634,7 @@ void Upscaling::FillMenuCameraMotionVectors()
 	}
 	cameraMotionVectorsCB->Update(cbData);
 
-	ID3D11VertexShader* previousVS = nullptr;
-	ID3D11PixelShader* previousPS = nullptr;
-	ID3D11HullShader* previousHS = nullptr;
-	ID3D11DomainShader* previousDS = nullptr;
-	ID3D11GeometryShader* previousGS = nullptr;
-	ID3D11ShaderResourceView* previousSRV = nullptr;
-	ID3D11Buffer* previousPSCB1 = nullptr;
-	std::array<ID3D11RenderTargetView*, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT> previousRTVs{};
-	ID3D11DepthStencilView* previousDSV = nullptr;
-	ID3D11BlendState* previousBlendState = nullptr;
-	FLOAT previousBlendFactor[4] = {};
-	UINT previousSampleMask = 0;
-	ID3D11DepthStencilState* previousDepthStencilState = nullptr;
-	UINT previousStencilRef = 0;
-	ID3D11RasterizerState* previousRasterizerState = nullptr;
-	std::array<D3D11_VIEWPORT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> previousViewports{};
-	UINT previousViewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-	D3D11_PRIMITIVE_TOPOLOGY previousTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
-	ID3D11InputLayout* previousInputLayout = nullptr;
-	ID3D11Buffer* previousVertexBuffer = nullptr;
-	UINT previousVertexStride = 0;
-	UINT previousVertexOffset = 0;
-	ID3D11Buffer* previousIndexBuffer = nullptr;
-	DXGI_FORMAT previousIndexFormat = DXGI_FORMAT_UNKNOWN;
-	UINT previousIndexOffset = 0;
-
-	context->VSGetShader(&previousVS, nullptr, nullptr);
-	context->PSGetShader(&previousPS, nullptr, nullptr);
-	context->HSGetShader(&previousHS, nullptr, nullptr);
-	context->DSGetShader(&previousDS, nullptr, nullptr);
-	context->GSGetShader(&previousGS, nullptr, nullptr);
-	context->PSGetShaderResources(0, 1, &previousSRV);
-	context->PSGetConstantBuffers(1, 1, &previousPSCB1);
-	context->OMGetRenderTargets(static_cast<UINT>(previousRTVs.size()), previousRTVs.data(), &previousDSV);
-	context->OMGetBlendState(&previousBlendState, previousBlendFactor, &previousSampleMask);
-	context->OMGetDepthStencilState(&previousDepthStencilState, &previousStencilRef);
-	context->RSGetState(&previousRasterizerState);
-	context->RSGetViewports(&previousViewportCount, previousViewports.data());
-	context->IAGetPrimitiveTopology(&previousTopology);
-	context->IAGetInputLayout(&previousInputLayout);
-	context->IAGetVertexBuffers(0, 1, &previousVertexBuffer, &previousVertexStride, &previousVertexOffset);
-	context->IAGetIndexBuffer(&previousIndexBuffer, &previousIndexFormat, &previousIndexOffset);
-
-	auto restoreState = ScopeExit([&]() {
-		ID3D11ShaderResourceView* nullSRV = nullptr;
-		context->PSSetShaderResources(0, 1, &nullSRV);
-
-		context->VSSetShader(previousVS, nullptr, 0);
-		context->PSSetShader(previousPS, nullptr, 0);
-		context->HSSetShader(previousHS, nullptr, 0);
-		context->DSSetShader(previousDS, nullptr, 0);
-		context->GSSetShader(previousGS, nullptr, 0);
-		context->PSSetShaderResources(0, 1, &previousSRV);
-		context->PSSetConstantBuffers(1, 1, &previousPSCB1);
-		context->OMSetRenderTargets(static_cast<UINT>(previousRTVs.size()), previousRTVs.data(), previousDSV);
-		context->OMSetBlendState(previousBlendState, previousBlendFactor, previousSampleMask);
-		context->OMSetDepthStencilState(previousDepthStencilState, previousStencilRef);
-		context->RSSetState(previousRasterizerState);
-		context->RSSetViewports(previousViewportCount, previousViewportCount ? previousViewports.data() : nullptr);
-		context->IASetPrimitiveTopology(previousTopology);
-		context->IASetInputLayout(previousInputLayout);
-		context->IASetVertexBuffers(0, 1, &previousVertexBuffer, &previousVertexStride, &previousVertexOffset);
-		context->IASetIndexBuffer(previousIndexBuffer, previousIndexFormat, previousIndexOffset);
-
-		if (previousVS)
-			previousVS->Release();
-		if (previousPS)
-			previousPS->Release();
-		if (previousHS)
-			previousHS->Release();
-		if (previousDS)
-			previousDS->Release();
-		if (previousGS)
-			previousGS->Release();
-		if (previousSRV)
-			previousSRV->Release();
-		if (previousPSCB1)
-			previousPSCB1->Release();
-		for (auto* rtv : previousRTVs) {
-			if (rtv)
-				rtv->Release();
-		}
-		if (previousDSV)
-			previousDSV->Release();
-		if (previousBlendState)
-			previousBlendState->Release();
-		if (previousDepthStencilState)
-			previousDepthStencilState->Release();
-		if (previousRasterizerState)
-			previousRasterizerState->Release();
-		if (previousInputLayout)
-			previousInputLayout->Release();
-		if (previousVertexBuffer)
-			previousVertexBuffer->Release();
-		if (previousIndexBuffer)
-			previousIndexBuffer->Release();
-	});
+	Util::FullscreenPassState<1, 1, false> restore(context);
 
 	context->IASetInputLayout(nullptr);
 	ID3D11Buffer* nullVertexBuffer = nullptr;
@@ -68836,6 +68741,8 @@ void Upscaling::UpscaleDepth()
 		return;
 	}
 
+	Util::FullscreenPassState<0, 3> restore(context);
+
 	// UpscaleDepth can run without the main upscale pass on VR full-resolution
 	// mask paths. Unbind current outputs before copying depth/depthCopy.
 	context->OMSetRenderTargets(0, nullptr, nullptr);
@@ -68847,6 +68754,9 @@ void Upscaling::UpscaleDepth()
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
 	// Set up vertex shader that generates fullscreen triangle using SV_VertexID
+	context->GSSetShader(nullptr, nullptr, 0);
+	context->HSSetShader(nullptr, nullptr, 0);
+	context->DSSetShader(nullptr, nullptr, 0);
 	context->VSSetShader(fullscreenVS, nullptr, 0);
 
 	// Set up viewport for fullscreen rendering

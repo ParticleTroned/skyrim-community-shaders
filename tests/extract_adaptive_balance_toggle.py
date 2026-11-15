@@ -34,6 +34,15 @@ def extract(root, output):
     state = (root / "src/State.cpp").read_text(encoding="utf-8-sig")
     state_header = (root / "src/State.h").read_text(encoding="utf-8-sig")
     output.mkdir(parents=True, exist_ok=True)
+    (output / "adaptive_balance_travel_members.h").write_text(
+        between(header, "\tstd::atomic_bool locationTeleportPending", "\tstd::array<std::string, static_cast<std::size_t>(ContextProfileScope::Count)> contextPresetNames"), encoding="utf-8")
+    (output / "adaptive_balance_travel_under_test.h").write_text(
+        between(source, "\tconst char* GetCellEditorIDError(", "\tvoid DrawTableWrappedText(")
+        + between(source, "const char* AdaptiveBrightness::GetLocationTeleportBlockReason()", "void AdaptiveBrightness::DrawPresets()"), encoding="utf-8")
+    (output / "adaptive_balance_travel_ui_under_test.h").write_text(
+        between(source, "\t\t\tconst float teleportButtonSize", "\n\t\t\tImGui::TableSetColumnIndex(4)"), encoding="utf-8")
+    (output / "adaptive_balance_travel_menu_under_test.h").write_text(
+        between(menu, '\t\tif (action == "adaptive_balance_locations"', '\t\tif (action == "request_dynamic_cubemap_refresh")'), encoding="utf-8")
     (output / "linear_lighting_members.h").write_text(
         between(linear, "\tstruct Settings", "\tstruct alignas(16) PerFrameData"), encoding="utf-8")
     (output / "adaptive_balance_effect_permutation_members.h").write_text(

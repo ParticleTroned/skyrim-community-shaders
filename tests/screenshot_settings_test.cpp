@@ -200,13 +200,24 @@ int main()
 		check(current["outputs"][0]["width"] == 3840 && current["outputs"][0]["height"] == 2160, "explicit frame default is not 4K");
 		const auto legacy = explicitFrame({ { "view", view }, { "width", 2560 }, { "height", 1440 } });
 		check(legacy["outputs"][0]["width"] == 2560 && legacy["outputs"][0]["height"] == 1440, "explicit legacy dimensions changed");
+		const auto decimal4k = explicitFrame({ { "view", view }, { "resolution", "4k" }, { "width", 3840.0 }, { "height", 2160.0 } })["outputs"][0];
+		check(decimal4k["width"].is_number_integer() && decimal4k["width"] == 3840 &&
+				  decimal4k["height"].is_number_integer() && decimal4k["height"] == 2160,
+			"integer-valued 4K dimensions were not normalized");
+		const auto decimalLegacy = explicitFrame({ { "view", view }, { "width", 2560.0 }, { "height", 1440.0 } })["outputs"][0];
+		check(decimalLegacy["width"].is_number_integer() && decimalLegacy["width"] == 2560 &&
+				  decimalLegacy["height"].is_number_integer() && decimalLegacy["height"] == 1440,
+			"integer-valued legacy dimensions were not normalized");
 		for (const auto invalid : {
 				 json{ { "view", view }, { "resolution", "native" }, { "width", 3840 } },
 				 json{ { "view", view }, { "resolution", "4k" }, { "width", 2560 } },
 				 json{ { "view", view }, { "resolution", "8k" } },
 				 json{ { "view", view }, { "width", -1 } },
 				 json{ { "view", view }, { "width", 4294971136ull } },
-				 json{ { "view", view }, { "width", 3840.0 } },
+				 json{ { "view", view }, { "width", 3840.0 }, { "height", 1440.0 } },
+				 json{ { "view", view }, { "width", 2560.0 }, { "height", 2160.0 } },
+				 json{ { "view", view }, { "width", 3840.5 }, { "height", 2160.0 } },
+				 json{ { "view", view }, { "width", 3840.0 }, { "height", "2160" } },
 				 json{ { "view", "left_eye" }, { "resolution", "native" } } }) {
 			bool rejected = false;
 			try {

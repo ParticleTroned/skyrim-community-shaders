@@ -11,6 +11,8 @@ namespace
 {
 	unsigned effects = 0;
 	unsigned presentCalls = 0;
+	unsigned presentFailures = 0;
+	HRESULT loggedFailure = S_OK;
 	UINT forwardedFlags = 0;
 	UINT forwardedInterval = 0;
 	IDXGISwapChain* forwardedChain = nullptr;
@@ -23,6 +25,36 @@ namespace
 	uint32_t timingFrame = 0;
 	HRESULT timingResult = S_OK;
 	std::string renderOrder;
+	unsigned failureLogs = 0, failureFlushes = 0, deviceReasonQueries = 0;
+}
+struct Upscaling
+{
+	struct VRRenderScaleTransitionSnapshot
+	{
+		int state = 0;
+		uint64_t targetEpoch = 0, revision = 0;
+	};
+	static const char* GetVRRenderScaleTransitionStateName(int) { return "Idle"; }
+};
+namespace logger
+{
+	template <class... Args>
+	void info(const char*, Args&&...)
+	{
+		++failureLogs;
+	}
+}
+namespace spdlog
+{
+	struct Logger
+	{
+		void flush() { ++failureFlushes; }
+	};
+	Logger* default_logger()
+	{
+		static Logger logger;
+		return &logger;
+	}
 }
 namespace globals
 {
@@ -74,6 +106,15 @@ namespace globals
 	namespace d3d
 	{
 		void* context = nullptr;
+		struct Device
+		{
+			HRESULT GetDeviceRemovedReason()
+			{
+				++deviceReasonQueries;
+				return S_OK;
+			}
+		} deviceValue;
+		Device* device = &deviceValue;
 	}
 	namespace features
 	{
@@ -92,6 +133,7 @@ namespace globals
 				++timingCapabilityQueries;
 				return frameGeneration;
 			}
+			Upscaling::VRRenderScaleTransitionSnapshot GetVRRenderScaleTransitionSnapshot() { return {}; }
 			void PresentVRMenuDesktopMirror(IDXGISwapChain*)
 			{
 				++effects;
@@ -157,7 +199,16 @@ void TracyD3D11Collect(int)
 }
 void LogFrameIntervalSpikeIfNeeded(uint64_t, uint64_t, uint64_t, uint64_t, HRESULT) { ++effects; }
 
+struct IDXGISwapChain_Present
+{
+	static void LogFirstPresentFailure(HRESULT result)
+	{
+		++presentFailures;
+		loggedFailure = result;
+	}
+
 #include "menu_present_under_test.h"
+};
 
 int main()
 {
@@ -179,6 +230,8 @@ int main()
 					for (bool initialized : { false, true }) {
 						for (bool blurReady : { false, true }) {
 							effects = presentCalls = 0;
+							presentFailures = 0;
+							loggedFailure = S_OK;
 							flatBegins = flatCompletions = timingCapabilityQueries = 0;
 							renderOrder.clear();
 							globals::stateValue.frameCount = 0;
@@ -193,6 +246,7 @@ int main()
 																	 "mirror;reset;overlay;render-targets;capture;indicator;timing-end;present;timing-begin;collect;");
 							const bool expectedBlurReady = blurReady || (!test && initialized && SUCCEEDED(result));
 							if (actual != result || presentCalls != 1 || forwardedChain != chain || forwardedFlags != flags || forwardedInterval != 2 ||
+								presentFailures != unsigned(FAILED(result)) || (FAILED(result) && loggedFailure != result) ||
 								flatBegins != unsigned(!vr && !test) || flatCompletions != flatBegins || timingCapabilityQueries != flatBegins ||
 								(!vr && !test && (timingFrame != 0 || timingResult != result || !timingSupported)) ||
 								renderOrder != expectedOrder || globals::stateValue.startupMenuBlurSourceReady != expectedBlurReady ||
@@ -227,5 +281,6 @@ int main()
 	presentResult = S_OK;
 	const auto probeResult = IDXGISwapChain_Present::thunk(nullptr, 0, DXGI_PRESENT_TEST);
 	passed = passed && probeResult == S_OK && presentCalls == 1 && effects == 0 && renderOrder == "present;";
+	passed = passed && failureLogs == 1 && failureFlushes == 1 && deviceReasonQueries == 1;
 	return passed ? EXIT_SUCCESS : EXIT_FAILURE;
 }

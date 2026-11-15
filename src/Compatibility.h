@@ -14,7 +14,7 @@ namespace Compatibility
 	/** @brief A blocked plugin and, where known, why it is blocked. */
 	struct IncompatiblePlugin
 	{
-		const wchar_t* dll;         ///< DLL basename under Data/SKSE/Plugins.
+		const wchar_t* dll;         ///< DLL path relative to Data/SKSE/Plugins.
 		std::string_view reason{};  ///< Shown to the user; empty when the rationale is not recorded.
 	};
 
@@ -23,7 +23,14 @@ namespace Compatibility
 		L"ShadowFixes.dll", "CSX already contains an alternative fix addressing the same sun-shadow receiver issue"
 	};
 
-	/** @brief Installed or loaded matches disable all CSX hooks and features. */
+	/** @brief External depth reversal cannot share CSX's depth-convention ownership. */
+	inline constexpr IncompatiblePlugin externalReverseZ{
+		L"skyrim-runtime-extender/reversed_z.dll", "external Reverse Z conflicts with CSX's depth handling; use CSX's built-in Reverse Z instead"
+	};
+
+	/** @brief Installed or loaded matches stop CSX startup before hooks and features initialize.
+	 * Feature-local conflicts such as SPS remain with their owning features.
+	 */
 	inline constexpr IncompatiblePlugin incompatiblePlugins[] = {
 		{ L"ShaderTools.dll" },
 		{ L"SSEShaderTools.dll" },
@@ -38,13 +45,14 @@ namespace Compatibility
 			"superseded by Light Limit Fix; both replace the same lighting hooks" },
 		{ L"NMN_DeformableTerrain.dll",
 			"Dynamic Terrain Deformation is not supported alongside CSX Terrain Blending" },
-		shadowFixes
+		shadowFixes,
+		externalReverseZ
 	};
 
 	/** @brief Checks loaded modules without loading or retaining the other plugin. */
 	inline bool IsLoaded(const IncompatiblePlugin& plugin)
 	{
-		return GetModuleHandleW(plugin.dll) != nullptr;
+		return GetModuleHandleW(std::filesystem::path(plugin.dll).filename().c_str()) != nullptr;
 	}
 
 	/** @brief A nonzero error means presence could not be established safely. */

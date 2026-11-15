@@ -51,7 +51,7 @@ namespace
 			const auto* view = Find(feature);
 			Check(view && !view->ownedGpu && !view->ownedRoot.empty() && !view->sharedPrefixes.empty(), "CPU update scopes must not be advertised as feature-owned GPU cost");
 		}
-		for (const auto feature : { "TruePBR", "ExtendedMaterials", "TerrainVariation", "ExtendedTranslucency", "FoliageLighting", "GrassLighting", "HairSpecular", "WaterEffects" }) {
+		for (const auto feature : { "TruePBR", "ExtendedMaterials", "DetailMaps", "TerrainVariation", "ExtendedTranslucency", "FoliageLighting", "GrassLighting", "HairSpecular", "WaterEffects" }) {
 			const auto* view = Find(feature);
 			Check(view && view->ownedRoot.empty() && !view->ownedGpu && !view->sharedPrefixes.empty(), "shared shader view incorrectly owns rendering cost");
 		}

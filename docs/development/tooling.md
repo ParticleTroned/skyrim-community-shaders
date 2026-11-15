@@ -43,6 +43,31 @@ an explicit `VIRTUALENV_OVERRIDE_APP_DATA` is preserved.
 The Prettier hook pins its Node runtime so a new cache does not select an
 unsupported prerelease from Node's download index.
 
+## Settings search metadata
+
+The DLL build runs `tools/generate-control-catalog.py` to produce immutable
+control metadata from feature settings methods and built-in menu pages.
+It follows literal labels through UI helpers, lambdas and typed field
+tables. It never runs a page to discover its controls. Dynamic asset names
+and arbitrary C++ expressions are not inferred; their containing feature
+remains searchable.
+
+The menu creates its index lazily and caches query results. Closed menus
+perform no search processing. Navigation selects existing pages and tabs;
+it never invokes a button or edits a feature setting. Use
+`MenuUI::NavigationChoice` only for UI subpage selectors, never for rendering
+values. Common widgets report their rectangles for scrolling and highlighting.
+Controls behind additional conditions can require manual navigation after
+opening the page. Add parser coverage when introducing another UI declaration
+pattern, rather than hard-coding a second list of labels.
+
+Run `python tests/control_catalog_test.py` to check extraction without a
+build. `SettingsSearch` and `SettingsUI` are controller tests for query policy
+and the shared widgets. The DevBench menu tool exposes `search_settings`,
+`reveal_setting` and `search_status`; revealing requires an already open menu
+and respects measurement, dialog and section guards. A queued result does
+not establish that its control is visible.
+
 ## Daily commands
 
 ```powershell
@@ -144,6 +169,47 @@ unless the selected protocol specifies another rule. Check the required live
 capabilities before starting any recorder. A production DLL can expose core
 DevBench controls without registering the CSX profiling bridge; a process or
 generic scenario dispatcher does not prove profiler availability.
+
+### Standard comparison replays
+
+DevBench's shared recording library can drive the same route with CSX or
+Open Shaders. Confirm the installed files with `recordings action=list` and
+their metadata with `recordings action=describe` through the selected
+DevBench transport before choosing a route.
+
+| Recording                           | Recorded duration | Declared runtimes |
+| ----------------------------------- | ----------------- | ----------------- |
+| `DragonsreachTorchThirdPerson.json` | 61.5 seconds      | SE, AE, VR        |
+| `GuardianStonesToWhiterun.json`     | 90.6 seconds      | SE, AE            |
+
+Start with Dragonsreach for a short VR comparison. Its recording declares
+VR compatibility but contains no recorded headset tracking, so use the same
+fixed headset pose in both runs. Do not bypass the outdoor route's runtime
+restriction to claim a comparable VR result. Durations above describe the
+recorded path, excluding scene restoration and warm-up; check the installed
+recording rather than relying on its filename for the actual endpoint.
+
+For a simple comparison using the existing controls and collectors:
+
+1. Use the same recording, modlist, scene, equivalent feature settings,
+   actual render resolution and VR presentation settings for both renderers.
+   Match weather and time using the comparison rules above.
+2. Finish shader compilation and warm the route before measuring. Restore
+   the same initial scene, camera, equipment and toggle states for each run;
+   a replay can contain commands as well as movement.
+3. Replay through `record action=replay` at normal speed, with scene
+   restoration enabled and asynchronous completion tracking. Use the
+   existing fpsVR logger helpers below for whole-frame CPU/GPU timings.
+   Compare the active route window, excluding loading and warm-up, and
+   verify the final scene and replay result rather than scheduler completion
+   alone.
+4. Report mean and tail frame times in milliseconds, with equal repetition
+   counts and any unmatched settings. CSX pass timings alone do not measure
+   the whole-frame difference between renderers.
+
+When Tracy capture is requested, follow the maintained
+`tools/devbench-control/tracy-replay.md` protocol in full. This route guide
+does not replace a named protocol's timing, ownership or validation rules.
 
 ### fpsVR and CSX measurements
 

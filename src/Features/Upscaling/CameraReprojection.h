@@ -13,6 +13,38 @@ namespace UpscalingCamera
 		DirectX::SimpleMath::Matrix prevClipToClip;
 	};
 
+	/** One camera's unjittered row-vector matrices and camera-relative origins. */
+	struct CameraFrame
+	{
+		DirectX::SimpleMath::Matrix viewInverse;
+		DirectX::SimpleMath::Matrix viewProjection;
+		DirectX::SimpleMath::Matrix previousViewProjection;
+		DirectX::SimpleMath::Vector3 origin;
+		DirectX::SimpleMath::Vector3 previousOrigin;
+	};
+
+	/** @brief Reads a camera from the per-frame constant buffer, which stores column-vector matrices. */
+	inline CameraFrame FromConstantBuffer(
+		const DirectX::SimpleMath::Matrix& a_viewInverse,
+		const DirectX::SimpleMath::Matrix& a_viewProjection,
+		const DirectX::SimpleMath::Matrix& a_previousViewProjection,
+		const DirectX::SimpleMath::Vector3& a_origin,
+		const DirectX::SimpleMath::Vector3& a_previousOrigin)
+	{
+		return { a_viewInverse.Transpose(), a_viewProjection.Transpose(), a_previousViewProjection.Transpose(), a_origin, a_previousOrigin };
+	}
+
+	/** @brief Reads a camera from its engine camera-table entry, which stores row-vector matrices. */
+	inline CameraFrame FromCameraTable(
+		const DirectX::SimpleMath::Matrix& a_view,
+		const DirectX::SimpleMath::Matrix& a_viewProjection,
+		const DirectX::SimpleMath::Matrix& a_previousViewProjection,
+		const DirectX::SimpleMath::Vector3& a_origin,
+		const DirectX::SimpleMath::Vector3& a_previousOrigin)
+	{
+		return { a_view.Invert(), a_viewProjection, a_previousViewProjection, a_origin, a_previousOrigin };
+	}
+
 	/** Builds unjittered transforms using the current-minus-previous camera-relative origin. */
 	[[nodiscard]] inline Reprojection BuildReprojection(
 		const DirectX::SimpleMath::Matrix& a_cameraViewInverse,

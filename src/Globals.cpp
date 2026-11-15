@@ -9,6 +9,7 @@
 #include "Features/AdaptiveBrightness.h"
 #include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
+#include "Features/DetailMaps.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
@@ -98,6 +99,7 @@ namespace globals
 		HorizonFix horizonFix{};
 		InteriorSun interiorSun{};
 		FurShells furShells{};
+		DetailMaps detailMaps{};
 		SnowCover snowCover{};
 		SeasonalWeather seasonalWeather{};
 		InverseSquareLighting inverseSquareLighting{};

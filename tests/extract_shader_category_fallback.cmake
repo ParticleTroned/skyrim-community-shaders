@@ -2,7 +2,22 @@ include("${PROJECT_ROOT}/tests/extract_source_region.cmake")
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 file(READ "${PROJECT_ROOT}/src/ShaderCache.cpp" _cache)
 file(READ "${PROJECT_ROOT}/src/ShaderCache.h" _header)
+file(READ "${PROJECT_ROOT}/src/ShaderCacheSpecializations.cpp" _specializations)
+extract_between("${_specializations}" "void ShaderCache::RegisterSpecializationBase("
+    "std::vector<Util::ShaderSpecializationRequest> ShaderCache::GetStartupShaderSpecializations(" "specialization_bases.h")
+extract_between("${_specializations}" "void ShaderCache::PrewarmDiscoveredPixelShaders("
+    "void ShaderCache::RememberShaderSpecialization(" "specialization_replay.h")
 file(READ "${PROJECT_ROOT}/src/Hooks.cpp" _hooks)
+file(READ "${PROJECT_ROOT}/src/State.cpp" _state)
+string(FIND "${_hooks}" "for (const auto& entry : shader->pixelShaders)" _pixel_loop)
+if(_pixel_loop EQUAL -1)
+    message(FATAL_ERROR "Startup pixel shader loop missing")
+endif()
+string(SUBSTRING "${_hooks}" ${_pixel_loop} -1 _pixel_startup)
+extract_between("${_pixel_startup}" "auto vertexShaderDesriptor = entry->id;"
+    "\n\t\t\t}" "startup_pixel_lookup.h")
+extract_between("${_state}" "case RE::BSShader::Type::Lighting:"
+    "case RE::BSShader::Type::Grass:" "lighting_lookup.h")
 file(READ "${PROJECT_ROOT}/src/TruePBR.cpp" _pbr)
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp" _character)
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterRendering.h" _character_header)
@@ -39,7 +54,12 @@ extract_between("${_pbr}" "auto* boundShader = *globals::game::currentPixelShade
 
 extract_between("${_header}" "enum class LightingShaderTechniques"
     "enum class EffectShaderFlags" "lighting_flags.h")
+extract_between("${_header}" "enum class UtilityShaderFlags"
+    "// Shader blocking data" "utility_flags.h")
 extract_between("${_cache}" "void ShaderCache::PrewarmDeferredPixelShaders("
     "RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader(" "pixel_prewarm.h")
 extract_between("${_pbr}" "void TruePBR::GenerateShaderPermutations("
     "struct ExtendedRendererState" "pbr_prewarm.h")
+
+extract_between("${_cache}" "bool ShaderCache::UsesRuntimeLightingSpecializationPolicy() const"
+    "void ShaderCache::RecordLightingSpecializationMiss(" "runtime_specialization_policy.h")

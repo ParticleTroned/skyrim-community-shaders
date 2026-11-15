@@ -10,3 +10,9 @@ extract_between(
     "\n\tnamespace SShaderCache"
     "tracking_include_under_test.h"
 )
+extract_between(
+    "${_source}"
+    "\tvoid ShaderCache::FinishStartupPreparation()"
+    "\n\tvoid ShaderCache::StopCompilation()"
+    "startup_include_lifecycle.h"
+)

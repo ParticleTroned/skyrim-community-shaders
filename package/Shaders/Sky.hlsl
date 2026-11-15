@@ -4,6 +4,10 @@
 #include "Common/ReverseZ.hlsli"
 #include "Common/VR.hlsli"
 
+#if defined(VSHADER) && defined(DITHER) && defined(TEX)
+#	include "Common/SunGlare.hlsli"
+#endif
+
 #if defined(VSHADER)
 struct VS_INPUT
 {
@@ -136,6 +140,11 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.Color.w = BlendColor[0].w * input.Color.w;
 
 #	endif  // OCCLUSION MOONMASK HORIZFADE
+
+#	if defined(DITHER) && defined(TEX)
+	// The billboard origin follows the actual sun, even when Sky Sync lights the scene from a moon.
+	vsout.Color.w *= SunGlare::GetVisibility(mul(WorldViewProj[eyeIndex], float4(0, 0, 0, 1)), eyeIndex);
+#	endif
 
 	float4 skyClip = mul(WorldViewProj[eyeIndex], inputPosition);
 	vsout.Position = float4(skyClip.xy, FrameBuffer::FarPlaneClipZ(skyClip.w), skyClip.w);

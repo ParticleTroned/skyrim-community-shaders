@@ -475,7 +475,7 @@ namespace
 	};
 }
 
-void State::Draw()
+void State::Draw(bool isCompute)
 {
 #ifdef TRACY_SUPPORT
 	const bool emitTracyDrawZones = Util::TracyZones::PerDrawZonesEnabled();
@@ -598,6 +598,20 @@ void State::Draw()
 		}
 
 		updateShader = false;
+
+		if (!isCompute && currentShader && currentShader->shaderType.get() == RE::BSShader::Type::Sky &&
+			techniqueShaderSelection.vertex &&
+			(currentVertexDescriptor & 255) == static_cast<uint32_t>(SIE::ShaderCache::SkyShaderTechniques::SunGlare)) {
+			auto* sky = globals::game::sky;
+			const bool sceneDepthValid = !isMapMenuOpen && !Util::IsInterior() && sky &&
+			                             !sky->flags.any(RE::Sky::Flags::kHideSky) &&
+			                             !(permutationData.ExtraShaderDescriptor & static_cast<uint32_t>(ExtraShaderDescriptors::IsReflections));
+			// Sky writes the depth copy, so the main depth view supplies opaque scene visibility.
+			auto* depth = sceneDepthValid && globals::game::renderer ?
+			                  reinterpret_cast<ID3D11ShaderResourceView*>(globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV) :
+			                  nullptr;
+			sunGlareBindings.emplace(context, depth);
+		}
 	}
 }
 
@@ -881,6 +895,8 @@ void State::UpdateSaveLoadSafeMode()
 
 void State::Reset()
 {
+	RestoreSunGlareBindings();
+	techniqueShaderSelection = {};
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	CSX::Diagnostics::PerformanceCosts::ProcessPendingChanges();
 #endif
@@ -969,6 +985,7 @@ void State::Setup()
 
 	// Load scene-specific settings (Interior Only, etc.)
 	SceneSettingsManager::GetSingleton()->LoadAll();
+	globals::deferred->PrewarmDiscoveredComposites();
 }
 
 void State::SetupRenderTargetResources()
@@ -1569,6 +1586,7 @@ void State::SaveToJson(
 	general["Enable Disk Cache"] = shaderCache->IsDiskCache();
 	general["Skip Unchanged Shaders"] = shaderCache->IsSkipUnchangedShaders();
 	general["Enable Async"] = shaderCache->IsAsync();
+	general["Resident Only Lighting Specializations"] = shaderCache->ResidentOnlyLightingSpecializations();
 
 	settings["General"] = general;
 
@@ -1692,6 +1710,8 @@ void State::LoadFromJson(
 			shaderCache->SetSkipUnchangedShaders(general["Skip Unchanged Shaders"]);
 		if (general.contains("Enable Async") && general["Enable Async"].is_boolean())
 			shaderCache->SetAsync(general["Enable Async"]);
+		if (general.contains("Resident Only Lighting Specializations") && general["Resident Only Lighting Specializations"].is_boolean())
+			shaderCache->SetResidentOnlyLightingSpecializations(general["Resident Only Lighting Specializations"]);
 	}
 
 	if (settings.contains("Replace Original Shaders") && settings["Replace Original Shaders"].is_object()) {
@@ -2112,6 +2132,11 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::TruePbr |
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::LandscapeSeams);
 
+				using LightingFlags = SIE::ShaderCache::LightingShaderFlags;
+				constexpr auto legacyScattering = static_cast<uint32_t>(LightingFlags::SoftLighting) |
+				                                  static_cast<uint32_t>(LightingFlags::RimLighting) |
+				                                  static_cast<uint32_t>(LightingFlags::BackLighting);
+				const bool hasLegacyScattering = (a_pixelDescriptor & legacyScattering) != 0;
 				a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::AmbientSpecular |
 									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::ShadowDir |
 									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::DefShadow |
@@ -2135,9 +2160,14 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 				}
 
 				a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::Snow);
+				a_pixelDescriptor |= lightingPixelShaderFlags & ~SIE::ShaderCache::kLightingNoContactShadows;
 
-				if (deferred->deferredPass || a_forceDeferred)
-					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::LightingShaderFlags::Deferred;
+				if (deferred->deferredPass || a_forceDeferred) {
+					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::LightingShaderFlags::Deferred |
+					                     (lightingPixelShaderFlags & SIE::ShaderCache::kLightingNoContactShadows);
+					if (!hasLegacyScattering)
+						a_pixelDescriptor |= SIE::ShaderCache::kLightingNoLegacySubsurface;
+				}
 
 				{
 					uint32_t technique = 0x3F & (a_vertexDescriptor >> 24);
@@ -2195,9 +2225,12 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 			{
 				auto flags = ~((uint32_t)SIE::ShaderCache::EffectShaderFlags::GrayscaleToColor |
 							   (uint32_t)SIE::ShaderCache::EffectShaderFlags::GrayscaleToAlpha |
-							   (uint32_t)SIE::ShaderCache::EffectShaderFlags::IgnoreTexAlpha);
+							   (uint32_t)SIE::ShaderCache::EffectShaderFlags::IgnoreTexAlpha |
+							   SIE::ShaderCache::kEffectAmbientWorldIBL);
 				a_vertexDescriptor &= flags;
 				a_pixelDescriptor &= flags;
+				if (effectAmbientIBLUploaded && (permutationData.ExtraShaderDescriptor & static_cast<uint32_t>(ExtraShaderDescriptors::InWorld)))
+					a_pixelDescriptor |= SIE::ShaderCache::kEffectAmbientWorldIBL;
 
 				if (deferred->deferredPass || a_forceDeferred)
 					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::EffectShaderFlags::Deferred;

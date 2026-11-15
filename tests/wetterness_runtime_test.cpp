@@ -148,6 +148,7 @@ namespace globals
 	struct State
 	{
 		uint32_t frameCount = 0;
+		uint32_t lightingPixelShaderFlags = 1u;
 	};
 	State* state = nullptr;
 	namespace game
@@ -196,6 +197,7 @@ struct Wetterness
 	PerFrame GetCommonBufferData() const;
 	float GetRainFilmPercent() const;
 	void SetRainFilmPercent(float percent);
+	PerFrame PrepareFrameData() const;
 	void Prepass();
 };
 namespace
@@ -211,6 +213,14 @@ namespace
 #include "wetterness_activity.h"
 #include "wetterness_reset.h"
 #include "wetterness_update.h"
+namespace SIE
+{
+	struct ShaderCache
+	{
+		static constexpr uint32_t kLightingDryWeather = 1u << 21;
+	};
+}
+#include "wetterness_prepare.h"
 
 namespace
 {
@@ -259,7 +269,13 @@ namespace
 		{
 			calendar.seconds += seconds;
 			++state.frameCount;
-			auto data = wetness.GetCommonBufferData();
+			const auto otherFlags = state.lightingPixelShaderFlags & ~SIE::ShaderCache::kLightingDryWeather;
+			auto data = wetness.PrepareFrameData();
+			Require((state.lightingPixelShaderFlags & ~SIE::ShaderCache::kLightingDryWeather) == otherFlags,
+				"Wetness changed unrelated lighting variants");
+			Require(((state.lightingPixelShaderFlags & SIE::ShaderCache::kLightingDryWeather) != 0) ==
+						(wetness.loaded && data.settings.EnableWetterness == 0u),
+				"Lighting variant disagreed with the uploaded wetness state");
 			wetness.Prepass();
 			return data;
 		}

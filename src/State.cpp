@@ -1569,6 +1569,7 @@ void State::SaveToJson(
 	general["Enable Disk Cache"] = shaderCache->IsDiskCache();
 	general["Skip Unchanged Shaders"] = shaderCache->IsSkipUnchangedShaders();
 	general["Enable Async"] = shaderCache->IsAsync();
+	general["Resident Only Lighting Specializations"] = shaderCache->ResidentOnlyLightingSpecializations();
 
 	settings["General"] = general;
 
@@ -1692,6 +1693,8 @@ void State::LoadFromJson(
 			shaderCache->SetSkipUnchangedShaders(general["Skip Unchanged Shaders"]);
 		if (general.contains("Enable Async") && general["Enable Async"].is_boolean())
 			shaderCache->SetAsync(general["Enable Async"]);
+		if (general.contains("Resident Only Lighting Specializations") && general["Resident Only Lighting Specializations"].is_boolean())
+			shaderCache->SetResidentOnlyLightingSpecializations(general["Resident Only Lighting Specializations"]);
 	}
 
 	if (settings.contains("Replace Original Shaders") && settings["Replace Original Shaders"].is_object()) {

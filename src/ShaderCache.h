@@ -1,6 +1,7 @@
 #pragma once
 
 #include <BS_thread_pool.hpp>
+#include <ankerl/unordered_dense.h>
 #include <array>
 #include <atomic>
 #include <condition_variable>
@@ -719,6 +720,10 @@ namespace SIE
 			uint32_t descriptor, PixelShaderLookup a_lookup = PixelShaderLookup::Compile);
 		/** Binds a compatible per-draw lighting variant, retaining the technique shader while it compiles. */
 		void SelectLightingPixelShader(const RE::BSShader& shader, uint32_t specializationFlags);
+		/** Suppresses new optional lighting preparation after startup; required shaders retain their policy. */
+		void SetResidentOnlyLightingSpecializations(bool enabled);
+		/** Does not cancel work already queued or invalidate resident shaders. */
+		bool ResidentOnlyLightingSpecializations() const { return residentOnlyLightingSpecializations.load(std::memory_order_relaxed); }
 		RE::BSGraphics::ComputeShader* GetComputeShader(const RE::BSShader& shader,
 			uint32_t descriptor);
 
@@ -729,7 +734,7 @@ namespace SIE
 		RE::BSGraphics::ComputeShader* MakeAndAddComputeShader(const RE::BSShader& shader,
 			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
 
-		static std::string GetDefinesString(const RE::BSShader& shader, uint32_t descriptor);
+		static std::string GetDefinesString(const RE::BSShader& shader, uint32_t descriptor, ShaderClass shaderClass = ShaderClass::Pixel);
 
 		uint64_t GetCachedHitTasks();
 		uint64_t GetCompletedTasks();
@@ -855,12 +860,13 @@ namespace SIE
 			MTLandLODBlend = 19,
 		};
 
+		static constexpr uint32_t kLightingDryWeather = 1u << 21;
 		static constexpr uint32_t kLightingSnowCoverInactive = 1u << 19;
 		static constexpr uint32_t kLightingNoMeshVariation = 1u << 7;
 		static constexpr uint32_t kLightingNoLocalLights = 1u << 8;
 		static constexpr uint32_t kLightingNoContactShadows = 1u << 13;
 		static constexpr uint32_t kLightingNoLegacySubsurface = 1u << 17;
-		static constexpr uint32_t kLightingSpecializationMask = kLightingSnowCoverInactive | kLightingNoMeshVariation |
+		static constexpr uint32_t kLightingSpecializationMask = kLightingDryWeather | kLightingSnowCoverInactive | kLightingNoMeshVariation |
 		                                                        kLightingNoLocalLights | kLightingNoContactShadows | kLightingNoLegacySubsurface;
 
 		enum class LightingShaderFlags : uint32_t
@@ -1243,6 +1249,12 @@ namespace SIE
 		std::atomic_uint64_t graphicsShaderRevision{ 0 };
 		std::mutex vertexShadersMutex;
 		std::mutex pixelShadersMutex;
+		std::atomic_bool residentOnlyLightingSpecializations{ false };
+		std::mutex specializationMissMutex;
+		ankerl::unordered_dense::set<uint64_t> specializationMisses;
+		uint64_t specializationMissRevision = UINT64_MAX;
+		bool specializationMissLimitReported = false;
+		void RecordLightingSpecializationMiss(uint32_t descriptor, bool suppressed) noexcept;
 		std::mutex computeShadersMutex;
 		CompilationSet compilationSet;
 		ankerl::unordered_dense::map<std::string, ShaderCacheResult> shaderMap{};

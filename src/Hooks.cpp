@@ -885,7 +885,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 					logger::error("ReverseZ: Water technique rejected; VS={:X} available={} PS={:X} available={} skipped={} UW-ready={} VS-defines=[{}] PS-defines=[{}]. Check shader compile/create errors; restart after correcting shader inputs",
 						state->modifiedVertexDescriptor, vertexShader != nullptr, state->modifiedPixelDescriptor,
 						pixelShader != nullptr, skipPixelShader, globals::features::unifiedWater.loaded && !globals::features::unifiedWater.RequiresVanillaWaterShaders(),
-						shaderCache->GetDefinesString(*shader, state->modifiedVertexDescriptor),
+						shaderCache->GetDefinesString(*shader, state->modifiedVertexDescriptor, SIE::ShaderClass::Vertex),
 						shaderCache->GetDefinesString(*shader, state->modifiedPixelDescriptor));
 			}
 		} else {

@@ -30,6 +30,42 @@ prerequisites, exact local and CI commands, version/update rules, validation
 gates, recovery procedures, scope boundary, and AI-agent instructions are in
 the [Prebuilt Shader Cache Runbook](./prebuilt-shader-cache.md).
 
+## Optional lighting specialization diagnostics
+
+Advanced > Shaders > Threading has **Resident-only Lighting
+Specializations**. Off (default) allows missing optional lighting variants
+to prepare asynchronously. On uses resident variants and retains general
+shading on an optional miss. It suppresses new requests after startup,
+including background boot once game data is loaded. It neither invalidates
+shaders nor cancels queued work. Required general shaders retain their
+normal compilation policy. Save settings to persist the choice.
+
+This covers dry Wetterness, inactive Snow Cover, absent mesh variation,
+absent local lights, disabled contact shadows and unused legacy subsurface
+scattering. Dry Wetterness follows the uploaded dry state, retaining the
+existing drying timeline, debug overrides and persistent shoreline
+darkening.
+
+At Info level, `[ShaderSpecialization]` reports each missing descriptor
+once per graphics-cache revision and policy (`request=allowed` or
+`request=suppressed`). These are resident misses, not counts of source
+compilation. Miss reporting is bounded to 8192 descriptor/policy pairs per
+revision and explicitly reports when further misses are omitted.
+Miss logs use the existing background pool to avoid disk flushes on the
+draw thread, so their output can lag preparation logs.
+`prepared` entries report the bytecode source, `source_compiles` (actual
+compiler invocations, including retries), publication success and elapsed
+preparation time. Disk or shared-bytecode reuse can report zero source
+compiles while still creating a D3D shader. Elapsed time includes cache
+work and object creation; it is not a frame-time or stutter measurement.
+
+DevBench `communityshaders.shader_api`, action `specializationPolicy`, reads
+the setting; supplying boolean `residentOnly` changes it for the session.
+The normal settings save can persist that choice. The snapshot reports
+`compilation.residentOnlyLightingSpecializations`. Use the same compiled
+revision and cache conditions for comparisons; a cache warmed in the first
+condition cannot measure cold first-use behavior in the second condition.
+
 ## Verifying refactors
 
 `tools/verify-shader-refactor.ps1` (bash wrapper: `tools/verify-shader-refactor.sh`)

@@ -1,3 +1,4 @@
+#include "ShaderCompilationSchedulingPolicy.h"
 #include "reverse_z_test_stub.h"
 
 #include <algorithm>
@@ -126,6 +127,10 @@ namespace SIE
 		std::mutex vertexShadersMutex, pixelShadersMutex, computeShadersMutex;
 		std::atomic<unsigned> activeShaderCaptureFramesRemaining{};
 		std::atomic<bool> backgroundCompilation{};
+		std::atomic_bool startupCompilationComplete{ false };
+		std::atomic_bool menuLoaded{ false };
+		bool ResidentOnlyLightingSpecializations() const { return false; }
+		void RecordLightingSpecializationMiss(uint32_t, bool) {}
 		int blockedKeyIndex = -1;
 		std::string blockedKey;
 		std::vector<std::uint32_t> blockedIDs;

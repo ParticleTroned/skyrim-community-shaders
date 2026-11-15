@@ -210,6 +210,7 @@ namespace
 				{ "repairRequired", Util::ShaderCachePack::RequiresInstallationRepair(issue) },
 			};
 		}
+		snapshotJson["compilation"]["residentOnlyLightingSpecializations"] = globals::shaderCache && globals::shaderCache->ResidentOnlyLightingSpecializations();
 		snapshotJson["compilation"]["contentDedupeTasks"] = globals::shaderCache ? globals::shaderCache->GetContentDedupeTasks() : 0;
 		snapshotJson["compilation"]["activeReuseTasks"] = globals::shaderCache ? globals::shaderCache->GetActiveReuseTasks() : 0;
 		snapshotJson["compilation"]["previousReuseTasks"] = globals::shaderCache ? globals::shaderCache->GetPreviousReuseTasks() : 0;
@@ -255,7 +256,7 @@ namespace
 		const auto action = a_args.value("action", std::string{});
 		const bool knownAction = action == "registry" || action == "snapshot" || action == "features" ||
 		                         action == "preflight" || action == "execute" || action == "backgroundCompile" ||
-		                         action == "exportTrace";
+		                         action == "exportTrace" || action == "specializationPolicy";
 		if (!knownAction)
 			return Foundation().MakeError(a_args, "unknown_action", "action is not supported", "validation", false, "action");
 		if (action == "registry") {
@@ -271,7 +272,7 @@ namespace
 				{ "backgroundCompileMainThreadAffine", false },
 				{ "exportTraceMainThreadAffine", false },
 				{ "preflightTokenLifetimeMs", 30000 },
-				{ "actions", json::array({ "registry", "snapshot", "features", "preflight", "execute", "backgroundCompile", "exportTrace" }) },
+				{ "actions", json::array({ "registry", "snapshot", "features", "preflight", "execute", "backgroundCompile", "exportTrace", "specializationPolicy" }) },
 				{ "statusCodes", json::array({
 									 "success",
 									 "invalid_argument",
@@ -385,6 +386,8 @@ namespace
 			};
 			return response;
 		}
+		if (action == "specializationPolicy" && a_args.contains("residentOnly") && !a_args["residentOnly"].is_boolean())
+			return Foundation().MakeError(a_args, "invalid_argument", "residentOnly must be boolean", "validation", false, "residentOnly");
 		if (action == "preflight" || action == "execute") {
 			// Validate the JSON contract before entering the game-thread dispatch.
 			// The request is rebuilt in the task so its borrowed string pointers are local.
@@ -401,6 +404,17 @@ namespace
 			const auto* api = CSX::Api::GetShaderService001();
 			if (!api)
 				return json{ { "error", "shader API unavailable" } };
+			if (action == "specializationPolicy") {
+				auto* cache = globals::shaderCache;
+				if (!cache)
+					return json{ { "error", "shader cache unavailable" } };
+				const bool previous = cache->ResidentOnlyLightingSpecializations();
+				if (a_args.contains("residentOnly"))
+					cache->SetResidentOnlyLightingSpecializations(a_args["residentOnly"].get<bool>());
+				return json{ { "residentOnly", cache->ResidentOnlyLightingSpecializations() },
+					{ "changed", previous != cache->ResidentOnlyLightingSpecializations() },
+					{ "scope", "optional_lighting_after_startup" }, { "queuedWorkRetained", true } };
+			}
 			if (action == "snapshot")
 				return ReadSnapshot(*api);
 			if (action == "features") {
@@ -521,7 +535,7 @@ namespace CSX::Api::ShaderDevBenchBridge
 			return;
 		}
 		const char* descriptor = R"({
-			"description":"Reply and event strings replace invalid UTF-8 with U+FFFD; request validation remains strict. Versioned CSX shader, feature, compilation, and cache lifecycle API. Disk-cache rollback flags in each snapshot come from one publication; compilation counters remain live. snapshot.diskCache.installation reports the boot admission issue (not_checked, none, wrong_runtime, invalid_pack) without triggering cache admission, cachedRuntime when mismatched, requiredRuntime (SE includes AE), and repairRequired. Rejected installations require resolving the installation or access problem and restarting; accept_cache_rebuild is blocked with cache_installation_repair_required. snapshot.compilation.sourceCompiles counts actual compiler invocations; contentDedupeTasks counts tasks reusing identical preprocessed bytecode across different shader keys. activeReuseTasks counts matching content in installed packs or the active loose cache; previousReuseTasks counts matching content in the loose rollback cache. snapshot.compilation.recentFailures contains the last 32 source compile failures as {key,path,error,epoch,frame}; error text is capped at 2000 bytes. Mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile releases the boot compile wait and wakes the dispatcher to apply the background thread budget. exportTrace writes completed task timings as Chrome Trace JSON after a build finishes. set_skip_unchanged permits only content-verified disk hits when true; false skips disk reads while preserving disk writes.",
+			"description":"Reply and event strings replace invalid UTF-8 with U+FFFD; request validation remains strict. Versioned CSX shader, feature, compilation, and cache lifecycle API. specializationPolicy reads the optional-lighting policy or sets it with residentOnly (boolean) on the main thread. It is a session change; normal settings save can persist it. true suppresses new optional lighting preparation after startup; resident variants remain usable, already queued work finishes, and required general shaders keep their normal policy. false (default) permits asynchronous preparation. Info ShaderSpecialization entries distinguish unique resident misses from completed preparation and actual source compiler invocations. snapshot.compilation.residentOnlyLightingSpecializations reports this policy. Disk-cache rollback flags in each snapshot come from one publication; compilation counters remain live. snapshot.diskCache.installation reports the boot admission issue (not_checked, none, wrong_runtime, invalid_pack) without triggering cache admission, cachedRuntime when mismatched, requiredRuntime (SE includes AE), and repairRequired. Rejected installations require resolving the installation or access problem and restarting; accept_cache_rebuild is blocked with cache_installation_repair_required. snapshot.compilation.sourceCompiles counts actual compiler invocations; contentDedupeTasks counts tasks reusing identical preprocessed bytecode across different shader keys. activeReuseTasks counts matching content in installed packs or the active loose cache; previousReuseTasks counts matching content in the loose rollback cache. snapshot.compilation.recentFailures contains the last 32 source compile failures as {key,path,error,epoch,frame}; error text is capped at 2000 bytes. Lifecycle mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile releases the boot compile wait and wakes the dispatcher to apply the background thread budget. exportTrace writes completed task timings as Chrome Trace JSON after a build finishes. set_skip_unchanged permits only content-verified disk hits when true; false skips disk reads while preserving disk writes.",
 			"inputSchema":{
 				"type":"object",
 				"required":["contractMajor","clientId","commandId","action"],
@@ -530,7 +544,8 @@ namespace CSX::Api::ShaderDevBenchBridge
 					"clientId":{"type":"string","minLength":1,"maxLength":128},
 					"commandId":{"type":"string","minLength":1,"maxLength":128},
 					"expectedBuildId":{"type":"string"},
-					"action":{"type":"string","enum":["registry","snapshot","features","preflight","execute","backgroundCompile","exportTrace"],"description":"snapshot includes compilation.contentDedupeTasks for shared bytecode and activeReuseTasks/previousReuseTasks for verified disk content reuse. backgroundCompile enables demand-only background compilation, drops unstarted startup precompiles that no draw or explicit compile requested, and wakes the dispatcher; result.changed reports whether the mode changed."},
+					"action":{"type":"string","enum":["registry","snapshot","features","preflight","execute","backgroundCompile","exportTrace","specializationPolicy"],"description":"snapshot includes compilation.contentDedupeTasks for shared bytecode and activeReuseTasks/previousReuseTasks for verified disk content reuse. backgroundCompile enables demand-only background compilation, drops unstarted startup precompiles that no draw or explicit compile requested, and wakes the dispatcher; result.changed reports whether the mode changed."},
+					"residentOnly":{"type":"boolean","description":"specializationPolicy only: omit to read; true suppresses new optional lighting requests after startup; false permits asynchronous preparation. No cache invalidation or cancellation."},
 					"path":{"type":"string","description":"exportTrace only: UTF-8 destination relative to the Community Shaders log directory; defaults to compile-trace.json. The returned path is UTF-8. Null characters, malformed UTF-8 and paths outside that directory are rejected."},
 					"mutation":{
 						"type":"object",
@@ -555,9 +570,17 @@ namespace CSX::Api::ShaderDevBenchBridge
 					"result":{
 						"type":"object",
 						"properties":{
+							"residentOnly":{"type":"boolean"},
+							"changed":{"type":"boolean"},
+							"scope":{"type":"string","const":"optional_lighting_after_startup"},
+							"queuedWorkRetained":{"type":"boolean","const":true},
 							"snapshot":{
 								"type":"object",
 								"properties":{
+									"compilation":{
+										"type":"object",
+										"properties":{"residentOnlyLightingSpecializations":{"type":"boolean"}}
+									},
 									"diskCache":{
 										"type":"object",
 										"properties":{

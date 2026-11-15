@@ -64,6 +64,12 @@ namespace ShaderCompilationSchedulingPolicy
 		return a_dataLoaded && !a_compilationActive;
 	}
 
+	/** Background boot releases gameplay before the initial compilation batch completes. */
+	[[nodiscard]] constexpr bool UseRuntimeSpecializationPolicy(bool startupComplete, bool dataLoaded, bool backgroundMode) noexcept
+	{
+		return startupComplete || (dataLoaded && backgroundMode);
+	}
+
 	[[nodiscard]] constexpr WorkerThreadPriorityMode SelectWorkerThreadPriorityMode(
 		CompilationPhase a_phase) noexcept
 	{

@@ -1,3 +1,4 @@
+#include "ShaderCompilationSchedulingPolicy.h"
 #include "Utils/ShaderDescriptor.h"
 #include "reverse_z_test_stub.h"
 
@@ -231,6 +232,7 @@ namespace SIE
 {
 	enum class ShaderClass
 	{
+		Vertex,
 		Pixel
 	};
 	namespace SShaderCache
@@ -268,6 +270,11 @@ namespace SIE
 		std::vector<uint32_t> blockedIDs;
 		bool enabled = true, safeLoad = false, async = true, compilationSucceeds = true;
 		std::atomic_bool backgroundCompilation{ false };
+		std::atomic_bool startupCompilationComplete{ false };
+		std::atomic_bool menuLoaded{ false };
+		bool residentOnly = false;
+		bool ResidentOnlyLightingSpecializations() const { return residentOnly; }
+		void RecordLightingSpecializationMiss(uint32_t, bool) {}
 		unsigned compiles = 0, vertexLookups = 0;
 		uint64_t graphicsRevision = 0;
 		uint64_t GetGraphicsShaderRevision() const { return graphicsRevision; }
@@ -297,7 +304,7 @@ namespace SIE
 		static bool IsSupportedShader(RE::BSShader::Type) { return true; }
 		static bool IsSupportedShader(const RE::BSShader&);
 		bool IsEnabled() const { return enabled; }
-		std::string GetDefinesString(const RE::BSShader&, uint32_t) const { return {}; }
+		std::string GetDefinesString(const RE::BSShader&, uint32_t, ShaderClass = ShaderClass::Pixel) const { return {}; }
 		bool IsSaveLoadSafeModeActive() const { return safeLoad; }
 		bool ShouldUseAsyncCompilation() const { return async; }
 		void TrackActiveShader(ShaderClass, const RE::BSShader&, uint32_t) {}
@@ -998,6 +1005,48 @@ void TestCombinedLightingSpecializations()
 	Require(f.deferred.captureReady && !f.state.deferredPixelShaderMissing);
 }
 
+void TestResidentLightingSpecializations()
+{
+	using Cache = SIE::ShaderCache;
+	for (const auto flag : { Cache::kLightingDryWeather, Cache::kLightingSnowCoverInactive,
+			 Cache::kLightingNoMeshVariation, Cache::kLightingNoLocalLights,
+			 Cache::kLightingNoContactShadows, Cache::kLightingNoLegacySubsurface,
+			 Cache::kLightingSpecializationMask }) {
+		Fixture f;
+		constexpr uint32_t descriptor = 1u;
+		auto* standard = f.cache.Add(f.shader, descriptor);
+		f.cache.startupCompilationComplete = true;
+		f.cache.residentOnly = true;
+		f.cache.async = false;
+		const auto specialized = descriptor | flag;
+		Require(f.cache.GetPixelShader(f.shader, specialized, Cache::PixelShaderLookup::Draw) == standard);
+		Require(!f.cache.GetPixelShader(f.shader, specialized, Cache::PixelShaderLookup::Specialization));
+		Require(f.cache.compilationSet.requests.empty() && f.cache.compiles == 0);
+		auto* resident = f.cache.Add(f.shader, specialized);
+		Require(f.cache.GetPixelShader(f.shader, specialized, Cache::PixelShaderLookup::Draw) == resident);
+		Require(f.cache.compilationSet.requests.empty() && f.cache.compiles == 0);
+		f.cache.pixelShaders[f.shader.shaderType.underlying()].erase(specialized);
+		++f.cache.graphicsRevision;
+		Require(f.cache.GetPixelShader(f.shader, specialized, Cache::PixelShaderLookup::Draw) == standard);
+		Require(f.cache.compilationSet.requests.empty());
+		f.cache.residentOnly = false;
+		Require(!f.cache.GetPixelShader(f.shader, specialized, Cache::PixelShaderLookup::Specialization));
+		Require(f.cache.compilationSet.requests.contains(specialized) && f.cache.compiles == 0);
+		f.cache.compilationSet.requests.clear();
+		f.cache.residentOnly = true;
+		f.cache.startupCompilationComplete = false;
+		Require(f.cache.GetPixelShader(f.shader, specialized, Cache::PixelShaderLookup::Precompile) == standard);
+		Require(f.cache.compilationSet.requests.contains(specialized));
+		f.cache.compilationSet.requests.clear();
+		f.cache.backgroundCompilation = true;
+		f.cache.menuLoaded = true;
+		Require(f.cache.GetPixelShader(f.shader, specialized, Cache::PixelShaderLookup::Draw) == standard);
+		Require(f.cache.compilationSet.requests.empty() && f.cache.compiles == 0);
+		Require(f.cache.GetPixelShader(f.shader, descriptor + 1, Cache::PixelShaderLookup::Draw) != nullptr);
+		Require(f.cache.compiles == 1 && f.cache.compilationSet.requests.empty());
+	}
+}
+
 void TestWaterRuntimeDescriptor()
 {
 	constexpr auto wading = static_cast<uint32_t>(SIE::ShaderCache::WaterShaderFlags::Wading);
@@ -1035,6 +1084,7 @@ int main()
 			TestWaterRuntimeDescriptor();
 			TestLightingSpecialization();
 			TestCombinedLightingSpecializations();
+			TestResidentLightingSpecializations();
 			TestPBRPrewarming();
 			TestSeamPrewarming();
 			TestNativeImageSpaceAdmission();

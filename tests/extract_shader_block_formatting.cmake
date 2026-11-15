@@ -10,7 +10,7 @@ foreach(_lookup IN ITEMS VertexShaderLookup PixelShaderLookup)
     endif()
     file(APPEND "${OUTPUT_DIRECTORY}/shader_block_lookup_contract.h" "${_declaration}\n")
 endforeach()
-extract_between("${_header}" "static constexpr uint32_t kLightingSnowCoverInactive"
+extract_between("${_header}" "static constexpr uint32_t kLightingDryWeather"
     "enum class LightingShaderFlags" "shader_block_lighting_constants.h")
 extract_between(
     "${_source}" "RE::BSGraphics::VertexShader* ShaderCache::GetVertexShaderIfCached("

@@ -112,7 +112,7 @@ namespace SIE
 	namespace SShaderCache
 	{
 		unsigned keyBuilds = 0;
-		void GetShaderDefines(const RE::BSShader& a_shader, uint32_t, std::span<D3D_SHADER_MACRO> a_defines)
+		void GetShaderDefines(const RE::BSShader& a_shader, uint32_t, std::span<D3D_SHADER_MACRO> a_defines, ShaderClass)
 		{
 			std::copy(a_shader.macros.begin(), a_shader.macros.end(), a_defines.begin());
 		}

@@ -24,7 +24,7 @@ namespace
 
 	json Defaults()
 	{
-		return { { "General", { { "Enable Shaders", true }, { "Enable Async", true } } },
+		return { { "General", { { "Enable Shaders", true }, { "Enable Async", true }, { "Resident Only Lighting Specializations", false } } },
 			{ "Advanced", { { "Compiler Threads", std::int32_t{ 4 } }, { "Log Level", std::uint32_t{ 2 } },
 							  { "Refraction Scale", 1.0f }, { "Shader Defines", "DEFAULT" } } },
 			{ "Replace Original Shaders", { { "Lighting", true }, { "Water", true } } },
@@ -51,6 +51,12 @@ namespace
 		Check(defaults["Replace Original Shaders"]["Lighting"].get<bool>() && !defaults["Replace Original Shaders"]["Water"].get<bool>(), "Shader replacement flags were reset");
 		Check(defaults["Disable at Boot"]["Upscaling"].get<bool>() && defaults["Disable at Boot"]["WetnessEffects"].get<bool>() && !defaults["Disable at Boot"]["NewFeature"].get<bool>(), "Partial boot flags discarded saved choices");
 		Check(defaults["Upscaling"] == Defaults()["Upscaling"], "Core overlay synthesized a feature migration field");
+		Util::Settings::OverlayCoreSettings(defaults, "General", { { "Resident Only Lighting Specializations", true } });
+		Check(defaults["General"]["Resident Only Lighting Specializations"].get<bool>(), "Resident-only policy was not persisted");
+		Util::Settings::OverlayCoreSettings(defaults, "General", { { "Resident Only Lighting Specializations", "false" } });
+		Check(defaults["General"]["Resident Only Lighting Specializations"].get<bool>(), "Invalid resident-only policy replaced the saved choice");
+		Util::Settings::OverlayCoreSettings(defaults, "General", { { "Resident Only Lighting Specializations", false } });
+		Check(!defaults["General"]["Resident Only Lighting Specializations"].get<bool>(), "Resident-only policy could not be disabled");
 
 		for (const auto* section : { "General", "Advanced", "Replace Original Shaders", "Disable at Boot" }) {
 			for (const auto& bad : { json(nullptr), json(true), json(9), json("invalid"), json::array() }) {

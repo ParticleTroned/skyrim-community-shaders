@@ -1,9 +1,11 @@
 #pragma once
 
+#include "../src/ShaderCompilationSchedulingPolicy.h"
 #include <array>
 #include <atomic>
 #include <barrier>
 #include <cassert>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -122,6 +124,24 @@ namespace logger
 	void info(const char*, T&&...)
 	{}
 }
+namespace spdlog
+{
+	enum class level
+	{
+		info
+	};
+	constexpr bool should_log(level) { return false; }
+}
+namespace SKSE::stl
+{
+	template <class F>
+	struct scope_exit
+	{
+		F action;
+		explicit scope_exit(F f) : action(std::move(f)) {}
+		~scope_exit() { action(); }
+	};
+}
 namespace magic_enum
 {
 	const char* enum_name(RE::BSShader::Type) { return "Water"; }
@@ -197,7 +217,12 @@ bool failCompile = false;
 std::function<void()> afterCompile;
 namespace SShaderCache
 {
-	Blob* CompileShader(ShaderClass, const RE::BSShader&, uint32_t, bool, int*, std::optional<uint64_t>)
+	struct PreparationInfo
+	{
+		const char* source = "unavailable";
+		uint32_t sourceCompiles = 0;
+	};
+	Blob* CompileShader(ShaderClass, const RE::BSShader&, uint32_t, bool, int*, std::optional<uint64_t>, PreparationInfo* = nullptr)
 	{
 		if (afterCompile)
 			afterCompile();
@@ -245,6 +270,9 @@ struct ShaderCache
 		}
 	} compilationSet;
 	std::atomic_uint64_t graphicsShaderRevision{ 0 };
+	std::atomic_bool startupCompilationComplete{ false }, menuLoaded{ false }, backgroundCompilation{ false };
+	uint64_t GetGraphicsShaderRevision() const { return graphicsShaderRevision.load(); }
+	static constexpr uint32_t GetPixelSpecializationMask(RE::BSShader::Type) { return 0; }
 	std::unique_ptr<int> dependencyTracker;
 	std::mutex vertexShadersMutex, pixelShadersMutex;
 	std::array<std::unordered_map<uint32_t, std::unique_ptr<RE::BSGraphics::VertexShader>>, 1> vertexShaders;

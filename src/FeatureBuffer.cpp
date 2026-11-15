@@ -248,7 +248,7 @@ namespace
 std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 {
 	auto grassLightingSettings = globals::features::grassLighting.settings;
-	const auto wetternessSettings = globals::features::wetterness.GetCommonBufferData();
+	const auto wetternessSettings = globals::features::wetterness.PrepareFrameData();
 	grassLightingSettings.Glossiness = globals::features::wetterness.GetEffectiveGrassGlossiness(
 		grassLightingSettings.Glossiness,
 		wetternessSettings);

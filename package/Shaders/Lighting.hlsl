@@ -1272,7 +1272,11 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 	float wetnessLightingStrength = 0.0;
 	float filmHighlightReduction = 0.0;
 	float rainFilmWeight = 0.0;
+#		if defined(DRY_WEATHER)
+	const bool wetnessEnabled = false;
+#		else
 	const bool wetnessEnabled = (CS_WETNESS_SETTINGS.EnableWetnessEffects != 0);
+#		endif
 	float shoreHeightDelta = input.WorldPosition.z - waterHeight;
 	const bool wetSurfaceAllowed = shoreHeightDelta > 0.5;
 	// Keep puddle spawning farther away from the waterline than generic wet film.

@@ -259,6 +259,8 @@ public:
 	float GetRainFilmPercent() const;
 	/** Updates rain-film strength without resetting accumulation; nonfinite input retains the current value. */
 	void SetRainFilmPercent(float percent);
+	/** Selects the lighting variant from the same constants uploaded for this frame. */
+	PerFrame PrepareFrameData() const;
 	float GetEffectiveGrassGlossiness(float dryGlossiness, const PerFrame& frameData) const;
 	float GetEffectiveGrassSpecularStrength(float drySpecularStrength, const PerFrame& frameData) const;
 

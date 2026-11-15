@@ -35,6 +35,18 @@ namespace
 	}
 	static_assert(CoversSameFrameNativeResolutionOwnership());
 
+	constexpr bool CoversRetainedSaveLoadThenCellTransition()
+	{
+		constexpr std::uint64_t loadSerial = 7;
+		constexpr std::uint32_t saveLoadClose = 100;
+		constexpr std::uint32_t nextCellClose = 150;
+		return IsRetainedSaveLoadTail(loadSerial, saveLoadClose, loadSerial, saveLoadClose, false) &&
+		       !IsRetainedSaveLoadTail(loadSerial, saveLoadClose, loadSerial, nextCellClose, false) &&
+		       !IsRetainedSaveLoadTail(loadSerial, saveLoadClose, loadSerial + 1, nextCellClose, false) &&
+		       !IsRetainedSaveLoadTail(loadSerial, saveLoadClose, loadSerial, saveLoadClose, true);
+	}
+	static_assert(CoversRetainedSaveLoadThenCellTransition());
+
 	constexpr bool CoversRetainedSaveLoadDestination()
 	{
 		const RetainedSaveLoadDestination matched{ 7, 7, 7, 100, 101, 102, 103, false, true };

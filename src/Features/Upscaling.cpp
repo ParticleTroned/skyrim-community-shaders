@@ -1000,6 +1000,7 @@ namespace
 	// Close-side dirtiness is serialized by perfModeRenderTargetRecreateQueueMutex.
 	uint64_t g_vrDeferredPostLoadFSRResetSerial = 0;
 	std::atomic_uint64_t g_vrRetainedPostLoadPresentationSerial{ 0 };
+	std::atomic_uint32_t g_vrRetainedPostLoadPresentationCloseFrame{ 0 };
 	std::atomic_uint32_t g_vrLoadingTransitionSourceCellFormID{ 0 };
 	std::atomic_uint32_t g_vrLoadingTransitionDestinationCellFormID{ 0 };
 	std::atomic_uint32_t g_vrLoadingTransitionDestinationObservationWorldFrame{ 0 };
@@ -5986,10 +5987,14 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 
 	bool IsVRLoadingPresentationTailActive(const State* a_state)
 	{
-		const auto retainedSerial = g_vrRetainedPostLoadPresentationSerial.load(std::memory_order_acquire);
-		if (retainedSerial != 0 &&
-			!g_vrLoadingTransitionSerialOpen.load(std::memory_order_acquire) &&
-			retainedSerial == g_vrLoadingTransitionSerial.load(std::memory_order_acquire)) {
+		const auto retainedCloseFrame = g_vrRetainedPostLoadPresentationCloseFrame.load(std::memory_order_acquire);
+		if (retainedCloseFrame != 0 &&
+			VRVendorRelatchPolicy::IsRetainedSaveLoadTail(
+				g_vrRetainedPostLoadPresentationSerial.load(std::memory_order_relaxed),
+				retainedCloseFrame,
+				g_vrLoadingTransitionSerial.load(std::memory_order_acquire),
+				g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire),
+				g_vrLoadingTransitionSerialOpen.load(std::memory_order_acquire))) {
 			return false;
 		}
 		return IsSaveLoadTransitionContextActive(a_state) ?
@@ -22775,7 +22780,7 @@ void Upscaling::NotifyGamePreLoadStarted(bool a_initialProcessSaveLoad)
 	if (!globals::game::isVR || IsOpenCompositeUpscalingBlocked())
 		return;
 
-	g_vrRetainedPostLoadPresentationSerial.store(0, std::memory_order_release);
+	g_vrRetainedPostLoadPresentationCloseFrame.store(0, std::memory_order_release);
 	const auto configuredMethod = GetConfiguredUpscaleMethodForTransition();
 	const bool awaitingStabilizerSync =
 		!IsVendorUpscalingMethod(configuredMethod) &&
@@ -42296,7 +42301,8 @@ bool Upscaling::TryRetainFSRForCompletedSaveLoad(
 	RequestHistoryReset();
 	g_vrDeferredPostLoadFSRResetSerial = 0;
 	postLoadRuntimeResetPending.store(false, std::memory_order_release);
-	g_vrRetainedPostLoadPresentationSerial.store(loadSerial, std::memory_order_release);
+	g_vrRetainedPostLoadPresentationSerial.store(loadSerial, std::memory_order_relaxed);
+	g_vrRetainedPostLoadPresentationCloseFrame.store(closeFrame, std::memory_order_release);
 	logger::info(
 		"[VRRenderScale][PostLoad] Retained FSR provider after save load serial={} recoveryEpoch={} generation={} worldFrame={} frame={}",
 		loadSerial, a_recoveryEpoch, boot.generation, state->lastCompletedWorldRenderFrame, state->frameCount);

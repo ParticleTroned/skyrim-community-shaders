@@ -27,6 +27,15 @@ namespace VRVendorRelatchPolicy
 		       a_cachedFrame == a_currentFrame && a_cachedNative == a_currentNative;
 	}
 
+	[[nodiscard]] constexpr bool IsRetainedSaveLoadTail(
+		std::uint64_t a_retainedSerial, std::uint32_t a_retainedCloseFrame,
+		std::uint64_t a_currentSerial, std::uint32_t a_currentCloseFrame,
+		bool a_loadingOpen) noexcept
+	{
+		return !a_loadingOpen && a_retainedSerial != 0 && a_retainedCloseFrame != 0 &&
+		       a_retainedSerial == a_currentSerial && a_retainedCloseFrame == a_currentCloseFrame;
+	}
+
 	enum class PresentationRecoveryStage : std::uint8_t
 	{
 		None,

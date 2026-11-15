@@ -7,17 +7,31 @@
 #if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
 namespace AdaptiveBalanceFire
 {
-	/// Recognizes the additive palette and indexed-particle paths used for flames.
+	/// Recognizes unlit additive palette effects and indexed flames.
 	bool IsFire()
 	{
-#	if defined(ADDBLEND) && !defined(MOTIONVECTORS_NORMALS)
-#		if defined(SOFT)
-		const uint paletteFlags = Permutation::EffectFlags::GrayscaleToColor | Permutation::EffectFlags::GrayscaleToAlpha;
-		return (Permutation::PixelShaderDescriptor & paletteFlags) == paletteFlags;
-#		elif defined(PARTICLES) && defined(TEXCOORD_INDEX) && defined(INDEXED_TEXTURE)
+#	if defined(ADDBLEND) && !defined(MOTIONVECTORS_NORMALS) && !defined(LIGHTING) && !defined(MEMBRANE) && !defined(BLOOD) && !defined(PROJECTED_UV)
+#		if defined(PARTICLES) && defined(TEXCOORD_INDEX) && defined(INDEXED_TEXTURE) && !defined(SOFT)
 		return true;
 #		else
+		const uint paletteFlags = Permutation::EffectFlags::GrayscaleToColor | Permutation::EffectFlags::GrayscaleToAlpha;
+		return (Permutation::PixelShaderDescriptor & paletteFlags) == paletteFlags;
+#		endif
+#	else
 		return false;
+#	endif
+	}
+
+	/// Keeps glow grading on sky sprites and soft plain-textured glows, separate from fire.
+	bool IsLightSprite()
+	{
+#	if defined(ADDBLEND) && !defined(MOTIONVECTORS_NORMALS) && !defined(LIGHTING) && !defined(MEMBRANE) && !defined(BLOOD) && !defined(PROJECTED_UV)
+		const bool skyObject = (Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) != 0;
+#		if defined(SOFT) && defined(TEXTURE)
+		const uint nonPlainFlags = Permutation::EffectFlags::GrayscaleToColor | Permutation::EffectFlags::GrayscaleToAlpha | Permutation::EffectFlags::IgnoreTexAlpha;
+		return !IsFire() && (skyObject || (Permutation::PixelShaderDescriptor & nonPlainFlags) == 0);
+#		else
+		return !IsFire() && skyObject;
 #		endif
 #	else
 		return false;

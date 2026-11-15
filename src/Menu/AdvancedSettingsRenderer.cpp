@@ -95,7 +95,7 @@ void AdvancedSettingsRenderer::RenderShaderCompileFlags()
 	static uint32_t lastDefinesFrame = 0;
 	const auto frame = globals::state->frameCount;
 	if (!editingDefines || (frame != lastDefinesFrame && frame != lastDefinesFrame + 1u)) {
-		shaderDefines = globals::state->GetShaderDefinesSnapshot()->canonicalText;
+		shaderDefines = globals::state->GetShaderDefinesSnapshot()->authoredText;
 		appliedDefines = shaderDefines;
 	}
 	lastDefinesFrame = frame;
@@ -104,7 +104,7 @@ void AdvancedSettingsRenderer::RenderShaderCompileFlags()
 	if ((applyDefines || ImGui::IsItemDeactivatedAfterEdit()) &&
 		!ImGui::IsKeyPressed(ImGuiKey_Escape, false) && shaderDefines != appliedDefines) {
 		const auto previousDefines = globals::state->GetShaderDefinesSnapshot();
-		if (shaderDefines != previousDefines->canonicalText) {
+		if (shaderDefines != previousDefines->authoredText) {
 			globals::state->SetDefines(shaderDefines);
 			if (globals::state->GetShaderDefinesSnapshot()->canonicalText != previousDefines->canonicalText)
 				shaderCache->Clear();

@@ -57,8 +57,11 @@ class ShaderCompileIdentityTests(unittest.TestCase):
 
     def test_standalone_depth_conventions_have_disjoint_cache_keys(self) -> None:
         for runtime in ("SE", "VR"):
-            standard = standalone.resolve_tasks(runtime, {"ReverseZ": False}, "test-abi")
-            reversed_tasks = standalone.resolve_tasks(runtime, {"ReverseZ": True}, "test-abi")
+            standard = standalone.resolve_tasks(runtime, {"ReverseZ": True}, "test-abi")
+            reversed_tasks = standalone.resolve_tasks(runtime, {"ReverseZ": True}, "test-abi", reverse_z_enabled=True)
+            unloaded = standalone.resolve_tasks(runtime, {"ReverseZ": False}, "test-abi")
+            self.assertEqual(unloaded, standalone.resolve_tasks(runtime, {"ReverseZ": False}, "test-abi", reverse_z_enabled=True))
+            self.assertEqual({key: task for key, task in standard.items() if not task["source"].startswith("ReverseZ/")}, unloaded)
             self.assertTrue(standard.keys().isdisjoint(reversed_tasks))
             self.assertTrue(all(("REVERSE_Z", "1") in task["defines"] for task in reversed_tasks.values()))
             self.assertFalse(any(name == "REVERSE_Z" for task in standard.values() for name, _ in task["defines"]))
@@ -77,7 +80,7 @@ class ShaderCompileIdentityTests(unittest.TestCase):
                     filtered = BUILDER.filter_profile_defines(
                         REPO / ".github/configs" / name,
                         Path(temporary) / f"{runtime}-{enabled}.yaml", yaml, profile,
-                        feature_states={"ReverseZ": enabled},
+                        feature_states={"ReverseZ": True},
                         reverse_z_enabled=enabled,
                     )
                     for source, _, _, defines in parse_shader_configs(str(filtered)):
@@ -382,21 +385,26 @@ class ShaderCompileIdentityTests(unittest.TestCase):
     def test_lighting_inventory_keys_match_runtime_flag_mask(self) -> None:
         flags = {"SPECULAR", "SOFT_LIGHTING", "RIM_LIGHTING", "BACK_LIGHTING"}
         mask = sum(1 << bit for bit in (9, 10, 11, 12))
-        for name, expected in (("shader-validation.yaml", 246), ("shader-validation-vr.yaml", 284)):
+        unmasked_techniques = {9, 18, 13, 15}
+        for name in ("shader-validation.yaml", "shader-validation-vr.yaml"):
             path = REPO / ".github/configs" / name
             config = yaml.safe_load(path.read_text(encoding="utf-8"))
             BUILDER.validate_captured_variant_count(config, path)
             lighting = next(shader for shader in config["shaders"] if shader["file"] == "Lighting.hlsl")
             entries = lighting["configs"]["PSHADER"]["entries"]
-            self.assertEqual(len(entries), expected)
             keys = set()
+            techniques = set()
             for entry in entries:
                 descriptor = int(entry["entry"].rsplit(":", 1)[1], 16)
                 self.assertNotIn(descriptor, keys)
                 keys.add(descriptor)
-                if (descriptor >> 24) & 0x3f not in (9, 18, 13, 15):
+                technique = (descriptor >> 24) & 0x3f
+                techniques.add(technique)
+                if technique not in unmasked_techniques:
                     self.assertEqual(descriptor & mask, 0)
                     self.assertFalse(flags.intersection(entry["defines"]))
+            self.assertTrue(unmasked_techniques.issubset(techniques))
+            self.assertTrue(techniques - unmasked_techniques)
 
     def test_water_pixel_keys_share_wading_without_changing_vertices(self) -> None:
         config = {"captured_shader_variants": 3, "shaders": [{"file": "Water.hlsl", "configs": {

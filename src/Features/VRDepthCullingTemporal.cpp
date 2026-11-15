@@ -7,6 +7,8 @@
 #include "VRDepthCullingSubmissionPolicy.h"
 #include "VRDepthCullingTemporalPolicy.h"
 
+#include "RE/M/MapMenu.h"
+#include "RE/M/MenuOpenCloseEvent.h"
 #include "RE/N/NiCamera.h"
 #include "RE/N/NiPoint3.h"
 
@@ -195,6 +197,14 @@ namespace VRDepthCullingTemporal
 		}
 #endif
 
+		inline constexpr std::size_t kMapSuppressionOffset = 0xC8;
+
+		void InvalidateProducerEpoch()
+		{
+			g_cullingEpoch.fetch_add(1, std::memory_order_acq_rel);
+			g_producerPoseEpoch.store(0, std::memory_order_release);
+		}
+
 		bool IsBalancedRecoveryActive(std::uint64_t a_cullingEpoch, std::uint64_t a_policyEpoch)
 		{
 			return (a_policyEpoch & 1u) == 0 &&
@@ -203,6 +213,28 @@ namespace VRDepthCullingTemporal
 			       g_cullingEpoch.load(std::memory_order_acquire) == a_cullingEpoch &&
 			       g_policyEpoch.load(std::memory_order_acquire) == a_policyEpoch;
 		}
+
+		class MapMenuEvents final : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
+		{
+		public:
+			explicit MapMenuEvents(std::byte** a_cullerSlot) : cullerSlot(a_cullerSlot) {}
+
+			RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override
+			{
+				if (a_event && a_event->menuName == RE::MapMenu::MENU_NAME) {
+					InvalidateProducerEpoch();
+					// Map suppression is separate from the location's global culling enablement.
+					if (!a_event->opening) {
+						if (auto* culler = *cullerSlot)
+							culler[kMapSuppressionOffset] = std::byte{ 0 };
+					}
+				}
+				return RE::BSEventNotifyControl::kContinue;
+			}
+
+		private:
+			std::byte** const cullerSlot;
+		};
 
 		template <class T>
 		T ReadCullerField(const std::byte* a_culler, std::size_t a_offset)
@@ -378,14 +410,13 @@ namespace VRDepthCullingTemporal
 			       a_delta.translationSquared >= 0.0f;
 		}
 
-		void CaptureProducerPose()
+		void CaptureProducerPose(std::uint64_t a_cullingEpoch)
 		{
 			g_producerPose.valid = false;
 			if (!g_cullingEnabled.load(std::memory_order_acquire) ||
 				g_mode.load(std::memory_order_acquire) == Mode::Legacy) {
 				return;
 			}
-			const auto cullingEpoch = g_cullingEpoch.load(std::memory_order_acquire);
 
 			const auto* camera = RE::Main::WorldRootCamera();
 			if (camera) {
@@ -394,8 +425,8 @@ namespace VRDepthCullingTemporal
 				g_producerPose.valid = true;
 			}
 			if (g_cullingEnabled.load(std::memory_order_acquire) &&
-				g_cullingEpoch.load(std::memory_order_acquire) == cullingEpoch) {
-				g_producerPoseEpoch.store(cullingEpoch, std::memory_order_release);
+				g_cullingEpoch.load(std::memory_order_acquire) == a_cullingEpoch) {
+				g_producerPoseEpoch.store(a_cullingEpoch, std::memory_order_release);
 			}
 		}
 
@@ -687,13 +718,27 @@ namespace VRDepthCullingTemporal
 					else
 						g_preparedDepth.reason = Reason::InvalidView;
 				}
-				CaptureProducerPose();
+				// A UI transition during depth preparation must not relabel older evidence with a new epoch.
+				CaptureProducerPose(projection.cullingEpoch);
 				static REL::Relocation<const bool*> depthReady{ REL::Offset(0x1ED4180) };
 				// Native submission ownership survives a missing pose; recovery handles invalid view evidence.
 				g_depthPrepared = *depthReady;
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
+
+		std::byte** ResolveNativeMapCuller()
+		{
+			const auto load = REL::Offset(0x1321DF9).address();
+			const auto test = REL::Offset(0x1321E17).address();
+			// Resolve the current culler through the native consumer, without caching its object lifetime.
+			if (!REL::verify_code(load, REL::make_pattern<"48 8B 0D ?? ?? ?? ??">()) ||
+				!REL::verify_code(test, REL::make_pattern<"80 B9 ?? ?? ?? ?? 00">()) ||
+				ReadCullerField<std::uint32_t>(reinterpret_cast<const std::byte*>(test), 2) != kMapSuppressionOffset)
+				return nullptr;
+			const auto displacement = ReadCullerField<std::int32_t>(reinterpret_cast<const std::byte*>(load), 3);
+			return reinterpret_cast<std::byte**>(load + 7 + displacement);
+		}
 
 		bool IsCallInstruction(std::uintptr_t a_address)
 		{
@@ -742,8 +787,29 @@ namespace VRDepthCullingTemporal
 		g_depthResources = {};
 		g_depthPrepared = false;
 		g_producerPose = {};
-		g_producerPoseEpoch.store(0, std::memory_order_release);
-		g_cullingEpoch.fetch_add(1, std::memory_order_acq_rel);
+		InvalidateProducerEpoch();
+	}
+
+	void RegisterMapEvents()
+	{
+		if (!globals::game::isVR || REL::Module::get().version() != SKSE::RUNTIME_VR_1_4_15)
+			return;
+		auto* ui = globals::game::ui;
+		if (!ui) {
+			logger::error("VR: depth-culling map lifecycle unavailable because UI is missing");
+			return;
+		}
+		static bool registered = false;
+		if (registered)
+			return;
+		auto** cullerSlot = ResolveNativeMapCuller();
+		if (!cullerSlot) {
+			logger::error("VR: depth-culling map repair unavailable because the native suppression layout changed");
+			return;
+		}
+		static MapMenuEvents events(cullerSlot);
+		ui->AddEventSink(&events);
+		registered = true;
 	}
 
 	void SetMode(Mode a_mode)
@@ -762,8 +828,7 @@ namespace VRDepthCullingTemporal
 		if (previous == Mode::Legacy || a_mode == Mode::Legacy) {
 			// Legacy does not keep a producer pose warm. Require a new pose whenever
 			// crossing that boundary so Balanced cannot consume an arbitrarily old one.
-			g_cullingEpoch.fetch_add(1, std::memory_order_acq_rel);
-			g_producerPoseEpoch.store(0, std::memory_order_release);
+			InvalidateProducerEpoch();
 		}
 		g_policyEpoch.fetch_add(1, std::memory_order_release);
 	}

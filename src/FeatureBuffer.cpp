@@ -22,7 +22,6 @@
 #include "Features/WaterAppearance.h"
 #include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
-#include "Features/Wetterness/SnowMelt.h"
 #include "TruePBR.h"
 
 #include <array>
@@ -83,7 +82,6 @@ namespace
 		WaterAppearanceSettingsCB waterAppearanceSettings;
 		BloomSettingsCB bloomSettings;
 		SnowCoverSettingsCB snowCoverSettings;
-		WetternessSnowMelt::PerFrame snowMeltSettings;
 	};
 
 	using FeatureDataTuple = std::tuple<
@@ -109,8 +107,7 @@ namespace
 		UnifiedWaterSettingsCB,
 		WaterAppearanceSettingsCB,
 		BloomSettingsCB,
-		SnowCoverSettingsCB,
-		WetternessSnowMelt::PerFrame>;
+		SnowCoverSettingsCB>;
 
 	static_assert(sizeof(GrassLightingSettingsCB) == 32);
 	static_assert(offsetof(GrassLightingSettingsCB, Enabled) == 28);
@@ -216,9 +213,7 @@ namespace
 	static_assert(offsetof(FeatureDataLayout, waterAppearanceSettings) == offsetof(FeatureDataLayout, unifiedWaterSettings) + sizeof(UnifiedWaterSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, bloomSettings) == offsetof(FeatureDataLayout, waterAppearanceSettings) + sizeof(WaterAppearanceSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, snowCoverSettings) == offsetof(FeatureDataLayout, bloomSettings) + sizeof(BloomSettingsCB));
-	static_assert(offsetof(FeatureDataLayout, snowMeltSettings) == offsetof(FeatureDataLayout, snowCoverSettings) + sizeof(SnowCoverSettingsCB));
-	static_assert(sizeof(FeatureDataLayout) == offsetof(FeatureDataLayout, snowMeltSettings) + sizeof(WetternessSnowMelt::PerFrame));
-	static_assert(sizeof(FeatureDataLayout) <= 65536);
+	static_assert(sizeof(FeatureDataLayout) == offsetof(FeatureDataLayout, snowCoverSettings) + sizeof(SnowCoverSettingsCB));
 
 	template <class T>
 	void PackField(unsigned char* a_dst, size_t& a_offset, const T& a_value)
@@ -227,13 +222,6 @@ namespace
 		static_assert(std::is_trivially_copyable_v<T>);
 		std::memcpy(a_dst + a_offset, std::addressof(a_value), sizeof(T));
 		a_offset += sizeof(T);
-	}
-
-	void PackField(unsigned char* a_dst, size_t& a_offset, const WetternessSnowMelt::PerFrame& a_value)
-	{
-		const auto size = WetternessSnowMelt::PackedSize(a_value);
-		std::memcpy(a_dst + a_offset, std::addressof(a_value), size);
-		a_offset += size;
 	}
 
 	template <class... Ts>
@@ -247,26 +235,19 @@ namespace
 		static_assert(totalSize == sizeof(FeatureDataLayout));
 
 		alignas(16) static thread_local std::array<unsigned char, totalSize> data;
-		// The optional tail is guarded by its initialized header; unused samples need no upload.
-		std::memset(data.data(), 0, offsetof(FeatureDataLayout, snowMeltSettings));
+		// Start from a deterministic payload; this avoids stale bytes in any untouched padding.
+		std::memset(data.data(), 0, data.size());
 
 		size_t offset = 0;
 		(PackField(data.data(), offset, a_fields), ...);
 
-		return std::make_pair(data.data(), offset);
+		return std::make_pair(data.data(), data.size());
 	}
-}
-
-size_t GetFeatureBufferCapacity()
-{
-	return sizeof(FeatureDataLayout);
 }
 
 std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 {
 	auto grassLightingSettings = globals::features::grassLighting.settings;
-	const auto snowCoverSettings = globals::features::snowCover.GetCommonBufferData(a_inWorld);
-	const auto& snowMeltSettings = WetternessSnowMelt::GetCommonBufferData();
 	const auto wetternessSettings = globals::features::wetterness.GetCommonBufferData();
 	grassLightingSettings.Glossiness = globals::features::wetterness.GetEffectiveGrassGlossiness(
 		grassLightingSettings.Glossiness,
@@ -298,6 +279,5 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::unifiedWater.GetCommonBufferData(),
 		globals::features::adaptiveBrightness.GetEffectiveWaterAppearanceSettings(),
 		globals::features::adaptiveBrightness.GetEffectiveBloomSettings(),
-		snowCoverSettings,
-		snowMeltSettings);
+		globals::features::snowCover.GetCommonBufferData(a_inWorld));
 }

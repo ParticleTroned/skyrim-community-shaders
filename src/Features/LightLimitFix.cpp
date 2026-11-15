@@ -1444,9 +1444,9 @@ void LightLimitFix::SetupResources()
 		CompileComputeShaders();
 
 		if (!lightBuildingCB)
-			lightBuildingCB = new ConstantBuffer(ConstantBufferDesc<LightBuildingCB>());
+			lightBuildingCB = new ConstantBuffer(ConstantBufferDesc<LightBuildingCB>(), "LLF::LightBuildingCB");
 		if (!lightCullingCB)
-			lightCullingCB = new ConstantBuffer(ConstantBufferDesc<LightCullingCB>());
+			lightCullingCB = new ConstantBuffer(ConstantBufferDesc<LightCullingCB>(), "LLF::LightCullingCB");
 	}
 
 	{
@@ -1543,7 +1543,7 @@ void LightLimitFix::SetupResources()
 
 	{
 		if (!strictLightDataCB)
-			strictLightDataCB = new ConstantBuffer(ConstantBufferDesc<StrictLightDataCB>());
+			strictLightDataCB = new ConstantBuffer(ConstantBufferDesc<StrictLightDataCB>(), "LLF::StrictLightDataCB");
 	}
 }
 

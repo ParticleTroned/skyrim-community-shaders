@@ -46,6 +46,21 @@ class CacheContracts(unittest.TestCase):
         self.assertNotIn("constants_.Reset()", actor)
         self.assertIn("InvalidateCaptureMetadata()", actor)
 
+    def test_reference_shader_requests_keep_ordinary_invalidation_independent(self):
+        source = read(NR / "Renderer.cpp")
+        request = body(source, "void Renderer::ResetReferenceShaders()")
+        self.assertIn("referenceShaderInvalidation_.Request()", request)
+        self.assertNotIn("shaderInvalidation_.Request()", request)
+        invalidate = body(source, "void Renderer::State::ApplyShaderInvalidationLocked()")
+        reference = invalidate[invalidate.index("if (generation == shaderInvalidation_.Applied()) {"):invalidate.index("#else")]
+        self.assertIn("colorPipeline_.InvalidateShaders()", reference)
+        self.assertIn("referenceShaderInvalidation_.Applied(referenceGeneration)", reference)
+        for forbidden in ("slot.historyValid", "modelResolution_", "CharacterRendering::", "shaderInvalidation_.Applied(generation)"):
+            self.assertNotIn(forbidden, reference)
+        self.assertIn("slot.historyValid = false", invalidate[invalidate.index("#else"):])
+        status = body(source, "bool Renderer::HasPendingShaderInvalidation() const noexcept")
+        self.assertIn("shaderInvalidation_.Pending() || state_->referenceShaderInvalidation_.Pending()", status)
+
     def test_native_only_prewarm_and_safe_adoption(self):
         source = read(NR / "Renderer.cpp")
         prewarm = body(source, "void Renderer::State::ServicePrewarmLocked(") + body(source, "void Renderer::State::PreparePrewarmFeatureLocked(")

@@ -16,7 +16,9 @@ namespace
 		if (reason.empty())
 			return "Ready for the next natural weather change.";
 		if (reason == "disabled")
-			return "Preview only. Enable Seasonal Weather to change natural weather chances.";
+			return "Preview only. Enable this feature to change natural weather chances.";
+		if (reason == "seasonal_weathers_framework")
+			return "Seasonal Weathers Framework is loaded. This region uses weather globals, so CSX leaves its weather chances and candidates unchanged.";
 		if (reason == "weather_global_control")
 			return "This region has weather globals. Another weather controller may own its chances.";
 		if (reason == "excluded_worldspace")
@@ -40,7 +42,7 @@ namespace
 	bool DrawSeasonControls(SeasonalWeatherConfig::Settings& edited, RE::TESWeather* selectedWeather)
 	{
 		bool changed = ImGui::Checkbox("Leave regions with weather globals unchanged", &edited.SkipGlobalControlledRegions);
-		Util::AddTooltip("Recommended when another mod controls seasons. Turn off only after choosing which mod should own seasonal weather chances.");
+		Util::AddTooltip("Recommended when another mod controls seasons. Seasonal Weathers Framework always takes priority when detected, regardless of this setting.");
 		if (selectedWeather) {
 			const auto weatherKey = Util::ToLowerAscii(Util::GetFormFileKey(selectedWeather));
 			auto found = std::ranges::find(edited.WeatherCategories, weatherKey, &SeasonalWeatherConfig::WeatherCategory::Weather);
@@ -214,11 +216,14 @@ void SeasonalWeather::DrawEditorSettings(RE::TESWeather* selectedWeather)
 	if (selectedWeather)
 		DrawSettingsEnabledControl();
 	ImGui::TextWrapped("Adjust weather through the year using the same game calendar as Snow Cover. Changes apply at the next natural weather change. Use Save settings in the CSX menu to keep them.");
-	SeasonalWeatherConfig::Settings edited;
+	if (frameworkDetected.load())
+		ImGui::TextWrapped("Seasonal Weathers Framework detected: CSX only adjusts regions without weather globals. Snow Cover, melting and wetness remain independent.");
+	SeasonalWeatherConfig::Settings original;
 	{
 		std::lock_guard lock(mutex);
-		edited = settings;
+		original = settings;
 	}
+	auto edited = original;
 	bool changed = DrawSeasonControls(edited, selectedWeather);
 	auto* region = DrawRegionPicker();
 	changed |= DrawRegionSnow(edited, region, selectedWeather);
@@ -226,7 +231,7 @@ void SeasonalWeather::DrawEditorSettings(RE::TESWeather* selectedWeather)
 	if (changed) {
 		try {
 			std::lock_guard lock(mutex);
-			Apply(SeasonalWeatherConfig::Serialize(edited));
+			ApplyEditorEdits(original, edited);
 			settingsError.clear();
 		} catch (const std::exception& error) {
 			settingsError = error.what();

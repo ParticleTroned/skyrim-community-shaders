@@ -34,6 +34,7 @@ inline void from_json(const json& input, float3& value) { value = { input.at(0).
 #undef NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT
 #define NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(...)
 #define STATIC_ASSERT_ALIGNAS_16(Type) static_assert(alignof(Type) == 16)
+#include "Diagnostics/PerformanceCostExperiments.h"
 #include "Features/AdaptiveBalanceBloomControls.h"
 #include "Features/SharedLighting.h"
 #include "Features/WaterAppearance.h"
@@ -1360,6 +1361,30 @@ void CheckVolumetricClarity()
 
 void CheckVanillaPointLightRequirements()
 {
+	for (float saturation : { 0.0f, 0.5f, 1.0f, 2.0f })
+		for (float gamma : { -1.0f, -0.5f, 0.0f, 1.0f })
+			for (float subtypeSaturation : { 0.0f, 1.0f, 2.0f })
+				for (float subtypeGamma : { -1.0f, 0.0f, 1.0f }) {
+					auto authored = AdaptiveBalanceAppearanceSettings{};
+					authored.nonlinearPointLightSaturation = authored.linearPointLightSaturation = saturation;
+					authored.pointLightGammaOffset = authored.linearPointLightGammaOffset = gamma;
+					authored.spotlightSaturation = authored.linearSpotlightSaturation = subtypeSaturation;
+					authored.omnidirectionalBulbSaturation = authored.linearOmnidirectionalBulbSaturation = subtypeSaturation;
+					authored.spotlightGammaOffset = authored.linearSpotlightGammaOffset = subtypeGamma;
+					authored.omnidirectionalBulbGammaOffset = authored.linearOmnidirectionalBulbGammaOffset = subtypeGamma;
+					auto upload = authored;
+					AdaptiveBalanceAppearance::PreparePointLightColors(upload);
+					const auto expectedSaturation = std::clamp(saturation * subtypeSaturation, 0.0f, 2.0f);
+					const auto expectedGamma = std::clamp(gamma + subtypeGamma, -1.0f, 1.0f);
+					assert(upload.spotlightSaturation == expectedSaturation && upload.linearSpotlightSaturation == expectedSaturation);
+					assert(upload.omnidirectionalBulbSaturation == expectedSaturation && upload.linearOmnidirectionalBulbSaturation == expectedSaturation);
+					assert(upload.spotlightGammaOffset == expectedGamma && upload.linearSpotlightGammaOffset == expectedGamma);
+					assert(upload.omnidirectionalBulbGammaOffset == expectedGamma && upload.linearOmnidirectionalBulbGammaOffset == expectedGamma);
+					assert(upload.nonlinearPointLightSaturation == saturation && upload.linearPointLightSaturation == saturation);
+					assert(upload.pointLightGammaOffset == gamma && upload.linearPointLightGammaOffset == gamma);
+					assert(upload.pointLightColorEnabled == static_cast<uint>(AdaptiveBalanceAppearance::UsesClassifiedPointLights(authored)));
+				}
+
 	AdaptiveBrightness balance;
 	globals::features::linearLighting.runtimeEnabled = false;
 	assert(!balance.NeedsVanillaPointLightData());

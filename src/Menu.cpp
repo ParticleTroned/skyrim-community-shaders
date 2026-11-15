@@ -184,7 +184,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkipConstraintWarning,
 	RequireShiftToDock,
 	UseResolutionFont,
-	Theme,
 	SelectedThemePreset)
 
 bool IsEnabled = false;
@@ -466,7 +465,7 @@ void Menu::Load(json& o_json)
 		settings.ShowCompilationHUDInVR = false;
 	}
 
-	// Restore Theme - don't load it from config, only from theme preset files
+	// Embedded themes use the validated loader independently of other settings.
 	settings.Theme = currentTheme;
 
 	// Migration: Convert legacy uint32_t keys to InputCombo vectors if needed
@@ -515,28 +514,13 @@ void Menu::Load(json& o_json)
 	loadComboList(o_json, "CSEditorToggleKey", settings.CSEditorToggleKey);
 	loadComboList(o_json, "ScreenshotKey", settings.ScreenshotKey);
 
-	// Legacy support: If old config has Theme data and no SelectedThemePreset, load it
-	if (o_json.contains("Theme") && o_json["Theme"].is_object() && settings.SelectedThemePreset.empty()) {
-		bool hasFontRoles = o_json["Theme"].contains("FontRoles");
-		SanitizeFontRolesJson(o_json["Theme"]);
-		settings.Theme = o_json["Theme"];
-		PaletteFromJson(o_json["Theme"], settings.Theme.FullPalette);
-		MenuFonts::NormalizeFontRoles(settings.Theme, hasFontRoles);
-		settings.Theme.GlobalScale = MenuUI::Layout::SanitizeGlobalScale(settings.Theme.GlobalScale);
-
-		auto& bodyRole = settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)];
-		if (!Util::ValidateFont(bodyRole.File)) {
-			const auto& defaults = Menu::GetDefaultFontRole(FontRole::Body);
-			logger::warn("Font '{}' not found while loading settings, falling back to default font '{}'",
-				bodyRole.File, defaults.File);
-			settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)] = defaults;
-			settings.Theme.FontName = defaults.File;
-		}
+	// A valid embedded theme takes precedence over first-run defaults.
+	const bool hasLegacyTheme = settings.SelectedThemePreset.empty() && LoadTheme(o_json);
+	if (hasLegacyTheme)
 		logger::info("Loaded legacy Theme data from config (no SelectedThemePreset)");
-	}
 
 	// Apply Default Dark theme on first launch if no theme is selected
-	if (!settings.FirstTimeSetupCompleted && settings.SelectedThemePreset.empty()) {
+	if (!settings.FirstTimeSetupCompleted && settings.SelectedThemePreset.empty() && !hasLegacyTheme) {
 		// Ensure default themes are created/available
 		CreateDefaultThemes();
 
@@ -567,12 +551,11 @@ void Menu::Save(json& o_json)
 {
 	settings.Theme.FontName = settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)].File;
 
-	// Save all settings except Theme values
-	// Theme values should only be saved in theme preset files, not in the main config
 	o_json = settings;
 
-	// Remove Theme object from config, only keep SelectedThemePreset
-	o_json.erase("Theme");
+	// An unnamed theme has no preset file; retain its validated saved baseline.
+	if (settings.SelectedThemePreset.empty() && !savedThemeSnapshot.is_null())
+		o_json["Theme"] = savedThemeSnapshot;
 
 	// Manually save input combos using the smart serializer
 	InputCombo::ComboList::to_json(o_json["ToggleKey"], settings.ToggleKey);
@@ -693,11 +676,11 @@ void Menu::UpdateSettingsDirtyState()
 	}
 }
 
-void Menu::LoadTheme(json& o_json)
+bool Menu::LoadTheme(json& o_json)
 {
 	const auto theme = o_json.find("Theme");
 	if (theme == o_json.end() || !theme->is_object())
-		return;
+		return false;
 
 	try {
 		auto themeJson = *theme;
@@ -723,8 +706,10 @@ void Menu::LoadTheme(json& o_json)
 		settings.Theme = std::move(candidate);
 		savedThemeSnapshot = std::move(snapshot);
 		BackgroundBlur::SetEnabled(settings.Theme.BackgroundBlurEnabled);
+		return true;
 	} catch (const std::exception& e) {
 		logger::warn("Error loading theme: {}", e.what());
+		return false;
 	}
 }
 void Menu::SaveTheme(json& o_json)
@@ -781,28 +766,13 @@ bool Menu::LoadThemePreset(const std::string& themeName)
 	json themeSettings;
 
 	if (themeManager->LoadTheme(themeName, themeSettings)) {
-		// Create a backup of current theme in case loading fails
-		ThemeSettings backupTheme = settings.Theme;
-		bool hasFontRoles = themeSettings.contains("FontRoles");
-
-		SanitizeFontRolesJson(themeSettings);
-
 		try {
-			settings.Theme = themeSettings;
-			PaletteFromJson(themeSettings, settings.Theme.FullPalette);
+			std::string selectedTheme = themeName;
+			json themeDocument = { { "Theme", std::move(themeSettings) } };
+			if (!LoadTheme(themeDocument))
+				return false;
 
-			MenuFonts::NormalizeFontRoles(settings.Theme, hasFontRoles);
-			settings.Theme.GlobalScale = MenuUI::Layout::SanitizeGlobalScale(settings.Theme.GlobalScale);
-			auto& bodyRole = settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)];
-			if (!Util::ValidateFont(bodyRole.File)) {
-				const auto& defaults = Menu::GetDefaultFontRole(FontRole::Body);
-				logger::warn("Font '{}' from theme '{}' not found, falling back to default font '{}'",
-					bodyRole.File, themeName, defaults.File);
-				settings.Theme.FontRoles[static_cast<size_t>(FontRole::Body)] = defaults;
-				settings.Theme.FontName = defaults.File;
-			}
-
-			settings.SelectedThemePreset = themeName;
+			settings.SelectedThemePreset = std::move(selectedTheme);
 
 			// Schedule deferred font reload if font has changed
 			if (settings.Theme.FontName != cachedFontName) {
@@ -812,16 +782,11 @@ bool Menu::LoadThemePreset(const std::string& themeName)
 			// Schedule deferred icon reload to apply theme-specific icon overrides
 			pendingIconReload = true;
 
-			// Apply background blur enabled state from theme
-			BackgroundBlur::SetEnabled(settings.Theme.BackgroundBlurEnabled);
-
-			AcceptCurrentThemeAsSaved();
 			RequestSettingsDirtyCheck();
 			logger::info("Applied theme preset: {}", themeName);
 			return true;
 		} catch (const std::exception& e) {
 			logger::warn("Error loading theme '{}': {}", themeName, e.what());
-			settings.Theme = backupTheme;
 			return false;
 		}
 	} else {
@@ -842,20 +807,22 @@ void Menu::Init()
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 
-	// IMPORTANT: Immediately override ImGui's default styles with our Default.json theme
-	// This prevents hardcoded ImGui defaults from ever showing through
-	auto* themeManager = ThemeManager::GetSingleton();
-	json defaultThemeSettings;
-	if (themeManager->LoadTheme("Default", defaultThemeSettings)) {
-		// Temporarily create a minimal theme structure to apply defaults
-		json tempSettings;
-		tempSettings["Theme"] = defaultThemeSettings;
-		LoadTheme(tempSettings);
-		logger::info("Applied Default.json theme immediately after ImGui context creation");
-	} else {
-		logger::warn("Could not load Default.json theme - trying direct force application");
-		// Last resort: Apply Default.json colors directly to ImGui
-		ThemeManager::ForceApplyDefaultTheme();
+	// A validated unnamed theme is already the user's selection before ImGui starts.
+	if (!settings.SelectedThemePreset.empty() || savedThemeSnapshot.is_null()) {
+		auto* themeManager = ThemeManager::GetSingleton();
+		json defaultThemeSettings;
+		bool loadedDefaultTheme = themeManager->LoadTheme("Default", defaultThemeSettings);
+		if (loadedDefaultTheme) {
+			json tempSettings;
+			tempSettings["Theme"] = defaultThemeSettings;
+			loadedDefaultTheme = LoadTheme(tempSettings);
+		}
+		if (loadedDefaultTheme) {
+			logger::info("Applied Default.json theme immediately after ImGui context creation");
+		} else {
+			logger::warn("Could not load Default.json theme - trying direct force application");
+			ThemeManager::ForceApplyDefaultTheme();
+		}
 	}
 
 	// Re-apply user-selected preset after defaults are applied (covers Default and custom)

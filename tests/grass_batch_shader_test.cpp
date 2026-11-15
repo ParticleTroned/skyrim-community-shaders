@@ -2,6 +2,7 @@
 #	define NOMINMAX
 #endif
 
+#include "Features/GrassOptimizations/GrassOcclusionPolicy.h"
 #include "Features/GrassOptimizations/GrassPolicy.h"
 #include "Utils/DepthPyramidPolicy.h"
 #include "Utils/ShaderInclude.h"
@@ -104,7 +105,7 @@ namespace
 							Check(reflection->GetConstantBufferByName("GrassBatch")->GetVariableByName("GrassBatchCollisionDistance")->GetDesc(&collisionDistance));
 							Require(collisionDistance.StartOffset == 12 && collisionDistance.Size == sizeof(float), "Batch collision distance layout changed");
 						}
-						for (const auto& [name, slot] : std::array<std::pair<const char*, UINT>, 4>{ { { "GrassCollision::GrassCollisionPerFrame", 5 }, { "GrassCollision::Deformation", 100 }, { "GrassCollision::PreviousDeformation", 101 }, { "GrassCollision::DeformationSampler", 15 } } }) {
+						for (const auto& [name, slot] : std::array<std::pair<const char*, UINT>, 5>{ { { "GrassCollision::GrassCollisionPerFrame", 5 }, { "GrassCollision::Deformation", 100 }, { "GrassCollision::PreviousDeformation", 101 }, { "GrassCollision::ContactMotion", 102 }, { "GrassCollision::PreviousContactMotion", 103 } } }) {
 							const auto result = reflection->GetResourceBindingDescByName(name, &binding);
 							if (mode == 2 || (mode == 1 && slot == 5))
 								Require(SUCCEEDED(result) && binding.BindPoint == slot, "Collision resource changed register");
@@ -117,6 +118,8 @@ namespace
 						Require(binding.BindPoint == 2, "Batch fade changed register");
 						Check(reflection->GetResourceBindingDescByName("GrassSourceRecords", &binding));
 						Require(binding.BindPoint == 3, "Batch source records changed register");
+						Check(reflection->GetResourceBindingDescByName("GrassTextureNormalLength", &binding));
+						Require(binding.BindPoint == 4, "Grass texture classification changed register");
 						D3D11_SHADER_VARIABLE_DESC world{}, previous{};
 						ValidateWindLayout(reflection.Get(), "PerGeometry", vr);
 						auto geometry = reflection->GetConstantBufferByName("PerGeometry");
@@ -130,10 +133,12 @@ namespace
 					}
 	}
 
+#include "grass_active_depth_gpu.h"
 #include "grass_bounds_gpu.h"
 #include "grass_collision_field_gpu.h"
 #include "grass_collision_strength_gpu.h"
 #include "grass_culling_gpu.h"
+#include "grass_occlusion_gpu.h"
 #include "grass_source_index_gpu.h"
 #include "grass_spd_gpu.h"
 
@@ -165,10 +170,16 @@ int main()
 				}
 		run("Flat grass culling", [] { RunCullingShader(false); });
 		run("VR grass culling", [] { RunCullingShader(true); });
+		run("Flat reversed grass culling", [] { RunCullingShader(false, true); });
+		run("VR reversed grass culling", [] { RunCullingShader(true, true); });
+		run("Standard grass occlusion margin", [] { RunGrassOcclusionMargin(false); });
+		run("Reversed grass occlusion margin", [] { RunGrassOcclusionMargin(true); });
 		RunDepthReduction(false);
 		RunDepthReduction(true);
 		RunDepthReduction(false, 4);
 		RunDepthReduction(true, 4);
+		run("Standard active depth reduction", [] { RunActiveDepthReduction(false); });
+		run("Reversed active depth reduction", [] { RunActiveDepthReduction(true); });
 		RunGrassBounds();
 		RunGrassBounds(true);
 		for (bool vr : { false, true })
@@ -188,6 +199,7 @@ int main()
 		RunSPDReduction(4096, 128, 2);
 		RunSPDReduction(128, 8192, 1);
 		Compile(L"features/Grass Optimizations/Shaders/GrassOptimizations/GrassDepthCS.hlsl", "cs_5_0");
+		Compile(L"features/Grass Optimizations/Shaders/GrassOptimizations/DetectComplexCS.hlsl", "cs_5_0");
 		Compile(L"features/Grass Optimizations/Shaders/GrassOptimizations/GrassInstanceSignatureVS.hlsl", "vs_5_0");
 		for (bool vr : { false, true }) {
 			std::vector<D3D_SHADER_MACRO> defines;

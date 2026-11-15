@@ -13,6 +13,20 @@ def read(name):
 
 
 class CurrentContextContract(unittest.TestCase):
+    def test_face_protection_preserves_full_eye_input_borrowing(self):
+        source = read("src/Features/Upscaling.cpp")
+        start = source.index("const bool borrowEligible =")
+        end = source.index("const bool wasBorrowed =", start)
+        admission = source[start:end]
+        self.assertNotIn("neuralRenderingFaceDetailProtectionPercent", admission)
+        self.assertNotIn("faceDetailRegions", admission)
+        # Resolve must validate the same retained producer, including its content stamp.
+        end = source.index("const auto prepareFoveatedTexture =", end)
+        validation = source[start:end]
+        self.assertIn("(!validateStagedResources || wasBorrowed)", validation)
+        self.assertIn("neuralSourceFrame, neuralGeneration, validateStagedResources", validation)
+        self.assertIn("if (validateStagedResources && wasBorrowed && !borrowedInputs)", validation)
+
     def test_face_protection_alias_and_saved_status(self):
         bridge = read("src/Features/Upscaling/VRRenderScaleDevBenchBridge.cpp")
         schema = json.loads(re.search(r'kNeuralRenderingDescriptor = R"nr\((.*?)\)nr"', bridge, re.S).group(1))

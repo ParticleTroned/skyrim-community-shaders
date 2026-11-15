@@ -206,8 +206,21 @@ void CheckParameterPassthrough() {
             "Unavailable grass passes/resources must not query or restore native buffer changes");
     }
 }
+void CheckNativeGroupOwnership(Fixture& fixture, bool guarded) {
+    const auto [writerAcquired, captureAcquired] = std::async(std::launch::async, [&] {
+        auto* word = reinterpret_cast<volatile LONG*>(&GrassRuntime::groupWord);
+        const bool writer = InterlockedCompareExchange(word, 1, 0) == 0;
+        if (writer) InterlockedExchange(word, 0);
+        const bool capture = fixture.renderer.impl->captureMutex.try_lock();
+        if (capture) fixture.renderer.impl->captureMutex.unlock();
+        return std::pair{writer, capture};
+    }).get();
+    Require(writerAcquired == !guarded,
+        "Native group ownership must cover queued draws and release afterward");
+    Require(captureAcquired, "Native drawing must not retain the capture mutex");
+}
 void CheckQueuedStreamingFallback() {
-    for (bool failExpanded : {false, true}) for (unsigned mutation = 0; mutation < 4; ++mutation) {
+    for (unsigned failAtDraw : {0u, 1u, 2u}) for (unsigned mutation = 0; mutation < 4; ++mutation) {
         Fixture f;
         ID3D11Buffer bones;
         auto* previous = &bones;
@@ -239,14 +252,18 @@ void CheckQueuedStreamingFallback() {
         static std::function<void(RE::BSRenderPass*)> visit;
         visit = [&](RE::BSRenderPass* pass) {
             drawn.push_back(pass->geometry);
+            CheckNativeGroupOwnership(f, true);
             if (mutation == 3 && pass->geometry == &f.shape) retire();
             f.Setup(0, pass);
+            CheckNativeGroupOwnership(f, true);
             Require(f.context.vertexConstants[9].buffer == &f.buffer,
                 "Each expanded native member must receive grass parameters");
-            if (failExpanded && pass->geometry == &otherShape)
-                throw InjectedDrawFailure("Injected expanded-member failure");
+            if (failAtDraw && drawn.size() == failAtDraw)
+                throw InjectedDrawFailure("Injected queued-draw failure");
             f.Draw(pass->geometry == &f.shape);
+            CheckNativeGroupOwnership(f, true);
             f.Restore(pass);
+            CheckNativeGroupOwnership(f, true);
         };
         for (unsigned pass = 0; pass < 2; ++pass) {
             drawn.clear();
@@ -255,11 +272,14 @@ void CheckQueuedStreamingFallback() {
                 f.renderer.DrawRenderPass(&f.pass, 0, false, 0,
                     [](RE::BSRenderPass* native, uint32_t, bool, uint32_t) { visit(native); });
             } catch (const InjectedDrawFailure&) { threw = true; }
-            Require(drawn == std::vector{&f.shape, &otherShape},
+            auto expected = std::vector{&f.shape};
+            if (failAtDraw != 1) expected.push_back(&otherShape);
+            Require(drawn == expected,
                 "Streaming invalidation lost or duplicated a suppressed native draw");
-            Require(threw == failExpanded && f.renderer.impl->nativeFallbackDepth == 0 &&
+            Require(threw == (failAtDraw != 0) && f.renderer.impl->nativeFallbackDepth == 0 &&
                     f.context.vertexConstants == before,
                 "Expanded fallback must restore the incoming binding and nesting depth, including exceptions");
+            CheckNativeGroupOwnership(f, false);
             ++f.pass.passEnum;
         }
         Require(f.renderer.impl->submissions == 0, "Native fallback unexpectedly submitted a batch");
@@ -268,6 +288,28 @@ void CheckQueuedStreamingFallback() {
         f.renderer.EndFrame();
         Require(f.renderer.impl->queuedGroups.empty(), "Frame-end retained stale native draw owners");
     }
+    Fixture unqueued;
+    unqueued.renderer.impl->queuedGroups.clear();
+    unqueued.renderer.DrawRenderPass(&unqueued.pass, 0, false, 0,
+        [](RE::BSRenderPass*, uint32_t, bool, uint32_t) {
+            CheckNativeGroupOwnership(*Fixture::active, false);
+        });
+}
+void CheckTextureCacheFrameBoundary() {
+    Fixture f;
+    f.renderer.impl->frame = 3;
+    for (const uint32_t frame : {27u, 28u}) {
+        globals::state->frameCount = frame;
+        f.renderer.EndFrame();
+        Require(f.renderer.impl->textureCache.frameCalls == frame - 26 &&
+                f.renderer.impl->textureCache.lastFrame == frame,
+            "Frame end must retire texture-cache owners using the current engine frame, even without draws");
+    }
+    globals::features::grassOptimizations.loaded = false;
+    globals::features::grassOptimizations.enabled = false;
+    f.renderer.EndFrame();
+    Require(f.renderer.impl->textureCache.frameCalls == 3,
+        "Disabled grass must still retire texture-cache owners");
 }
 void CheckNestedParameterRestoration() {
     for (bool unwind : {false, true}) {
@@ -517,6 +559,7 @@ int main() {
             CheckNestedParameterRestoration();
             CheckRenderFamilyIsolation();
             CheckQueuedStreamingFallback();
+            CheckTextureCacheFrameBoundary();
             for (bool loaded : {false, true}) for (bool enabled : {false, true}) {
                 Fixture f;
                 globals::features::grassOptimizations.loaded = loaded;
@@ -996,6 +1039,86 @@ def compile_fixture(driver: str, devbench: bool = False) -> subprocess.Completed
 
 
 class GrassDrawLifecycleTests(unittest.TestCase):
+    def test_hiz_retained_allocation_failure(self):
+        source = (ROOT / "src/Features/GrassOptimizations/GrassHiZ.cpp").read_text(encoding="utf-8")
+        method = block(source, "bool GrassHiZ::Build(")
+        marker = "\tif (pyramid.SRV()" if "\tif (pyramid.SRV()" in method else "\tif (builtFrame =="
+        tail = method[method.index(marker):]
+        driver = r'''
+#include "Features/GrassOptimizations/GrassHiZPolicy.h"
+#include <algorithm>
+#include <array>
+#include <cassert>
+#include <stdexcept>
+using UINT = uint32_t;
+constexpr UINT D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION = 16384;
+namespace GrassPolicy { constexpr UINT kCullResultTrimFrames = 3; }
+namespace globals {
+namespace game { constexpr bool isVR = true; }
+namespace features { struct { bool IsActive() const { return true; } } reverseZ; }
+}
+namespace logger { void warn(const char*, const char*) {} }
+struct OutputState { explicit OutputState(void*) {} };
+struct Pyramid {
+    bool allocated = true, valid = true, failBuild = false;
+    int builds = 0;
+    bool Allocated() const { return allocated; }
+    const void* SRV() const { return valid ? this : nullptr; }
+    bool Build(void*, void*, UINT, UINT, UINT, UINT, UINT, UINT, bool) {
+        ++builds; valid = !failBuild; return valid;
+    }
+};
+struct GrassHiZ {
+    Pyramid pyramid;
+    DepthPyramidPolicy::AllocationRetention allocationRetention;
+    UINT width = 1024, height = 1024, builtFrame = 3, activeWidth = 4032, activeHeight = 2240;
+    int sourceIdentity = 1;
+    int allocations = 0;
+    float depthViewportSlack = 0;
+    std::array<float, 4> scale{};
+    void Allocate(UINT, UINT, UINT) { ++allocations; pyramid.valid = false; throw std::runtime_error("resize"); }
+    bool Build(UINT currentWidth, UINT currentHeight, uint64_t candidateIndexWork, int sourceResource = 1, UINT frame = 3) {
+        constexpr UINT eyes = 2;
+        void* context = nullptr;
+        void* source = nullptr;
+        struct { UINT Width = 4032, Height = 2240; } desc;
+        struct { float MaxDepth = 1; } viewport;
+#define GRASS_HIZ_FAIL(reason) return false
+TAIL
+#undef GRASS_HIZ_FAIL
+};
+int main() {
+    GrassHiZ hiz;
+    constexpr DepthPyramidPolicy::Extent full{1024, 1024}, half{512, 512};
+    hiz.allocationRetention.Observe(full, half, 1, 3);
+    hiz.allocationRetention.Observe(full, half, 2, 3);
+    const auto moderate = GrassHiZPolicy::AddCandidateIndexWork(0, 10000, 2, 24);
+    assert(!hiz.Build(2016, 1120, moderate));
+    assert(hiz.pyramid.builds == 0 && !hiz.pyramid.SRV());
+    assert(!hiz.Build(4032, 2240, moderate));
+    assert(hiz.pyramid.builds == 0);
+    assert(hiz.Build(4032, 2240, UINT64_MAX));
+    assert(hiz.pyramid.builds == 1 && hiz.pyramid.SRV());
+    assert(hiz.Build(4032, 2240, 0));
+    assert(hiz.pyramid.builds == 1);
+    hiz.pyramid.valid = false;
+    hiz.pyramid.failBuild = true;
+    assert(!hiz.Build(4032, 2240, UINT64_MAX));
+    assert(hiz.pyramid.builds == 2 && !hiz.pyramid.SRV());
+    assert(!hiz.Build(4032, 2240, 0));
+    GrassHiZ replaced;
+    assert(!replaced.Build(2016, 1120, moderate, 2));
+    assert(replaced.allocations == 1 && replaced.sourceIdentity == 2 && replaced.builtFrame == UINT32_MAX);
+    assert(!replaced.Build(2016, 1120, moderate, 2));
+    assert(!replaced.Build(2016, 1120, moderate, 2, 4));
+    assert(replaced.allocations == 1 && replaced.pyramid.builds == 0);
+    assert(!replaced.Build(2016, 1120, moderate, 2, 5));
+    assert(replaced.allocations == 2 && !replaced.pyramid.SRV());
+}
+'''.replace("TAIL", tail)
+        result = compile_fixture(driver)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_retained_cache_resources(self):
         source = (ROOT / "src/ShaderCache.cpp").read_text(encoding="utf-8")
         methods = "template <typename Interface, typename Cache>\n" + block(source, "winrt::com_ptr<Interface> RetainShaderResource(")
@@ -1110,34 +1233,104 @@ int main() {
 METHODS
 int main() {
     for (bool vertex : {false, true}) {
+        testDevice.Reset();
+        {
         ShaderCache cache;
         RE::BSShader shader;
         const auto publish = [&](uint32_t descriptor, std::optional<uint64_t> generation = {}) -> const void* {
             if (vertex) return cache.MakeAndAddVertexShader(shader, descriptor, generation);
             return cache.MakeAndAddPixelShader(shader, descriptor, generation);
         };
-        testDevice.creates = resource.releases = 0;
-        concurrent = true;
+        // Both candidates must own a driver shader before either can win publication.
+        std::barrier<> created{2};
+        testDevice.afterCreate = [&] { created.arrive_and_wait(); };
         const void* workerResult = nullptr;
         std::thread worker([&] { workerResult = publish(7); });
         const void* drawResult = publish(7);
         worker.join();
-        concurrent = false;
+        testDevice.afterCreate = {};
         assert(drawResult && drawResult == workerResult);
-        assert(testDevice.creates == 1 && resource.releases == 0 && cache.graphicsShaderRevision == 0);
-        assert(publish(7) == drawResult && testDevice.creates == 1);
-        assert(!publish(7, 0) && !publish(8, 0) && testDevice.creates == 1);
+        assert(testDevice.creates == 2 && resource.named == 2 && resource.releases == 1 && resource.live == 1);
+        assert(cache.graphicsShaderRevision == 0);
+        const auto* winner = vertex ? cache.vertexShaders[0].at(7)->shader : cache.pixelShaders[0].at(7)->shader;
+        assert(winner->references == 1 && winner->releases == 0);
+        assert(testDevice.resources[0].get() != testDevice.resources[1].get());
+        const auto expectedName = vertex ? "ShaderCache::Vertex 0:7" : "ShaderCache::Pixel 0:7";
+        for (const auto& candidate : testDevice.resources) {
+            assert(candidate->name == expectedName);
+            assert(candidate->references == (candidate.get() == winner ? 1u : 0u));
+            assert(candidate->releases == (candidate.get() == winner ? 0u : 1u));
+        }
+        assert(publish(7) == drawResult && testDevice.creates == 3 && resource.releases == 2);
+        assert(winner->references == 1 && winner->releases == 0);
+        assert(!publish(7, 0) && !publish(8, 0) && testDevice.creates == 3);
         failCompile = true;
-        assert(!publish(8) && testDevice.creates == 1);
+        assert(!publish(8) && testDevice.creates == 3);
         failCompile = false;
         testDevice.fail = true;
-        assert(!publish(8) && testDevice.creates == 2);
+        assert(!publish(8) && testDevice.creates == 4 && resource.named == 3);
+        assert(resource.releases == 2 && resource.live == 1 && testDevice.resources.size() == 3);
         testDevice.fail = false;
-        assert(publish(8) && testDevice.creates == 3 && resource.releases == 0);
+        assert(publish(8) && testDevice.creates == 5 && resource.named == 4 && resource.releases == 2 && resource.live == 2);
         const auto previousGeneration = cache.compilationSet.LiveGeneration(RE::BSShader::Type::Water);
-        cache.compilationSet.typeEpochs[0].fetch_add(1);
+        testDevice.afterCreate = [&] {
+            // Driver work must not hold either publication mutex.
+            std::thread lockProbe([&] {
+                assert(cache.vertexShadersMutex.try_lock());
+                cache.vertexShadersMutex.unlock();
+                assert(cache.pixelShadersMutex.try_lock());
+                cache.pixelShadersMutex.unlock();
+            });
+            lockProbe.join();
+            cache.compilationSet.typeEpochs[0].fetch_add(1);
+        };
+        assert(!publish(9, previousGeneration));
+        testDevice.afterCreate = {};
+        assert(testDevice.creates == 6 && resource.releases == 3 && resource.live == 2 && resource.named == 5);
         assert(!publish(7, previousGeneration) && !publish(8, previousGeneration));
-        assert(testDevice.creates == 3);
+        assert(testDevice.creates == 6 && winner->references == 1 && winner->releases == 0);
+        }
+        assert(resource.releases == 5 && resource.live == 0);
+        testDevice.Reset();
+
+        for (bool scoped : {false, true}) {
+            for (bool afterCreation : {false, true}) {
+                ShaderCache cache;
+                RE::BSShader shader;
+                const auto publish = [&]() -> const void* {
+                    if (vertex) return cache.MakeAndAddVertexShader(shader, 9);
+                    return cache.MakeAndAddPixelShader(shader, 9);
+                };
+                std::latch reached{1}, resume{1};
+                auto& hook = afterCreation ? testDevice.afterCreate : afterCompile;
+                hook = [&] { reached.count_down(); resume.wait(); };
+                const void* result = nullptr;
+                std::thread delayed([&] { result = publish(); });
+                reached.wait();
+                if (scoped)
+                    cache.compilationSet.typeEpochs[0].fetch_add(1);
+                else
+                    cache.compilationSet.generation.fetch_add(1);
+                resume.count_down();
+                delayed.join();
+                hook = {};
+                assert(!result && cache.vertexShaders[0].empty() && cache.pixelShaders[0].empty());
+                const unsigned staleCreates = afterCreation ? 1u : 0u;
+                assert(testDevice.creates == staleCreates && resource.named == staleCreates);
+                assert(resource.releases == staleCreates && resource.live == 0);
+                if (afterCreation) {
+                    assert(testDevice.resources.front()->references == 0);
+                    assert(testDevice.resources.front()->releases == 1);
+                }
+                assert(publish() && testDevice.creates == staleCreates + 1);
+                auto* current = vertex ? cache.vertexShaders[0].at(9)->shader : cache.pixelShaders[0].at(9)->shader;
+                assert(current->references == 1 && current->releases == 0);
+                assert(resource.live == 1);
+                cache.ReleaseResources();
+                assert(resource.live == 0 && resource.releases == staleCreates + 1);
+                testDevice.Reset();
+            }
+        }
     }
 }
 '''.replace("METHODS", methods)

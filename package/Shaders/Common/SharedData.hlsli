@@ -578,7 +578,8 @@ namespace SharedData
 
 		float ObjectFadeEnd;
 		float ObjectFadeAmount;
-		uint2 pad2;
+		uint LandscapeSnowColorMask;
+		uint pad2;
 
 		uint FireMeltCount;
 		float FireMeltStrength;
@@ -586,28 +587,6 @@ namespace SharedData
 		uint pad3;
 		float4 FireMeltSpheres[8];
 	};
-#		if defined(WETTERNESS)
-	struct SnowMeltSample
-	{
-		float4 state;
-		uint fireCount;
-		float fireStrength;
-		float fireRadiusScale;
-		uint padding;
-		float4 fires[8];
-		float4 lightDryingAge;
-		float4 heavyDryingAge;
-	};
-	struct SnowMeltSettings
-	{
-		uint count;
-		uint enabled;
-		uint2 padding;
-		float4 lightDryingHours;
-		float4 heavyDryingHours;
-		SnowMeltSample samples[32];
-	};
-#		endif
 #	endif
 
 	cbuffer FeatureData : register(b6)
@@ -636,9 +615,6 @@ namespace SharedData
 		BloomSettings bloomSettings;
 #	if defined(SNOW_COVER) && defined(PSHADER)
 		SnowCoverSettings snowCoverSettings;
-#		if defined(WETTERNESS)
-		SnowMeltSettings snowMeltSettings;
-#		endif
 #	endif
 	};
 

@@ -147,6 +147,17 @@ option(
 )
 option(TRACY_SUPPORT "Enable support for tracy profiler" OFF)
 option(NVPERF_SUPPORT "Build developer-only NVIDIA D3D11 hardware counters" OFF)
+option(
+    CSX_GPU_CRASH_LOGGING
+    "Enable GPU crash diagnostics at startup in developer builds"
+    OFF
+)
+if(CSX_GPU_CRASH_LOGGING AND NOT DEVBENCH_BRIDGE)
+    message(
+        FATAL_ERROR
+        "CSX_GPU_CRASH_LOGGING requires DEVBENCH_BRIDGE=ON; crash diagnostics are developer-only"
+    )
+endif()
 set(NVPERF_SDK_ROOT
     ""
     CACHE PATH
@@ -194,6 +205,7 @@ message("\tZip to dist: ${ZIP_TO_DIST}")
 message("\tAIO Zip to dist: ${AIO_ZIP_TO_DIST}")
 message("\tSkip runtime downloads: ${SKIP_RUNTIME_DOWNLOADS}")
 message("\tTracy profiler: ${TRACY_SUPPORT}")
+message("\tGPU crash logging: ${CSX_GPU_CRASH_LOGGING}")
 message("\tShader tests: ${BUILD_SHADER_TESTS}")
 message("\tController tests: ${BUILD_CONTROLLER_TESTS}")
 message(
@@ -271,6 +283,7 @@ add_custom_target(
         "CSX_RELEASE_VERSION=${CSX_RELEASE_VERSION}" --build-option
         "TRACY_SUPPORT=${TRACY_SUPPORT}" --build-option
         "NVPERF_SUPPORT=${NVPERF_SUPPORT}" --build-option
+        "CSX_GPU_CRASH_LOGGING=${CSX_GPU_CRASH_LOGGING}" --build-option
         "ENABLE_SKYRIM_AE=${ENABLE_SKYRIM_AE}" --build-option
         "ENABLE_SKYRIM_SE=${ENABLE_SKYRIM_SE}" --build-option
         "ENABLE_SKYRIM_VR=${ENABLE_SKYRIM_VR}" --build-option
@@ -414,6 +427,14 @@ target_link_libraries(
 if(DEVBENCH_BRIDGE)
     target_link_libraries(${PROJECT_NAME} PRIVATE DevBench::API advapi32)
     target_compile_definitions(${PROJECT_NAME} PRIVATE DEVBENCH_BRIDGE_ENABLED)
+endif()
+if(CSX_GPU_CRASH_LOGGING)
+    set_property(
+        SOURCE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/Diagnostics/GpuCrashDiagnostics.cpp"
+        APPEND
+        PROPERTY COMPILE_DEFINITIONS CSX_GPU_CRASH_LOGGING_BOOT_ENABLED=1
+    )
 endif()
 
 include(NvPerf)
@@ -765,6 +786,17 @@ set(FEATURE_PATHS_SLASH ${FEATURE_PATHS})
 list(TRANSFORM FEATURE_PATHS_SLASH APPEND /)
 
 # Install payload for the isolated AIO staging package.
+set(CSX_PROJECT_LICENSE_DESTINATION SKSE/Plugins/CommunityShaders/Licenses)
+set(CSX_PROJECT_LICENSE_FILES
+    "${CMAKE_SOURCE_DIR}/COPYING"
+    "${CMAKE_SOURCE_DIR}/COPYING.LESSER"
+    "${CMAKE_SOURCE_DIR}/EXCEPTIONS.md"
+)
+install(
+    FILES ${CSX_PROJECT_LICENSE_FILES}
+    DESTINATION ${CSX_PROJECT_LICENSE_DESTINATION}
+    COMPONENT SKSE
+)
 install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION SKSE/Plugins COMPONENT SKSE)
 install(
     FILES "${CSX_PROVENANCE_FINAL_MANIFEST}"
@@ -808,31 +840,11 @@ install(
 # # Automatic AIO preparation (incremental copy system)
 # #######################################################################################################################
 
+# Validation staging is available independently of packaging and deployment.
+include("${CMAKE_SOURCE_DIR}/cmake/ShaderStaging.cmake")
+
 if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     message("Preparing AIO package in ${AIO_DIR}")
-
-    function(append_copy_if_different _cmds _srcs _src_base _dst_base)
-        foreach(_src IN LISTS ${_srcs})
-            file(RELATIVE_PATH _rel "${_src_base}" "${_src}")
-            set(_dst "${_dst_base}/${_rel}")
-            get_filename_component(_dst_dir "${_dst}" DIRECTORY)
-            list(
-                APPEND ${_cmds}
-                COMMAND
-                ${CMAKE_COMMAND}
-                -E
-                make_directory
-                "${_dst_dir}"
-                COMMAND
-                ${CMAKE_COMMAND}
-                -E
-                copy_if_different
-                "${_src}"
-                "${_dst}"
-            )
-        endforeach()
-        set(${_cmds} ${${_cmds}} PARENT_SCOPE)
-    endfunction()
 
     # Prepare AIO only when sources change. Gather package + feature files as
     # inputs so the prepare step runs only when something actually changed.
@@ -850,6 +862,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         list(FILTER _tmp EXCLUDE REGEX "/Shaders/")
         list(APPEND _AIO_PACKAGE_FILES ${_tmp})
     endforeach()
+    list(APPEND _AIO_PACKAGE_FILES ${CSX_PROJECT_LICENSE_FILES})
 
     # Prepare AIO by copying files only when different. This avoids updating
     # timestamps for unchanged files and prevents downstream incremental
@@ -900,6 +913,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     list(FILTER _AIO_PACKAGE_SOURCE_FILES EXCLUDE REGEX "/Tests/")
     list(FILTER _AIO_PACKAGE_SOURCE_FILES EXCLUDE REGEX "/Shaders/")
     append_copy_if_different(_prepare_aio_cmds _AIO_PACKAGE_SOURCE_FILES "${CMAKE_SOURCE_DIR}/package" "${AIO_DIR}")
+    append_copy_if_different(_prepare_aio_cmds CSX_PROJECT_LICENSE_FILES "${CMAKE_SOURCE_DIR}" "${AIO_DIR}/${CSX_PROJECT_LICENSE_DESTINATION}")
 
     # Copy feature folders (only files, preserve existing files in AIO).
     # Shader files are excluded because copy_shaders.stamp owns Shaders/.
@@ -987,142 +1001,6 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     )
 
     csx_stage_nvperf(${PROJECT_NAME})
-
-    # Copy shader-package content individually so unchanged files keep their
-    # timestamps. Track every staged asset (not only HLSL/HLSLI): feature
-    # shader trees also contain runtime configuration, textures, libraries,
-    # symbols, and notices that must retrigger staging when changed.
-    file(
-        GLOB_RECURSE _package_shaders
-        CONFIGURE_DEPENDS
-        LIST_DIRECTORIES FALSE
-        "${CMAKE_SOURCE_DIR}/package/Shaders/*"
-    )
-    # Exclude test files from production packages
-    list(FILTER _package_shaders EXCLUDE REGEX "/Tests/")
-    set(_all_shader_sources ${_package_shaders})
-    set(_shader_copy_cmds)
-
-    set(_shader_feature_paths ${FEATURE_PATHS})
-    if(SHADER_VALIDATION_INCLUDE_NON_SHIPPED_FEATURES)
-        foreach(_fpath IN LISTS _ALL_FEATURE_PATHS)
-            get_filename_component(_feature_dir_name "${_fpath}" NAME)
-            if(_feature_dir_name IN_LIST AIO_NON_SHIPPED_FEATURE_PACKAGES)
-                list(APPEND _shader_feature_paths "${_fpath}")
-                message(
-                    STATUS
-                    "Staging non-shipped feature shaders for validation: ${_feature_dir_name}"
-                )
-            endif()
-        endforeach()
-        list(REMOVE_DUPLICATES _shader_feature_paths)
-    endif()
-
-    set(_feature_shader_paths
-        "${FFX_RUNTIME_SHADER_ROOT}"
-        "${STREAMLINE_RUNTIME_SHADER_ROOT}"
-    )
-    foreach(_fpath IN LISTS _shader_feature_paths)
-        if(EXISTS "${_fpath}/Shaders")
-            list(APPEND _feature_shader_paths "${_fpath}/Shaders")
-        endif()
-    endforeach()
-    # Use the same file transport for feature shader paths so generators do
-    # not reinterpret space-containing entries as malformed command arguments.
-    set(_feature_shader_paths_list_file
-        "${CMAKE_CURRENT_BINARY_DIR}/feature_shader_paths.txt"
-    )
-    string(
-        REPLACE ";"
-        "\n"
-        _feature_shader_paths_file_content
-        "${_feature_shader_paths}"
-    )
-    file(
-        WRITE "${_feature_shader_paths_list_file}"
-        "${_feature_shader_paths_file_content}"
-    )
-
-    list(
-        APPEND _shader_copy_cmds
-        COMMAND
-        ${CMAKE_COMMAND}
-        -DMODE=SHADERS
-        -DAIO_DIR="${AIO_DIR}"
-        -DSOURCE_DIR="${CMAKE_SOURCE_DIR}"
-        -DFEATURE_SHADER_PATHS_FILE="${_feature_shader_paths_list_file}"
-        -DSKIP_RUNTIME_DOWNLOADS=${SKIP_RUNTIME_DOWNLOADS}
-        -P
-        "${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake"
-    )
-
-    append_copy_if_different(_shader_copy_cmds _package_shaders "${CMAKE_SOURCE_DIR}/package/Shaders" "${AIO_DIR}/Shaders")
-    append_copy_if_different(_shader_copy_cmds FFX_RUNTIME_FILES "${FFX_RUNTIME_SHADER_ROOT}" "${AIO_DIR}/Shaders")
-    append_copy_if_different(_shader_copy_cmds STREAMLINE_RUNTIME_FILES "${STREAMLINE_RUNTIME_SHADER_ROOT}" "${AIO_DIR}/Shaders")
-
-    # feature shader folders
-    foreach(_fpath IN LISTS _shader_feature_paths)
-        if(EXISTS "${_fpath}/Shaders")
-            file(
-                GLOB_RECURSE _feat_shaders
-                CONFIGURE_DEPENDS
-                LIST_DIRECTORIES FALSE
-                "${_fpath}/Shaders/*"
-            )
-            list(FILTER _feat_shaders EXCLUDE REGEX "/Tests/")
-            list(APPEND _all_shader_sources ${_feat_shaders})
-            append_copy_if_different(_shader_copy_cmds _feat_shaders "${_fpath}/Shaders" "${AIO_DIR}/Shaders")
-        endif()
-    endforeach()
-    list(REMOVE_DUPLICATES _all_shader_sources)
-
-    add_custom_command(
-        OUTPUT copy_shaders.stamp
-        COMMAND
-            ${CMAKE_COMMAND} -E make_directory "${AIO_DIR}/Shaders"
-            ${_shader_copy_cmds}
-        COMMAND ${CMAKE_COMMAND} -E touch copy_shaders.stamp
-        DEPENDS
-            ${_all_shader_sources}
-            ${FFX_RUNTIME_FILES}
-            ${STREAMLINE_RUNTIME_FILES}
-            ${_feature_shader_paths_list_file}
-            ${CSX_RUNTIME_INSTALL_GUARD}
-            ${CMAKE_SOURCE_DIR}/cmake/PreservedRuntimePaths.cmake
-            ${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake
-        COMMENT "Copying changed shaders into AIO/Shaders"
-    )
-
-    # Standalone target for preparing shaders for CI validation
-    # This allows shader validation to run without waiting for the full build
-    add_custom_target(
-        prepare_shaders
-        DEPENDS copy_shaders.stamp
-        COMMENT "Preparing shaders for validation"
-    )
-
-    # Incremental local validation: compile only the shaders affected by the
-    # current working-tree diff (vs HEAD). Mirrors the CI incremental path but
-    # derives the change set from git instead of a precomputed list. Override
-    # the config with -DVALIDATE_CHANGED_CONFIG=... (defaults to Flatrim).
-    set(VALIDATE_CHANGED_CONFIG
-        "${CMAKE_SOURCE_DIR}/.github/configs/shader-validation.yaml"
-        CACHE FILEPATH
-        "hlslkit config used by the validate_changed target"
-    )
-    add_custom_target(
-        validate_changed
-        COMMAND
-            ${CMAKE_COMMAND} -E env python
-            "${CMAKE_SOURCE_DIR}/tools/validate_changed_shaders.py" --repo-root
-            "${CMAKE_SOURCE_DIR}" -- hlslkit-compile --shader-dir
-            "${AIO_DIR}/Shaders" --output-dir "${CMAKE_BINARY_DIR}/ShaderCache"
-            --config "${VALIDATE_CHANGED_CONFIG}" --max-warnings 0
-            --suppress-warnings X1519
-        DEPENDS prepare_shaders
-        USES_TERMINAL
-        COMMENT "Validating only shaders affected by working-tree changes"
-    )
 endif()
 
 # Automatic deployment to CommunityShaders output directory.
@@ -1351,6 +1229,12 @@ if(ZIP_TO_DIST)
             ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/package
             "${ZIP_DIR}"
         COMMAND
+            ${CMAKE_COMMAND} -E make_directory
+            "${ZIP_DIR}/${CSX_PROJECT_LICENSE_DESTINATION}"
+        COMMAND
+            ${CMAKE_COMMAND} -E copy_if_different ${CSX_PROJECT_LICENSE_FILES}
+            "${ZIP_DIR}/${CSX_PROJECT_LICENSE_DESTINATION}/"
+        COMMAND
             ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${PROJECT_NAME}>
             "${ZIP_DIR}/SKSE/Plugins/"
         COMMAND
@@ -1482,6 +1366,7 @@ file(
 # knows the actual output path of the target at build time)
 list(APPEND CORE_SOURCES "$<TARGET_FILE:${PROJECT_NAME}>")
 list(APPEND CORE_SOURCES "${CSX_PROVENANCE_FINAL_MANIFEST}")
+list(APPEND CORE_SOURCES ${CSX_PROJECT_LICENSE_FILES})
 
 set(CORE_FEATURE_PATHS "${CMAKE_SOURCE_DIR}/package/")
 
@@ -1699,6 +1584,14 @@ endif()
 if(BUILD_CONTROLLER_TESTS)
     enable_testing()
     add_test(
+        NAME ShaderStaging
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/Testing/ShaderStaging"
+            "-DTEST_GENERATOR=${CMAKE_GENERATOR}" -P
+            "${PROJECT_SOURCE_DIR}/tests/shader_staging_test.cmake"
+    )
+    add_test(
         NAME RuntimeDownloadPolicy
         COMMAND
             "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
@@ -1788,6 +1681,49 @@ if(BUILD_CONTROLLER_TESTS)
         set_tests_properties(${TEST_NAME} PROPERTIES LABELS "ControllerTests")
     endfunction()
 
+    set(_performance_cost_defines_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/performance-cost-defines"
+    )
+    set(_performance_cost_defines_header
+        "${_performance_cost_defines_dir}/performance_cost_defines_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_performance_cost_defines_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_performance_cost_defines_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_performance_cost_defines.cmake"
+        DEPENDS
+            src/State.cpp
+            tests/extract_performance_cost_defines.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    foreach(_suffix IN ITEMS on off)
+        add_controller_test(performance_cost_experiments_${_suffix}_test PerformanceCostExperiments_${_suffix} tests/performance_cost_experiments_test.cpp)
+        target_sources(
+            performance_cost_experiments_${_suffix}_test
+            PRIVATE "${_performance_cost_defines_header}"
+        )
+        target_include_directories(
+            performance_cost_experiments_${_suffix}_test
+            PRIVATE "${_performance_cost_defines_dir}"
+        )
+        target_link_libraries(
+            performance_cost_experiments_${_suffix}_test
+            PRIVATE pystring::pystring
+        )
+        if(_suffix STREQUAL "on")
+            target_compile_definitions(
+                performance_cost_experiments_${_suffix}_test
+                PRIVATE DEVBENCH_BRIDGE_ENABLED
+            )
+            target_link_libraries(
+                performance_cost_experiments_${_suffix}_test
+                PRIVATE nlohmann_json::nlohmann_json
+            )
+        endif()
+    endforeach()
     add_controller_test(shader_descriptor_test ShaderDescriptor tests/shader_descriptor_test.cpp)
     add_controller_test(texture_alpha_test TextureAlpha tests/texture_alpha_test.cpp)
     target_link_libraries(
@@ -2004,6 +1940,7 @@ if(BUILD_CONTROLLER_TESTS)
     set_tests_properties(SettingsUI PROPERTIES TIMEOUT 30)
 
     add_controller_test(grass_draw_batch_test GrassOptimizationPolicy tests/grass_draw_batch_test.cpp)
+    add_controller_test(depth_pyramid_policy_test DepthPyramidPolicy tests/depth_pyramid_policy_test.cpp)
     add_controller_test(grass_pass_cache_test GrassPassCache tests/grass_pass_cache_test.cpp)
     add_controller_test(grass_bucket_preparation_test GrassBucketPreparation tests/grass_bucket_preparation_test.cpp)
     add_controller_test(grass_telemetry_test GrassTelemetry tests/grass_telemetry_test.cpp)
@@ -2932,6 +2869,10 @@ if(BUILD_CONTROLLER_TESTS)
     set_tests_properties(PBRMaterialRegistry PROPERTIES TIMEOUT 30)
     add_controller_test(snow_cover_math_test SnowCoverMath tests/snow_cover_math_test.cpp)
     add_controller_test(
+        snow_cover_color_source_test SnowCoverColorSource
+        tests/snow_cover_color_source_test.cpp
+    )
+    add_controller_test(
         seasonal_weather_policy_test
         SeasonalWeatherPolicy
         tests/seasonal_weather_policy_test.cpp
@@ -2955,12 +2896,19 @@ if(BUILD_CONTROLLER_TESTS)
     set(_seasonal_weather_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/tests/seasonal-weather"
     )
+    set(_seasonal_weather_test_headers
+        "${_seasonal_weather_test_dir}/seasonal_weather_list_under_test.h"
+        "${_seasonal_weather_test_dir}/seasonal_weather_selection_under_test.h"
+        "${_seasonal_weather_test_dir}/seasonal_weather_native_list_under_test.h"
+        "${_seasonal_weather_test_dir}/seasonal_weather_apply_under_test.h"
+        "${_seasonal_weather_test_dir}/seasonal_weather_detection_under_test.h"
+        "${_seasonal_weather_test_dir}/seasonal_weather_plan_helpers_under_test.h"
+        "${_seasonal_weather_test_dir}/seasonal_weather_plan_type_under_test.h"
+        "${_seasonal_weather_test_dir}/seasonal_weather_plan_under_test.h"
+        "${_seasonal_weather_test_dir}/seasonal_weather_calendar_under_test.h"
+    )
     add_custom_command(
-        OUTPUT
-            "${_seasonal_weather_test_dir}/seasonal_weather_list_under_test.h"
-            "${_seasonal_weather_test_dir}/seasonal_weather_selection_under_test.h"
-            "${_seasonal_weather_test_dir}/seasonal_weather_native_list_under_test.h"
-            "${_seasonal_weather_test_dir}/seasonal_weather_apply_under_test.h"
+        OUTPUT ${_seasonal_weather_test_headers}
         COMMAND
             "${CMAKE_COMMAND}"
             "-DSOURCE_FILE=${PROJECT_SOURCE_DIR}/src/Features/SeasonalWeather.cpp"
@@ -2968,12 +2916,21 @@ if(BUILD_CONTROLLER_TESTS)
             "${PROJECT_SOURCE_DIR}/tests/extract_seasonal_weather.cmake"
         DEPENDS
             src/Features/SeasonalWeather.cpp
+            src/Features/SnowCover/Environment.cpp
             tests/extract_seasonal_weather.cmake
             tests/extract_source_region.cmake
             extern/CommonLibSSE-NG/include/RE/B/BSSimpleList.h
         VERBATIM
     )
+    add_custom_target(
+        seasonal_weather_test_sources
+        DEPENDS ${_seasonal_weather_test_headers}
+    )
     add_controller_test(seasonal_weather_selection_test SeasonalWeatherSelection tests/seasonal_weather_selection_test.cpp)
+    add_dependencies(
+        seasonal_weather_selection_test
+        seasonal_weather_test_sources
+    )
     set_tests_properties(SeasonalWeatherSelection PROPERTIES TIMEOUT 30)
     target_sources(
         seasonal_weather_selection_test
@@ -2982,6 +2939,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${_seasonal_weather_test_dir}/seasonal_weather_selection_under_test.h"
             "${_seasonal_weather_test_dir}/seasonal_weather_native_list_under_test.h"
             "${_seasonal_weather_test_dir}/seasonal_weather_apply_under_test.h"
+            "${_seasonal_weather_test_dir}/seasonal_weather_detection_under_test.h"
             src/Features/SeasonalWeatherConfig.cpp
     )
     target_link_libraries(
@@ -2991,6 +2949,28 @@ if(BUILD_CONTROLLER_TESTS)
     target_include_directories(
         seasonal_weather_selection_test
         PRIVATE "${_seasonal_weather_test_dir}"
+    )
+    add_controller_test(seasonal_weather_plan_test SeasonalWeatherPlan tests/seasonal_weather_plan_test.cpp)
+    add_dependencies(seasonal_weather_plan_test seasonal_weather_test_sources)
+    target_sources(
+        seasonal_weather_plan_test
+        PRIVATE
+            "${_seasonal_weather_test_dir}/seasonal_weather_plan_helpers_under_test.h"
+            "${_seasonal_weather_test_dir}/seasonal_weather_plan_type_under_test.h"
+            "${_seasonal_weather_test_dir}/seasonal_weather_plan_under_test.h"
+            "${_seasonal_weather_test_dir}/seasonal_weather_calendar_under_test.h"
+    )
+    target_link_libraries(
+        seasonal_weather_plan_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    target_include_directories(
+        seasonal_weather_plan_test
+        PRIVATE "${_seasonal_weather_test_dir}"
+    )
+    target_compile_options(
+        seasonal_weather_plan_test
+        PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/fp:fast>"
     )
     target_compile_definitions(
         snow_cover_math_test
@@ -3014,6 +2994,17 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_link_libraries(sharpener_bindings_test PRIVATE d3d11.lib)
     include("${PROJECT_SOURCE_DIR}/tests/d3d11_shader_test.cmake")
+    add_d3d_shader_test(water_history_shader_test WaterHistoryShader tests/water_history_shader_test.cpp)
+    target_sources(
+        water_history_shader_test
+        PRIVATE src/Utils/ShaderInclude.cpp
+    )
+    target_link_libraries(
+        water_history_shader_test
+        PRIVATE spdlog::spdlog windowsapp.lib
+    )
+    include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_depth.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/vanilla_ssao.cmake")
     add_d3d_shader_test(
         sss_skin_color_test SSSSkinColor tests/sss_skin_color_test.cpp
     )
@@ -3023,13 +3014,8 @@ if(BUILD_CONTROLLER_TESTS)
         tests/wetterness_highlights_test.cpp
     )
     include("${PROJECT_SOURCE_DIR}/tests/wetterness_runtime.cmake")
-    add_controller_test(
-        wetterness_snow_history_test WetternessSnowHistory
-        tests/wetterness_snow_history_test.cpp
-    )
     add_d3d_shader_test(
-        wetterness_snow_melt_test WetternessSnowMelt
-        tests/wetterness_snow_melt_test.cpp
+        snow_cover_color_test SnowCoverColor tests/snow_cover_color_test.cpp
     )
     add_d3d_shader_test(lazy_shader_test LazyShader tests/lazy_shader_test.cpp)
     target_link_libraries(
@@ -3111,6 +3097,7 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE xbyak::xbyak "${DETOURS_LIBRARY}"
     )
     add_d3d_shader_test(grass_d3d_state_test GrassD3DState tests/grass_d3d_state_test.cpp)
+    add_d3d_shader_test(fur_touch_shader_test FurTouchShader tests/fur_touch_shader_test.cpp)
     target_link_libraries(grass_d3d_state_test PRIVATE windowsapp.lib)
     target_compile_definitions(grass_d3d_state_test PRIVATE NOMINMAX)
     add_d3d_shader_test(grass_batch_shader_test GrassBatchShader tests/grass_batch_shader_test.cpp)
@@ -3123,6 +3110,14 @@ if(BUILD_CONTROLLER_TESTS)
         tests/pbr_grass_shader_test.cpp
     )
     set_tests_properties(PBRGrassShader PROPERTIES TIMEOUT 180)
+    add_test(NAME GrassLODLighting COMMAND pbr_grass_shader_test --lod-lighting)
+    set_tests_properties(
+        GrassLODLighting
+        PROPERTIES
+            WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+            TIMEOUT 180
+            LABELS ControllerTests
+    )
     add_d3d_shader_test(
         ambient_balance_shader_test
         AmbientBalanceShader
@@ -3281,6 +3276,18 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(
         GrassDrawLifecycle
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+    )
+    add_test(
+        NAME GpuCrashDiagnostics
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/gpu_crash_diagnostics_test.py"
+    )
+    set_tests_properties(
+        GpuCrashDiagnostics
         PROPERTIES
             LABELS "ControllerTests"
             ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
@@ -4728,6 +4735,7 @@ if(BUILD_CONTROLLER_TESTS)
         VRDepthCullingTemporalPolicy
         tests/vr_depth_culling_temporal_policy_test.cpp
     )
+    include("${PROJECT_SOURCE_DIR}/tests/vr_depth_culling_map_lifecycle.cmake")
     add_controller_test(
         vr_wand_interaction_policy_test
         VRWandInteractionPolicy
@@ -4864,6 +4872,7 @@ if(BUILD_CONTROLLER_TESTS)
         EXCLUDE_FROM_ALL
         tests/preset_compatibility_test.cpp
         src/PresetCompatibility.cpp
+        src/Features/SeasonalWeatherConfig.cpp
     )
     target_compile_features(preset_compatibility_test PRIVATE cxx_std_23)
     target_include_directories(

@@ -14,6 +14,16 @@ namespace Hair
 		return T_reoriented;
 	}
 
+	/** Projects a unit view across a unit strand; N supplies a nonparallel axial fallback. */
+	float3 GetViewFacingNormal(float3 T, float3 V, float3 N)
+	{
+		// Cross products avoid a tangent-aligned rounding residual near axial views.
+		float3 projectedView = cross(T, cross(V, T));
+		if (dot(projectedView, projectedView) <= EPSILON_DIVISION * EPSILON_DIVISION)
+			projectedView = N - T * dot(N, T);
+		return normalize(projectedView);
+	}
+
 	// [Kajiya et al. 1989, "Rendering fur with three dimensional textures."]
 	// https://doi.org/10.1145/74334.74361
 	float3 D_KajiyaKay(float3 T, float3 H, float n)

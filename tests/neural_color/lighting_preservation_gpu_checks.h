@@ -34,7 +34,7 @@ static void CheckLightingPreservation(ID3D11Device* device, ID3D11DeviceContext*
 			// symmetric ramp is unchanged; a checker contributes one third.
 			for (std::string_view signal : { "double", "half", "constant", "ramp", "mixed", "identity",
 					 "zero", "limit_zero", "bounded", "hidden", "appearance", "transport", "invalid", "near_black", "range",
-					 "managed", "legacy", "appearance_partial", "negative", "hdr" }) {
+					 "managed", "legacy", "appearance_partial", "negative", "hdr", "zero_invalid" }) {
 				if ((signal == "negative" && formatIndex >= 2) || (signal == "hdr" && formatIndex == 3))
 					continue;
 				const auto residual = [signal](unsigned x, unsigned y) {
@@ -60,7 +60,7 @@ static void CheckLightingPreservation(ID3D11Device* device, ID3D11DeviceContext*
 					const auto gain = std::exp2(residual(i % 64, i / 64));
 					edited[i] = { encode(decode(source[i].r) * gain), encode(decode(source[i].g) * gain),
 						encode(decode(source[i].b) * gain), 0 };
-					if (signal == "invalid")
+					if (signal == "invalid" || signal == "zero_invalid")
 						edited[i].r = std::numeric_limits<float>::quiet_NaN();
 					if (signal == "range")
 						edited[i] = { 70000, 70000, 70000, 0 };
@@ -75,8 +75,8 @@ static void CheckLightingPreservation(ID3D11Device* device, ID3D11DeviceContext*
 					constants.domain = domain;
 					constants.bypass = flags[formatIndex] | (signal == "hidden" ? 2u : signal == "transport" ? 1u :
 																											   0u);
-					constants.detail = signal == "zero" ? 0.f : signal == "constant" ? 0.75f :
-					                                                                   1.f;
+					constants.detail = signal == "zero" || signal == "zero_invalid" ? 0.f : signal == "constant" ? 0.75f :
+					                                                                                               1.f;
 					constants.maximumStops = signal == "limit_zero" ? 0.f : signal == "bounded" ? 0.125f :
 					                                                                              2.f;
 					constants.appearance = signal == "appearance" ? 1.f : signal == "appearance_partial" ? 0.25f :
@@ -104,7 +104,7 @@ static void CheckLightingPreservation(ID3D11Device* device, ID3D11DeviceContext*
 							const unsigned i = y * 64 + x;
 							const auto a = actual[i], s = source[i];
 							const bool outside = x >= 32 || y >= 32;
-							const bool exact = outside || signal == "zero" || signal == "hidden" || signal == "near_black" || signal == "negative";
+							const bool exact = outside || signal == "zero" || signal == "zero_invalid" || signal == "hidden" || signal == "near_black" || signal == "negative";
 							Require(a.a == s.a, "lighting preservation retains alpha");
 							if (exact) {
 								if (a.r != s.r || a.g != s.g || a.b != s.b)
@@ -166,6 +166,47 @@ static void CheckLightingPreservation(ID3D11Device* device, ID3D11DeviceContext*
 		}
 	}
 	std::printf("Lighting preservation: %u bit-exact pre-change comparisons; FP32/FP16/R11G11B10/UNORM and all domains\n", comparisons);
+}
+
+static void CheckPreparationReference(ID3D11Device* device, ID3D11DeviceContext* context,
+	ID3D11ComputeShader* reconstruct, ID3D11ComputeShader* reference, ID3D11ComputeShader* copy, ID3D11Buffer* cb)
+{
+	const std::array formats{ DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R16G16B16A16_FLOAT,
+		DXGI_FORMAT_R11G11B10_FLOAT, DXGI_FORMAT_R8G8B8A8_UNORM };
+	const std::array storageFlags{ 0u, 0x200u, 0x100u, 0x300u };
+	for (size_t formatIndex = 0; formatIndex < formats.size(); ++formatIndex) {
+		const auto format = formats[formatIndex];
+		for (unsigned domain = 0; domain < 3; ++domain) {
+			const std::vector<Pixel> source(4096, Pixel{ .25f, .125f, .0625f, .375f });
+			auto baseline = StorePixels(device, context, copy, cb, source, format);
+			for (unsigned scenario = 0; scenario < 8; ++scenario) {
+				auto constants = FullTextureConstants();
+				constants.width = constants.height = 32;
+				constants.domain = domain;
+				constants.mode = scenario == 4 ? 1u : scenario == 6 ? 0u :
+				                                                      2u;
+				constants.bypass = storageFlags[formatIndex] | (scenario == 5 ? 1u : scenario == 7 ? 2u :
+																									 0u);
+				constants.detail = scenario == 2 ? 1.f : 0.f;
+				constants.appearance = scenario == 3 ? .5f : 0.f;
+				constants.lightingPreservation = .5f;
+				const float modelRed = scenario == 0 ? std::numeric_limits<float>::quiet_NaN() : .5f;
+				auto model = MakeTexture(device, std::vector<Pixel>(4096, Pixel{ modelRed, .25f, .125f, 0 }));
+				auto output = StorePixels(device, context, copy, cb, source, format);
+				auto oldOutput = StorePixels(device, context, copy, cb, source, format);
+				const std::array inputs{ baseline.srv.Get(), model.srv.Get(), baseline.srv.Get() };
+				Dispatch(context, reconstruct, cb, constants, inputs, output.uav.Get());
+				Dispatch(context, reference, cb, constants, inputs, oldOutput.uav.Get());
+				const auto actual = ReadStored(device, context, copy, cb, output);
+				const auto expected = ReadStored(device, context, copy, cb, oldOutput);
+				Require(std::memcmp(actual.data(), expected.data(), actual.size() * sizeof(Pixel)) == 0,
+					"Neural preparation reference changed neutral, bypass or active reconstruction output");
+				if (scenario == 3 || scenario == 4 || scenario == 5 || scenario == 6)
+					Require(actual[16 * 64 + 16].r != source[16 * 64 + 16].r,
+						"Reconstruction comparison failed to exercise a nonneutral candidate");
+			}
+		}
+	}
 }
 
 static void CheckPackedLightingPreservation(ID3D11Device* device, ID3D11DeviceContext* context,

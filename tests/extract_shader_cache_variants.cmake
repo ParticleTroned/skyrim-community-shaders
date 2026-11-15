@@ -74,3 +74,29 @@ extract_between(
     "\nbool Upscaling::IsCharacterNeuralRenderingRouteConfigured() const"
     "shader_category_demand.h"
 )
+
+file(READ "${PROJECT_ROOT}/src/TruePBR.cpp" _pbr)
+extract_between(
+    "${_header}" "enum class LightingShaderTechniques"
+    "enum class BloodSplatterShaderTechniques" "shader_pbr_lighting_flags.h"
+)
+extract_between(
+    "${_header}" "enum class UtilityShaderFlags"
+    "// Shader blocking data" "shader_pbr_utility_flags.h"
+)
+extract_between(
+    "${_pbr}" "namespace Permutations"
+    "struct ExtendedRendererState" "shader_pbr_prewarm.h"
+)
+extract_between(
+    "${_source}" "const bool precompile = a_lookup == PixelShaderLookup::Precompile;"
+    "auto state = globals::state;" "shader_prewarm_lookup_gate.h"
+)
+extract_between(
+    "${_source}" "compilationSet.Add({ ShaderClass::Pixel, shader, descriptor, precompile });"
+    "} else if" "shader_prewarm_lookup_queue.h"
+)
+extract_between(
+    "${_source}" "bool ShaderCache::SetBackgroundCompilation("
+    "static const std::filesystem::path& DiskCachePath()" "shader_background_mode.h"
+)

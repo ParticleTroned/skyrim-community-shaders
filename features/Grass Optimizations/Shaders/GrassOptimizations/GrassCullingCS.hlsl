@@ -3,6 +3,7 @@
 #include "Common/Math.hlsli"
 #include "GrassOptimizations/GrassCullingBounds.hlsli"
 #include "GrassOptimizations/GrassInstance.hlsli"
+#include "GrassOptimizations/GrassOcclusion.hlsli"
 
 #ifdef VR
 #	define EYES 2
@@ -18,9 +19,10 @@ cbuffer Parameters : register(b0)
 	float4 RepresentativeOrigin;
 	float4 ModelBound;
 	uint DepthWidth, DepthHeight, DepthMips, CollisionEnabled;
-	float4 DepthUVScale;
+	float4 DepthUVScale;  // xy: active viewport scale; z: absolute depth-range slack.
 	float MeshCostBias, CostBiasStartDistance, InvisibleFadeCull, RenderDistance;
-	float EdgeFadeStart, SimpleShadingPixelSize, QualityRadius, Padding;
+	float EdgeFadeStart, SimpleShadingPixelSize, QualityRadius;
+	uint ProjectionModes;
 	uint OverrideDistance;
 	float CollisionDistance;
 	uint SliceOffset;
@@ -29,7 +31,7 @@ cbuffer Parameters : register(b0)
 	float4 MeshWeights;
 	float4 FarDensity;  // Minimum pixels, minimum/maximum density, authored-bound area scale.
 	uint FarPolicyEnabled, ProportionalFade;
-	uint2 PolicyPadding;
+	float2 ProjectionAsymptote;
 };
 
 cbuffer FrustumParameters : register(b3)
@@ -174,11 +176,15 @@ bool Hidden(float2 lo, float2 hi, float nearest, uint eye, out uint reason, out 
 		reason = 15;
 		return false;
 	}
+	uint projectionEye = Eye(eye);
+	float margin = GrassOcclusionMargin(ProjectionAsymptote[projectionEye], (ProjectionModes >> (projectionEye * 2)) & 3,
+		nearest, farthest, DepthBias, DepthUVScale.z);
+	bool hidden = DepthOrder::IsBehindWithBias(nearest, farthest, margin);
 	if (abs(farthest - DepthOrder::Far()) <= 1e-6)
 		reason = 16;
-	else if (!DepthOrder::IsBehindWithBias(nearest, farthest, DepthBias))
+	else if (!hidden)
 		reason = 17;
-	return DepthOrder::IsBehindWithBias(nearest, farthest, DepthBias);
+	return hidden;
 }
 uint FindSlice(uint index)
 {

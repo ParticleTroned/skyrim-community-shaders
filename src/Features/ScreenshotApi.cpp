@@ -1062,8 +1062,8 @@ ScreenshotApi::json ScreenshotApi::NormalizeCaptureDescriptor(
 				                        (output.value("width", json()) == 2560 || output.value("height", json()) == 1440);
 				const uint32_t width = legacySize ? 2560 : CSX::ScreenshotPolicy::FramedWidth;
 				const uint32_t height = legacySize ? 1440 : CSX::ScreenshotPolicy::FramedHeight;
-				if ((output.contains("width") && (!output["width"].is_number_integer() || output["width"] != width)) ||
-					(output.contains("height") && (!output["height"].is_number_integer() || output["height"] != height)))
+				if ((output.contains("width") && (!output["width"].is_number() || output["width"] != width)) ||
+					(output.contains("height") && (!output["height"].is_number() || output["height"] != height)))
 					throw std::runtime_error("framed dimensions must be 3840 x 2160 or explicit legacy 2560 x 1440");
 				output["width"] = width;
 				output["height"] = height;

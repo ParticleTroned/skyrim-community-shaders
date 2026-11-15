@@ -1,6 +1,8 @@
+#include "ShaderCompilationSchedulingPolicy.h"
 #include "Utils/ShaderInclude.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cerrno>
 #include <cstdio>
@@ -17,6 +19,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <vector>
 #include <winioctl.h>
@@ -26,6 +29,23 @@
 
 namespace
 {
+	int manifestFlushes = 0;
+	void FlushShaderCacheManifest() { ++manifestFlushes; }
+	struct ShaderCache
+	{
+		Util::ShaderInclude::StartupCache startupIncludeCache;
+		bool completed = false, dataLoaded = false, background = false, watcher = false;
+		bool UseFileWatcher() const { return watcher; }
+		bool CanCompileOptionalShaderSources() const
+		{
+			return ShaderCompilationSchedulingPolicy::CanCompileOptionalSources(completed, dataLoaded, background);
+		}
+		void FinishStartupPreparation();
+		Util::ShaderInclude::StartupCache* GetStartupIncludeCache(bool developerMode);
+	};
+
+#include "startup_include_lifecycle.h"
+
 	void Require(bool condition, const std::source_location& location = std::source_location::current())
 	{
 		if (!condition)
@@ -265,6 +285,10 @@ namespace
 		Require(!Util::ShaderInclude::Read(fixture.path, file, error));
 		Require(error.code == ERROR_FILE_TOO_LARGE && error.expectedBytes == static_cast<uint64_t>(size.QuadPart));
 		Require(!file.data && file.size == 0);
+		Util::ShaderInclude::StartupCache cache;
+		Require(!Util::ShaderInclude::Read(fixture.path, file, error, &cache));
+		Require(error.code == ERROR_FILE_TOO_LARGE && error.expectedBytes == static_cast<uint64_t>(size.QuadPart));
+		Require(!file.data && file.size == 0 && cache.GetUsage().entries == 0);
 	}
 
 	void TestRootAndDependencyContracts()
@@ -323,6 +347,182 @@ namespace
 		Util::ShaderInclude::Report(fixture.source, fixture.root / "additional.hlsli", { "open", ERROR_FILE_NOT_FOUND });
 		Require(fixture.output.str() == capped);
 	}
+
+	void TestStartupReuseLifecycle()
+	{
+		IncludeFixture fixture;
+		ShaderCache cache;
+		Require(cache.GetStartupIncludeCache(false) == &cache.startupIncludeCache);
+		Require(!cache.GetStartupIncludeCache(true));
+		for (bool* blocked : { &cache.completed, &cache.dataLoaded, &cache.background, &cache.watcher }) {
+			*blocked = true;
+			Require(!cache.GetStartupIncludeCache(false));
+			*blocked = false;
+		}
+		Util::ShaderInclude::File file;
+		Util::ShaderInclude::ReadError error;
+		auto* admitted = cache.GetStartupIncludeCache(false);
+		Require(Util::ShaderInclude::Read(fixture.path, file, error, admitted));
+		Require(cache.startupIncludeCache.GetUsage().entries == 1);
+		const auto before = manifestFlushes;
+		cache.FinishStartupPreparation();
+		Require(manifestFlushes == before + 1);
+		bool reused = true;
+		Require(Util::ShaderInclude::Read(fixture.path, file, error, admitted, &reused) && !reused);
+		Require(cache.startupIncludeCache.GetUsage().entries == 0);
+	}
+
+	void TestStartupReuseInvalidation()
+	{
+		IncludeFixture fixture;
+		Util::ShaderInclude::StartupCache cache;
+		Util::ShaderInclude::File file;
+		Util::ShaderInclude::ReadError error;
+		bool reused = true;
+		auto read = [&] {
+			Require(Util::ShaderInclude::Read(fixture.path, file, error, &cache, &reused));
+			return std::string(file.data.get(), file.size);
+		};
+		Require(read() == "include content" && !reused);
+		Require(read() == "include content" && reused);
+		const auto timestamp = std::filesystem::last_write_time(fixture.path);
+		fixture.Write(fixture.path, "changed content");
+		std::filesystem::last_write_time(fixture.path, timestamp);
+		Require(read() == "changed content" && !reused);
+		Require(read() == "changed content" && reused);
+
+		const auto replacement = fixture.root / "replacement.hlsli";
+		fixture.Write(replacement, "another content");
+		std::filesystem::last_write_time(replacement, timestamp);
+		Require(MoveFileExW(replacement.c_str(), fixture.path.c_str(), MOVEFILE_REPLACE_EXISTING));
+		Require(read() == "another content" && !reused);
+		Require(read() == "another content" && reused);
+		winrt::file_handle writer{ CreateFileW(fixture.path.c_str(), GENERIC_WRITE, 0,
+			nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr) };
+		Require(static_cast<bool>(writer));
+		Require(!Util::ShaderInclude::Read(fixture.path, file, error, &cache, &reused));
+		Require(!reused && !file.data && error.code == ERROR_SHARING_VIOLATION);
+		writer.close();
+		writer.attach(CreateFileW(fixture.path.c_str(), GENERIC_WRITE,
+			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+		Require(static_cast<bool>(writer));
+		DWORD written = 0;
+		Require(WriteFile(writer.get(), "updated content", 15, &written, nullptr) && written == 15);
+		Require(read() == "updated content" && !reused);
+		writer.close();
+		std::filesystem::remove(fixture.path);
+		Require(!Util::ShaderInclude::Read(fixture.path, file, error, &cache, &reused));
+		Require(!reused && !file.data && error.code == ERROR_FILE_NOT_FOUND);
+		fixture.Write(fixture.path, "");
+		Require(read().empty() && !reused && file.data);
+		Require(read().empty() && reused);
+		cache.Disable();
+		Require(cache.GetUsage().entries == 0 && cache.GetUsage().bytes == 0);
+		Require(read().empty() && !reused);
+		Require(cache.GetUsage().entries == 0);
+	}
+
+	void TestStartupReuseMappedWrites()
+	{
+		IncludeFixture fixture;
+		winrt::file_handle writer{ CreateFileW(fixture.path.c_str(), GENERIC_READ | GENERIC_WRITE,
+			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr) };
+		Require(static_cast<bool>(writer));
+		winrt::handle mapping{ CreateFileMappingW(writer.get(), nullptr, PAGE_READWRITE, 0, 0, nullptr) };
+		Require(static_cast<bool>(mapping));
+		std::unique_ptr<void, decltype(&UnmapViewOfFile)> view{
+			MapViewOfFile(mapping.get(), FILE_MAP_WRITE, 0, 0, 0), &UnmapViewOfFile
+		};
+		Require(static_cast<bool>(view));
+		writer.close();
+		Util::ShaderInclude::StartupCache cache;
+		Util::ShaderInclude::File file;
+		Util::ShaderInclude::ReadError error;
+		Require(Util::ShaderInclude::Read(fixture.path, file, error, &cache));
+		std::memcpy(view.get(), "changed content", 15);
+		Require(Util::ShaderInclude::Read(fixture.path, file, error, &cache));
+		Require(std::string(file.data.get(), file.size) == "changed content");
+		Require(FlushViewOfFile(view.get(), 15));
+		Require(Util::ShaderInclude::Read(fixture.path, file, error, &cache));
+		Require(std::string(file.data.get(), file.size) == "changed content");
+	}
+
+	void TestStartupReuseBoundsAndConcurrency()
+	{
+		IncludeFixture fixture;
+		Util::ShaderInclude::StartupCache cache(1024, 2);
+		Util::ShaderInclude::File file;
+		Util::ShaderInclude::ReadError error;
+		bool reused;
+		for (int i = 0; i < 8; ++i) {
+			const auto path = fixture.root / (std::to_string(i) + ".hlsli");
+			fixture.Write(path, "bytes");
+			Require(Util::ShaderInclude::Read(path, file, error, &cache));
+		}
+		Require(cache.GetUsage().entries == 2 && cache.GetUsage().bytes <= 1024);
+		Require(Util::ShaderInclude::Read(fixture.root / "0.hlsli", file, error, &cache, &reused) && reused);
+		Require(Util::ShaderInclude::Read(fixture.root / "7.hlsli", file, error, &cache, &reused) && !reused);
+		fixture.Write(fixture.root / "0.hlsli", std::string(2048, 'a'));
+		Require(Util::ShaderInclude::Read(fixture.root / "0.hlsli", file, error, &cache, &reused) && !reused);
+		Require(file.size == 2048 && cache.GetUsage().bytes <= 1024 && cache.GetUsage().entries == 1);
+		Util::ShaderInclude::StartupCache empty(0, 0);
+		Require(Util::ShaderInclude::Read(fixture.path, file, error, &empty, &reused) && !reused);
+		Require(empty.GetUsage().entries == 0);
+
+		Util::ShaderInclude::StartupCache shared;
+		std::atomic<int> reads = 0;
+		std::atomic<bool> correct = true;
+		std::vector<std::jthread> workers;
+		for (int i = 0; i < 8; ++i) {
+			workers.emplace_back([&] {
+				for (int n = 0; n < 100; ++n) {
+					Util::ShaderInclude::File result;
+					Util::ShaderInclude::ReadError failure;
+					if (!Util::ShaderInclude::Read(fixture.path, result, failure, &shared) ||
+						std::string(result.data.get(), result.size) != "include content")
+						correct = false;
+					++reads;
+				}
+			});
+		}
+		while (reads.load() < 8)
+			std::this_thread::yield();
+		shared.Disable();
+		workers.clear();
+		Require(correct && reads == 800);
+		Require(shared.GetUsage().bytes == 0 && shared.GetUsage().entries == 0);
+	}
+
+	void TestStartupReuseBytecode()
+	{
+		IncludeFixture fixture;
+		fixture.Write(fixture.source, "#include \"Common/Parent.hlsli\"\nfloat4 main() : SV_Target { return VALUE; }");
+		fixture.Write(fixture.root / "Common/Parent.hlsli", "#include \"Common/Empty.hlsli\"\n#include \"Common/Test.hlsli\"\n");
+		fixture.Write(fixture.root / "Common/Empty.hlsli", "");
+		fixture.Write(fixture.path, "#ifdef VR\n#define VALUE float4(2, 3, 4, 5)\n#else\n#define VALUE float4(1, 2, 3, 4)\n#endif\n");
+		Util::ShaderInclude::StartupCache cache;
+		auto compile = [&](bool vr, bool reuse) {
+			D3D_SHADER_MACRO macros[]{ { "VR", "1" }, {} };
+			TrackingIncludeHandler handler(fixture.source, reuse ? &cache : nullptr);
+			winrt::com_ptr<ID3DBlob> blob, errors;
+			Require(SUCCEEDED(D3DCompileFromFile(fixture.source.c_str(), vr ? macros : nullptr, &handler,
+				"main", "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, blob.put(), errors.put())));
+			Require(handler.includes.size() == 3);
+			return std::string(static_cast<const char*>(blob->GetBufferPointer()), blob->GetBufferSize());
+		};
+		for (bool vr : { false, true }) {
+			const auto baseline = compile(vr, false);
+			Require(compile(vr, true) == baseline);
+			Require(compile(vr, true) == baseline);
+		}
+		Require(cache.GetUsage().entries == 3);
+		const auto oldBytecode = compile(false, true);
+		const auto timestamp = std::filesystem::last_write_time(fixture.path);
+		fixture.Write(fixture.path, "#define VALUE float4(7, 8, 9, 10)\n");
+		std::filesystem::last_write_time(fixture.path, timestamp);
+		Require(compile(false, true) != oldBytecode);
+		Require(compile(false, true) == compile(false, false));
+	}
 }
 
 int main()
@@ -333,6 +533,11 @@ int main()
 		TestReaderOwnershipAndErrors();
 		TestOversizedInclude();
 		TestRootAndDependencyContracts();
+		TestStartupReuseLifecycle();
+		TestStartupReuseInvalidation();
+		TestStartupReuseMappedWrites();
+		TestStartupReuseBoundsAndConcurrency();
+		TestStartupReuseBytecode();
 		TestDiagnosticLimit();
 		std::cout << "Shader include contracts passed\n";
 		return 0;

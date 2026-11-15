@@ -13,10 +13,12 @@
 #include <limits>
 #include <memory>
 #include <shared_mutex>
+#include <thread>
 #include <winrt/base.h>
 
 namespace logger
 {
+	std::atomic<int> warnings = 0;
 	template <class... Args>
 	void debug(const char*, Args&&...)
 	{}
@@ -25,7 +27,9 @@ namespace logger
 	{}
 	template <class... Args>
 	void warn(const char*, Args&&...)
-	{}
+	{
+		++warnings;
+	}
 	template <class... Args>
 	void error(const char*, Args&&...)
 	{}
@@ -96,13 +100,21 @@ namespace
 {
 	using namespace Util;
 	using ShaderContentReuse::Identity;
-	ShaderCacheManifest::Manifest cacheManifest;
+	std::atomic<int> manifestFlushes = 0;
+	struct ObservedManifest : ShaderCacheManifest::Manifest
+	{
+		bool Save()
+		{
+			++manifestFlushes;
+			return Manifest::Save();
+		}
+	} cacheManifest;
 	ShaderCachePack::Store* activePack = nullptr;
 	bool managed = false, quarantined = false;
 	std::shared_mutex g_diskCacheMutationMutex;
 	std::mutex g_standaloneCacheIOMutex;
-	std::atomic<uint64_t> diskGeneration = 0, g_manifestWriteCount = 0;
-	constexpr uint64_t kManifestFlushBatchSize = 25;
+	std::atomic<uint64_t> diskGeneration = 0;
+#include "content_manifest_policy.h"
 	ContentHash::Hash128 testSourceDigest = ContentHash::HashString("source-v1");
 
 	const std::filesystem::path& DiskCachePath()
@@ -120,14 +132,14 @@ namespace
 	auto* GetShaderPackStore(bool) { return quarantined ? nullptr : activePack; }
 	void QuarantineShaderPackLane(bool, std::string_view) { quarantined = true; }
 	auto& GetShaderCacheManifest() { return cacheManifest; }
-	void FlushShaderCacheManifestLocked() { assert(cacheManifest.Save()); }
+#include "content_manifest_flush.h"
 	std::optional<ContentHash::Hash128> GetShaderContentDigest(const std::filesystem::path&, const std::filesystem::path&) { return testSourceDigest; }
 	std::filesystem::path ShaderSourceRoot() { return "Data/Shaders"; }
 	std::string GetShaderPackFamily(const std::wstring&) { return "Lighting"; }
 
 	struct ShaderCache
 	{
-		bool active = true, skipUnchanged = true;
+		bool active = true, skipUnchanged = true, startup = false;
 		static ShaderCache& Instance()
 		{
 			static ShaderCache cache;
@@ -135,6 +147,7 @@ namespace
 		}
 		bool IsDiskCacheActive() const { return active; }
 		bool IsSkipUnchangedShaders() const { return skipUnchanged; }
+		bool CanCompileOptionalShaderSources() const { return startup; }
 	};
 
 	// clang-format off
@@ -164,6 +177,10 @@ namespace
 			activePack = nullptr;
 			managed = quarantined = false;
 			ShaderCache::Instance().active = ShaderCache::Instance().skipUnchanged = true;
+			ShaderCache::Instance().startup = false;
+			g_manifestWriteCount = 0;
+			manifestFlushes = 0;
+			logger::warnings = 0;
 		}
 		~Fixture()
 		{
@@ -189,6 +206,74 @@ namespace
 	{
 		return { ContentHash::HashString(a_code).ToHex(), ContentHash::HashString("abi").ToHex(),
 			CSX::Api::GetShaderCompatibilityRequirementSet("Lighting", "Lighting.hlsl").digest };
+	}
+
+	void StartupManifestBatching()
+	{
+		Fixture fixture;
+		ShaderCache::Instance().startup = true;
+		auto record = [](int index) {
+			RecordShaderDigest(std::format(L"Data/ShaderCache/Lighting/{}.pso", index),
+				testSourceDigest, testSourceDigest, std::nullopt);
+		};
+		for (int i = 0; i < 255; ++i)
+			record(i);
+		assert(manifestFlushes == 0);
+		assert(!std::filesystem::exists(DiskCachePath() / "Manifest.json"));
+		record(255);
+		assert(manifestFlushes == 1);
+		ShaderCacheManifest::Manifest persisted;
+		persisted.Load(DiskCachePath() / "Manifest.json");
+		assert(persisted.Get("Lighting/255.pso"));
+		record(256);
+		FlushShaderCacheManifestLocked();
+		persisted.Load(DiskCachePath() / "Manifest.json");
+		assert(persisted.Get("Lighting/256.pso"));
+		ShaderCache::Instance().startup = false;
+		for (int i = 257; i < 275; ++i)
+			record(i);
+		assert(manifestFlushes == 3);
+		persisted.Load(DiskCachePath() / "Manifest.json");
+		assert(persisted.Get("Lighting/274.pso"));
+		managed = true;
+		for (int i = 275; i < 600; ++i)
+			record(i);
+		assert(manifestFlushes == 3 && g_manifestWriteCount == 275);
+		assert(!cacheManifest.Get("Lighting/599.pso"));
+	}
+
+	void StartupManifestFailureAndConcurrency()
+	{
+		Fixture fixture;
+		ShaderCache::Instance().startup = true;
+		auto record = [](int index) {
+			RecordShaderDigest(std::format(L"Data/ShaderCache/Lighting/{}.pso", index),
+				testSourceDigest, testSourceDigest, std::nullopt);
+		};
+		const auto manifestPath = DiskCachePath() / "Manifest.json";
+		std::filesystem::create_directory(manifestPath);
+		for (int i = 0; i < 256; ++i)
+			record(i);
+		assert(manifestFlushes == 1 && logger::warnings == 1);
+		std::filesystem::remove(manifestPath);
+		FlushShaderCacheManifestLocked();
+		ShaderCacheManifest::Manifest persisted;
+		persisted.Load(manifestPath);
+		assert(persisted.Get("Lighting/255.pso"));
+
+		std::vector<std::jthread> writers;
+		for (int worker = 0; worker < 8; ++worker) {
+			writers.emplace_back([&, worker] {
+				for (int i = 0; i < 64; ++i)
+					record(256 + worker * 64 + i);
+			});
+		}
+		writers.clear();
+		assert(manifestFlushes == 4 && logger::warnings == 1);
+		FlushShaderCacheManifestLocked();
+		persisted.Load(manifestPath);
+		for (int i = 0; i < 768; ++i)
+			assert(persisted.Get(std::format("Lighting/{}.pso", i)));
 	}
 
 	void ManifestLifecycle()
@@ -401,6 +486,8 @@ namespace
 
 int main()
 {
+	StartupManifestBatching();
+	StartupManifestFailureAndConcurrency();
 	ManifestLifecycle();
 	LooseAndRollback();
 	ManagedRecords();

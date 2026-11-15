@@ -601,6 +601,7 @@ namespace SIE
 		}
 
 		constexpr uint64_t kManifestFlushBatchSize = 25;
+		constexpr uint64_t kStartupManifestFlushBatchSize = 256;
 		std::atomic<uint64_t> g_manifestWriteCount = 0;
 		std::atomic<uint64_t> g_diskCacheGeneration = 0;
 		std::shared_mutex g_diskCacheMutationMutex;
@@ -662,7 +663,10 @@ namespace SIE
 			manifest.Set(manifestKey, combined.ToHex(), a_contentKey);
 
 			const auto writeCount = g_manifestWriteCount.fetch_add(1, std::memory_order_relaxed) + 1;
-			if (writeCount % kManifestFlushBatchSize == 0)
+			const auto batchSize = ShaderCache::Instance().CanCompileOptionalShaderSources() ?
+			                           kStartupManifestFlushBatchSize :
+			                           kManifestFlushBatchSize;
+			if (writeCount % batchSize == 0)
 				FlushShaderCacheManifestLocked();
 		}
 
@@ -1352,9 +1356,10 @@ namespace SIE
 		std::vector<std::unique_ptr<char[]>> buffers;
 		std::filesystem::path baseDir;
 		std::filesystem::path sourcePath;
+		Util::ShaderInclude::StartupCache* startupCache;
 
-		explicit TrackingIncludeHandler(const std::filesystem::path& source) :
-			baseDir(source.parent_path()), sourcePath(source) {}
+		explicit TrackingIncludeHandler(const std::filesystem::path& source, Util::ShaderInclude::StartupCache* cache = nullptr) :
+			baseDir(source.parent_path()), sourcePath(source), startupCache(cache) {}
 
 		HRESULT Open(D3D_INCLUDE_TYPE IncludeType, LPCSTR pFileName, LPCVOID /*pParentData*/, LPCVOID* ppData, UINT* pBytes) noexcept override
 		{
@@ -1380,7 +1385,7 @@ namespace SIE
 
 				Util::ShaderInclude::File contents;
 				Util::ShaderInclude::ReadError error;
-				if (!Util::ShaderInclude::Read(ec ? includePath : canonical, contents, error)) {
+				if (!Util::ShaderInclude::Read(ec ? includePath : canonical, contents, error, startupCache)) {
 					Util::ShaderInclude::Report(sourcePath, includePath, error);
 					return HRESULT_FROM_WIN32(error.code);
 				}
@@ -3004,7 +3009,7 @@ namespace SIE
 			}
 
 			TrackingIncludeHandler includeHandler(path);
-			TrackingIncludeHandler preprocessHandler(path);
+			TrackingIncludeHandler preprocessHandler(path, useDiskCache ? cache.GetStartupIncludeCache(compileState.developerMode) : nullptr);
 			std::optional<SharedCompile> shared;
 			std::optional<Util::ShaderContentReuse::Identity> contentIdentity;
 			ContentReuseSource reuseSource = ContentReuseSource::None;
@@ -4452,6 +4457,17 @@ namespace SIE
 			logger::info("Shader compiler scheduling transitioned from startup-cooperative to in-game normal priority");
 	}
 
+	void ShaderCache::FinishStartupPreparation()
+	{
+		startupIncludeCache.Disable();
+		FlushShaderCacheManifest();
+	}
+
+	Util::ShaderInclude::StartupCache* ShaderCache::GetStartupIncludeCache(bool developerMode)
+	{
+		return !developerMode && !UseFileWatcher() && CanCompileOptionalShaderSources() ? &startupIncludeCache : nullptr;
+	}
+
 	void ShaderCache::StopCompilation()
 	{
 		if (IsCompiling()) {
@@ -4823,6 +4839,8 @@ namespace SIE
 
 	bool ShaderCache::SetBackgroundCompilation(bool value)
 	{
+		if (value)
+			startupIncludeCache.Disable();
 		bool previousValue;
 		{
 			// Serialize mode changes with the predicate check and transition into wait.
@@ -5770,16 +5788,17 @@ namespace SIE
 
 	bool ShaderCache::UseFileWatcher() const
 	{
-		return useFileWatcher;
+		return useFileWatcher.load(std::memory_order_acquire);
 	}
 
 	void ShaderCache::SetFileWatcher(bool value)
 	{
-		auto oldValue = useFileWatcher;
-		useFileWatcher = value;
-		if (useFileWatcher && !oldValue)
+		if (value)
+			startupIncludeCache.Disable();
+		const bool oldValue = useFileWatcher.exchange(value, std::memory_order_acq_rel);
+		if (value && !oldValue)
 			StartFileWatcher();
-		else if (!useFileWatcher && oldValue)
+		else if (!value && oldValue)
 			StopFileWatcher();
 	}
 
@@ -5814,7 +5833,7 @@ namespace SIE
 	{
 		logger::info("Stopping FileWatcher");
 		// Set flag first so processQueue()'s loop condition becomes false before we join.
-		useFileWatcher = false;
+		useFileWatcher.store(false, std::memory_order_release);
 		if (fileWatcher) {
 			fileWatcher->removeWatch(watchID);
 			fileWatcher = nullptr;

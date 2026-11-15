@@ -30,6 +30,30 @@ prerequisites, exact local and CI commands, version/update rules, validation
 gates, recovery procedures, scope boundary, and AI-agent instructions are in
 the [Prebuilt Shader Cache Runbook](./prebuilt-shader-cache.md).
 
+## Startup source preparation
+
+Blocking startup compilation retains up to 16 MiB of include bytes and
+entry payloads across at most 1,024 includes; the entry limit also bounds
+container overhead. Reuse checks file identity, size, last-write time,
+and change time through an open handle that excludes
+writers and replacement. Readers retain immutable snapshots while copying
+outside the cache lock. Unsupported metadata or concurrent writer access
+falls back to ordinary reads. Source digest validation and compiler flags
+are unchanged. Developer compilation and file watching bypass reuse;
+entering background mode or finishing startup releases the snapshots.
+
+The legacy loose-file manifest checkpoints every 256 records during
+blocking startup and every 25 otherwise. Compilation completion, the end
+of the startup wait, and shutdown flush remaining changes. Managed shader
+packs retain their existing batched persistence.
+
+`ShaderInclude` exercises bytecode equivalence for flat and VR macros,
+same-size edits with preserved timestamps, replacement, mapped writes,
+read failures, bounded storage, and concurrent shutdown. `SharedShaderCompile` covers
+edits between preprocessing and compilation. `ShaderContentReuse` checks
+legacy startup batching, failed-write recovery, concurrent persistence,
+and the transition to normal checkpoints using the production policy.
+
 ## Optional lighting specialization diagnostics
 
 Advanced > Shaders > Threading has **Resident-only Lighting

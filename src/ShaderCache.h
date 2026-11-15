@@ -25,6 +25,7 @@
 #include "Utils/ContentHash.h"
 #include "Utils/ShaderAllocation.h"
 #include "Utils/ShaderContentReuse.h"
+#include "Utils/ShaderInclude.h"
 #include "Utils/ShaderSpecializationRequests.h"
 #include "Utils/ShaderTrackingKeyCache.h"
 #include "Utils/WinApi.h"
@@ -849,6 +850,10 @@ namespace SIE
 		std::jthread managementJthread;  // dedicated thread for ManageCompilationSet (not in pool)
 		/** @brief Sets compilation mode and wakes the dispatcher; returns the previous mode. */
 		bool SetBackgroundCompilation(bool value);
+		/** Ends startup include retention and checkpoints the legacy manifest before gameplay. */
+		void FinishStartupPreparation();
+		/** Returns bounded include reuse only while optimized blocking startup is active. */
+		Util::ShaderInclude::StartupCache* GetStartupIncludeCache(bool developerMode);
 		std::atomic<bool> backgroundCompilation = false;
 		std::atomic<bool> menuLoaded = false;
 		// Set only after DataLoaded and the initial compilation batch have both
@@ -1268,7 +1273,8 @@ namespace SIE
 		bool isAsync = true;
 		bool isDump = false;
 		bool hideError = false;
-		bool useFileWatcher = false;
+		Util::ShaderInclude::StartupCache startupIncludeCache;
+		std::atomic<bool> useFileWatcher = false;
 		std::atomic_bool pendingClear{ false };
 
 		bool ShouldUseAsyncCompilation() const;

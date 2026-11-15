@@ -12,6 +12,8 @@ foreach(
         content_pack_reuse.h
         content_persist.h
         content_record_digest.h
+        content_manifest_policy.h
+        content_manifest_flush.h
         content_abi_snapshot.h
 )
     list(APPEND _content_reuse_headers "${_content_reuse_dir}/${_header}")

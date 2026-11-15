@@ -9,9 +9,13 @@
 
 namespace ImageBasedLighting
 {
+#if defined(AMBIENT_WORLD_EFFECT_LIGHTING) && defined(EFFECT) && defined(PSHADER)
+#	define IBL_AMBIENT_WORLD_EFFECT
+#endif
+
 	bool IsEnabled()
 	{
-#if defined(IBL_LUMINANCE_RATIO) && defined(IBL_DEFERRED)
+#if (defined(IBL_LUMINANCE_RATIO) && defined(IBL_DEFERRED)) || defined(IBL_AMBIENT_WORLD_EFFECT)
 		return true;
 #else
 		return SharedData::iblSettings.EnableIBL != 0;
@@ -20,10 +24,19 @@ namespace ImageBasedLighting
 
 	uint GetDALCMode()
 	{
-#if defined(IBL_LUMINANCE_RATIO) && defined(IBL_DEFERRED)
+#if (defined(IBL_LUMINANCE_RATIO) && defined(IBL_DEFERRED)) || defined(IBL_AMBIENT_WORLD_EFFECT)
 		return 0;
 #else
 		return SharedData::iblSettings.DALCMode;
+#endif
+	}
+
+	float GetDALCAmount()
+	{
+#if defined(IBL_AMBIENT_WORLD_EFFECT)
+		return 0.0;
+#else
+		return SharedData::iblSettings.DALCAmount;
 #endif
 	}
 
@@ -77,7 +90,7 @@ namespace ImageBasedLighting
 	/// Compute ratio between DALC and IBL for brightness/color matching.
 	float3 GetIBLRatio()
 	{
-		const float dalcAmount = SharedData::iblSettings.DALCAmount;
+		const float dalcAmount = GetDALCAmount();
 		float3 matchedRatio = 1.0;
 		[branch] if (dalcAmount != 0.0)
 		{

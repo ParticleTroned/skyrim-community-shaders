@@ -46,6 +46,12 @@ scattering. Dry Wetterness follows the uploaded dry state, retaining the
 existing drying timeline, debug overrides and persistent shoreline
 darkening.
 
+The same policy covers ambient world Effect lighting and deferred
+composite specializations for IBL luminance ratio, linear lighting, or
+both. Eligibility uses the effective settings uploaded for the current
+frame. A missing optional shader retains the general shader while
+preparation is allowed, or for the whole miss when resident-only is on.
+
 At Info level, `[ShaderSpecialization]` reports each missing descriptor
 once per graphics-cache revision and policy (`request=allowed` or
 `request=suppressed`). These are resident misses, not counts of source
@@ -58,6 +64,9 @@ compiler invocations, including retries), publication success and elapsed
 preparation time. Disk or shared-bytecode reuse can report zero source
 compiles while still creating a D3D shader. Elapsed time includes cache
 work and object creation; it is not a frame-time or stutter measurement.
+Composite entries use `composite_revision`, variant and interior/exterior
+identity instead of a pixel descriptor. Their miss reports are bounded to
+the six variants and two request policies per composite-cache revision.
 
 DevBench `communityshaders.shader_api`, action `specializationPolicy`, reads
 the setting; supplying boolean `residentOnly` changes it for the session.

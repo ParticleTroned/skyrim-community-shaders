@@ -525,6 +525,8 @@ public:
 
 	PermutationCB permutationData{};
 	PermutationCB permutationDataPrevious{};
+	// Matches the effective feature data uploaded for the current scene pass.
+	bool effectAmbientIBLUploaded = false;
 
 	Util::FrameChecker frameChecker;
 	uint frameCount = 0;

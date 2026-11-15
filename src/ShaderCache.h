@@ -870,6 +870,14 @@ namespace SIE
 		static constexpr uint32_t kLightingNoLegacySubsurface = 1u << 17;
 		static constexpr uint32_t kLightingSpecializationMask = kLightingDryWeather | kLightingSnowCoverInactive | kLightingNoMeshVariation |
 		                                                        kLightingNoLocalLights | kLightingNoContactShadows | kLightingNoLegacySubsurface;
+		static constexpr uint32_t kEffectAmbientWorldIBL = 1u << 28;
+		/** Optional pixel flags are separate from engine flags and category output layouts. */
+		static constexpr uint32_t GetPixelSpecializationMask(RE::BSShader::Type type)
+		{
+			return type == RE::BSShader::Type::Lighting ? kLightingSpecializationMask :
+			       type == RE::BSShader::Type::Effect   ? kEffectAmbientWorldIBL :
+			                                              0u;
+		}
 
 		enum class LightingShaderFlags : uint32_t
 		{
@@ -1256,7 +1264,7 @@ namespace SIE
 		ankerl::unordered_dense::set<uint64_t> specializationMisses;
 		uint64_t specializationMissRevision = UINT64_MAX;
 		bool specializationMissLimitReported = false;
-		void RecordLightingSpecializationMiss(uint32_t descriptor, bool suppressed) noexcept;
+		void RecordLightingSpecializationMiss(RE::BSShader::Type type, uint32_t descriptor, bool suppressed) noexcept;
 		std::mutex computeShadersMutex;
 		CompilationSet compilationSet;
 		ankerl::unordered_dense::map<std::string, ShaderCacheResult> shaderMap{};

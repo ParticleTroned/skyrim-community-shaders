@@ -275,7 +275,7 @@ namespace SIE
 		bool residentOnly = false;
 		bool ResidentOnlyLightingSpecializations() const { return residentOnly; }
 		bool UsesRuntimeLightingSpecializationPolicy() const;
-		void RecordLightingSpecializationMiss(uint32_t, bool) {}
+		void RecordLightingSpecializationMiss(RE::BSShader::Type, uint32_t, bool) {}
 		unsigned compiles = 0, vertexLookups = 0;
 		uint64_t graphicsRevision = 0;
 		uint64_t GetGraphicsShaderRevision() const { return graphicsRevision; }
@@ -1010,11 +1010,18 @@ void TestCombinedLightingSpecializations()
 void TestResidentLightingSpecializations()
 {
 	using Cache = SIE::ShaderCache;
-	for (const auto flag : { Cache::kLightingDryWeather, Cache::kLightingSnowCoverInactive,
-			 Cache::kLightingNoMeshVariation, Cache::kLightingNoLocalLights,
-			 Cache::kLightingNoContactShadows, Cache::kLightingNoLegacySubsurface,
-			 Cache::kLightingSpecializationMask }) {
+	using Type = RE::BSShader::Type;
+	for (const auto [type, flag] : {
+			 std::pair{ Type::Lighting, Cache::kLightingDryWeather },
+			 std::pair{ Type::Lighting, Cache::kLightingSnowCoverInactive },
+			 std::pair{ Type::Lighting, Cache::kLightingNoMeshVariation },
+			 std::pair{ Type::Lighting, Cache::kLightingNoLocalLights },
+			 std::pair{ Type::Lighting, Cache::kLightingNoContactShadows },
+			 std::pair{ Type::Lighting, Cache::kLightingNoLegacySubsurface },
+			 std::pair{ Type::Lighting, Cache::kLightingSpecializationMask },
+			 std::pair{ Type::Effect, Cache::kEffectAmbientWorldIBL } }) {
 		Fixture f;
+		f.shader.shaderType.value = type;
 		constexpr uint32_t descriptor = 1u;
 		auto* standard = f.cache.Add(f.shader, descriptor);
 		f.cache.startupCompilationComplete = true;
@@ -1047,6 +1054,30 @@ void TestResidentLightingSpecializations()
 		Require(f.cache.GetPixelShader(f.shader, descriptor + 1, Cache::PixelShaderLookup::Draw) != nullptr);
 		Require(f.cache.compiles == 1 && f.cache.compilationSet.requests.empty());
 	}
+}
+
+void TestEffectSpecializationFallback()
+{
+	using Cache = SIE::ShaderCache;
+	Fixture f;
+	f.shader.shaderType.value = RE::BSShader::Type::Effect;
+	const auto category = Cache::GetCharacterCategoryFlag(RE::BSShader::Type::Effect);
+	constexpr auto specialization = Cache::kEffectAmbientWorldIBL;
+	constexpr uint32_t descriptor = 0x08010001u;
+	Require(!(specialization & category));
+	Require(Cache::GetPixelSpecializationMask(RE::BSShader::Type::Effect) == specialization);
+	Require(Cache::GetPixelSpecializationMask(RE::BSShader::Type::Water) == 0);
+	f.cache.residentOnly = true;
+	f.cache.startupCompilationComplete = true;
+	auto* general = f.cache.Add(f.shader, descriptor);
+	Require(f.cache.GetPixelShader(f.shader, descriptor | category | specialization, Cache::PixelShaderLookup::Draw) == general);
+	Require(!f.deferred.captureReady && !f.state.deferredPixelShaderMissing);
+	Require(f.cache.compilationSet.requests.contains(descriptor | category));
+	Require(!f.cache.compilationSet.requests.contains(descriptor | category | specialization));
+	general = f.cache.Add(f.shader, descriptor | category);
+	f.deferred.captureReady = true;
+	Require(f.cache.GetPixelShader(f.shader, descriptor | category | specialization, Cache::PixelShaderLookup::Draw) == general);
+	Require(f.deferred.captureReady && !f.state.deferredPixelShaderMissing);
 }
 
 void TestWaterRuntimeDescriptor()
@@ -1087,6 +1118,7 @@ int main()
 			TestLightingSpecialization();
 			TestCombinedLightingSpecializations();
 			TestResidentLightingSpecializations();
+			TestEffectSpecializationFallback();
 			TestPBRPrewarming();
 			TestSeamPrewarming();
 			TestNativeImageSpaceAdmission();

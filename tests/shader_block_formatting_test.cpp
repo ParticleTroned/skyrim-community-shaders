@@ -40,6 +40,7 @@ namespace RE
 		enum class Type
 		{
 			Lighting,
+			Effect,
 			Total
 		};
 		struct TypeValue
@@ -131,7 +132,7 @@ namespace SIE
 		std::atomic_bool menuLoaded{ false };
 		bool ResidentOnlyLightingSpecializations() const { return false; }
 		bool UsesRuntimeLightingSpecializationPolicy() const;
-		void RecordLightingSpecializationMiss(uint32_t, bool) {}
+		void RecordLightingSpecializationMiss(RE::BSShader::Type, uint32_t, bool) {}
 		int blockedKeyIndex = -1;
 		std::string blockedKey;
 		std::vector<std::uint32_t> blockedIDs;

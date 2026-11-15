@@ -2208,9 +2208,12 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 			{
 				auto flags = ~((uint32_t)SIE::ShaderCache::EffectShaderFlags::GrayscaleToColor |
 							   (uint32_t)SIE::ShaderCache::EffectShaderFlags::GrayscaleToAlpha |
-							   (uint32_t)SIE::ShaderCache::EffectShaderFlags::IgnoreTexAlpha);
+							   (uint32_t)SIE::ShaderCache::EffectShaderFlags::IgnoreTexAlpha |
+							   SIE::ShaderCache::kEffectAmbientWorldIBL);
 				a_vertexDescriptor &= flags;
 				a_pixelDescriptor &= flags;
+				if (effectAmbientIBLUploaded && (permutationData.ExtraShaderDescriptor & static_cast<uint32_t>(ExtraShaderDescriptors::InWorld)))
+					a_pixelDescriptor |= SIE::ShaderCache::kEffectAmbientWorldIBL;
 
 				if (deferred->deferredPass || a_forceDeferred)
 					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::EffectShaderFlags::Deferred;

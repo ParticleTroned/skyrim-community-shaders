@@ -1716,9 +1716,11 @@ namespace SIE
 			defines[lastIndex] = { nullptr, nullptr };
 		}
 
-		static void GetEffectShaderDefines(uint32_t descriptor, std::span<D3D_SHADER_MACRO> defines)
+		static void GetEffectShaderDefines(uint32_t descriptor, std::span<D3D_SHADER_MACRO> defines, ShaderClass shaderClass)
 		{
 			size_t lastIndex = 0;
+			if (shaderClass == ShaderClass::Pixel && (descriptor & ShaderCache::kEffectAmbientWorldIBL))
+				defines[lastIndex++] = { "AMBIENT_WORLD_EFFECT_LIGHTING", nullptr };
 
 			if (descriptor & static_cast<uint32_t>(ShaderCache::EffectShaderFlags::Vc)) {
 				defines[lastIndex++] = { "VC", nullptr };
@@ -2081,7 +2083,7 @@ namespace SIE
 				GetParticleShaderDefines(descriptor, defines);
 				break;
 			case RE::BSShader::Type::Effect:
-				GetEffectShaderDefines(descriptor, defines);
+				GetEffectShaderDefines(descriptor, defines, shaderClass);
 				break;
 			case RE::BSShader::Type::Utility:
 				GetUtilityShaderDefines(descriptor, defines);
@@ -3573,7 +3575,7 @@ namespace SIE
 			startupCompilationComplete.load(std::memory_order_acquire), menuLoaded.load(std::memory_order_acquire), backgroundCompilation.load(std::memory_order_relaxed));
 	}
 
-	void ShaderCache::RecordLightingSpecializationMiss(uint32_t descriptor, bool suppressed) noexcept
+	void ShaderCache::RecordLightingSpecializationMiss(RE::BSShader::Type type, uint32_t descriptor, bool suppressed) noexcept
 	try {
 		if (!spdlog::should_log(spdlog::level::info))
 			return;
@@ -3589,7 +3591,7 @@ namespace SIE
 				specializationMisses.clear();
 				specializationMissLimitReported = false;
 			}
-			const uint64_t key = descriptor | (uint64_t(suppressed) << 32);
+			const uint64_t key = descriptor | (uint64_t(type) << 33) | (uint64_t(suppressed) << 32);
 			if (specializationMisses.contains(key))
 				return;
 			if (specializationMisses.size() >= reportLimit) {
@@ -3602,12 +3604,12 @@ namespace SIE
 			ordinal = specializationMisses.size();
 		}
 		// Info logging flushes to disk; keep it off the draw thread and outside cache locks.
-		compilationPool.detach_task([revision, ordinal, descriptor, suppressed, limitReached, reportLimit] {
+		compilationPool.detach_task([revision, ordinal, type, descriptor, suppressed, limitReached, reportLimit] {
 			if (limitReached)
 				logger::info("[ShaderSpecialization] revision={} miss_reporting=capped limit={} further_misses=unreported", revision, reportLimit);
 			else
-				logger::info("[ShaderSpecialization] revision={} miss={} descriptor={:08X} flags={:08X} request={} source_compile=unknown",
-					revision, ordinal, descriptor, descriptor & kLightingSpecializationMask, suppressed ? "suppressed" : "allowed");
+				logger::info("[ShaderSpecialization] revision={} miss={} family={} descriptor={:08X} flags={:08X} request={} source_compile=unknown",
+					revision, ordinal, magic_enum::enum_name(type), descriptor, descriptor & GetPixelSpecializationMask(type), suppressed ? "suppressed" : "allowed");
 		});
 	} catch (...) {
 		OutputDebugStringA("[ShaderSpecialization] Unable to queue miss diagnostics; shader fallback remains available.\n");
@@ -3668,12 +3670,12 @@ namespace SIE
 		}
 		if (a_lookup == PixelShaderLookup::Cached)
 			return nullptr;
-		const bool specializedLighting = shader.shaderType.get() == RE::BSShader::Type::Lighting &&
-		                                 (descriptor & kLightingSpecializationMask) != 0;
+		const auto specializationMask = GetPixelSpecializationMask(shader.shaderType.get());
+		const bool specializedLighting = (descriptor & specializationMask) != 0;
 		const bool gameplaySpecialization = specializedLighting && UsesRuntimeLightingSpecializationPolicy();
 		const bool suppressPreparation = gameplaySpecialization && ResidentOnlyLightingSpecializations();
 		if (gameplaySpecialization && !IsSaveLoadSafeModeActive())
-			RecordLightingSpecializationMiss(descriptor, suppressPreparation);
+			RecordLightingSpecializationMiss(shader.shaderType.get(), descriptor, suppressPreparation);
 		if (!suppressPreparation && !IsSaveLoadSafeModeActive()) {
 			if (specializedLighting || (ShouldUseAsyncCompilation() && (a_lookup != PixelShaderLookup::Draw || !globals::features::reverseZ.IsActive()))) {
 				compilationSet.Add({ ShaderClass::Pixel, shader, descriptor, precompile });
@@ -3683,7 +3685,7 @@ namespace SIE
 		}
 
 		if (specializedLighting && a_lookup != PixelShaderLookup::Specialization)
-			return GetPixelShader(shader, descriptor & ~kLightingSpecializationMask, a_lookup);
+			return GetPixelShader(shader, descriptor & ~specializationMask, a_lookup);
 
 		auto* deferred = globals::deferred;
 		const auto categoryFlag = GetCharacterCategoryFlag(shader.shaderType.get());
@@ -5889,7 +5891,8 @@ namespace SIE
 	RE::BSGraphics::PixelShader* ShaderCache::MakeAndAddPixelShader(const RE::BSShader& shader,
 		uint32_t descriptor, std::optional<uint64_t> a_taskGeneration)
 	{
-		const bool report = shader.shaderType.get() == RE::BSShader::Type::Lighting && (descriptor & kLightingSpecializationMask) &&
+		const auto specialization = descriptor & GetPixelSpecializationMask(shader.shaderType.get());
+		const bool report = specialization &&
 		                    spdlog::should_log(spdlog::level::info) && ShaderCompilationSchedulingPolicy::UseRuntimeSpecializationPolicy(startupCompilationComplete.load(std::memory_order_acquire), menuLoaded.load(std::memory_order_acquire), backgroundCompilation.load(std::memory_order_relaxed));
 		const auto revision = report ? GetGraphicsShaderRevision() : 0;
 		const auto started = report ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
@@ -5897,8 +5900,8 @@ namespace SIE
 		bool published = false;
 		const SKSE::stl::scope_exit reportPreparation([&] {
 			if (report)
-				logger::info("[ShaderSpecialization] prepared revision={} descriptor={:08X} flags={:08X} source={} source_compiles={} published={} elapsed_ms={:.3f}",
-					revision, descriptor, descriptor & kLightingSpecializationMask, preparation.source, preparation.sourceCompiles, published,
+				logger::info("[ShaderSpecialization] prepared revision={} family={} descriptor={:08X} flags={:08X} source={} source_compiles={} published={} elapsed_ms={:.3f}",
+					revision, magic_enum::enum_name(shader.shaderType.get()), descriptor, specialization, preparation.source, preparation.sourceCompiles, published,
 					std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
 		});
 		if (!a_taskGeneration)

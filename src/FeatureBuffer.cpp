@@ -22,6 +22,7 @@
 #include "Features/WaterAppearance.h"
 #include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
+#include "State.h"
 #include "TruePBR.h"
 
 #include <array>
@@ -249,6 +250,11 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 {
 	auto grassLightingSettings = globals::features::grassLighting.settings;
 	const auto wetternessSettings = globals::features::wetterness.PrepareFrameData();
+	const auto iblSettings = globals::features::ibl.PrepareFrameData();
+	const auto adaptiveSettings = globals::features::adaptiveBrightness.GetCommonBufferData();
+	globals::state->effectAmbientIBLUploaded = adaptiveSettings.useAmbientEffectLighting &&
+	                                           globals::features::ibl.loaded && globals::features::dynamicCubemaps.loaded &&
+	                                           iblSettings.EnableIBL && iblSettings.DALCMode == 0 && iblSettings.DALCAmount == 0.0f;
 	grassLightingSettings.Glossiness = globals::features::wetterness.GetEffectiveGrassGlossiness(
 		grassLightingSettings.Glossiness,
 		wetternessSettings);
@@ -269,9 +275,9 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::lodBlending.GetCommonBufferData(),
 		globals::features::hairSpecular.settings,
 		globals::features::terrainVariation.settings,
-		globals::features::ibl.PrepareFrameData(),
+		iblSettings,
 		globals::features::extendedTranslucency.GetCommonBufferData(),
-		globals::features::adaptiveBrightness.GetCommonBufferData(),
+		adaptiveSettings,
 		globals::features::linearLighting.PrepareFrameData(),
 		globals::features::terrainBlending.settings,
 		globals::features::truePBR.settings,

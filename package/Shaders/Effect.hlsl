@@ -583,24 +583,36 @@ float3 ApplyParticlePointInfluence(float3 color)
 	return color;
 }
 
+bool IsWorldEffect()
+{
+#	if defined(AMBIENT_WORLD_EFFECT_LIGHTING)
+	return true;
+#	else
+	return (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld) != 0;
+#	endif
+}
+
 bool UseAmbientEffectLighting()
 {
-	return SharedData::adaptiveBalanceSettings.useAmbientEffectLighting &&
-	       (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld);
+#	if defined(AMBIENT_WORLD_EFFECT_LIGHTING)
+	return true;
+#	else
+	return SharedData::adaptiveBalanceSettings.useAmbientEffectLighting && IsWorldEffect();
+#	endif
 }
 
 float3 GetEffectAmbientLighting(float skylightingDiffuse)
 {
 	bool needsAmbient = true;
 #	if defined(IBL)
-	needsAmbient = !SharedData::iblSettings.EnableIBL || SharedData::iblSettings.DALCAmount != 0.0;
+	needsAmbient = !ImageBasedLighting::IsEnabled() || ImageBasedLighting::GetDALCAmount() != 0.0;
 #	endif
 	float3 ambientColor = 0.0;
 	[branch] if (needsAmbient)
 		ambientColor = ShadowSampling::GetRawAmbientLighting(ShadowSampling::LightingSampleNormal);
 
 #	if defined(IBL)
-	if (SharedData::iblSettings.EnableIBL) {
+	if (ImageBasedLighting::IsEnabled()) {
 #		if defined(SKYLIGHTING)
 		ambientColor = ImageBasedLighting::GetDiffuseIBLOccluded(ambientColor, ShadowSampling::ImageBasedLightingNormal, skylightingDiffuse);
 #		else
@@ -699,7 +711,7 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 	float4 lightDistanceSquared = (PLightPositionX[eyeIndex] - msPosition.xxxx) * (PLightPositionX[eyeIndex] - msPosition.xxxx) + (PLightPositionY[eyeIndex] - msPosition.yyyy) * (PLightPositionY[eyeIndex] - msPosition.yyyy) + (PLightPositionZ[eyeIndex] - msPosition.zzzz) * (PLightPositionZ[eyeIndex] - msPosition.zzzz);
 	float4 lightFadeMul = 1.0.xxxx - saturate(PLightingRadiusInverseSquared * lightDistanceSquared);
 	float3 color = DLightColor.xyz * Color::EffectLightingMult();
-	const bool inWorld = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld);
+	const bool inWorld = IsWorldEffect();
 
 	bool suppressExternalEmittance = SharedData::InInterior && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SuppressExternalEmittance);
 	[branch] if (UseAmbientEffectLighting())
@@ -761,7 +773,7 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 	color = Color::WeatherEffectLighting(color, (Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) != 0);
 
 #		if defined(LIGHT_LIMIT_FIX)
-	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld))
+	if (!IsWorldEffect())
 #		endif
 	{
 		const float effectLightingMult = Color::EffectLightingMult();
@@ -929,7 +941,7 @@ PS_OUTPUT main(PS_INPUT input)
 	if (LightingInfluence.x > 0.0) {
 		float3 viewPosition = mul(FrameBuffer::CameraView[eyeIndex], float4(input.WorldPosition.xyz, 1)).xyz;
 		float2 screenUV = FrameBuffer::ViewToUV(viewPosition, true, eyeIndex);
-		bool inWorld = Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld;
+		bool inWorld = IsWorldEffect();
 
 		uint clusterIndex = 0;
 		if (inWorld && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
@@ -1029,7 +1041,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		else
 	float3 fogColor = Color::Fog(input.FogParam.xyz);
 #			if defined(IBL)
-	if (SharedData::iblSettings.EnableIBL) {
+	if (ImageBasedLighting::IsEnabled()) {
 		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
 	}
 #			endif

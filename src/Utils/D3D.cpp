@@ -278,7 +278,8 @@ namespace Util
 		const char* ProgramType,
 		const char* Program,
 		HRESULT& a_result,
-		ShaderCompileTiming* a_timing)
+		ShaderCompileTiming* a_timing,
+		bool a_optionalSpecialization)
 	{
 		a_result = E_INVALIDARG;
 		const auto queryQpc = []() noexcept {
@@ -383,8 +384,17 @@ namespace Util
 				shaderCompileFailures.insert(failureKey);
 		};
 
+		const auto deferOptionalCompile = [&] {
+			if (!a_optionalSpecialization || globals::shaderCache->CanCompileOptionalShaderSources())
+				return false;
+			if (a_timing)
+				a_timing->deferred = true;
+			return true;
+		};
 		auto compile = [&]() -> winrt::com_ptr<ID3DBlob> {
 			a_result = E_FAIL;
+			if (deferOptionalCompile())
+				return nullptr;
 			winrt::com_ptr<ID3DBlob> shaderBlob;
 			winrt::com_ptr<ID3DBlob> shaderErrors;
 
@@ -394,6 +404,8 @@ namespace Util
 				return nullptr;
 			}
 			logger::debug("Compiling {} with {}", str, DefinesToString(macros));
+			if (deferOptionalCompile())
+				return nullptr;
 			const uint64_t compilationBegin = a_timing ? queryQpc() : 0;
 			if (a_timing)
 				++a_timing->sourceCompiles;
@@ -484,8 +496,11 @@ namespace Util
 			return SUCCEEDED(a_result);
 		};
 
-		const StandaloneShaderRequest request{ FilePath, macros, ProgramType, Program, flags, developerMode };
+		const bool cacheOnly = a_optionalSpecialization && !globals::shaderCache->CanCompileOptionalShaderSources();
+		const StandaloneShaderRequest request{ FilePath, macros, ProgramType, Program, flags, developerMode, cacheOnly };
 		if (!globals::shaderCache->CompileStandaloneShaderCached(request, compile, createShader)) {
+			if (a_timing && cacheOnly)
+				a_timing->deferred = true;
 			if (FAILED(hr))
 				logger::error("Failed to create shader object for {}:{} (HRESULT 0x{:08X})", str, Program, static_cast<uint32_t>(hr));
 			if (SUCCEEDED(a_result))

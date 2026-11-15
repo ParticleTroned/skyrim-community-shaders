@@ -211,6 +211,7 @@ namespace
 			};
 		}
 		snapshotJson["compilation"]["residentOnlyLightingSpecializations"] = globals::shaderCache && globals::shaderCache->ResidentOnlyLightingSpecializations();
+		snapshotJson["compilation"]["specializationPreparation"] = globals::shaderCache ? globals::shaderCache->GetSpecializationPreparationStatus() : json(nullptr);
 		snapshotJson["compilation"]["contentDedupeTasks"] = globals::shaderCache ? globals::shaderCache->GetContentDedupeTasks() : 0;
 		snapshotJson["compilation"]["activeReuseTasks"] = globals::shaderCache ? globals::shaderCache->GetActiveReuseTasks() : 0;
 		snapshotJson["compilation"]["previousReuseTasks"] = globals::shaderCache ? globals::shaderCache->GetPreviousReuseTasks() : 0;
@@ -412,6 +413,7 @@ namespace
 				if (a_args.contains("residentOnly"))
 					cache->SetResidentOnlyLightingSpecializations(a_args["residentOnly"].get<bool>());
 				return json{ { "residentOnly", cache->ResidentOnlyLightingSpecializations() },
+					{ "preparation", cache->GetSpecializationPreparationStatus() },
 					{ "changed", previous != cache->ResidentOnlyLightingSpecializations() },
 					{ "scope", "optional_lighting_after_startup" }, { "queuedWorkRetained", true } };
 			}
@@ -535,7 +537,7 @@ namespace CSX::Api::ShaderDevBenchBridge
 			return;
 		}
 		const char* descriptor = R"({
-			"description":"Reply and event strings replace invalid UTF-8 with U+FFFD; request validation remains strict. Versioned CSX shader, feature, compilation, and cache lifecycle API. specializationPolicy reads the optional-lighting policy (Lighting/Effect pixel variants and IBL/Linear Lighting deferred composites) or sets it with residentOnly (boolean) on the main thread. It is a session change; normal settings save can persist it. true suppresses new optional lighting preparation after startup; resident variants remain usable, already queued work finishes, and required general shaders keep their normal policy. false (default) permits asynchronous preparation. Info ShaderSpecialization entries distinguish unique resident misses from completed preparation and actual source compiler invocations. snapshot.compilation.residentOnlyLightingSpecializations reports this policy. Disk-cache rollback flags in each snapshot come from one publication; compilation counters remain live. snapshot.diskCache.installation reports the boot admission issue (not_checked, none, wrong_runtime, invalid_pack) without triggering cache admission, cachedRuntime when mismatched, requiredRuntime (SE includes AE), and repairRequired. Rejected installations require resolving the installation or access problem and restarting; accept_cache_rebuild is blocked with cache_installation_repair_required. snapshot.compilation.sourceCompiles counts actual compiler invocations; contentDedupeTasks counts tasks reusing identical preprocessed bytecode across different shader keys. activeReuseTasks counts matching content in installed packs or the active loose cache; previousReuseTasks counts matching content in the loose rollback cache. snapshot.compilation.recentFailures contains the last 32 source compile failures as {key,path,error,epoch,frame}; error text is capped at 2000 bytes. Lifecycle mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile releases the boot compile wait and wakes the dispatcher to apply the background thread budget. exportTrace writes completed task timings as Chrome Trace JSON after a build finishes. set_skip_unchanged permits only content-verified disk hits when true; false skips disk reads while preserving disk writes.",
+			"description":"Reply and event strings replace invalid UTF-8 with U+FFFD; request validation remains strict. Versioned CSX shader, feature, compilation, and cache lifecycle API. specializationPolicy reads the optional-lighting policy (Lighting/Effect pixel variants and IBL/Linear Lighting deferred composites) or sets it with residentOnly (boolean) on the main thread. It is a session change; normal settings save can persist it. true suppresses new optional lighting preparation after startup; resident variants remain usable, already queued work finishes, and required general shaders keep their normal policy. false (default) loads valid cached variants asynchronously during gameplay and records cache misses for preparation at the next blocking startup. Optional source compilation is never started during gameplay or background boot; already-running compiler calls finish. preparation and snapshot.compilation.specializationPreparation expose gameplayPolicy, sourceCompilationAllowed, discoveredRequests, discoveryPersistenceFailed and pendingComposites. Info ShaderSpecialization entries distinguish unique resident misses from completed preparation and actual source compiler invocations. snapshot.compilation.residentOnlyLightingSpecializations reports this policy. Disk-cache rollback flags in each snapshot come from one publication; compilation counters remain live. snapshot.diskCache.installation reports the boot admission issue (not_checked, none, wrong_runtime, invalid_pack) without triggering cache admission, cachedRuntime when mismatched, requiredRuntime (SE includes AE), and repairRequired. Rejected installations require resolving the installation or access problem and restarting; accept_cache_rebuild is blocked with cache_installation_repair_required. snapshot.compilation.sourceCompiles counts actual compiler invocations; contentDedupeTasks counts tasks reusing identical preprocessed bytecode across different shader keys. activeReuseTasks counts matching content in installed packs or the active loose cache; previousReuseTasks counts matching content in the loose rollback cache. snapshot.compilation.recentFailures contains the last 32 source compile failures as {key,path,error,epoch,frame}; error text is capped at 2000 bytes. Lifecycle mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile releases the boot compile wait and wakes the dispatcher to apply the background thread budget. exportTrace writes completed task timings as Chrome Trace JSON after a build finishes. set_skip_unchanged permits only content-verified disk hits when true; false skips disk reads while preserving disk writes.",
 			"inputSchema":{
 				"type":"object",
 				"required":["contractMajor","clientId","commandId","action"],
@@ -545,7 +547,7 @@ namespace CSX::Api::ShaderDevBenchBridge
 					"commandId":{"type":"string","minLength":1,"maxLength":128},
 					"expectedBuildId":{"type":"string"},
 					"action":{"type":"string","enum":["registry","snapshot","features","preflight","execute","backgroundCompile","exportTrace","specializationPolicy"],"description":"snapshot includes compilation.contentDedupeTasks for shared bytecode and activeReuseTasks/previousReuseTasks for verified disk content reuse. backgroundCompile enables demand-only background compilation, drops unstarted startup precompiles that no draw or explicit compile requested, and wakes the dispatcher; result.changed reports whether the mode changed."},
-					"residentOnly":{"type":"boolean","description":"specializationPolicy only: omit to read; true suppresses new optional Lighting/Effect pixel and IBL/Linear Lighting composite requests after startup; false permits asynchronous preparation. No cache invalidation or cancellation."},
+					"residentOnly":{"type":"boolean","description":"specializationPolicy only: omit to read; true suppresses new optional Lighting/Effect pixel and IBL/Linear Lighting composite requests after startup; false permits asynchronous cache-only loads and records missing variants for the next blocking startup. Neither value allows new optional source compilation during gameplay. No cache invalidation or cancellation."},
 					"path":{"type":"string","description":"exportTrace only: UTF-8 destination relative to the Community Shaders log directory; defaults to compile-trace.json. The returned path is UTF-8. Null characters, malformed UTF-8 and paths outside that directory are rejected."},
 					"mutation":{
 						"type":"object",
@@ -564,6 +566,18 @@ namespace CSX::Api::ShaderDevBenchBridge
 				}
 			},
 			"outputSchema":{
+				"$defs":{
+					"specializationPreparation":{
+						"type":["object","null"],
+						"properties":{
+							"sourceCompilationAllowed":{"type":"boolean"},
+							"gameplayPolicy":{"enum":["resident_only","cache_only"]},
+							"discoveredRequests":{"type":"integer","minimum":0,"maximum":8192},
+							"discoveryPersistenceFailed":{"type":"boolean"},
+							"pendingComposites":{"type":"integer","minimum":0}
+						}
+					}
+				},
 				"type":"object",
 				"description":"Invalid UTF-8 in output strings is replaced with U+FFFD; valid UTF-8 output is unchanged. Disk-cache rollback flags in each snapshot are coherent; installation remains not_checked until boot admission finishes, then remains fixed; other counters may advance independently.",
 				"properties":{
@@ -571,6 +585,7 @@ namespace CSX::Api::ShaderDevBenchBridge
 						"type":"object",
 						"properties":{
 							"residentOnly":{"type":"boolean"},
+							"preparation":{"$ref":"#/$defs/specializationPreparation"},
 							"changed":{"type":"boolean"},
 							"scope":{"type":"string","const":"optional_lighting_after_startup"},
 							"queuedWorkRetained":{"type":"boolean","const":true},
@@ -579,7 +594,10 @@ namespace CSX::Api::ShaderDevBenchBridge
 								"properties":{
 									"compilation":{
 										"type":"object",
-										"properties":{"residentOnlyLightingSpecializations":{"type":"boolean"}}
+										"properties":{
+											"residentOnlyLightingSpecializations":{"type":"boolean"},
+											"specializationPreparation":{"$ref":"#/$defs/specializationPreparation"}
+										}
 									},
 									"diskCache":{
 										"type":"object",

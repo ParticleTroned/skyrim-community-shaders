@@ -50,6 +50,8 @@ public:
 
 	ID3D11ComputeShader* GetComputeMainComposite();
 	ID3D11ComputeShader* GetComputeMainCompositeInterior();
+	/** Queues previously discovered composites before the blocking startup wait. */
+	void PrewarmDiscoveredComposites();
 
 	ID3D11BlendState* deferredBlendStates[7][2][13][2];
 	ID3D11BlendState* forwardBlendStates[7][2][13][2];

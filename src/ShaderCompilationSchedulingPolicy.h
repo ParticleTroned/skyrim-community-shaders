@@ -70,6 +70,12 @@ namespace ShaderCompilationSchedulingPolicy
 		return startupComplete || (dataLoaded && backgroundMode);
 	}
 
+	/** A skipped startup never authorizes optional source compilation during background boot. */
+	[[nodiscard]] constexpr bool CanCompileOptionalSources(bool startupComplete, bool dataLoaded, bool backgroundMode) noexcept
+	{
+		return !startupComplete && !dataLoaded && !backgroundMode;
+	}
+
 	[[nodiscard]] constexpr WorkerThreadPriorityMode SelectWorkerThreadPriorityMode(
 		CompilationPhase a_phase) noexcept
 	{

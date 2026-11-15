@@ -25,6 +25,7 @@
 #include "Utils/ContentHash.h"
 #include "Utils/ShaderAllocation.h"
 #include "Utils/ShaderContentReuse.h"
+#include "Utils/ShaderSpecializationRequests.h"
 #include "Utils/ShaderTrackingKeyCache.h"
 #include "Utils/WinApi.h"
 
@@ -235,7 +236,8 @@ namespace SIE
 		{
 			Pending,
 			Failed,
-			Completed
+			Completed,
+			Deferred
 		};
 		ShaderCompilationTask(ShaderClass shaderClass, const RE::BSShader& shader,
 			uint32_t descriptor, bool a_precompile = false);
@@ -655,7 +657,8 @@ namespace SIE
 		void ResolvePendingFailure(
 			const std::string& key,
 			RE::BSShader::Type a_type,
-			std::optional<uint64_t> a_taskGeneration = std::nullopt);
+			std::optional<uint64_t> a_taskGeneration = std::nullopt,
+			bool a_deferred = false);
 
 		ID3DBlob* GetCompletedShader(const std::string& a_key);
 		ID3DBlob* GetCompletedShader(const SIE::ShaderCompilationTask& a_task);
@@ -726,6 +729,21 @@ namespace SIE
 		bool ResidentOnlyLightingSpecializations() const { return residentOnlyLightingSpecializations.load(std::memory_order_relaxed); }
 		/** Includes background boot after DataLoaded, before startup work finishes. */
 		bool UsesRuntimeLightingSpecializationPolicy() const;
+		/** Optional source compilation is confined to blocking startup, including retry attempts. */
+		bool CanCompileOptionalShaderSources() const;
+		/** Records a current startup descriptor as an admissible base for discovery replay. */
+		void RegisterSpecializationBase(RE::BSShader::Type type, uint32_t descriptor);
+		/** Queues previously discovered variants only when their base is supported by this startup. */
+		void PrewarmDiscoveredPixelShaders(const RE::BSShader& shader);
+		/** Worker-only recording; persistence uses the cache writer and its save/load I/O gate. */
+		void RememberShaderSpecialization(Util::ShaderSpecializationRequest request) noexcept;
+		/** Returns the bounded history loaded before gameplay, excluding discoveries from this session. */
+		std::vector<Util::ShaderSpecializationRequest> GetStartupShaderSpecializations();
+		/** Returns discovery and preparation state without filesystem access. */
+		nlohmann::json GetSpecializationPreparationStatus() const;
+		/** Includes optional composite workers in the startup wait without changing graphics task counters. */
+		void BeginCompositePreparation() { pendingCompositePreparations.fetch_add(1, std::memory_order_acq_rel); }
+		void EndCompositePreparation();
 		RE::BSGraphics::ComputeShader* GetComputeShader(const RE::BSShader& shader,
 			uint32_t descriptor);
 
@@ -1260,6 +1278,9 @@ namespace SIE
 		std::mutex vertexShadersMutex;
 		std::mutex pixelShadersMutex;
 		std::atomic_bool residentOnlyLightingSpecializations{ false };
+		std::atomic_uint32_t pendingCompositePreparations{ 0 };
+		std::mutex specializationBasesMutex;
+		std::array<std::unordered_set<uint32_t>, 2> specializationBases;
 		std::mutex specializationMissMutex;
 		ankerl::unordered_dense::set<uint64_t> specializationMisses;
 		uint64_t specializationMissRevision = UINT64_MAX;
@@ -1281,6 +1302,7 @@ namespace SIE
 		std::deque<std::string> deferredDiskWriteOrder;
 		static constexpr std::size_t kMaximumDeferredDiskWrites = 8192;
 		static constexpr std::size_t kDeferredDiskWriteBatchSize = 64;
+		static constexpr auto kSpecializationFlushDelay = std::chrono::milliseconds(250);
 		std::mutex deferredDiskWritesMutex;
 		std::condition_variable_any deferredDiskWritesCV;
 		std::jthread deferredDiskWriterJthread;
@@ -1289,6 +1311,9 @@ namespace SIE
 		std::atomic_bool saveLoadDiskPersistenceBlocked{ false };
 		std::size_t deferredDiskWritesInFlight = 0;  // guarded by deferredDiskWritesMutex
 		bool deferredManifestFlushPending = false;   // guarded by deferredDiskWritesMutex
+		bool deferredSpecializationFlushPending = false;
+		void QueueSpecializationHistoryFlush();
+		void FlushSpecializationHistory();
 
 		// efsw file watcher
 		efsw::FileWatcher* fileWatcher = nullptr;

@@ -993,6 +993,24 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite(bool interior)
 	return general.get();
 }
 
+void Deferred::PrewarmDiscoveredComposites()
+{
+	auto& cache = *globals::shaderCache;
+	if (!cache.CanCompileOptionalShaderSources() || !cache.IsDiskCacheActive())
+		return;
+	const auto requests = cache.GetStartupShaderSpecializations();
+	for (const auto& request : requests) {
+		if (request.family != Util::SpecializationFamily::Composite)
+			continue;
+		const auto specialization = static_cast<uint8_t>(request.descriptor & kCompositeSpecializationCount);
+		if ((specialization & kCompositeLuminanceRatio) && (!globals::features::ibl.loaded || !globals::features::dynamicCubemaps.loaded))
+			continue;
+		if ((specialization & kCompositeLinearLighting) && !globals::features::linearLighting.loaded)
+			continue;
+		RequestSpecializedComposite((request.descriptor & 4u) != 0, specialization);
+	}
+}
+
 void Deferred::RequestSpecializedComposite(bool interior, uint8_t specialization) noexcept
 try {
 	if (!specialization || specialization > kCompositeSpecializationCount)
@@ -1030,34 +1048,51 @@ try {
 			macros.push_back({ "IBL_LUMINANCE_RATIO", nullptr });
 		if (linearLighting)
 			macros.push_back({ "COMPOSITE_LINEAR_LIGHTING", nullptr });
-		cache.compilationPool.detach_task([ticket, device, canCompile, macros = std::move(macros), variantName, interior, revision] {
-			winrt::com_ptr<ID3D11ComputeShader> shader;
-			Util::ShaderCompileTiming timing;
-			HRESULT result = canCompile ? E_ABORT : E_NOTIMPL;
-			const auto started = std::chrono::steady_clock::now();
-			try {
-				if (!ticket->IsCancelled() && canCompile) {
-					shader.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShaderOnDevice(device.get(),
-						L"Data\\Shaders\\DeferredCompositeCS.hlsl", macros, "cs_5_0", "main", result, &timing)));
-					if (shader)
-						Util::SetResourceName(shader.get(), "Deferred::MainComposite%s::%s", interior ? "Interior" : "", variantName);
+		const bool startupPreparation = cache.CanCompileOptionalShaderSources();
+		if (startupPreparation)
+			cache.BeginCompositePreparation();
+		try {
+			cache.compilationPool.detach_task([ticket, device, canCompile, macros = std::move(macros), variantName, interior, revision, specialization, startupPreparation] {
+				auto& cache = *globals::shaderCache;
+				const SKSE::stl::scope_exit completePreparation([&] {
+					if (startupPreparation)
+						cache.EndCompositePreparation();
+				});
+				winrt::com_ptr<ID3D11ComputeShader> shader;
+				Util::ShaderCompileTiming timing;
+				HRESULT result = canCompile ? E_ABORT : E_NOTIMPL;
+				const auto started = std::chrono::steady_clock::now();
+				try {
+					if (!ticket->IsCancelled() && canCompile) {
+						shader.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShaderOnDevice(device.get(),
+							L"Data\\Shaders\\DeferredCompositeCS.hlsl", macros, "cs_5_0", "main", result, &timing, true)));
+						if (shader)
+							Util::SetResourceName(shader.get(), "Deferred::MainComposite%s::%s", interior ? "Interior" : "", variantName);
+					}
+				} catch (...) {
+					shader = nullptr;
+					result = E_FAIL;
 				}
-			} catch (...) {
-				shader = nullptr;
-				result = E_FAIL;
-			}
-			try {
-				logger::info("[ShaderSpecialization] prepared composite_revision={} variant={} interior={} source={} source_compiles={} ready={} cancelled={} result=0x{:08X} elapsed_ms={:.3f}",
-					revision, variantName, interior, timing.sourceCompiles ? "source" : shader ? "disk_cache" :
-																								 "none",
-					timing.sourceCompiles,
-					bool(shader) && !ticket->IsCancelled(), ticket->IsCancelled(), static_cast<uint32_t>(result),
-					std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
-			} catch (...) {
-				OutputDebugStringA("[ShaderSpecialization] Composite preparation result logging failed.\n");
-			}
-			ticket->Complete(std::move(shader));
-		});
+				if (timing.deferred && !ticket->IsCancelled())
+					cache.RememberShaderSpecialization({ Util::SpecializationFamily::Composite, uint32_t(specialization) | (interior ? 4u : 0u) });
+				try {
+					logger::info("[ShaderSpecialization] prepared composite_revision={} variant={} interior={} source={} source_compiles={} ready={} cancelled={} result=0x{:08X} elapsed_ms={:.3f}",
+						revision, variantName, interior, timing.deferred ? "deferred_until_startup" : timing.sourceCompiles ? "source" :
+																								  shader                    ? "disk_cache" :
+																															  "none",
+						timing.sourceCompiles,
+						bool(shader) && !ticket->IsCancelled(), ticket->IsCancelled(), static_cast<uint32_t>(result),
+						std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
+				} catch (...) {
+					OutputDebugStringA("[ShaderSpecialization] Composite preparation result logging failed.\n");
+				}
+				ticket->Complete(std::move(shader));
+			});
+		} catch (...) {
+			if (startupPreparation)
+				cache.EndCompositePreparation();
+			throw;
+		}
 	} catch (...) {
 		ticket->Complete(nullptr);
 		throw;

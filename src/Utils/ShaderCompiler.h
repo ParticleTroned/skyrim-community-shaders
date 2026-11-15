@@ -19,6 +19,7 @@ namespace Util
 		const char* entryPoint = "main";
 		uint32_t flags = 0;
 		bool developerMode = false;
+		bool cacheOnly = false;
 	};
 
 	/** @brief Optional QPC accumulator separating compiler and device creation cost. */
@@ -27,6 +28,7 @@ namespace Util
 		uint64_t bytecodeCompilationQpcTicks = 0;
 		uint64_t d3dObjectCreationQpcTicks = 0;
 		uint64_t sourceCompiles = 0;
+		bool deferred = false;
 	};
 
 	/** Compile a packaged shader and create its object on the renderer's D3D11 device. */
@@ -53,7 +55,8 @@ namespace Util
 		const char* ProgramType,
 		const char* Program,
 		HRESULT& a_result,
-		ShaderCompileTiming* a_timing = nullptr);
+		ShaderCompileTiming* a_timing = nullptr,
+		bool a_optionalSpecialization = false);
 
 	/** Permit standalone retries without retaining failures from pre-reset attempts. */
 	void ClearShaderCompileFailures();

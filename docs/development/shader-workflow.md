@@ -33,12 +33,35 @@ the [Prebuilt Shader Cache Runbook](./prebuilt-shader-cache.md).
 ## Optional lighting specialization diagnostics
 
 Advanced > Shaders > Threading has **Resident-only Lighting
-Specializations**. Off (default) allows missing optional lighting variants
-to prepare asynchronously. On uses resident variants and retains general
+Specializations**. Off (default) loads valid cached optional variants
+asynchronously during gameplay. A missing, stale, or rejected cache entry
+retains general shading and records the variant for a later startup; it
+never falls through to optional source compilation. On uses resident variants and retains general
 shading on an optional miss. It suppresses new requests after startup,
 including background boot once game data is loaded. It neither invalidates
 shaders nor cancels queued work. Required general shaders retain their
 normal compilation policy. Save settings to persist the choice.
+
+Discovered variants are prepared on the next blocking startup. Pixel
+requests must match a base descriptor admitted by that startup's shader
+enumeration; stale or unsupported descriptors cannot introduce arbitrary
+compiler inputs. Composite requests select only the six supported
+interior/exterior combinations. Both use current features, macros and
+content-verified cache admission. Startup waits for composite preparation
+as well as graphics tasks. Background startup skips this optional source
+preparation, retaining discoveries for a later blocking startup. Switching
+to background mode prevents further optional compiler invocations; a
+compiler invocation already running must finish.
+
+Discovery history is bounded to 8192 unique requests and persisted
+atomically by the existing cache writer, outside save/load I/O blocking, in
+`Data/SKSE/Plugins/CommunityShaders/ShaderSpecializations-<runtime>.json`.
+SE and AE share the `SE` history; VR uses `VR`. This stores descriptors,
+not shader bytecode, paths or macros. Malformed or incompatible history is
+ignored with a warning. Shutdown flushes remaining discoveries after workers stop.
+Failed persistence retains general shading and is
+reported through DevBench. Disabling disk caching or cache reads prevents
+gameplay cache reuse but does not authorize optional source compilation.
 
 This covers dry Wetterness, inactive Snow Cover, absent mesh variation,
 absent local lights, disabled contact shadows and unused legacy subsurface
@@ -64,6 +87,9 @@ compiler invocations, including retries), publication success and elapsed
 preparation time. Disk or shared-bytecode reuse can report zero source
 compiles while still creating a D3D shader. Elapsed time includes cache
 work and object creation; it is not a frame-time or stutter measurement.
+`source=deferred_until_startup` records an optional cache miss; it is not a
+compiler failure. The graphics task finishes without a shader while its
+general fallback remains available.
 Composite entries use `composite_revision`, variant and interior/exterior
 identity instead of a pixel descriptor. Their miss reports are bounded to
 the six variants and two request policies per composite-cache revision.
@@ -71,7 +97,11 @@ the six variants and two request policies per composite-cache revision.
 DevBench `communityshaders.shader_api`, action `specializationPolicy`, reads
 the setting; supplying boolean `residentOnly` changes it for the session.
 The normal settings save can persist that choice. The snapshot reports
-`compilation.residentOnlyLightingSpecializations`. Use the same compiled
+`compilation.residentOnlyLightingSpecializations` and
+`compilation.specializationPreparation`. The latter reports the gameplay
+policy, current source-compilation permission, discovery count,
+persistence failures and outstanding composite workers. The policy action
+returns the same data as `preparation`. Use the same compiled
 revision and cache conditions for comparisons; a cache warmed in the first
 condition cannot measure cold first-use behavior in the second condition.
 

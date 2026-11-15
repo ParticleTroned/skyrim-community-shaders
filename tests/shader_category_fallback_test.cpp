@@ -1,5 +1,6 @@
 #include "ShaderCompilationSchedulingPolicy.h"
 #include "Utils/ShaderDescriptor.h"
+#include "Utils/ShaderSpecializationRequests.h"
 #include "reverse_z_test_stub.h"
 
 #include <algorithm>
@@ -18,6 +19,7 @@
 #include <string>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct ID3D11PixelShader
@@ -100,6 +102,9 @@ namespace logger
 	}
 	template <class... T>
 	void debug(const char*, T&&...)
+	{}
+	template <class... T>
+	void info(const char*, T&&...)
 	{}
 	template <class... T>
 	void warn(const char*, T&&...)
@@ -277,6 +282,20 @@ namespace SIE
 		bool ResidentOnlyLightingSpecializations() const { return residentOnly; }
 		bool UsesRuntimeLightingSpecializationPolicy() const;
 		void RecordLightingSpecializationMiss(RE::BSShader::Type, uint32_t, bool) {}
+		std::mutex specializationBasesMutex;
+		std::array<std::unordered_set<uint32_t>, 2> specializationBases;
+		std::vector<Util::ShaderSpecializationRequest> discoveries;
+		bool diskCacheActive = true;
+		bool IsDiskCacheActive() const { return diskCacheActive; }
+		bool CanCompileOptionalShaderSources() const { return ShaderCompilationSchedulingPolicy::CanCompileOptionalSources(startupCompilationComplete, menuLoaded, backgroundCompilation); }
+		void RegisterSpecializationBase(RE::BSShader::Type, uint32_t);
+		void PrewarmDiscoveredPixelShaders(const RE::BSShader&);
+		int startupHistoryReads = 0;
+		auto GetStartupShaderSpecializations()
+		{
+			++startupHistoryReads;
+			return discoveries;
+		}
 		unsigned compiles = 0, vertexLookups = 0;
 		uint64_t graphicsRevision = 0;
 		uint64_t GetGraphicsShaderRevision() const { return graphicsRevision; }
@@ -332,6 +351,8 @@ namespace SIE
 #include "pixel_prewarm.h"
 #include "runtime_specialization_policy.h"
 #include "shader_support.h"
+#include "specialization_bases.h"
+#include "specialization_replay.h"
 }
 namespace Permutations
 {
@@ -1107,6 +1128,38 @@ void TestResidentLightingSpecializations()
 	}
 }
 
+void TestDiscoveredSpecializationReplay()
+{
+	using Cache = SIE::ShaderCache;
+	for (const auto type : { RE::BSShader::Type::Lighting, RE::BSShader::Type::Effect }) {
+		Fixture f;
+		f.shader.shaderType.value = type;
+		const auto family = type == RE::BSShader::Type::Lighting ? Util::SpecializationFamily::Lighting : Util::SpecializationFamily::Effect;
+		const auto flag = type == RE::BSShader::Type::Lighting ? Cache::kLightingNoMeshVariation : Cache::kEffectAmbientWorldIBL;
+		const uint32_t base = 1;
+		f.cache.discoveries = { { family, base | flag }, { family, 2u | flag }, { family, base }, { Util::SpecializationFamily::Composite, 3 } };
+		f.cache.RegisterSpecializationBase(type, base);
+		f.cache.PrewarmDiscoveredPixelShaders(f.shader);
+		Require(f.cache.compilationSet.requests == std::set<uint32_t>{ base | flag });
+		Require(f.cache.compilationSet.precompiles.at(base | flag));
+		Require(f.cache.startupHistoryReads == 1);
+		f.cache.compilationSet.requests.clear();
+		f.cache.RegisterSpecializationBase(type, base);
+		f.cache.backgroundCompilation = true;
+		f.cache.PrewarmDiscoveredPixelShaders(f.shader);
+		Require(f.cache.compilationSet.requests.empty());
+		f.cache.backgroundCompilation = false;
+		f.cache.menuLoaded = true;
+		f.cache.PrewarmDiscoveredPixelShaders(f.shader);
+		Require(f.cache.compilationSet.requests.empty());
+		f.cache.menuLoaded = false;
+		f.cache.diskCacheActive = false;
+		f.cache.PrewarmDiscoveredPixelShaders(f.shader);
+		Require(f.cache.compilationSet.requests.empty());
+		Require(f.cache.startupHistoryReads == 1);
+	}
+}
+
 void TestEffectSpecializationFallback()
 {
 	using Cache = SIE::ShaderCache;
@@ -1171,6 +1224,7 @@ int main()
 			TestCombinedLightingSpecializations();
 			TestResidentLightingSpecializations();
 			TestEffectSpecializationFallback();
+			TestDiscoveredSpecializationReplay();
 			TestPBRPrewarming();
 			TestSeamPrewarming();
 			TestNativeImageSpaceAdmission();

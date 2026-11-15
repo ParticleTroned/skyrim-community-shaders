@@ -969,6 +969,7 @@ void State::Setup()
 
 	// Load scene-specific settings (Interior Only, etc.)
 	SceneSettingsManager::GetSingleton()->LoadAll();
+	globals::deferred->PrewarmDiscoveredComposites();
 }
 
 void State::SetupRenderTargetResources()

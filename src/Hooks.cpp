@@ -773,6 +773,7 @@ struct BSShader_LoadShaders
 				shaderCache->PrewarmDeferredPixelShaders(*shader, pixelShaderDescriptor, categories, true);
 			}
 		}
+		shaderCache->PrewarmDiscoveredPixelShaders(*shader);
 		BSShaderHooks::hk_LoadShaders((REX::BSShader*)shader, stream);
 	};
 	static inline REL::Relocation<decltype(thunk)> func;

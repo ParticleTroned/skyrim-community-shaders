@@ -2950,9 +2950,24 @@ namespace SIE
 			}
 
 			if (diskCacheProbeError) {
-				logger::debug("Failed to probe shader cache {}: {}; compiling from source",
+				logger::debug("Failed to probe shader cache {}: {}",
 					Util::WStringToString(diskPath), diskCacheProbeError.message());
 			}
+
+			const bool optionalSpecialization = shaderClass == ShaderClass::Pixel && (descriptor & ShaderCache::GetPixelSpecializationMask(type));
+			bool deferred = false;
+			const auto deferOptionalCompile = [&] {
+				if (!optionalSpecialization || cache.CanCompileOptionalShaderSources())
+					return false;
+				deferred = true;
+				if (preparation)
+					preparation->source = "deferred_until_startup";
+				cache.RememberShaderSpecialization({ type == RE::BSShader::Type::Lighting ? Util::SpecializationFamily::Lighting : Util::SpecializationFamily::Effect, descriptor });
+				cache.ResolvePendingFailure(key, type, a_taskGeneration, true);
+				return true;
+			};
+			if (deferOptionalCompile())
+				return nullptr;
 
 			const std::wstring path = shaderSourcePath;
 			auto pathString = Util::WStringToString(path);
@@ -2998,6 +3013,8 @@ namespace SIE
 			const auto sourceDigest = Util::ShaderSourceProvenance::CompileWithStableDigest(
 				[&](bool a_refresh) { return GetShaderContentDigest(path, ShaderSourceRoot(), a_refresh); },
 				[&] {
+					if (deferOptionalCompile())
+						return false;
 					shared.emplace(AcquireSharedCompile(path, pathString, defines.data(), GetShaderProfile(shaderClass),
 						flags, compileState.developerMode, preprocessHandler));
 					if (shared->key) {
@@ -3019,6 +3036,8 @@ namespace SIE
 							cache.IncContentReuseTasks(reuseSource == ContentReuseSource::PreviousCache, type, a_taskGeneration);
 						compileResult = S_OK;
 					} else {
+						if (deferOptionalCompile())
+							return false;
 						if (preparation) {
 							preparation->source = "source";
 							++preparation->sourceCompiles;
@@ -3039,6 +3058,11 @@ namespace SIE
 						logger::warn("Cannot verify shader source content for {}; retaining compiled bytecode in memory", pathString);
 					}
 				});
+			if (deferred) {
+				if (shaderBlob)
+					shaderBlob->Release();
+				return nullptr;
+			}
 			const auto& capturedIncludes = shared->preprocessed ? preprocessHandler.includes : includeHandler.includes;
 			// Failed compiles still register includes; empty captures retain prior dependencies.
 			if (dependencyTracker && !capturedIncludes.empty()) {
@@ -3646,6 +3670,9 @@ namespace SIE
 			return nullptr;
 		}
 
+		if (precompile)
+			RegisterSpecializationBase(shader.shaderType.get(), descriptor);
+
 		if (developerMode || activeShaderCaptureFramesRemaining.load(std::memory_order_relaxed) > 0)
 			TrackActiveShader(ShaderClass::Pixel, shader, descriptor);
 
@@ -3835,6 +3862,8 @@ namespace SIE
 			deferredDiskWritesCV.notify_all();
 			deferredDiskWriterJthread.join();
 		}
+		// The worker queue can be purged during teardown; retain discoveries after producers stop.
+		FlushSpecializationHistory();
 		{
 			std::lock_guard lock{ deferredDiskWritesMutex };
 			if (!deferredDiskWrites.empty()) {
@@ -4132,7 +4161,7 @@ namespace SIE
 		{
 			static bool IsPending(const ShaderCacheResult& a_entry) { return a_entry.status == ShaderCompilationTask::Status::Pending; }
 			static bool IsCompleted(const ShaderCacheResult& a_entry) { return a_entry.status == ShaderCompilationTask::Status::Completed; }
-			static bool IsFailed(const ShaderCacheResult& a_entry) { return a_entry.status == ShaderCompilationTask::Status::Failed; }
+			static bool IsFailed(const ShaderCacheResult& a_entry) { return a_entry.status == ShaderCompilationTask::Status::Failed || a_entry.status == ShaderCompilationTask::Status::Deferred; }
 			static bool HasPayload(const ShaderCacheResult& a_entry) { return a_entry.blob != nullptr; }
 			static uint64_t GetGeneration(const ShaderCacheResult& a_entry) { return a_entry.generation; }
 		};
@@ -4303,7 +4332,8 @@ namespace SIE
 	void ShaderCache::ResolvePendingFailure(
 		const std::string& key,
 		RE::BSShader::Type a_type,
-		std::optional<uint64_t> a_taskGeneration)
+		std::optional<uint64_t> a_taskGeneration,
+		bool a_deferred)
 	{
 		auto outcome = Util::GenerationClaim::PublishOutcome::RejectedStale;
 		{
@@ -4316,10 +4346,10 @@ namespace SIE
 					a_taskGeneration,
 					compilationSet.LiveGeneration(a_type),
 					false,
-					[](uint64_t a_generation, bool) {
+					[a_deferred](uint64_t a_generation, bool) {
 						return ShaderCacheResult{
 							nullptr,
-							ShaderCompilationTask::Status::Failed,
+							a_deferred ? ShaderCompilationTask::Status::Deferred : ShaderCompilationTask::Status::Failed,
 							system_clock::now(),
 							false,
 							a_generation
@@ -4407,7 +4437,8 @@ namespace SIE
 
 	bool ShaderCache::IsCompiling()
 	{
-		return compilationSet.totalTasks && compilationSet.completedTasks + compilationSet.failedTasks < compilationSet.totalTasks;
+		return pendingCompositePreparations.load(std::memory_order_acquire) != 0 ||
+		       (compilationSet.totalTasks && compilationSet.completedTasks + compilationSet.failedTasks < compilationSet.totalTasks);
 	}
 
 	void ShaderCache::TryCompleteStartupCompilationPhase()
@@ -4641,7 +4672,7 @@ namespace SIE
 							if (recorded && *recorded == Util::ContentHash::CombineHashes(*cachedDigest, key->looseDigest).ToHex()) {
 								cached = ReadVerifiedCachedShaderBlob(key->diskPath);
 								if (!cached)
-									logger::debug("Cannot read cached standalone shader {}; compiling from source", request.source.string());
+									logger::debug("Cannot read cached standalone shader {}", request.source.string());
 							}
 						}
 					}
@@ -4653,19 +4684,22 @@ namespace SIE
 		} catch (const std::exception& error) {
 			cached = nullptr;
 			key.reset();
-			logger::warn("Standalone shader cache lookup failed for {}; compiling from source: {}", request.source.string(), error.what());
+			logger::warn("Standalone shader cache lookup failed for {}: {}", request.source.string(), error.what());
 		} catch (...) {
 			cached = nullptr;
 			key.reset();
-			logger::warn("Standalone shader cache lookup failed for {}; compiling from source", request.source.string());
+			logger::warn("Standalone shader cache lookup failed for {}", request.source.string());
 		}
 		if (cached) {
 			if (createShader(cached.get())) {
 				logger::debug("Loaded standalone shader from cache: {}", request.source.string());
 				return true;
 			}
-			logger::warn("Cached standalone shader was rejected by D3D; recompiling {}", request.source.string());
+			logger::warn("Cached standalone shader was rejected by D3D: {}", request.source.string());
 		}
+
+		if (request.cacheOnly)
+			return false;
 
 		winrt::com_ptr<ID3DBlob> blob;
 		const auto sourceDigest = Util::ShaderSourceProvenance::CompileWithStableDigest(
@@ -5922,6 +5956,8 @@ namespace SIE
 			if (FAILED(result)) {
 				logger::error("Failed to create pixel shader {}::{:X}",
 					magic_enum::enum_name(shader.shaderType.get()), descriptor);
+				if (specialization)
+					RememberShaderSpecialization({ shader.shaderType.get() == RE::BSShader::Type::Lighting ? Util::SpecializationFamily::Lighting : Util::SpecializationFamily::Effect, descriptor });
 				return nullptr;
 			}
 			Util::SetResourceName(driverShader.get(), "ShaderCache::Pixel %u:%X",
@@ -6476,17 +6512,25 @@ namespace SIE
 		for (;;) {
 			std::deque<DeferredDiskWrite> writes;
 			bool flushManifest = false;
+			bool flushSpecializations = false;
 			std::size_t extractedWrites = 0;
 			{
 				std::unique_lock lock{ deferredDiskWritesMutex };
 				deferredDiskWritesCV.wait(lock, stoken, [this, stoken] {
 					const bool hasPendingWork =
-						!deferredDiskWrites.empty() || deferredManifestFlushPending;
+						!deferredDiskWrites.empty() || deferredManifestFlushPending || deferredSpecializationFlushPending;
 					const bool persistenceBlocked =
 						saveLoadDiskPersistenceBlocked.load(std::memory_order_acquire);
 					return stoken.stop_requested() ||
 					       (hasPendingWork && !persistenceBlocked);
 				});
+				if (deferredSpecializationFlushPending && deferredDiskWrites.empty() && !deferredManifestFlushPending) {
+					// Batch discovery bursts without delaying shader bytecode writes or shutdown.
+					deferredDiskWritesCV.wait_for(lock, stoken, kSpecializationFlushDelay, [this, stoken] {
+						return stoken.stop_requested() || !deferredDiskWrites.empty() || deferredManifestFlushPending ||
+						       saveLoadDiskPersistenceBlocked.load(std::memory_order_acquire);
+					});
+				}
 				if (stoken.stop_requested()) {
 					if (!deferredDiskWrites.empty()) {
 						logger::warn(
@@ -6498,6 +6542,8 @@ namespace SIE
 					deferredManifestFlushPending = false;
 					break;
 				}
+				if (saveLoadDiskPersistenceBlocked.load(std::memory_order_acquire))
+					continue;
 
 				while (!deferredDiskWriteOrder.empty() && writes.size() < kDeferredDiskWriteBatchSize) {
 					auto key = std::move(deferredDiskWriteOrder.front());
@@ -6512,6 +6558,7 @@ namespace SIE
 				}
 				flushManifest = deferredManifestFlushPending;
 				deferredManifestFlushPending = false;
+				flushSpecializations = std::exchange(deferredSpecializationFlushPending, false);
 			}
 
 			std::size_t durableWrites = 0;
@@ -6622,6 +6669,13 @@ namespace SIE
 				} else {
 					FlushShaderCacheManifest();
 				}
+			}
+
+			if (flushSpecializations) {
+				if (saveLoadDiskPersistenceBlocked.load(std::memory_order_acquire))
+					QueueSpecializationHistoryFlush();
+				else
+					FlushSpecializationHistory();
 			}
 
 			if (durableWrites != 0 || skippedWrites != 0) {
@@ -6991,6 +7045,7 @@ namespace SIE
 
 		// Determine whether this task was resolved from the disk cache or actually compiled.
 		bool wasDiskHit = cache.IsShaderLoadedFromDisk(key);
+		const bool wasDeferred = cache.GetShaderStatus(key) == ShaderCompilationTask::Status::Deferred;
 
 		// Perform all completion operations under one mutex acquisition
 		{
@@ -7006,7 +7061,10 @@ namespace SIE
 			QueryPerformanceCounter(&now);
 
 			// Update task counters
-			if (shaderBlob) {
+			if (wasDeferred) {
+				logger::debug("Optional shader deferred until startup: {}", key);
+				completedTasks++;
+			} else if (shaderBlob) {
 				logger::debug("Compiling Task succeeded: {}", key);
 				completedTasks++;
 			} else {

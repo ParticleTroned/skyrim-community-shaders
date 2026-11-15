@@ -2,6 +2,11 @@ include("${PROJECT_ROOT}/tests/extract_source_region.cmake")
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 file(READ "${PROJECT_ROOT}/src/ShaderCache.cpp" _cache)
 file(READ "${PROJECT_ROOT}/src/ShaderCache.h" _header)
+file(READ "${PROJECT_ROOT}/src/ShaderCacheSpecializations.cpp" _specializations)
+extract_between("${_specializations}" "void ShaderCache::RegisterSpecializationBase("
+    "std::vector<Util::ShaderSpecializationRequest> ShaderCache::GetStartupShaderSpecializations(" "specialization_bases.h")
+extract_between("${_specializations}" "void ShaderCache::PrewarmDiscoveredPixelShaders("
+    "void ShaderCache::RememberShaderSpecialization(" "specialization_replay.h")
 file(READ "${PROJECT_ROOT}/src/Hooks.cpp" _hooks)
 file(READ "${PROJECT_ROOT}/src/TruePBR.cpp" _pbr)
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp" _character)

@@ -5,6 +5,12 @@
 
 namespace CSX::Diagnostics::ColourPipelineProbe
 {
+	enum class Route : std::uint8_t
+	{
+		MainPass,
+		CompositorSubmit
+	};
+
 	enum class Stage : std::uint8_t
 	{
 		FsrInput,
@@ -26,6 +32,11 @@ namespace CSX::Diagnostics::ColourPipelineProbe::Policy
 	inline constexpr std::uint32_t kMaximumCaptureIdBytes = 128;
 	inline constexpr std::uint32_t kMaximumMetadataBytes = 16 * 1024;
 	inline constexpr std::uint32_t kTimeoutSeconds = 15;
+
+	inline constexpr std::uint32_t RequiredSlotCount(Route a_route) noexcept
+	{
+		return a_route == Route::CompositorSubmit ? 2 * kEyeCount : kSlotCount;
+	}
 
 	/** Keep main-source and VR ImageSpace destination observations distinct. */
 	inline constexpr bool ValidImageSpaceTarget(Stage a_stage, std::uint32_t a_target,

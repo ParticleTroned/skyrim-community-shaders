@@ -41,6 +41,7 @@ namespace CSX::Diagnostics::ColourPipelineProbe
 	bool Arm(
 		const std::string& a_captureId,
 		std::uint64_t a_expectedColourContractRevision,
+		Route a_route,
 		const nlohmann::json& a_metadata,
 		std::uint64_t& a_generation,
 		std::string& a_error);
@@ -50,7 +51,9 @@ namespace CSX::Diagnostics::ColourPipelineProbe
 	/** Test whether an opted-in capture still needs render-thread observations. */
 	bool WantsVendorCapture() noexcept;
 	/** Service nonblocking readback on the capture's immediate context. */
-	void ServiceReadbacks(ID3D11DeviceContext* a_context, std::uint32_t a_cpuFrame) noexcept;
+	void ServiceReadbacks(ID3D11DeviceContext* a_context, std::uint32_t a_cpuFrame, Route a_route = Route::MainPass) noexcept;
+	/** Retain an observation failure without changing the rendering result. */
+	void FailCapture(Route a_route, const char* a_error) noexcept;
 	/** Queue one bounded vendor texture region with coherent dispatch metadata. */
 	void CaptureVendorStage(
 		Stage a_stage,
@@ -63,7 +66,8 @@ namespace CSX::Diagnostics::ColourPipelineProbe
 		std::uint32_t a_activeHeight,
 		const DispatchMetadata& a_dispatch,
 		const char* a_symbol,
-		const char* a_callsite) noexcept;
+		const char* a_callsite, Route a_route = Route::MainPass,
+		ID3D11DeviceContext* a_context = nullptr) noexcept;
 	/** Queue main-source or VR destination eyes with their actual target identity. */
 	void CaptureImageSpaceStage(
 		Stage a_stage,

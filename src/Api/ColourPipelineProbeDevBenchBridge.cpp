@@ -44,7 +44,7 @@ namespace
 		for (const auto& [key, value] : a_args.items()) {
 			const bool common = key == "action" || key == "expectedBuildId";
 			const bool identity = key == "captureId" || key == "generation";
-			if (!(common || (action == "arm" && (key == "captureId" || key == "expectedRevision" || key == "metadata")) ||
+			if (!(common || (action == "arm" && (key == "captureId" || key == "expectedRevision" || key == "metadata" || key == "route")) ||
 					(action == "read" && (identity || key == "stage" || key == "eye")) ||
 					(action == "reset" && identity)))
 				throw std::runtime_error("unknown parameter for the selected action: " + key);
@@ -63,7 +63,15 @@ namespace
 				const auto status = Upscaling::fidelityFX.GetDevBenchFsrColorContractStatusSnapshot();
 				if (!revision || revision != status.contract.revision)
 					return { { "accepted", false }, { "error", "FSR request revision did not match" }, { "observedRevision", status.contract.revision } };
-				accepted = Probe::Arm(id, revision, a_args.value("metadata", json::object()), generation, error);
+				const auto route = a_args.value("route", std::string("main_pass"));
+				if (route != "main_pass" && route != "compositor_submit")
+					throw std::runtime_error("route must be main_pass or compositor_submit");
+				accepted = Probe::Arm(id, revision,
+					route == "main_pass" ? Probe::Route::MainPass : Probe::Route::CompositorSubmit,
+					a_args.value("metadata", json::object()), generation, error);
+				return { { "action", action }, { "accepted", accepted }, { "captureId", id },
+					{ "generation", generation }, { "route", route },
+					{ "error", error.empty() ? json(nullptr) : json(error) } };
 			} else {
 				accepted = Probe::Reset(id, Unsigned(a_args, "generation"), generation, error);
 			}
@@ -130,15 +138,16 @@ void CSX::Api::ColourPipelineProbeDevBenchBridge::Install()
 		~InstallationGuard() { installing.store(false, std::memory_order_release); }
 	} guard;
 	static const auto descriptor = json{
-		{ "description", "Bounded developer-only VR FSR five-seam raw sample capture. arm and reset require exact build identity; arm binds the expected FSR colour request revision. Read one stage and eye per page with the arm receipt's captureId/generation. Combined-main observes kMAIN; ImageSpace seams observe the kVR_FRAMEBUFFER destination before and after the original call. Status retains every named stage-eye queued/mapped flag and the unqueued missingStageEyeSlots, including terminal failures. Storage values are retained without gamma conversion; ambiguous typeless numeric decoding is withheld. Captures require the main-pass stereo FSR path, expire after 15 seconds or 120 readback frames, and never imply render-scale, headset or visual qualification. Limits: 8192 per staging dimension, 256 MiB per slot, 1 GiB total staging payload (driver overhead unmeasured), 16 KiB serialized metadata, 64 KiB request and 128 KiB response. Page dispatch.submittedInputs schema 1 retains actual submitted reset, jitterOffsetPixels in X/Y order and frameTimeDeltaMilliseconds only after same-frame/revision/eye successful attribution. Unavailable input values are null; availability is not internal exposure/history convergence. Additive page sceneObservation schema 1 retains sequential CPU-frame/eye/QPC observations before each stage-eye copy: finite native cached camera matrices and adjusted positions, world-render markers, and typed image-space HDR/cinematic/tint parameters. Cached-camera content frame/QPC/initialization and internal adaptive exposure remain unknown/null; scene reads are not an atomic render snapshot or continuous world-camera equivalence. FSR colour mutations use communityshaders.fsr_color_contract separately." },
+		{ "description", "Bounded developer-only VR FSR raw sample capture. main_pass observes five seams; compositor_submit observes the stereo FSR input and output only. arm and reset require exact build identity; arm binds the expected FSR colour request revision. Read one stage and eye per page with the arm receipt's captureId/generation. Combined-main observes kMAIN; ImageSpace seams observe the kVR_FRAMEBUFFER destination before and after the original call. Status retains every named stage-eye queued/mapped flag and the unqueued missingStageEyeSlots, including terminal failures. Storage values are retained without gamma conversion; ambiguous typeless numeric decoding is withheld. Captures require the selected stereo FSR path, expire after 15 seconds or 120 readback frames, and never imply render-scale, headset or visual qualification. Limits: 8192 per staging dimension, 256 MiB per slot, 1 GiB total staging payload (driver overhead unmeasured), 16 KiB serialized metadata, 64 KiB request and 128 KiB response. Page dispatch.submittedInputs schema 1 retains actual submitted reset, jitterOffsetPixels in X/Y order and frameTimeDeltaMilliseconds only after same-frame/revision/eye successful attribution. Unavailable input values are null; availability is not internal exposure/history convergence. Additive page sceneObservation schema 1 retains sequential CPU-frame/eye/QPC observations before each stage-eye copy: finite native cached camera matrices and adjusted positions, world-render markers, and typed image-space HDR/cinematic/tint parameters. Cached-camera content frame/QPC/initialization and internal adaptive exposure remain unknown/null; scene reads are not an atomic render snapshot or continuous world-camera equivalence. FSR colour mutations use communityshaders.fsr_color_contract separately." },
 		{ "inputSchema", { { "type", "object" }, { "additionalProperties", false }, { "properties", {
-																										{ "action", { { "type", "string" }, { "enum", { "status", "arm", "read", "reset" } }, { "default", "status" }, { "description", "Status includes all ten stageEyeSlots and unqueued missingStageEyeSlots for the current capture identity; failure retains them until reset or a new arm. Read pages add versioned dispatch.submittedInputs for the attributed successful eye, with explicit availability and nullable reset/jitterOffsetPixels/frameTimeDeltaMilliseconds. Pages also add sceneObservation schema 1 with CPU observation bracket, finite native cached per-eye camera values and typed image-space parameters; unavailable groups are null, cached content frame and internal adaptive exposure remain unknown." } } },
+																										{ "action", { { "type", "string" }, { "enum", { "status", "arm", "read", "reset" } }, { "default", "status" }, { "description", "Status includes the selected route and its required stageEyeSlots and unqueued missingStageEyeSlots for the current capture identity; failure retains them until reset or a new arm. Read pages add versioned dispatch.submittedInputs for the attributed successful eye, with explicit availability and nullable reset/jitterOffsetPixels/frameTimeDeltaMilliseconds. Pages also add sceneObservation schema 1 with CPU observation bracket, finite native cached per-eye camera values and typed image-space parameters; unavailable groups are null, cached content frame and internal adaptive exposure remain unknown." } } },
 																										{ "expectedBuildId", { { "type", "string" } } },
 																										{ "captureId", { { "type", "string" }, { "minLength", 1 }, { "maxLength", 128 } } },
 																										{ "expectedRevision", { { "type", "integer" }, { "minimum", 1 } } },
 																										{ "generation", { { "type", "integer" }, { "minimum", 1 } } },
 																										{ "stage", { { "type", "string" }, { "enum", kStages } } },
 																										{ "eye", { { "type", "integer" }, { "enum", { 0, 1 } } } },
+																										{ "route", { { "type", "string" }, { "enum", { "main_pass", "compositor_submit" } }, { "default", "main_pass" } } },
 																										{ "metadata", { { "type", "object" } } },
 																									} } } },
 	}

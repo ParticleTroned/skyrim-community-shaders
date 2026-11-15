@@ -18,7 +18,10 @@ namespace
 int main()
 {
 	namespace Policy = CSX::Diagnostics::ColourPipelineProbe::Policy;
+	using CSX::Diagnostics::ColourPipelineProbe::Route;
 	using CSX::Diagnostics::ColourPipelineProbe::Stage;
+	static_assert(Policy::RequiredSlotCount(Route::MainPass) == 10);
+	static_assert(Policy::RequiredSlotCount(Route::CompositorSubmit) == 4);
 	constexpr std::uint32_t mainTarget = 1;
 	constexpr std::uint32_t vrDestination = 114;
 	Require(Policy::ValidImageSpaceTarget(Stage::CombinedMain, mainTarget, true, mainTarget, vrDestination));
@@ -40,6 +43,9 @@ int main()
 	for (std::uint32_t index = 0; index < 6; ++index)
 		slots[index].queued = true;
 	const auto partial = Policy::DescribeStageEyeSlots(slots);
+	Require(partial[0].stage == Stage::FsrInput && partial[1].stage == Stage::FsrInput);
+	Require(partial[2].stage == Stage::FsrOutput && partial[3].stage == Stage::FsrOutput);
+	Require(partial[Policy::RequiredSlotCount(Route::CompositorSubmit)].stage == Stage::CombinedMain);
 	for (std::uint32_t index = 0; index < partial.size(); ++index) {
 		Require(partial[index].eye == index % 2 && !partial[index].mapped);
 		Require(partial[index].queued == (index < 6));

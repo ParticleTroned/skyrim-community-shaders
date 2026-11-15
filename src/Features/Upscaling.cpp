@@ -61024,7 +61024,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 					RecordSubmitFreshnessVendorAttempt(1, upscaleMethod);
 #endif
 					stereoResult = fidelityFX.UpscaleStereoRegions(
-						runtimeFSRStereoRegions);
+						runtimeFSRStereoRegions, /* a_compositorSubmit = */ true);
 				}
 				if (stereoResult == FidelityFX::StereoUpscaleResult::Ready) {
 #ifdef DEVBENCH_BRIDGE_ENABLED

@@ -85,6 +85,7 @@ namespace CSX::Diagnostics::ColourPipelineProbe
 		{
 			std::mutex mutex;
 			ProbeState state = ProbeState::Idle;
+			Route route = Route::MainPass;
 			std::uint64_t generation = 0;
 			std::uint64_t expectedColourContractRevision = 0;
 			std::uint64_t nextWriteEpoch = 1;
@@ -113,6 +114,7 @@ namespace CSX::Diagnostics::ColourPipelineProbe
 		void ClearStateLocked()
 		{
 			g_state.state = ProbeState::Idle;
+			g_state.route = Route::MainPass;
 			g_state.expectedColourContractRevision = 0;
 			g_state.nextWriteEpoch = 1;
 			g_state.armedQpc = 0;
@@ -530,13 +532,19 @@ namespace CSX::Diagnostics::ColourPipelineProbe
 			return true;
 		}
 
+		const char* RouteName(Route a_route) noexcept
+		{
+			return a_route == Route::CompositorSubmit ? "compositor_submit" : "main_pass";
+		}
+
 		void QueueCompletionIfReadyLocked(ID3D11DeviceContext* a_context)
 		{
 			if (g_state.state == ProbeState::Failed || g_state.state == ProbeState::ReadbackPending)
 				return;
-			if (!std::ranges::all_of(g_state.slots, [](const Slot& a_slot) { return a_slot.queued; }))
+			const auto requiredEnd = g_state.slots.begin() + Policy::RequiredSlotCount(g_state.route);
+			if (!std::all_of(g_state.slots.begin(), requiredEnd, [](const Slot& a_slot) { return a_slot.queued; }))
 				return;
-			if (g_state.flows.size() != kEyeCount) {
+			if (g_state.route == Route::MainPass && g_state.flows.size() != kEyeCount) {
 				FailLocked("the captured frame did not contain both observed FSR copy-back calls");
 				return;
 			}
@@ -810,6 +818,7 @@ namespace CSX::Diagnostics::ColourPipelineProbe
 	bool Arm(
 		const std::string& a_captureId,
 		std::uint64_t a_expectedColourContractRevision,
+		Route a_route,
 		const nlohmann::json& a_metadata,
 		std::uint64_t& a_generation,
 		std::string& a_error)
@@ -841,6 +850,7 @@ namespace CSX::Diagnostics::ColourPipelineProbe
 		ClearStateLocked();
 		g_state.generation = nextGeneration;
 		g_state.state = ProbeState::Armed;
+		g_state.route = a_route;
 		g_state.captureId = std::move(captureId);
 		g_state.expectedColourContractRevision = a_expectedColourContractRevision;
 		g_state.metadata = std::move(metadata);
@@ -893,14 +903,15 @@ namespace CSX::Diagnostics::ColourPipelineProbe
 		std::uint32_t a_activeHeight,
 		const DispatchMetadata& a_dispatch,
 		const char* a_symbol,
-		const char* a_callsite) noexcept
+		const char* a_callsite, Route a_route, ID3D11DeviceContext* a_context) noexcept
 	{
 		if (!WantsVendorCapture())
 			return;
 		try {
 			std::lock_guard lock(g_state.mutex);
 			ExpireLocked();
-			if (g_state.state != ProbeState::Armed && g_state.state != ProbeState::Capturing)
+			if (g_state.route != a_route ||
+				(g_state.state != ProbeState::Armed && g_state.state != ProbeState::Capturing))
 				return;
 			if ((a_stage != Stage::FsrInput && a_stage != Stage::FsrOutput) || a_eye >= kEyeCount) {
 				FailLocked("invalid vendor capture stage or eye");
@@ -942,8 +953,13 @@ namespace CSX::Diagnostics::ColourPipelineProbe
 				}
 			}
 			g_state.dispatch = a_dispatch;
-			QueueSlotLocked(a_stage, a_eye, globals::d3d::context, a_texture, a_srv, a_rtv, a_uav, 0, 0, 0, a_activeWidth, a_activeHeight, a_symbol, a_callsite);
+			auto* context = a_context ? a_context : globals::d3d::context;
+			if (!QueueSlotLocked(a_stage, a_eye, context, a_texture, a_srv, a_rtv, a_uav,
+					0, 0, 0, a_activeWidth, a_activeHeight, a_symbol, a_callsite))
+				return;
 			g_state.slots[SlotIndex(a_stage, a_eye)].dispatch = a_dispatch;
+			if (g_state.route == Route::CompositorSubmit && a_stage == Stage::FsrOutput)
+				QueueCompletionIfReadyLocked(context);
 		} catch (const std::exception& e) {
 			std::lock_guard lock(g_state.mutex);
 			FailLocked(e.what());
@@ -968,7 +984,7 @@ namespace CSX::Diagnostics::ColourPipelineProbe
 			return;
 		try {
 			std::lock_guard lock(g_state.mutex);
-			if (g_state.state != ProbeState::Capturing || !a_texture ||
+			if (g_state.route != Route::MainPass || g_state.state != ProbeState::Capturing || !a_texture ||
 				!Policy::ValidImageSpaceTarget(a_stage, a_engineTarget, a_matchesMainTarget,
 					static_cast<std::uint32_t>(RE::RENDER_TARGETS::kMAIN),
 					static_cast<std::uint32_t>(RE::RENDER_TARGETS::kVR_FRAMEBUFFER)))
@@ -1027,7 +1043,7 @@ namespace CSX::Diagnostics::ColourPipelineProbe
 			return;
 		try {
 			std::lock_guard lock(g_state.mutex);
-			if (g_state.state != ProbeState::Capturing)
+			if (g_state.route != Route::MainPass || g_state.state != ProbeState::Capturing)
 				return;
 			if (g_state.flows.size() > a_eye)
 				return;
@@ -1075,12 +1091,21 @@ namespace CSX::Diagnostics::ColourPipelineProbe
 		}
 	}
 
-	void ServiceReadbacks(ID3D11DeviceContext* a_context, std::uint32_t a_cpuFrame) noexcept
+	void FailCapture(Route a_route, const char* a_error) noexcept
+	{
+		std::lock_guard lock(g_state.mutex);
+		if (g_state.route == a_route && WantsVendorCapture())
+			FailLocked(a_error);
+	}
+
+	void ServiceReadbacks(ID3D11DeviceContext* a_context, std::uint32_t a_cpuFrame, Route a_route) noexcept
 	{
 		if (!WantsVendorCapture() || !a_context)
 			return;
 		try {
 			std::lock_guard lock(g_state.mutex);
+			if (g_state.route != a_route)
+				return;
 			ExpireLocked();
 			if (g_state.state == ProbeState::Capturing && g_state.cpuFrame != a_cpuFrame) {
 				FailLocked("the captured frame did not contain every required stage and eye");
@@ -1104,7 +1129,8 @@ namespace CSX::Diagnostics::ColourPipelineProbe
 				FailLocked(std::format("completion query failed with HRESULT 0x{:08X}", static_cast<std::uint32_t>(ready)));
 				return;
 			}
-			for (auto& slot : g_state.slots) {
+			for (std::uint32_t index = 0; index < Policy::RequiredSlotCount(g_state.route); ++index) {
+				auto& slot = g_state.slots[index];
 				if (slot.mapped)
 					continue;
 				const auto mapped = MapSlotLocked(a_context, slot);
@@ -1139,6 +1165,8 @@ namespace CSX::Diagnostics::ColourPipelineProbe
 		auto stageEyeSlots = json::array();
 		auto missingStageEyeSlots = json::array();
 		for (const auto& slot : Policy::DescribeStageEyeSlots(g_state.slots)) {
+			if (SlotIndex(slot.stage, slot.eye) >= Policy::RequiredSlotCount(g_state.route))
+				break;
 			json identity{ { "stage", StageName(slot.stage) }, { "eye", slot.eye },
 				{ "eyeName", slot.eye == 0 ? "left" : "right" } };
 			if (!slot.queued)
@@ -1154,7 +1182,8 @@ namespace CSX::Diagnostics::ColourPipelineProbe
 			{ "cpuFrame", g_state.cpuFrame ? json(g_state.cpuFrame) : json(nullptr) },
 			{ "sceneEpoch", nullptr },
 			{ "submissionEpoch", nullptr },
-			{ "expectedStageEyeSlots", kSlotCount },
+			{ "route", RouteName(g_state.route) },
+			{ "expectedStageEyeSlots", Policy::RequiredSlotCount(g_state.route) },
 			{ "queuedStageEyeSlots", queued },
 			{ "mappedStageEyeSlots", mapped },
 			{ "stageEyeSlots", std::move(stageEyeSlots) },
@@ -1180,8 +1209,11 @@ namespace CSX::Diagnostics::ColourPipelineProbe
 		if (g_state.captureId != a_captureId || g_state.generation != a_generation ||
 			static_cast<std::uint32_t>(a_stage) >= kStageCount || a_eye >= kEyeCount)
 			return { { "error", "capture identity, generation or page did not match" } };
+		if (SlotIndex(a_stage, a_eye) >= Policy::RequiredSlotCount(g_state.route))
+			return { { "error", "stage is outside the selected capture route" } };
 		return {
 			{ "schema", "csx-colour-pipeline-probe-v3" },
+			{ "route", RouteName(g_state.route) },
 			{ "captureId", g_state.captureId },
 			{ "generation", g_state.generation },
 			{ "state", StateName(g_state.state) },

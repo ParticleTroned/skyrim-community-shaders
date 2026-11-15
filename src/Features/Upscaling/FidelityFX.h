@@ -334,7 +334,8 @@ public:
 		uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight,
 		float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness, bool* a_usedRuntimeUpscaler = nullptr);
 	/** @brief Dispatch both ready VR runtime-FSR contexts in one interop transaction when eligible. */
-	StereoUpscaleResult UpscaleStereoRegions(const std::array<UpscaleRegionParameters, 2>& a_regions);
+	StereoUpscaleResult UpscaleStereoRegions(const std::array<UpscaleRegionParameters, 2>& a_regions,
+		bool a_compositorSubmit = false);
 
 private:
 	const std::string& GetRuntimeUpscalerFramePathLabel(RuntimeUpscalerFramePath a_path) const;
@@ -560,13 +561,15 @@ private:
 		const D3D11_TEXTURE2D_DESC& a_reactiveDesc,
 		const D3D11_TEXTURE2D_DESC& a_transparencyDesc,
 		const D3D11_TEXTURE2D_DESC& a_outputDesc);
-	LifecycleResult ExecuteRuntimeUpscalerBatch(const RuntimeDispatchPlan& a_plan, std::span<const UpscaleRegionParameters> a_regions);
+	LifecycleResult ExecuteRuntimeUpscalerBatch(const RuntimeDispatchPlan& a_plan, std::span<const UpscaleRegionParameters> a_regions,
+		bool a_compositorSubmit = false);
 	/** Returns a retained exact full-eye guide import, or null to use the copy fallback. */
 	WrappedResource* ResolveRuntimeSharedGuide(uint32_t a_eye, FSRSharedGuidePolicy::Guide a_guide,
 		ID3D11Resource* a_source, const D3D11_TEXTURE2D_DESC& a_desc);
 	[[nodiscard]] bool HasQuarantinedRuntimeSharedGuides(const UpscaleRegionParameters& a_region) const noexcept;
 	[[nodiscard]] bool CanDispatchHostFallbackForRegions(std::span<const UpscaleRegionParameters> a_regions, const RuntimeDispatchPlan& a_plan) const;
-	LifecycleResult DispatchRuntimeUpscalerBatch(std::span<const UpscaleRegionParameters> a_regions, RuntimeUpscalerFramePath a_path);
+	LifecycleResult DispatchRuntimeUpscalerBatch(std::span<const UpscaleRegionParameters> a_regions, RuntimeUpscalerFramePath a_path,
+		bool a_compositorSubmit);
 	LifecycleResult DestroyRuntimeUpscalerContexts(bool a_waitForIdle = true);
 	LifecycleResult DestroyRuntimeUpscalerResources(bool a_waitForIdle = true);
 	LifecycleResult RetireQuarantinedRuntimeUpscalerResources();

@@ -35,6 +35,7 @@
 #	include <DevBenchAPI.h>
 #	include <nlohmann/json.hpp>
 #	include <atomic>
+#	include <cmath>
 #	include <exception>
 #	include <functional>
 #	include <mutex>
@@ -46,7 +47,7 @@ namespace
 {
 	using json = nlohmann::json;
 	using namespace CSX::FeatureAPI;
-	constexpr auto DevBenchSchemaRevision = 37;
+	constexpr auto DevBenchSchemaRevision = 38;
 	std::atomic_bool g_registered{ false };
 
 	CSX::Api::ServiceFoundation& Foundation()
@@ -209,9 +210,15 @@ namespace
 		const auto action = args.value("action", std::string{});
 		if (args.contains("wetterness")) {
 			const auto& settings = args.at("wetterness");
-			if (action != "wetterness" || !settings.is_object() || settings.size() != 1 ||
-				!settings.contains("restrictPuddleSlopes") || !settings.at("restrictPuddleSlopes").is_boolean())
-				return Foundation().MakeError(args, "invalid_settings", "wetterness requires the wetterness action and exactly one boolean restrictPuddleSlopes field", "validation", false, "wetterness");
+			if (action != "wetterness" || !settings.is_object() || settings.empty())
+				return Foundation().MakeError(args, "invalid_settings", "wetterness requires the wetterness action and a nonempty settings object", "validation", false, "wetterness");
+			for (const auto& [name, value] : settings.items()) {
+				const bool validToggle = (name == "restrictPuddleSlopes" || name == "preserveWetnessHighlights") && value.is_boolean();
+				const bool validPercent = name == "rainFilmPercent" && value.is_number() &&
+				                          std::isfinite(value.get<double>()) && value.get<double>() >= 0.0 && value.get<double>() <= 100.0;
+				if (!validToggle && !validPercent)
+					return Foundation().MakeError(args, "invalid_settings", "Expected restrictPuddleSlopes or preserveWetnessHighlights boolean, or rainFilmPercent in [0,100]", "validation", false, "wetterness." + name);
+			}
 		}
 		if (action == "gpu_crash_diagnostics") {
 			auto response = Foundation().MakeEnvelope(args, true);
@@ -470,13 +477,19 @@ namespace
 			if (action == "wetterness") {
 				auto& wetterness = globals::features::wetterness;
 				if (args.contains("wetterness")) {
-					const bool restrictSlopes = args.at("wetterness").at("restrictPuddleSlopes").get<bool>();
-					if (restrictSlopes && !wetterness.loaded)
+					const auto& settings = args.at("wetterness");
+					if (!wetterness.loaded && (settings.value("restrictPuddleSlopes", false) ||
+												  settings.value("preserveWetnessHighlights", false) || settings.contains("rainFilmPercent")))
 						return json{ { "error", "Wetterness must be loaded" }, { "errorCode", "feature_unavailable" } };
-					wetterness.restrictPuddleSlopes = restrictSlopes;
+					wetterness.restrictPuddleSlopes = settings.value("restrictPuddleSlopes", wetterness.restrictPuddleSlopes);
+					wetterness.preserveWetnessHighlights = settings.value("preserveWetnessHighlights", wetterness.preserveWetnessHighlights);
+					if (settings.contains("rainFilmPercent"))
+						wetterness.SetRainFilmPercent(settings.at("rainFilmPercent").get<float>());
 				}
 				return json{ { "available", wetterness.loaded }, { "enabled", wetterness.IsRuntimeActive() },
-					{ "restrictPuddleSlopes", wetterness.restrictPuddleSlopes }, { "sessionOnly", true } };
+					{ "restrictPuddleSlopes", wetterness.restrictPuddleSlopes },
+					{ "preserveWetnessHighlights", wetterness.preserveWetnessHighlights },
+					{ "rainFilmPercent", wetterness.GetRainFilmPercent() }, { "sessionOnly", true } };
 			}
 			if (action == "terrain_seams") {
 				auto& terrain = globals::features::terrainBlending;
@@ -649,12 +662,16 @@ namespace CSX::Api::FeatureDevBenchBridge
 			auto spec = json::parse(descriptor);
 			spec["inputSchema"]["properties"]["action"]["enum"].push_back("wetterness");
 			spec["inputSchema"]["properties"]["wetterness"] = {
-				{ "type", "object" }, { "additionalProperties", false }, { "required", { "restrictPuddleSlopes" } },
-				{ "properties", { { "restrictPuddleSlopes", { { "type", "boolean" }, { "default", false } } } } }
+				{ "type", "object" }, { "additionalProperties", false }, { "minProperties", 1 },
+				{ "properties", { { "restrictPuddleSlopes", { { "type", "boolean" }, { "default", false } } },
+									{ "preserveWetnessHighlights", { { "type", "boolean" }, { "default", false } } },
+									{ "rainFilmPercent", { { "type", "number" }, { "minimum", 0 }, { "maximum", 100 }, { "default", 70 } } } } }
 			};
 			spec["outputSchema"]["properties"]["result"]["properties"]["restrictPuddleSlopes"] = { { "type", "boolean" } };
+			spec["outputSchema"]["properties"]["result"]["properties"]["preserveWetnessHighlights"] = { { "type", "boolean" } };
+			spec["outputSchema"]["properties"]["result"]["properties"]["rainFilmPercent"] = { { "type", "number" }, { "minimum", 0 }, { "maximum", 100 } };
 			spec["description"] = spec["description"].get<std::string>() +
-			                      " wetterness inspects the live puddle slope restriction. Optional wetterness.restrictPuddleSlopes switches it without resetting rain accumulation or recompiling shaders. True uses mesh slope, with full coverage below 3 degrees and none at 8 degrees; false preserves original placement. Rain film is independent. The API changes session state only; the menu setting is saved with normal feature settings. Enabling the restriction requires Wetterness to be loaded. available reports whether Wetterness is loaded; enabled reports its runtime master toggle.";
+			                      " wetterness inspects live puddle and rain-film controls. Optional wetterness accepts partial restrictPuddleSlopes and preserveWetnessHighlights booleans plus rainFilmPercent [0,100]. Changes apply on a following rendered frame without resetting rain accumulation or recompiling shaders. restrictPuddleSlopes uses mesh slope: full eligibility below 3 degrees, none at 8 degrees. preserveWetnessHighlights defaults false; true preserves continuous rain-film strength and view-independent roughness while compressing highlight peaks, false retains original grazing-angle suppression. rainFilmPercent maps the saved ground-film scale 0..2.5 to 0..100 (default 70); corrected mode uses it for rain-film coverage and darkening, independently of puddles and shore wetness. The existing Wet Highlight Reduction control sets compression, not roughness, in corrected mode. API changes are session-only; normal menu Save persists them. Enabling controls or changing the percentage requires Wetterness to be loaded. available reports loading; enabled reports its runtime master toggle.";
 			spec["inputSchema"]["properties"]["action"]["enum"].push_back("gpu_crash_diagnostics");
 			spec["description"] = spec["description"].get<std::string>() +
 			                      " gpu_crash_diagnostics reads developer-only GPU completion journal status without issuing GPU work. The dedicated logging build arms it at startup. First device loss writes pending and completed GPU boundaries plus CPU dispatch/resource observations beside CSX.log. Pending commands and last CPU observations do not identify the faulting GPU instruction; query gaps are explicit. No renderer settings are changed.";

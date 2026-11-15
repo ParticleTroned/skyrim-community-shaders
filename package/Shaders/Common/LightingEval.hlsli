@@ -190,7 +190,7 @@ struct WetnessDirectLightingParams
 	float wetnessFScale;
 	float lightColorScale;
 	float NdotV;
-	float pointLightHighlightReduction;
+	float highlightReduction;
 };
 
 float GetSkinWetnessOverdriveScale()
@@ -295,12 +295,11 @@ void EvaluateWetnessLighting(float3 wetnessNormal, DirectContext context, float 
 	F = saturate(F);
 
 	float3 wetnessSpecular;
-	// Keep nighttime distribution and peak compression out of daytime local-light work.
-	[branch] if (params.pointLightHighlightReduction > 0.0)
+	[branch] if (params.highlightReduction > 0.0)
 	{
 		const float D = Wetterness::GetPointLightDistribution(roughness, NdotH);
 		const float response = D * G * F.x * NdotL;
-		wetnessSpecular = response * Wetterness::GetPointLightHighlightScale(response, params.pointLightHighlightReduction) * lightColor;
+		wetnessSpecular = response * Wetterness::GetWetHighlightScale(response, params.highlightReduction) * lightColor;
 	}
 	else
 	{
@@ -322,7 +321,7 @@ float3 GetWetnessIndirectLobeWeights(inout IndirectLobeWeights lobeWeights, floa
 	float NdotV = GetWetnessBiasedNdotV(N, V, reflectionParams.forwardBiasEnabled);
 	float2 specularBRDF = BRDF::EnvBRDF(roughness, NdotV);
 	float3 modernLobeWeight = 0.02 * specularBRDF.x + specularBRDF.y;
-	float3 legacyLobeWeight = saturate(1.0 - roughness) * specularBRDF.x + specularBRDF.y;
+	float3 legacyLobeWeight = wetnessStrength * specularBRDF.x + specularBRDF.y;
 	float glancing = saturate(1.0 - NdotV);
 	legacyLobeWeight *= (1.0 + 0.25 * glancing);
 	float3 specularLobeWeight = (modernLobeWeight * reflectionParams.modernWeight + legacyLobeWeight * reflectionParams.legacyWeight) * wetnessStrength * reflectionParams.effectiveScale;

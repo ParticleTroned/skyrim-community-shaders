@@ -39,6 +39,7 @@ namespace
 	constexpr uint32_t MAX_OCCLUSION_VIEW_PROJ_REUSE_FRAMES = 6u;
 	constexpr uint32_t RAIN_REFLECTION_CONTROL_OCCLUSION_VALID_BIT = (1u << 30);
 	constexpr uint32_t RAIN_REFLECTION_CONTROL_RESTRICT_PUDDLE_SLOPES_BIT = (1u << 31);
+	constexpr uint32_t POST_RAIN_CONTROL_PRESERVE_WETNESS_HIGHLIGHTS_BIT = (1u << 30);
 	constexpr float MIN_TRANSITION_SPEED = 0.2f;
 	constexpr float MAX_TRANSITION_SPEED = 8.0f;
 	constexpr float MIN_RAINDROP_GRID_SIZE = 1e-3f;
@@ -1197,6 +1198,21 @@ const Wetterness::Settings& Wetterness::GetSanitizedSettings() const
 	return sanitizedSettingsCache;
 }
 
+float Wetterness::GetRainFilmPercent() const
+{
+	return ClampFiniteOrDefault(settings.RainContactWetnessScale, RAIN_CONTACT_WETNESS_SCALE_MIN,
+			   RAIN_CONTACT_WETNESS_SCALE_MAX, DEFAULT_RAIN_CONTACT_WETNESS_SCALE) *
+	       (100.0f / RAIN_CONTACT_WETNESS_SCALE_MAX);
+}
+
+void Wetterness::SetRainFilmPercent(float percent)
+{
+	if (!std::isfinite(percent))
+		return;
+	settings.RainContactWetnessScale = std::clamp(percent, 0.0f, 100.0f) * (RAIN_CONTACT_WETNESS_SCALE_MAX / 100.0f);
+	InvalidateSanitizedSettingsCache();
+}
+
 void Wetterness::DrawEnabledCheckbox()
 {
 	bool enabled = settings.EnableWetterness != 0;
@@ -1651,9 +1667,12 @@ void Wetterness::DrawSettings()
 			ImGui::TextUnformatted("Minimum surface wetness during rain. Higher keeps more surfaces wet; lower favors exposed, upward-facing surfaces.");
 		}
 
-		Util::Widgets::SliderFloat("Ground Wet-film", &settings.RainContactWetnessScale, RAIN_CONTACT_WETNESS_SCALE_MIN, RAIN_CONTACT_WETNESS_SCALE_MAX, "%.2f");
+		float rainFilmPercent = GetRainFilmPercent();
+		if (Util::Widgets::SliderFloat("Wetness Between Puddles", &rainFilmPercent, 0.0f, 100.0f, "%.0f%%", ImGuiSliderFlags_AlwaysClamp))
+			SetRainFilmPercent(rainFilmPercent);
+		markPresetDirtyIfEdited();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Thin ground-film reflections and drops between puddles. Higher adds sheen; lower dries the reflection. Puddle depth and size stay unchanged.");
+			ImGui::TextUnformatted("Strength of the rain coating between puddles. With Preserve Wetness enabled, 0% removes the rain film and its darkening; 100% gives full film for the current exposure and drying. Puddles and shoreline wetness remain independent. Saved Ground Wet-film values map directly to this percentage.");
 		}
 
 		Util::Widgets::SliderFloat("Rain Reflection Balance", &rainReflectionBalance, RAIN_REFLECTION_BALANCE_MIN, RAIN_REFLECTION_BALANCE_MAX, "%.2f");
@@ -1668,14 +1687,18 @@ void Wetterness::DrawSettings()
 
 		Util::Widgets::SliderFloat("Wet Film Specular Floor", &settings.WetFilmSpecularFloorScale, WET_FILM_SPECULAR_FLOOR_SCALE_MIN, WET_FILM_SPECULAR_FLOOR_SCALE_MAX, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Boosts thin wet-film reflections outside standing puddles. Higher = stronger ground sheen between puddles.");
+			ImGui::TextUnformatted("Boosts thin wet-film reflections outside standing puddles. With Preserve Wetness enabled, higher values smooth the rain coating while keeping its coverage independent.");
 		}
 
 		surfaceGrid.Next();
 		MenuUI::SectionHeading("Fade and skin");
+		Util::Widgets::Checkbox("Preserve Wetness When Reducing Highlights", &preserveWetnessHighlights);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Keep rain-film strength and roughness stable as the viewing angle changes, and soften bright highlights separately. Off uses the original grazing-angle suppression. Switch live without resetting rain accumulation.");
+		}
 		Util::Widgets::SliderFloat("Wet Highlight Reduction", &settings.WetHighlightReduction, WET_HIGHLIGHT_REDUCTION_MIN, WET_HIGHLIGHT_REDUCTION_MAX, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Reduce white thin-film glare. Higher dims it; lower brightens highlights. Does not target deep puddles.");
+			ImGui::TextUnformatted("Reduce white thin-film glare. With Preserve Wetness enabled, higher values compress bright highlights without drying or roughening the coating. Off retains the original grazing-angle response. Does not target deep puddles.");
 		}
 
 		Util::Widgets::SliderFloat("Wetness Fade Range", &wetnessDistanceFadeRange, WETNESS_DISTANCE_FADE_RANGE_UI_MIN_GAME_UNITS, WETNESS_DISTANCE_FADE_RANGE_UI_MAX_GAME_UNITS, "%.0f units", ImGuiSliderFlags_AlwaysClamp);
@@ -2151,7 +2174,8 @@ json Wetterness::CapturePerformanceSettingsState() const
 		{ "RainGrassSpecularStrength", rainGrassSpecularStrength },
 		{ "RainGrassDarkening", rainGrassDarkening },
 		{ "PuddleMaskMode", static_cast<uint32_t>(puddleMaskMode) },
-		{ "RestrictPuddleSlopes", restrictPuddleSlopes }
+		{ "RestrictPuddleSlopes", restrictPuddleSlopes },
+		{ "PreserveWetnessHighlights", preserveWetnessHighlights }
 	};
 }
 
@@ -2189,6 +2213,7 @@ void Wetterness::RestorePerformanceCostMeasurementState(const json& a_state)
 	if (!a_state.is_object())
 		return;
 	restrictPuddleSlopes = a_state.value("RestrictPuddleSlopes", restrictPuddleSlopes);
+	preserveWetnessHighlights = a_state.value("PreserveWetnessHighlights", preserveWetnessHighlights);
 
 	if (a_state.contains("Settings"))
 		settings = a_state.at("Settings").get<Settings>();
@@ -2618,6 +2643,8 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 	// bits 10..19 = puddle sky/cubemap reflection scale
 	// bits 20..29 = faster wet-film rain phase
 	data.PackedPostRainControl = PackThreeUnorm10(postRainSpecBoostFromClarity, activePuddleSkyReflectionScale, activeWetFilmRainPhase);
+	if (preserveWetnessHighlights)
+		data.PackedPostRainControl |= POST_RAIN_CONTROL_PRESERVE_WETNESS_HIGHLIGHTS_BIT;
 	// Pack derived [0..1] controls into one uint lane using UNORM10 triplet:
 	// bits  0.. 9 = post-rain cubemap glare reduction (derived from Post-Rain Water Clarity)
 	// bits 10..19 = in-rain cubemap suppression (derived from Rain Reflection Balance)
@@ -2712,6 +2739,7 @@ void Wetterness::LoadSettings(json& o_json)
 	restrictPuddleSlopes = isObject && o_json.contains("RestrictPuddleSlopes") ?
 	                           JsonValueToBool(o_json["RestrictPuddleSlopes"], false) :
 	                           false;
+	preserveWetnessHighlights = JsonValueOr<bool>(o_json, "PreserveWetnessHighlights", false);
 	if (isObject) {
 		try {
 			settings = o_json.get<Settings>();
@@ -2821,6 +2849,7 @@ void Wetterness::SaveSettings(json& o_json)
 	o_json["RainGrassDarkening"] = rainGrassDarkening;
 	o_json["PuddleMaskMode"] = static_cast<uint32_t>(puddleMaskMode);
 	o_json["RestrictPuddleSlopes"] = restrictPuddleSlopes;
+	o_json["PreserveWetnessHighlights"] = preserveWetnessHighlights;
 	o_json["EnableWeatherDrivenDryingModel"] = enableWeatherDrivenDryingModel;
 
 	o_json["DebugSettings"] = debugSettings;
@@ -2830,6 +2859,7 @@ void Wetterness::RestoreDefaultSettings()
 {
 	settings = {};
 	restrictPuddleSlopes = false;
+	preserveWetnessHighlights = false;
 	puddleMaskMode = PuddleMaskMode::Textured;
 	enableWeatherDrivenDryingModel = true;
 	puddleDryingHours = DEFAULT_PUDDLE_DRYING_HOURS;

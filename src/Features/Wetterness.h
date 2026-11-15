@@ -13,7 +13,7 @@ public:
 	virtual inline std::string GetShortName() override { return "Wetterness"; }
 	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
 	virtual inline std::string_view GetShaderDefineName() override { return "WETTERNESS"; }
-	std::string_view GetShaderCacheAbiVersion() override { return "5"; }
+	std::string_view GetShaderCacheAbiVersion() override { return "6"; }
 	virtual std::string_view GetCategory() const override { return "Water"; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
@@ -213,6 +213,7 @@ public:
 	Settings settings;
 	PuddleMaskMode puddleMaskMode = PuddleMaskMode::Textured;
 	bool restrictPuddleSlopes = false;
+	bool preserveWetnessHighlights = false;
 	bool enableWeatherDrivenDryingModel = true;
 	float puddleDryingHours = 15.0f;
 	float puddleLayout = 3.0f;
@@ -254,6 +255,10 @@ public:
 	ClimatePreset climatePreset = defaultPreset;
 
 	PerFrame GetCommonBufferData() const;
+	/** Maps the persisted ground-film scale to the user-facing percentage. */
+	float GetRainFilmPercent() const;
+	/** Updates rain-film strength without resetting accumulation; nonfinite input retains the current value. */
+	void SetRainFilmPercent(float percent);
 	float GetEffectiveGrassGlossiness(float dryGlossiness, const PerFrame& frameData) const;
 	float GetEffectiveGrassSpecularStrength(float drySpecularStrength, const PerFrame& frameData) const;
 

@@ -2844,7 +2844,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(LOD_BLENDING)
 #		if defined(LODOBJECTS) || defined(LODOBJECTSHD)
 	if (SharedData::IsLODBlendingEnabled())
-		baseColor.xyz = pow(abs(baseColor.xyz), SharedData::lodBlendingSettings.LODObjectGamma) * SharedData::lodBlendingSettings.LODObjectBrightness;
+		baseColor.xyz = Color::CategoryGamma(baseColor.xyz, SharedData::lodBlendingSettings.LODObjectGamma) * SharedData::lodBlendingSettings.LODObjectBrightness;
 #		elif defined(LODLANDSCAPE)
 #			if defined(TERRAIN_VARIATION)
 	[branch] if (SharedData::terrainVariationSettings.enableLODTerrainTilingFix)
@@ -2854,7 +2854,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #			endif
 	if (SharedData::IsLODBlendingEnabled())
-		baseColor.xyz = pow(abs(baseColor.xyz), SharedData::lodBlendingSettings.LODTerrainGamma) * SharedData::lodBlendingSettings.LODTerrainBrightness;
+		baseColor.xyz = Color::CategoryGamma(baseColor.xyz, SharedData::lodBlendingSettings.LODTerrainGamma) * SharedData::lodBlendingSettings.LODTerrainBrightness;
 #		endif
 #	endif  // LOD_BLENDING
 
@@ -2963,7 +2963,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	lodLandColor.xyz = Color::ColorToLinear(lodLandColor.xyz) * Color::VanillaDiffuseColorMult();
 #		if defined(LOD_BLENDING)
 	if (SharedData::IsLODBlendingEnabled())
-		lodLandColor.xyz = pow(abs(lodLandColor.xyz), SharedData::lodBlendingSettings.LODTerrainGamma) * SharedData::lodBlendingSettings.LODTerrainBrightness;
+		lodLandColor.xyz = Color::CategoryGamma(lodLandColor.xyz, SharedData::lodBlendingSettings.LODTerrainGamma) * SharedData::lodBlendingSettings.LODTerrainBrightness;
 #		endif  // LOD_BLENDING
 	float lodBlendParameter = GetLodLandBlendParameter(lodLandColor.xyz);
 	float lodBlendMask = TexLandLodBlend2Sampler.Sample(SampLandLodBlend2Sampler, 3.0.xx * input.TexCoord0.zw).x;
@@ -3098,7 +3098,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif  // TRUE_PBR
 #			if defined(LOD_BLENDING) && (defined(LODOBJECTS) || defined(LODOBJECTSHD))
 		if (SharedData::IsLODBlendingEnabled())
-			projBaseColor.xyz = pow(abs(projBaseColor.xyz), SharedData::lodBlendingSettings.LODObjectSnowGamma) * SharedData::lodBlendingSettings.LODObjectSnowBrightness;
+			projBaseColor.xyz = Color::CategoryGamma(projBaseColor.xyz, SharedData::lodBlendingSettings.LODObjectSnowGamma) * SharedData::lodBlendingSettings.LODObjectSnowBrightness;
 #			endif  // LOD_BLENDING
 		if (projectedMaterialWeight > 0) {
 			float3 projectedWorldNormal = SafeNormalize3(Triplanar::TransformStochasticNormal(finalProjNormal, tbnTr[2], triWeights, triNoise), tbnTr[2]);

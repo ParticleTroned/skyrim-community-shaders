@@ -144,9 +144,11 @@ def release_requests(runtime: str, features: dict[str, bool], *, reverse_z_enabl
                 macros.append(("SSGI_AO_ONLY", None))
             if runtime == "VR":
                 macros.append(("FRAMEBUFFER", None))
-            add("DeferredCompositeCS.hlsl", macros)
-            if features.get("ImageBasedLighting") and features.get("DynamicCubemaps"):
-                add("DeferredCompositeCS.hlsl", [*macros, ("IBL_LUMINANCE_RATIO", None)])
+            for linear_lighting in (False, True) if features.get("LinearLighting") else (False,):
+                variant = [*macros, ("COMPOSITE_LINEAR_LIGHTING", None)] if linear_lighting else macros
+                add("DeferredCompositeCS.hlsl", variant)
+                if features.get("ImageBasedLighting") and features.get("DynamicCubemaps"):
+                    add("DeferredCompositeCS.hlsl", [*variant, ("IBL_LUMINANCE_RATIO", None)])
     if runtime == "VR":
         add("VR/StereoBlendCS.hlsl", [("FRAMEBUFFER", "")], feature="VR")
     for terrain in (False, True) if features.get("TerrainBlending") else (False,):

@@ -101,9 +101,12 @@ public:
 private:
 	ID3D11ComputeShader* GetComputeMainComposite(bool interior);
 	/** Queues optional preparation without delaying the pass or repeating failed work. */
-	void RequestLuminanceRatioComposite(bool interior) noexcept;
-	std::array<Util::AsyncShader<ID3D11ComputeShader>, 2> luminanceRatioComposites;
-	std::array<uint8_t, 2> compositeMissReports{};
+	void RequestSpecializedComposite(bool interior, uint8_t specialization) noexcept;
+	static constexpr uint8_t kCompositeLuminanceRatio = 1u;
+	static constexpr uint8_t kCompositeLinearLighting = 2u;
+	static constexpr size_t kCompositeSpecializationCount = kCompositeLuminanceRatio | kCompositeLinearLighting;
+	std::array<std::array<Util::AsyncShader<ID3D11ComputeShader>, kCompositeSpecializationCount>, 2> specializedComposites;
+	std::array<std::array<uint8_t, kCompositeSpecializationCount>, 2> compositeMissReports{};
 	uint64_t compositeRevision = 0;
 
 	/// Copies completed opaque depth without changing the active render targets.

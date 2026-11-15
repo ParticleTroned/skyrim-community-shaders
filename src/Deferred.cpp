@@ -21,6 +21,7 @@
 #include "Features/DynamicCubemaps.h"
 #include "Features/FurShells.h"
 #include "Features/IBL.h"
+#include "Features/LinearLighting.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
@@ -931,8 +932,9 @@ void Deferred::ClearShaderCache()
 {
 	mainCompositeCS.Reset();
 	mainCompositeInteriorCS.Reset();
-	for (auto& shader : luminanceRatioComposites)
-		shader.Reset();
+	for (auto& scene : specializedComposites)
+		for (auto& shader : scene)
+			shader.Reset();
 	compositeMissReports = {};
 	++compositeRevision;
 	copyShadowCS.Reset();
@@ -976,34 +978,42 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite(bool interior)
 	auto& general = interior ? mainCompositeInteriorCS : mainCompositeCS;
 	const bool luminanceRatio = globals::features::ibl.loaded && globals::features::dynamicCubemaps.loaded &&
 	                            globals::features::ibl.UsesLuminanceRatioComposite();
-	if (luminanceRatio) {
-		if (auto* shader = luminanceRatioComposites[interior].get())
+	const bool linearLighting = globals::features::linearLighting.loaded && globals::features::linearLighting.UsesLinearLightingComposite();
+	const uint8_t specialization = (luminanceRatio ? kCompositeLuminanceRatio : 0u) | (linearLighting ? kCompositeLinearLighting : 0u);
+	if (specialization) {
+		if (auto* shader = specializedComposites[interior][specialization - 1].get())
 			return shader;
 	}
 	if (!general && !general.HasFailed()) {
 		general.Get(L"Data\\Shaders\\DeferredCompositeCS.hlsl", BuildCompositeDefines(interior), "cs_5_0", "main",
 			interior ? "Deferred::MainCompositeInteriorCS" : "Deferred::MainCompositeCS");
 	}
-	if (general && luminanceRatio && luminanceRatioComposites[interior].CanPrepare())
-		RequestLuminanceRatioComposite(interior);
+	if (general && specialization && specializedComposites[interior][specialization - 1].CanPrepare())
+		RequestSpecializedComposite(interior, specialization);
 	return general.get();
 }
 
-void Deferred::RequestLuminanceRatioComposite(bool interior) noexcept
+void Deferred::RequestSpecializedComposite(bool interior, uint8_t specialization) noexcept
 try {
-	auto& variant = luminanceRatioComposites[interior];
+	if (!specialization || specialization > kCompositeSpecializationCount)
+		return;
+	auto& variant = specializedComposites[interior][specialization - 1];
 	auto& cache = *globals::shaderCache;
 	if (!variant.CanPrepare() || globals::state->IsSaveLoadSafeModeActive())
 		return;
 	const bool gameplay = cache.UsesRuntimeLightingSpecializationPolicy();
 	const bool suppressed = gameplay && cache.ResidentOnlyLightingSpecializations();
 	const auto revision = compositeRevision;
+	const bool luminanceRatio = (specialization & kCompositeLuminanceRatio) != 0;
+	const bool linearLighting = (specialization & kCompositeLinearLighting) != 0;
+	const char* variantName = luminanceRatio ? (linearLighting ? "ibl_luminance_ratio_linear_lighting" : "ibl_luminance_ratio") : "linear_lighting";
 	const uint8_t reportBit = suppressed ? 2u : 1u;
-	if (gameplay && !(compositeMissReports[interior] & reportBit) && spdlog::should_log(spdlog::level::info)) {
-		compositeMissReports[interior] |= reportBit;
-		cache.compilationPool.detach_task([revision, interior, suppressed] {
-			logger::info("[ShaderSpecialization] composite_revision={} variant=ibl_luminance_ratio interior={} request={} source_compile=unknown",
-				revision, interior, suppressed ? "suppressed" : "allowed");
+	auto& reportedMisses = compositeMissReports[interior][specialization - 1];
+	if (gameplay && !(reportedMisses & reportBit) && spdlog::should_log(spdlog::level::info)) {
+		reportedMisses |= reportBit;
+		cache.compilationPool.detach_task([revision, variantName, interior, suppressed] {
+			logger::info("[ShaderSpecialization] composite_revision={} variant={} interior={} request={} source_compile=unknown",
+				revision, variantName, interior, suppressed ? "suppressed" : "allowed");
 		});
 	}
 	if (suppressed)
@@ -1016,8 +1026,11 @@ try {
 		if (!canCompile)
 			device = nullptr;
 		auto macros = BuildCompositeDefines(interior);
-		macros.push_back({ "IBL_LUMINANCE_RATIO", nullptr });
-		cache.compilationPool.detach_task([ticket, device, canCompile, macros = std::move(macros), interior, revision] {
+		if (luminanceRatio)
+			macros.push_back({ "IBL_LUMINANCE_RATIO", nullptr });
+		if (linearLighting)
+			macros.push_back({ "COMPOSITE_LINEAR_LIGHTING", nullptr });
+		cache.compilationPool.detach_task([ticket, device, canCompile, macros = std::move(macros), variantName, interior, revision] {
 			winrt::com_ptr<ID3D11ComputeShader> shader;
 			Util::ShaderCompileTiming timing;
 			HRESULT result = canCompile ? E_ABORT : E_NOTIMPL;
@@ -1027,16 +1040,16 @@ try {
 					shader.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShaderOnDevice(device.get(),
 						L"Data\\Shaders\\DeferredCompositeCS.hlsl", macros, "cs_5_0", "main", result, &timing)));
 					if (shader)
-						Util::SetResourceName(shader.get(), interior ? "Deferred::MainCompositeInteriorLuminanceRatioCS" : "Deferred::MainCompositeLuminanceRatioCS");
+						Util::SetResourceName(shader.get(), "Deferred::MainComposite%s::%s", interior ? "Interior" : "", variantName);
 				}
 			} catch (...) {
 				shader = nullptr;
 				result = E_FAIL;
 			}
 			try {
-				logger::info("[ShaderSpecialization] prepared composite_revision={} variant=ibl_luminance_ratio interior={} source={} source_compiles={} ready={} cancelled={} result=0x{:08X} elapsed_ms={:.3f}",
-					revision, interior, timing.sourceCompiles ? "source" : shader ? "disk_cache" :
-																					"none",
+				logger::info("[ShaderSpecialization] prepared composite_revision={} variant={} interior={} source={} source_compiles={} ready={} cancelled={} result=0x{:08X} elapsed_ms={:.3f}",
+					revision, variantName, interior, timing.sourceCompiles ? "source" : shader ? "disk_cache" :
+																								 "none",
 					timing.sourceCompiles,
 					bool(shader) && !ticket->IsCancelled(), ticket->IsCancelled(), static_cast<uint32_t>(result),
 					std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());

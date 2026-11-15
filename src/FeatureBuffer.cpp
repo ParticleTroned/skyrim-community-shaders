@@ -272,7 +272,7 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::ibl.PrepareFrameData(),
 		globals::features::extendedTranslucency.GetCommonBufferData(),
 		globals::features::adaptiveBrightness.GetCommonBufferData(),
-		globals::features::linearLighting.GetCommonBufferData(),
+		globals::features::linearLighting.PrepareFrameData(),
 		globals::features::terrainBlending.settings,
 		globals::features::truePBR.settings,
 		globals::features::foliageLighting.GetCommonBufferData(),

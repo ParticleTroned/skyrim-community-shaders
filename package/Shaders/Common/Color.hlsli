@@ -10,7 +10,11 @@
 #	include "Common/Permutation.hlsli"
 #endif
 
-#define ENABLE_LL SharedData::linearLightingSettings.enableLinearLighting
+#if defined(COMPOSITE_LINEAR_LIGHTING) && defined(COMPUTESHADER)
+#	define ENABLE_LL true
+#else
+#	define ENABLE_LL SharedData::linearLightingSettings.enableLinearLighting
+#endif
 #define ENABLE_ADAPTIVE_BRIGHTNESS_COLOR_ADJUSTMENTS SharedData::linearLightingSettings.enableAdaptiveBrightnessColorAdjustments
 
 // Object shaders opt into this so LL material/effect adjustments skip menu and

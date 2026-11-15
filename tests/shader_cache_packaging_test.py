@@ -1124,5 +1124,49 @@ class ShaderCachePackagingTests(unittest.TestCase):
             ],
         )
 
+
+class DeferredCompositeWorkloadTests(unittest.TestCase):
+    def test_specializations_preserve_runtime_and_feature_dependencies(self) -> None:
+        for runtime in ("SE", "VR"):
+            for linear in (False, True):
+                for ibl in (False, True):
+                    for cubemaps in (False, True):
+                        with self.subTest(runtime=runtime, linear=linear, ibl=ibl, cubemaps=cubemaps):
+                            features = {
+                                "LinearLighting": linear,
+                                "ImageBasedLighting": ibl,
+                                "DynamicCubemaps": cubemaps,
+                                "ScreenSpaceGI": True,
+                                "Skylighting": True,
+                            }
+                            requests = [
+                                request for request in BUILDER.standalone_shader_cache.release_requests(runtime, features)
+                                if request["source"] == "DeferredCompositeCS.hlsl"
+                            ]
+                            variants = set()
+                            for request in requests:
+                                macros = dict(request["defines"])
+                                interior = "INTERIOR" in macros
+                                self.assertEqual(request["profile"], "cs_5_0")
+                                self.assertIn("COMPUTESHADER", macros)
+                                self.assertEqual("VR" in macros, runtime == "VR")
+                                self.assertEqual("FRAMEBUFFER" in macros, runtime == "VR")
+                                self.assertEqual("SKYLIGHTING" in macros, not interior)
+                                self.assertEqual("IBL" in macros, ibl)
+                                self.assertEqual("DYNAMIC_CUBEMAPS" in macros, cubemaps)
+                                variants.add((
+                                    interior, "SSGI_AO_ONLY" in macros,
+                                    "COMPOSITE_LINEAR_LIGHTING" in macros, "IBL_LUMINANCE_RATIO" in macros,
+                                ))
+                            expected = {
+                                (interior, ao_only, use_linear, use_ratio)
+                                for interior in (False, True) for ao_only in (False, True)
+                                for use_linear in (False, True) if not use_linear or linear
+                                for use_ratio in (False, True) if not use_ratio or (ibl and cubemaps)
+                            }
+                            self.assertEqual(variants, expected)
+                            self.assertEqual(len(requests), len(expected), "Composite cache requests must not duplicate variants")
+
+
 if __name__ == "__main__":
     unittest.main()

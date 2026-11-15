@@ -19,6 +19,7 @@
 #include "Utils/VanityCamera.h"
 
 #include "Feature.h"
+#include "Features/DetailMaps.h"
 #include "Features/FurShells.h"
 #include "Features/GrassLighting.h"
 #include "Features/SnowCover.h"
@@ -767,12 +768,16 @@ struct BSShader_LoadShaders
 				}
 				auto vertexShaderDesriptor = entry->id;
 				auto pixelShaderDescriptor = entry->id;
-				prepareLookup(vertexShaderDesriptor, pixelShaderDescriptor);
-				shaderCache->GetPixelShader(*shader, pixelShaderDescriptor, SIE::ShaderCache::PixelShaderLookup::Precompile);
+				// Deferred normalization needs the material flags stripped by the forward lookup.
+				auto forwardVertexDescriptor = vertexShaderDesriptor;
+				auto forwardPixelDescriptor = pixelShaderDescriptor;
+				prepareLookup(forwardVertexDescriptor, forwardPixelDescriptor);
+				shaderCache->GetPixelShader(*shader, forwardPixelDescriptor, SIE::ShaderCache::PixelShaderLookup::Precompile);
 				prepareLookup(vertexShaderDesriptor, pixelShaderDescriptor, true);
 				shaderCache->PrewarmDeferredPixelShaders(*shader, pixelShaderDescriptor, categories, true);
 			}
 		}
+		shaderCache->PrewarmDiscoveredPixelShaders(*shader);
 		BSShaderHooks::hk_LoadShaders((REX::BSShader*)shader, stream);
 	};
 	static inline REL::Relocation<decltype(thunk)> func;
@@ -838,11 +843,17 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	// Only check against non-shader bits
 	const uint32_t runtimePixelBits = shader->shaderType.get() == RE::BSShader::Type::Water ?
 	                                      static_cast<uint32_t>(SIE::ShaderCache::WaterShaderFlags::Wading) :
+	                                  shader->shaderType.get() == RE::BSShader::Type::Lighting ?
+	                                      static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::BaseObjectIsSnow) |
+	                                          static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ShadowDir) |
+	                                          static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::AmbientSpecular) :
 	                                      0u;
 	state->permutationData.PixelShaderDescriptor = Util::ShaderDescriptor::UploadedPixelDescriptor(
 		state->permutationData.PixelShaderDescriptor, state->modifiedPixelDescriptor, runtimePixelBits);
 
 	state->techniqueShaderSelection = {};
+	++state->techniqueShaderSequence;
+	state->techniqueShaderRevision = shaderCache->GetGraphicsShaderRevision();
 	bool shaderFound = func(shader, vertexDescriptor, pixelDescriptor, skipPixelShader);
 	if (phaseDiagActive) {
 		const uint64_t phaseEndTicks = ReadFrameDiagCounterTicks();
@@ -879,7 +890,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 					logger::error("ReverseZ: Water technique rejected; VS={:X} available={} PS={:X} available={} skipped={} UW-ready={} VS-defines=[{}] PS-defines=[{}]. Check shader compile/create errors; restart after correcting shader inputs",
 						state->modifiedVertexDescriptor, vertexShader != nullptr, state->modifiedPixelDescriptor,
 						pixelShader != nullptr, skipPixelShader, globals::features::unifiedWater.loaded && !globals::features::unifiedWater.RequiresVanillaWaterShaders(),
-						shaderCache->GetDefinesString(*shader, state->modifiedVertexDescriptor),
+						shaderCache->GetDefinesString(*shader, state->modifiedVertexDescriptor, SIE::ShaderClass::Vertex),
 						shaderCache->GetDefinesString(*shader, state->modifiedPixelDescriptor));
 			}
 		} else {
@@ -890,6 +901,10 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 			*globals::game::currentPixelShader = pixelShader;
 			globals::d3d::context->PSSetShader(pixelShader ? reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader) : nullptr, NULL, NULL);
 			state->selectedCustomPixelShaderType = pixelShader ? shader->shaderType.get() : RE::BSShader::Type::None;
+			state->techniqueShaderSelection.vertex = vertexShader;
+			state->techniqueShaderSelection.vertexDescriptor = state->modifiedVertexDescriptor;
+			state->techniqueShaderSelection.pixel = pixelShader;
+			state->techniqueShaderSelection.pixelDescriptor = state->modifiedPixelDescriptor;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (globals::features::upscaling.IsNeuralRenderingEnabled())
 				NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
@@ -947,6 +962,19 @@ namespace EffectExtensions
 	};
 }
 
+namespace SkyExtensions
+{
+	struct BSSkyShader_RestoreGeometry
+	{
+		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
+		{
+			globals::state->RestoreSunGlareBindings();
+			func(shader, pass, renderFlags);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+}
+
 namespace LightingExtensions
 {
 	struct BSLightingShader_SetupGeometry
@@ -968,6 +996,9 @@ namespace LightingExtensions
 
 			state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::IsTree);
 
+			if (globals::features::detailMaps.IsEnabled())
+				globals::features::detailMaps.BeginPass(shader, pass);
+
 			if (auto userData = pass->geometry->GetUserData())
 				if (auto baseObject = userData->GetBaseObject())
 					if (baseObject->As<RE::TESObjectTREE>())
@@ -984,8 +1015,11 @@ struct AcceptedDrawRestoreGeometry
 {
 	static void thunk(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_flags)
 	{
-		if constexpr (ShaderKind == 1)
+		if constexpr (ShaderKind == 1) {
+			if (globals::features::detailMaps.HasActivePass())
+				globals::features::detailMaps.EndPass();
 			TerrainSeams::GetInstance().Restore();
+		}
 		if (globals::game::isVR)
 			CSX::Api::SuspendAcceptedDrawGeometry();
 		func(a_shader, a_pass, a_flags);
@@ -1330,11 +1364,13 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 
 void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 {
+	// Release owned bindings before native state updates can replace their saved values.
+	globals::state->RestoreSunGlareBindings();
 	const auto callerRva = static_cast<uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - REL::Module::get().base());
 	if (!ShouldRecordCSFramePhaseDiag()) {
 		func(isCompute);
 		globals::features::terrainBlending.OnSetDirtyStates(isCompute, callerRva);
-		globals::state->Draw();
+		globals::state->Draw(isCompute);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (globals::features::upscaling.IsNeuralRenderingEnabled())
 			NeuralRendering::Color::ExposureCapture::Instance().ObserveGraphicsStateFlush(globals::d3d::context, isCompute);
@@ -1357,7 +1393,7 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 	RecordCSFrameHookPhase(CSFrameHookPhase::TerrainOnSetDirtyStates, frame, phaseEndTicks - phaseStartTicks);
 
 	phaseStartTicks = phaseEndTicks;
-	globals::state->Draw();
+	globals::state->Draw(isCompute);
 	phaseEndTicks = ReadFrameDiagCounterTicks();
 	RecordCSFrameHookPhase(CSFrameHookPhase::StateDraw, frame, phaseEndTicks - phaseStartTicks);
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -1929,7 +1965,14 @@ namespace Hooks
 					auto type = currentShader->shaderType.get();
 					if (state->ShaderEnabled(type) && !UseNativeWaterShaders(*currentShader)) {
 						RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*currentShader, state->modifiedPixelDescriptor, SIE::ShaderCache::PixelShaderLookup::Draw);
-						if (pixelShader) {
+						using UtilityFlags = SIE::ShaderCache::UtilityShaderFlags;
+						constexpr auto paraboloidFlags = static_cast<uint32_t>(UtilityFlags::RenderShadowmap) | static_cast<uint32_t>(UtilityFlags::RenderShadowmapPb);
+						const bool paraboloidCaster = type == RE::BSShader::Type::Utility &&
+						                              (state->modifiedPixelDescriptor & (paraboloidFlags | static_cast<uint32_t>(UtilityFlags::OpaqueEffect))) == paraboloidFlags;
+						// The near-caster cutoff needs the extra interpolant from the selected custom vertex shader.
+						const auto& selected = state->techniqueShaderSelection;
+						const bool compatibleVertex = !paraboloidCaster || (selected.vertex && selected.vertexDescriptor == state->modifiedVertexDescriptor);
+						if (pixelShader && compatibleVertex) {
 							globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
 							state->techniqueShaderSelection.pixel = pixelShader;
 							state->techniqueShaderSelection.pixelDescriptor = state->modifiedPixelDescriptor;
@@ -2631,6 +2674,7 @@ namespace Hooks
 		stl::write_thunk_call<TESWaterReflections_Update_Actor_GetLOSPosition>(REL::RelocationID(31373, 32160).address() + REL::Relocate(0x1AD, 0x1CA, 0x1ed));
 
 		logger::info("Installing SetupGeometry hooks");
+		stl::write_vfunc<0x7, SkyExtensions::BSSkyShader_RestoreGeometry>(RE::VTABLE_BSSkyShader[0]);
 		stl::write_vfunc<0x6, EffectExtensions::BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
 		stl::write_vfunc<0x6, LightingExtensions::BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 		stl::write_vfunc<0x7, AcceptedDrawRestoreGeometry<1>>(RE::VTABLE_BSLightingShader[0]);

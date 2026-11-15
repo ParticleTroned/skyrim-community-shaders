@@ -60,6 +60,12 @@ namespace
 	static_assert(CoversStartupCompilationCpuShare());
 	static_assert(CoversCooperativePrioritySelection());
 	static_assert(CoversWorkerPriorityLifecycle());
+	static_assert(CanCompileOptionalSources(false, false, false));
+	static_assert(!CanCompileOptionalSources(true, false, false));
+	static_assert(!CanCompileOptionalSources(false, true, false));
+	static_assert(!CanCompileOptionalSources(false, false, true));
+	static_assert(!CanCompileOptionalSources(false, true, true));
+	static_assert(!CanCompileOptionalSources(true, true, true));
 }
 
 int main()

@@ -6,6 +6,7 @@
 #include "Menu/AdaptiveBalancePresets.h"
 #include "Menu/SettingsActions.h"
 #include "Menu/SettingsPage.h"
+#include "Menu/SettingsSearch.h"
 #include "Utils/FeatureProfiling.h"
 #include "Utils/NumericEntry.h"
 #include "Utils/StringUtils.h"
@@ -325,6 +326,11 @@ namespace Util
 		}
 		~StyledButtonWrapper() { ImGui::PopStyleColor(3); }
 	};
+}
+namespace MenuUI::SettingsSearch
+{
+	void NotifyControl(const char*) {}
+	bool SelectNavigationChoice(const char*, int&, const char* const[], int) { return false; }
 }
 #include "settings_page_under_test.h"
 #include "settings_widget_under_test.h"

@@ -108,7 +108,8 @@ namespace Util::Settings
 			// Persisted JSON loses the signedness and width of the C++ settings.
 			static const nlohmann::json schemas{
 				{ "General", { { "Enable Shaders", true }, { "Enable Disk Cache", true },
-								 { "Skip Unchanged Shaders", true }, { "Enable Async", true } } },
+								 { "Skip Unchanged Shaders", true }, { "Enable Async", true },
+								 { "Resident Only Lighting Specializations", false } } },
 				{ "Advanced", { { "Dump Shaders", false }, { "Log Level", std::int32_t{ 0 } },
 								  { "Shader Defines", "" }, { "Compiler Threads", std::int32_t{ 0 } },
 								  { "Background Compiler Threads", std::int32_t{ 0 } }, { "Use FileWatcher", false },

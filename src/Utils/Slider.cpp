@@ -1,6 +1,7 @@
 #include "Features/VR.h"
 #include "Globals.h"
 #include "Menu.h"
+#include "Menu/SettingsSearch.h"
 #include "NumericEntry.h"
 #include "UI.h"
 #include "UISmoothing.h"
@@ -45,8 +46,9 @@ namespace Util::Widgets
 		struct ControlRow
 		{
 			float indent = 0;
+			const char* label;
 			bool active;
-			explicit ControlRow(const char* label) : active(controlLayout != 0 && ImGui::FindRenderedTextEnd(label) != label)
+			explicit ControlRow(const char* a_label) : label(a_label), active(controlLayout != 0 && ImGui::FindRenderedTextEnd(a_label) != a_label)
 			{
 				if (!active)
 					return;
@@ -72,6 +74,7 @@ namespace Util::Widgets
 			}
 			~ControlRow()
 			{
+				const SKSE::stl::scope_exit reveal([this] { MenuUI::SettingsSearch::NotifyControl(label); });
 				if (!active)
 					return;
 				ImGui::PopItemWidth();
@@ -454,6 +457,7 @@ namespace Util::Widgets
 
 	bool Checkbox(const char* label, bool* value)
 	{
+		const SKSE::stl::scope_exit reveal([label] { MenuUI::SettingsSearch::NotifyControl(label); });
 		auto& g = *GImGui;
 		auto* window = ImGui::GetCurrentWindow();
 		if (window->SkipItems)
@@ -672,6 +676,7 @@ namespace Util::Widgets
 
 	bool RadioButton(const char* label, bool active)
 	{
+		const SKSE::stl::scope_exit reveal([label] { MenuUI::SettingsSearch::NotifyControl(label); });
 		const ControlStyle style(controlLayout != 0);
 		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, { ImGui::GetStyle().FramePadding.x, std::max(0.0f, (CheckboxSize() - ImGui::GetFontSize()) * .5f) });
 		const SKSE::stl::scope_exit restore([] { ImGui::PopStyleVar(); });

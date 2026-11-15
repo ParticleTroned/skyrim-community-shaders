@@ -67,11 +67,11 @@ static const float3 noise3D[32] = {
 	const float3 arrayDimsF = float3(arrayDims);
 	uint sliceCount = max(1u, settings.ProbeUpdateSliceCount);
 	uint probeSlice = settings.ProbeUpdateSliceStart + dtid.z;
-	if (dtid.z >= sliceCount || probeSlice >= arrayDims.z)
+	if (dtid.z >= sliceCount || probeSlice >= arrayDims.z || any(dtid.xy >= arrayDims.xy))
 		return;
 
 	uint3 probeTexID = uint3(dtid.xy, probeSlice);
-	uint3 cellID = (probeTexID + arrayDims - settings.ArrayOrigin.xyz) % arrayDims;
+	uint3 cellID = Skylighting::WrapProbeIndexOnce(probeTexID + arrayDims - settings.ArrayOrigin.xyz, arrayDims);
 	int3 cellIDInt = int3(cellID);
 	int3 validMin = max(0, settings.ValidMargin.xyz);
 	int3 validMax = int3(arrayDims) - 1 + min(0, settings.ValidMargin.xyz);

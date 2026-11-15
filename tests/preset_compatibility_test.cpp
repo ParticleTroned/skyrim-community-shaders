@@ -70,7 +70,6 @@ int main(int argc, char** argv)
 		assert(marker.at("presetVersion") == policy.at("packageVersion"));
 		assert(marker.at("target") == policy.at("presetCompatibility").at("target"));
 		assert(marker.at("settingsContract").at("revision") == PresetCompatibility::kSettingsContractRevision);
-		assert(marker.at("settingsContract").at("sourceTreeSha256") == policy.at("runtimeSettingsContract").at("sourceTreeSha256"));
 		std::ifstream metadataInput(entry.path() / "meta.ini");
 		assert(metadataInput.is_open());
 		std::size_t versionCount = 0;
@@ -111,6 +110,9 @@ int main(int argc, char** argv)
 		std::ifstream input(path);
 		assert(input.is_open());
 		const auto preset = nlohmann::json::parse(input);
+		// Archived vendor presets retain the fingerprint of their source snapshot.
+		assert(preset.at("Preset Compatibility").at("settingsContract").at("sourceTreeSha256") ==
+			   policy.at("runtimeSettingsContract").at("sourceTreeSha256"));
 		assert(preset.at("VR").at("WandAimPitchTrimDegrees") == -26.0);
 		const auto& nr = preset.at("Neural Rendering").at("rendering");
 		assert(nr.at("neuralRenderingEnabled") == false);

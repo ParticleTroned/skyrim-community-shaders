@@ -1124,5 +1124,97 @@ class ShaderCachePackagingTests(unittest.TestCase):
             ],
         )
 
+
+class EffectLightingWorkloadTests(unittest.TestCase):
+    def test_specialization_retains_general_and_category_layouts(self) -> None:
+        macro = "AMBIENT_WORLD_EFFECT_LIGHTING"
+        for ibl, cubemaps in ((False, False), (False, True), (True, False), (True, True)):
+            with self.subTest(ibl=ibl, cubemaps=cubemaps):
+                config = {"shaders": [{"file": "Effect.hlsl", "configs": {
+                    "VSHADER": {"entries": [{"entry": "Effect:Vertex:1", "defines": ["VC"]}]},
+                    "PSHADER": {"common_defines": ["IBL", "DYNAMIC_CUBEMAPS"], "entries": [
+                        {"entry": "Effect:Pixel:18000001", "defines": ["VC", "DEFERRED", macro]},
+                    ]},
+                }}]}
+                BUILDER.append_character_category_variants(config, REPO)
+                states = {"AdaptiveBrightness": True, "ImageBasedLighting": ibl, "DynamicCubemaps": cubemaps}
+                BUILDER.append_effect_lighting_variants(config, REPO, states)
+                stages = config["shaders"][0]["configs"]
+                self.assertEqual(stages["VSHADER"]["entries"], [{"entry": "Effect:Vertex:1", "defines": ["VC"]}])
+                entries = {entry["entry"]: entry["defines"] for entry in stages["PSHADER"]["entries"]}
+                expected = {"Effect:Pixel:8000001", "Effect:Pixel:8000201"}
+                if ibl and cubemaps:
+                    expected.update({"Effect:Pixel:18000001", "Effect:Pixel:18000201"})
+                self.assertEqual(set(entries), expected)
+                for key, defines in entries.items():
+                    self.assertEqual(macro in defines, key.startswith("Effect:Pixel:18"))
+                    self.assertEqual("CHARACTER_CATEGORY" in defines, key.endswith("201"))
+                self.assertEqual(BUILDER.append_effect_lighting_variants(config, REPO, states), 0)
+
+    def test_rejects_mismatched_or_conflicting_specializations(self) -> None:
+        states = {"AdaptiveBrightness": True, "ImageBasedLighting": True, "DynamicCubemaps": True}
+        for entries in (
+            [{"entry": "Effect:Pixel:10000001", "defines": ["VC"]}],
+            [{"entry": "Effect:Pixel:1", "defines": ["AMBIENT_WORLD_EFFECT_LIGHTING"]}],
+            [{"entry": "Effect:Pixel:1", "defines": ["VC"]},
+             {"entry": "Effect:Pixel:10000001", "defines": ["TEXTURE", "AMBIENT_WORLD_EFFECT_LIGHTING"]}],
+        ):
+            with self.subTest(entries=entries), self.assertRaises(SystemExit):
+                BUILDER.append_effect_lighting_variants(
+                    {"shaders": [{"file": "Effect.hlsl", "configs": {"PSHADER": {"entries": entries}}}]}, REPO, states)
+
+    def test_unavailable_effect_dependencies_do_not_add_variants(self) -> None:
+        for adaptive, macros in ((False, ["IBL", "DYNAMIC_CUBEMAPS"]), (True, ["IBL"]), (True, [])):
+            config = {"shaders": [{"file": "Effect.hlsl", "configs": {"PSHADER": {
+                "common_defines": [macros], "entries": [{"entry": "Effect:Pixel:1", "defines": ["VC"]}],
+            }}}]}
+            states = {"AdaptiveBrightness": adaptive, "ImageBasedLighting": True, "DynamicCubemaps": True}
+            self.assertEqual(BUILDER.append_effect_lighting_variants(config, REPO, states), 0)
+            self.assertEqual(len(config["shaders"][0]["configs"]["PSHADER"]["entries"]), 1)
+
+
+class DeferredCompositeWorkloadTests(unittest.TestCase):
+    def test_specializations_preserve_runtime_and_feature_dependencies(self) -> None:
+        for runtime in ("SE", "VR"):
+            for linear in (False, True):
+                for ibl in (False, True):
+                    for cubemaps in (False, True):
+                        with self.subTest(runtime=runtime, linear=linear, ibl=ibl, cubemaps=cubemaps):
+                            features = {
+                                "LinearLighting": linear,
+                                "ImageBasedLighting": ibl,
+                                "DynamicCubemaps": cubemaps,
+                                "ScreenSpaceGI": True,
+                                "Skylighting": True,
+                            }
+                            requests = [
+                                request for request in BUILDER.standalone_shader_cache.release_requests(runtime, features)
+                                if request["source"] == "DeferredCompositeCS.hlsl"
+                            ]
+                            variants = set()
+                            for request in requests:
+                                macros = dict(request["defines"])
+                                interior = "INTERIOR" in macros
+                                self.assertEqual(request["profile"], "cs_5_0")
+                                self.assertIn("COMPUTESHADER", macros)
+                                self.assertEqual("VR" in macros, runtime == "VR")
+                                self.assertEqual("FRAMEBUFFER" in macros, runtime == "VR")
+                                self.assertEqual("SKYLIGHTING" in macros, not interior)
+                                self.assertEqual("IBL" in macros, ibl)
+                                self.assertEqual("DYNAMIC_CUBEMAPS" in macros, cubemaps)
+                                variants.add((
+                                    interior, "SSGI_AO_ONLY" in macros,
+                                    "COMPOSITE_LINEAR_LIGHTING" in macros, "IBL_LUMINANCE_RATIO" in macros,
+                                ))
+                            expected = {
+                                (interior, ao_only, use_linear, use_ratio)
+                                for interior in (False, True) for ao_only in (False, True)
+                                for use_linear in (False, True) if not use_linear or linear
+                                for use_ratio in (False, True) if not use_ratio or (ibl and cubemaps)
+                            }
+                            self.assertEqual(variants, expected)
+                            self.assertEqual(len(requests), len(expected), "Composite cache requests must not duplicate variants")
+
+
 if __name__ == "__main__":
     unittest.main()

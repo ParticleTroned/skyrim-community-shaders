@@ -1,3 +1,4 @@
+#include "ShaderCompilationSchedulingPolicy.h"
 #include "reverse_z_test_stub.h"
 
 #include <algorithm>
@@ -39,6 +40,7 @@ namespace RE
 		enum class Type
 		{
 			Lighting,
+			Effect,
 			Total
 		};
 		struct TypeValue
@@ -116,17 +118,8 @@ namespace SIE
 	}
 	struct ShaderCache
 	{
-		enum class VertexShaderLookup
-		{
-			Compile,
-			Draw
-		};
-		enum class PixelShaderLookup
-		{
-			Compile,
-			Cached,
-			Draw
-		};
+#include "shader_block_lighting_constants.h"
+#include "shader_block_lookup_contract.h"
 		template <class T>
 		using Maps = std::array<std::unordered_map<std::uint32_t, std::unique_ptr<T>>, 1>;
 		Maps<RE::BSGraphics::VertexShader> vertexShaders;
@@ -134,6 +127,13 @@ namespace SIE
 		Maps<RE::BSGraphics::ComputeShader> computeShaders;
 		std::mutex vertexShadersMutex, pixelShadersMutex, computeShadersMutex;
 		std::atomic<unsigned> activeShaderCaptureFramesRemaining{};
+		std::atomic<bool> backgroundCompilation{};
+		std::atomic_bool startupCompilationComplete{ false };
+		std::atomic_bool menuLoaded{ false };
+		bool ResidentOnlyLightingSpecializations() const { return false; }
+		bool UsesRuntimeLightingSpecializationPolicy() const;
+		void RecordLightingSpecializationMiss(RE::BSShader::Type, uint32_t, bool) {}
+		void RegisterSpecializationBase(RE::BSShader::Type, uint32_t) {}
 		int blockedKeyIndex = -1;
 		std::string blockedKey;
 		std::vector<std::uint32_t> blockedIDs;
@@ -142,6 +142,7 @@ namespace SIE
 			ShaderClass stage;
 			const RE::BSShader& shader;
 			std::uint32_t descriptor;
+			bool precompile = false;
 		};
 		struct Queue
 		{
@@ -177,7 +178,9 @@ namespace SIE
 		RE::BSGraphics::PixelShader* GetPixelShader(const RE::BSShader&, std::uint32_t, PixelShaderLookup);
 		RE::BSGraphics::ComputeShader* GetComputeShader(const RE::BSShader&, std::uint32_t);
 	};
-#include "shader_block_pixel_compute_under_test.h"
+#include "runtime_specialization_policy.h"
+#include "shader_block_compute_under_test.h"
+#include "shader_block_pixel_under_test.h"
 #include "shader_block_vertex_under_test.h"
 }
 

@@ -1,5 +1,6 @@
 #define NOMINMAX
 #include "Utils/DeviceContextState.h"
+#include "Utils/FullscreenPassState.h"
 #include <array>
 #include <cstdarg>
 #include <cstdio>
@@ -52,6 +53,79 @@ static void TestIsolationFallback()
 	context->IAGetPrimitiveTopology(&topology);
 	Require(topology == D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP, "rejected isolation preserves context state");
 }
+template <UINT Slot, UINT ResourceCount, bool SaveSampler>
+static void TestFullscreenRestoration(ID3D11Device* device, ID3D11DeviceContext1* context, UINT outputSlot)
+{
+	context->ClearState();
+	D3D11_BUFFER_DESC bufferDesc{};
+	bufferDesc.ByteWidth = 1024;
+	bufferDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+	winrt::com_ptr<ID3D11Buffer> buffer;
+	Check(device->CreateBuffer(&bufferDesc, nullptr, buffer.put()));
+	Util::SetResourceName(buffer.get(), "Test::FullscreenConstants");
+	auto* cb = buffer.get();
+	const UINT first = 16, count = 16;
+	context->PSSetConstantBuffers1(Slot, 1, &cb, &first, &count);
+	D3D11_TEXTURE2D_DESC desc{};
+	desc.Width = desc.Height = 16;
+	desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+	desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+	winrt::com_ptr<ID3D11Texture2D> texture;
+	winrt::com_ptr<ID3D11ShaderResourceView> srv;
+	winrt::com_ptr<ID3D11RenderTargetView> rtv;
+	Check(device->CreateTexture2D(&desc, nullptr, texture.put()));
+	Util::SetResourceName(texture.get(), "Test::FullscreenAlias");
+	Check(device->CreateShaderResourceView(texture.get(), nullptr, srv.put()));
+	Util::SetResourceName(srv.get(), "Test::FullscreenAlias SRV");
+	Check(device->CreateRenderTargetView(texture.get(), nullptr, rtv.put()));
+	Util::SetResourceName(rtv.get(), "Test::FullscreenAlias RTV");
+	auto* input = srv.get();
+	context->PSSetShaderResources(0, 1, &input);
+	desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+	winrt::com_ptr<ID3D11Texture2D> unorderedTexture;
+	winrt::com_ptr<ID3D11UnorderedAccessView> unorderedView;
+	Check(device->CreateTexture2D(&desc, nullptr, unorderedTexture.put()));
+	Util::SetResourceName(unorderedTexture.get(), "Test::FullscreenUnordered");
+	Check(device->CreateUnorderedAccessView(unorderedTexture.get(), nullptr, unorderedView.put()));
+	Util::SetResourceName(unorderedView.get(), "Test::FullscreenUnordered UAV");
+	auto* unorderedOutput = unorderedView.get();
+	context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, outputSlot, 1, &unorderedOutput, nullptr);
+	D3D11_QUERY_DESC query{ D3D11_QUERY_OCCLUSION_PREDICATE, 0 };
+	winrt::com_ptr<ID3D11Predicate> predicate;
+	Check(device->CreatePredicate(&query, predicate.put()));
+	Util::SetResourceName(predicate.get(), "Test::FullscreenPredicate");
+	context->SetPredication(predicate.get(), TRUE);
+	try {
+		Util::FullscreenPassState<Slot, ResourceCount, SaveSampler> restore(context);
+		winrt::com_ptr<ID3D11Predicate> activePredicate;
+		context->GetPredication(activePredicate.put(), nullptr);
+		Require(!activePredicate, "fullscreen work ignores engine predication");
+		auto* output = rtv.get();
+		context->OMSetRenderTargets(1, &output, nullptr);
+		ID3D11Buffer* empty = nullptr;
+		context->PSSetConstantBuffers(Slot, 1, &empty);
+		throw std::runtime_error("fullscreen pass aborted");
+	} catch (const std::runtime_error& error) {
+		Require(std::string(error.what()) == "fullscreen pass aborted", error.what());
+	}
+	winrt::com_ptr<ID3D11ShaderResourceView> restoredInput;
+	context->PSGetShaderResources(0, 1, restoredInput.put());
+	Require(restoredInput == srv, "restore input after releasing aliased output");
+	winrt::com_ptr<ID3D11Buffer> restoredBuffer;
+	UINT restoredFirst = 0, restoredCount = 0;
+	context->PSGetConstantBuffers1(Slot, 1, restoredBuffer.put(), &restoredFirst, &restoredCount);
+	Require(restoredBuffer == buffer && restoredFirst == first && restoredCount == count, "restore constant-buffer window");
+	winrt::com_ptr<ID3D11Predicate> restoredPredicate;
+	BOOL value = FALSE;
+	context->GetPredication(restoredPredicate.put(), &value);
+	Require(restoredPredicate == predicate && value, "restore fullscreen predication");
+	winrt::com_ptr<ID3D11UnorderedAccessView> restoredOutput;
+	context->OMGetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, outputSlot, 1, restoredOutput.put());
+	Require(restoredOutput == unorderedView, "restore output UAV displaced by fullscreen targets");
+	context->ClearState();
+}
+
 int main()
 {
 	try {
@@ -179,6 +253,10 @@ int main()
 		} catch (const std::runtime_error&) {}
 		verify();
 		context->ClearState();
+		for (UINT slot : { 0u, 7u }) {
+			TestFullscreenRestoration<0, 3, true>(device.get(), context1.get(), slot);
+			TestFullscreenRestoration<1, 1, false>(device.get(), context1.get(), slot);
+		}
 		std::cout << "D3D11 WARP full-state restoration passed\n";
 		return 0;
 	} catch (const std::exception& error) {

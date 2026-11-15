@@ -1,4 +1,5 @@
 #include "ReverseZ.h"
+#include "Utils/GraphicsCameraState.h"
 
 #include "Diagnostics/PerformanceCostExperiments.h"
 #include "Features/VRDepthCullingTemporal.h"
@@ -56,22 +57,8 @@ namespace
 	constexpr DXGI_FORMAT kStandardDepthTypeless = DXGI_FORMAT_R24G8_TYPELESS;
 	constexpr DXGI_FORMAT kFloatDepthTypeless = DXGI_FORMAT_R32G8X24_TYPELESS;
 
-	// Flat layout of the entry BSGraphics::State::BuildCameraStateData fills. ViewData is
-	// alignas(16), so it lands at +0x10 after the NiCamera pointer, not at +0x08.
-	struct CameraStateEntry
-	{
-		RE::NiCamera* referenceCamera;
-		RE::BSGraphics::ViewData viewData;
-	};
-	static_assert(offsetof(CameraStateEntry, viewData) == 0x10);
-
-	// VR layout of the same entry: one ViewData per eye, which a universal CommonLib build compiles out.
-	struct CameraStateEntryVR
-	{
-		RE::NiCamera* referenceCamera;
-		RE::BSTArray<RE::BSGraphics::ViewData> viewData;
-	};
-	static_assert(offsetof(CameraStateEntryVR, viewData) == 0x08);
+	using CameraStateEntry = Util::GraphicsCamera::FlatStateEntry;
+	using CameraStateEntryVR = Util::GraphicsCamera::StereoStateEntry;
 
 	std::shared_mutex g_viewMutex;
 	struct ViewVerdict

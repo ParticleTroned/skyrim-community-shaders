@@ -12,6 +12,24 @@ namespace Wetterness
 
 	Texture2D<float2> TexPuddleMask : register(t71);
 
+	/** Restricts standing water to normalized, upward mesh normals; zero normals reject puddles. */
+	float GetFlatSurfacePuddleMask(float3 meshNormal)
+	{
+		const float fullCoverageUpness = 0.998629535;  // cos(3 degrees)
+		const float zeroCoverageUpness = 0.990268069;  // cos(8 degrees)
+		return smoothstep(zeroCoverageUpness, fullCoverageUpness, saturate(meshNormal.z));
+	}
+
+	/** Evaluates a camera-facing triangle normal independently of its screen-space area. */
+	float GetGeometricPuddleMask(float3 faceNormal)
+	{
+		// Derivative magnitudes vary with distance and resolution, so rescale before normalization.
+		float normalScale = max(max(abs(faceNormal.x), abs(faceNormal.y)), abs(faceNormal.z));
+		float3 scaledNormal = faceNormal / max(normalScale, 1e-20);
+		float3 meshNormal = scaledNormal * rsqrt(max(dot(scaledNormal, scaledNormal), 1e-20));
+		return GetFlatSurfacePuddleMask(meshNormal);
+	}
+
 	/** Evaluates the selected noise pattern; Simple bypasses this helper. */
 	float GetPuddleNoiseSignal(
 		float3 puddleCoordsBase,

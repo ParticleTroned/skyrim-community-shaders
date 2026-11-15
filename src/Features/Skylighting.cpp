@@ -35,6 +35,14 @@ namespace
 		ProbeGridPreset{ 192, 192, 96, "Balanced (192 x 192 x 96)" },
 		ProbeGridPreset{ 256, 256, 128, "Quality (256 x 256 x 128)" },
 	};
+	static_assert([] {
+		for (const auto& preset : kProbeGridPresets) {
+			if (preset.Width != preset.Height || preset.Width != preset.Depth * 2)
+				return false;
+		}
+		return true;
+	}(),
+		"Probe tangent weighting requires cubic world-space cells");
 	constexpr uint kQualityProbeGrid = static_cast<uint>(kProbeGridPresets.size() - 1);
 	static_assert(kQualityProbeGrid == 2);
 

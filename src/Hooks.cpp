@@ -890,6 +890,8 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 			*globals::game::currentPixelShader = pixelShader;
 			globals::d3d::context->PSSetShader(pixelShader ? reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader) : nullptr, NULL, NULL);
 			state->selectedCustomPixelShaderType = pixelShader ? shader->shaderType.get() : RE::BSShader::Type::None;
+			state->techniqueShaderSelection.vertex = vertexShader;
+			state->techniqueShaderSelection.vertexDescriptor = state->modifiedVertexDescriptor;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (globals::features::upscaling.IsNeuralRenderingEnabled())
 				NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(
@@ -942,6 +944,19 @@ namespace EffectExtensions
 			}
 			if (globals::game::isVR)
 				CSX::Api::ActivateAcceptedDrawGeometry(pass);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+}
+
+namespace SkyExtensions
+{
+	struct BSSkyShader_RestoreGeometry
+	{
+		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
+		{
+			globals::state->RestoreSunGlareBindings();
+			func(shader, pass, renderFlags);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -1330,11 +1345,13 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 
 void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 {
+	// Release owned bindings before native state updates can replace their saved values.
+	globals::state->RestoreSunGlareBindings();
 	const auto callerRva = static_cast<uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - REL::Module::get().base());
 	if (!ShouldRecordCSFramePhaseDiag()) {
 		func(isCompute);
 		globals::features::terrainBlending.OnSetDirtyStates(isCompute, callerRva);
-		globals::state->Draw();
+		globals::state->Draw(isCompute);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (globals::features::upscaling.IsNeuralRenderingEnabled())
 			NeuralRendering::Color::ExposureCapture::Instance().ObserveGraphicsStateFlush(globals::d3d::context, isCompute);
@@ -1357,7 +1374,7 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 	RecordCSFrameHookPhase(CSFrameHookPhase::TerrainOnSetDirtyStates, frame, phaseEndTicks - phaseStartTicks);
 
 	phaseStartTicks = phaseEndTicks;
-	globals::state->Draw();
+	globals::state->Draw(isCompute);
 	phaseEndTicks = ReadFrameDiagCounterTicks();
 	RecordCSFrameHookPhase(CSFrameHookPhase::StateDraw, frame, phaseEndTicks - phaseStartTicks);
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -2631,6 +2648,7 @@ namespace Hooks
 		stl::write_thunk_call<TESWaterReflections_Update_Actor_GetLOSPosition>(REL::RelocationID(31373, 32160).address() + REL::Relocate(0x1AD, 0x1CA, 0x1ed));
 
 		logger::info("Installing SetupGeometry hooks");
+		stl::write_vfunc<0x7, SkyExtensions::BSSkyShader_RestoreGeometry>(RE::VTABLE_BSSkyShader[0]);
 		stl::write_vfunc<0x6, EffectExtensions::BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
 		stl::write_vfunc<0x6, LightingExtensions::BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 		stl::write_vfunc<0x7, AcceptedDrawRestoreGeometry<1>>(RE::VTABLE_BSLightingShader[0]);

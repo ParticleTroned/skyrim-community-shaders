@@ -475,7 +475,7 @@ namespace
 	};
 }
 
-void State::Draw()
+void State::Draw(bool isCompute)
 {
 #ifdef TRACY_SUPPORT
 	const bool emitTracyDrawZones = Util::TracyZones::PerDrawZonesEnabled();
@@ -598,6 +598,20 @@ void State::Draw()
 		}
 
 		updateShader = false;
+
+		if (!isCompute && currentShader && currentShader->shaderType.get() == RE::BSShader::Type::Sky &&
+			techniqueShaderSelection.vertex &&
+			(currentVertexDescriptor & 255) == static_cast<uint32_t>(SIE::ShaderCache::SkyShaderTechniques::SunGlare)) {
+			auto* sky = globals::game::sky;
+			const bool sceneDepthValid = !isMapMenuOpen && !Util::IsInterior() && sky &&
+			                             !sky->flags.any(RE::Sky::Flags::kHideSky) &&
+			                             !(permutationData.ExtraShaderDescriptor & static_cast<uint32_t>(ExtraShaderDescriptors::IsReflections));
+			// Sky writes the depth copy, so the main depth view supplies opaque scene visibility.
+			auto* depth = sceneDepthValid && globals::game::renderer ?
+			                  reinterpret_cast<ID3D11ShaderResourceView*>(globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV) :
+			                  nullptr;
+			sunGlareBindings.emplace(context, depth);
+		}
 	}
 }
 
@@ -881,6 +895,8 @@ void State::UpdateSaveLoadSafeMode()
 
 void State::Reset()
 {
+	RestoreSunGlareBindings();
+	techniqueShaderSelection = {};
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	CSX::Diagnostics::PerformanceCosts::ProcessPendingChanges();
 #endif

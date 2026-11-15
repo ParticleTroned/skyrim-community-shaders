@@ -1108,7 +1108,60 @@ void TestFallbackLightingSpecializations()
 	}
 }
 
-void TestStartupLightingDescriptors()
+void TestFallbackShaderRecovery()
+{
+	using Cache = SIE::ShaderCache;
+	constexpr uint32_t base = 0x10011u;
+	constexpr auto flags = Cache::kLightingNoMeshVariation | Cache::kLightingNoLocalLights;
+	constexpr auto requested = base | Cache::kLightingDryWeather;
+	for (bool nativeReady : { false, true }) {
+		for (bool residentOnly : { false, true }) {
+			Fixture f;
+			f.cache.startupCompilationComplete = true;
+			f.cache.residentOnly = residentOnly;
+			ID3D11VertexShader vertexShader;
+			RE::BSGraphics::VertexShader vertex{ &vertexShader };
+			f.cache.vertex = &vertex;
+			Hooks::BSShader_BeginTechnique::func = NativeTechnique;
+			nativeTechniqueReady = nativeReady;
+			nativeTechniquePixel = &f.native;
+			auto* standard = f.cache.Add(f.shader, base);
+			Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, base, base, false));
+			f.cache.SelectLightingPixelShader(f.shader, flags);
+			Require(f.context.bound == standard->shader);
+			Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, base, requested, false));
+			Require(f.state.techniqueShaderSelection.pixelDescriptor == requested);
+			Require(f.state.techniqueShaderSelection.pixel == standard);
+			f.cache.compilationSet.requests.clear();
+			const auto binds = f.context.binds, locks = f.cache.pixelShadersMutex.locks;
+			f.cache.SelectLightingPixelShader(f.shader, flags);
+			Require(f.context.binds == binds && f.cache.pixelShadersMutex.locks == locks);
+			Require(f.cache.compilationSet.requests.empty() && f.cache.compiles == 0);
+			Require(f.current == (nativeReady ? &f.native : standard));
+
+			// A fallback must discard the earlier miss throttle even for the same shader and frame.
+			auto* variant = f.cache.Add(f.shader, base | flags);
+			variant->constantBuffers = standard->constantBuffers;
+			Require(Hooks::BSShader_BeginTechnique::thunk(&f.shader, base, base, false));
+			f.cache.SelectLightingPixelShader(f.shader, flags);
+			Require(f.context.bound == variant->shader && f.state.frameCount == 0);
+			Require(f.current == (nativeReady ? &f.native : variant));
+			f.cache.SelectLightingPixelShader(f.shader, 0);
+			Require(f.context.bound == standard->shader);
+			Require(f.current == (nativeReady ? &f.native : standard));
+
+			// Invalidation makes the captured pointer unusable until another technique selects it.
+			++f.cache.graphicsRevision;
+			f.cache.pixelShaders[f.shader.shaderType.underlying()].clear();
+			const auto invalidatedBinds = f.context.binds, invalidatedLocks = f.cache.pixelShadersMutex.locks;
+			f.cache.SelectLightingPixelShader(f.shader, flags);
+			Require(f.context.binds == invalidatedBinds && f.cache.pixelShadersMutex.locks == invalidatedLocks);
+			Require(f.cache.compilationSet.requests.empty());
+		}
+	}
+}
+
+void TestStartupLightingDescriptors(bool forwardCached)
 {
 	using Cache = SIE::ShaderCache;
 	using Flags = Cache::LightingShaderFlags;
@@ -1124,6 +1177,8 @@ void TestStartupLightingDescriptors()
 			const auto* entry = &material;
 			auto* shader = &f.shader;
 			auto* shaderCache = &f.cache;
+			if (forwardCached)
+				f.cache.Add(f.shader, 1u);
 			const auto prepareLookup = [](uint32_t& a_vertexDescriptor, uint32_t& a_pixelDescriptor, bool a_forceDeferred = false) {
 				auto* deferred = globals::deferred;
 				const uint32_t lightingPixelShaderFlags = 0;
@@ -1134,6 +1189,8 @@ void TestStartupLightingDescriptors()
 #include "startup_pixel_lookup.h"
 			Require(material.id == (1u | materialFlags));
 			std::set<uint32_t> expected{ 1u, 1u | deferredFlag };
+			if (forwardCached)
+				expected.erase(1u);
 			if (categories)
 				expected.insert(1u | deferredFlag | category);
 			if (!materialFlags) {
@@ -1335,7 +1392,9 @@ int main()
 			TestWaterRuntimeDescriptor();
 			TestLightingSpecialization();
 			TestFallbackLightingSpecializations();
-			TestStartupLightingDescriptors();
+			TestFallbackShaderRecovery();
+			TestStartupLightingDescriptors(false);
+			TestStartupLightingDescriptors(true);
 			TestCombinedLightingSpecializations();
 			TestDetailMapsSpecializationFallback();
 			TestResidentLightingSpecializations();

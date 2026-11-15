@@ -86,7 +86,7 @@
     },
     "settingsContract": {
       "revision": 33,
-      "sourceTreeSha256": "4923E8947AD0D0B0A16F05F0CB916487A3457207DC4456247758746DADBAC887"
+      "sourceTreeSha256": "5B1D2966F87C62D884BCCD80F80379C1059075D821C5792E295205EB65974CC4"
     }
   },
   "Upscaling": {
@@ -284,6 +284,7 @@
     "VRCaptureSource": "HMDSubmission",
     "VRFramedDominantEye": "Left",
     "VRFramedEye": "Left",
+    "VRFramedNativeResolution": false,
     "VRFramedView": "Left"
   },
   "VR": {

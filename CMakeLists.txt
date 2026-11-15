@@ -2994,6 +2994,51 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_link_libraries(sharpener_bindings_test PRIVATE d3d11.lib)
     include("${PROJECT_SOURCE_DIR}/tests/d3d11_shader_test.cmake")
+    add_controller_test(detail_maps_policy_test DetailMapsPolicy tests/detail_maps_policy_test.cpp)
+    target_link_libraries(
+        detail_maps_policy_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    add_d3d_shader_test(detail_maps_shader_test DetailMapsShader tests/detail_maps_shader_test.cpp)
+    set_tests_properties(DetailMapsShader PROPERTIES TIMEOUT 300)
+    add_controller_test(detail_maps_reload_test DetailMapsReload tests/detail_maps_reload_test.cpp)
+    target_link_libraries(detail_maps_reload_test PRIVATE fmt::fmt)
+    set(_detail_maps_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/detail-maps"
+    )
+    set(_detail_maps_test_headers
+        "${_detail_maps_test_dir}/detail_maps_reload_under_test.h"
+        "${_detail_maps_test_dir}/detail_maps_bindings_under_test.h"
+        "${_detail_maps_test_dir}/detail_maps_bindings_decl_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_detail_maps_test_headers}
+        COMMAND
+            ${CMAKE_COMMAND} "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_detail_maps_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_detail_maps.cmake"
+        DEPENDS
+            src/Features/DetailMaps.cpp
+            src/Features/DetailMaps.h
+            tests/extract_detail_maps.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_custom_target(
+        detail_maps_test_headers
+        DEPENDS ${_detail_maps_test_headers}
+    )
+    foreach(
+        _detail_target
+        IN
+        ITEMS detail_maps_shader_test detail_maps_reload_test
+    )
+        add_dependencies(${_detail_target} detail_maps_test_headers)
+        target_include_directories(
+            ${_detail_target}
+            PRIVATE "${_detail_maps_test_dir}"
+        )
+    endforeach()
     add_d3d_shader_test(water_history_shader_test WaterHistoryShader tests/water_history_shader_test.cpp)
     target_sources(
         water_history_shader_test

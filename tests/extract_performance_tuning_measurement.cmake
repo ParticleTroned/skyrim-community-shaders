@@ -14,7 +14,7 @@ extract_between("${profiling_source}" "static void NormalizeGameFrameTiming"
     "static int ScaleToUiInt" "measurement_cadence.h")
 file(READ "${PROJECT_ROOT}/src/Menu/PerformanceTuningRenderer.cpp" source)
 extract_between("${source}" "constexpr double kFeatureCostMeasurementSeconds"
-    "constexpr std::array<std::string_view, 21>" "measurement_constants.h")
+    "constexpr std::array<std::string_view," "measurement_constants.h")
 extract_between("${source}" "using FeatureCostMoments"
     "enum class UpscalingCostSweepPhase" "measurement_types.h")
 extract_between("${source}" "bool IsFeatureCostMeasurementActive"

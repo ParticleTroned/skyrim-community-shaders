@@ -72,6 +72,7 @@ struct FfxFsr3DispatchUpscaleDescription
 ID3D11DeviceContext* ffxGetCommandListDX11(ID3D11DeviceContext* a_context) { return a_context; }
 ID3D11Resource* ffxGetResource(ID3D11Resource* a_resource, const wchar_t*) { return a_resource; }
 #define CS_GPU_PASS_DYNAMIC(name) ((void)(name))
+#define CS_GPU_PASS_INDEXED(index, ...) ((void)(index))
 namespace logger
 {
 	template <class... Args>

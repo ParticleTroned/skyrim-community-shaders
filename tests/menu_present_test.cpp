@@ -23,6 +23,36 @@ namespace
 	uint32_t timingFrame = 0;
 	HRESULT timingResult = S_OK;
 	std::string renderOrder;
+	unsigned failureLogs = 0, failureFlushes = 0, deviceReasonQueries = 0;
+}
+struct Upscaling
+{
+	struct VRRenderScaleTransitionSnapshot
+	{
+		int state = 0;
+		uint64_t targetEpoch = 0, revision = 0;
+	};
+	static const char* GetVRRenderScaleTransitionStateName(int) { return "Idle"; }
+};
+namespace logger
+{
+	template <class... Args>
+	void info(const char*, Args&&...)
+	{
+		++failureLogs;
+	}
+}
+namespace spdlog
+{
+	struct Logger
+	{
+		void flush() { ++failureFlushes; }
+	};
+	Logger* default_logger()
+	{
+		static Logger logger;
+		return &logger;
+	}
 }
 namespace globals
 {
@@ -74,6 +104,15 @@ namespace globals
 	namespace d3d
 	{
 		void* context = nullptr;
+		struct Device
+		{
+			HRESULT GetDeviceRemovedReason()
+			{
+				++deviceReasonQueries;
+				return S_OK;
+			}
+		} deviceValue;
+		Device* device = &deviceValue;
 	}
 	namespace features
 	{
@@ -92,6 +131,7 @@ namespace globals
 				++timingCapabilityQueries;
 				return frameGeneration;
 			}
+			Upscaling::VRRenderScaleTransitionSnapshot GetVRRenderScaleTransitionSnapshot() { return {}; }
 			void PresentVRMenuDesktopMirror(IDXGISwapChain*)
 			{
 				++effects;
@@ -227,5 +267,6 @@ int main()
 	presentResult = S_OK;
 	const auto probeResult = IDXGISwapChain_Present::thunk(nullptr, 0, DXGI_PRESENT_TEST);
 	passed = passed && probeResult == S_OK && presentCalls == 1 && effects == 0 && renderOrder == "present;";
+	passed = passed && failureLogs == 1 && failureFlushes == 1 && deviceReasonQueries == 1;
 	return passed ? EXIT_SUCCESS : EXIT_FAILURE;
 }

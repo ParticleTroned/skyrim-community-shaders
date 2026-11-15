@@ -19,6 +19,7 @@
 #include "Utils/VanityCamera.h"
 
 #include "Feature.h"
+#include "Features/DetailMaps.h"
 #include "Features/FurShells.h"
 #include "Features/GrassLighting.h"
 #include "Features/SnowCover.h"
@@ -983,6 +984,9 @@ namespace LightingExtensions
 
 			state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::IsTree);
 
+			if (globals::features::detailMaps.IsEnabled())
+				globals::features::detailMaps.BeginPass(shader, pass);
+
 			if (auto userData = pass->geometry->GetUserData())
 				if (auto baseObject = userData->GetBaseObject())
 					if (baseObject->As<RE::TESObjectTREE>())
@@ -999,8 +1003,11 @@ struct AcceptedDrawRestoreGeometry
 {
 	static void thunk(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_flags)
 	{
-		if constexpr (ShaderKind == 1)
+		if constexpr (ShaderKind == 1) {
+			if (globals::features::detailMaps.HasActivePass())
+				globals::features::detailMaps.EndPass();
 			TerrainSeams::GetInstance().Restore();
+		}
 		if (globals::game::isVR)
 			CSX::Api::SuspendAcceptedDrawGeometry();
 		func(a_shader, a_pass, a_flags);

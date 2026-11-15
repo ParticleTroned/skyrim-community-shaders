@@ -119,13 +119,15 @@ namespace SIE
 		enum class VertexShaderLookup
 		{
 			Compile,
+			Precompile,
 			Draw
 		};
 		enum class PixelShaderLookup
 		{
 			Compile,
-			Cached,
-			Draw
+			Precompile,
+			Draw,
+			Cached
 		};
 		template <class T>
 		using Maps = std::array<std::unordered_map<std::uint32_t, std::unique_ptr<T>>, 1>;
@@ -134,6 +136,7 @@ namespace SIE
 		Maps<RE::BSGraphics::ComputeShader> computeShaders;
 		std::mutex vertexShadersMutex, pixelShadersMutex, computeShadersMutex;
 		std::atomic<unsigned> activeShaderCaptureFramesRemaining{};
+		std::atomic<bool> backgroundCompilation{};
 		int blockedKeyIndex = -1;
 		std::string blockedKey;
 		std::vector<std::uint32_t> blockedIDs;
@@ -142,6 +145,7 @@ namespace SIE
 			ShaderClass stage;
 			const RE::BSShader& shader;
 			std::uint32_t descriptor;
+			bool precompile = false;
 		};
 		struct Queue
 		{

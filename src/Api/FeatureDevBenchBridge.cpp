@@ -19,6 +19,7 @@
 #	include "Features/ReverseZ.h"
 #	include "Features/TerrainSeams.h"
 #	include "Features/FurShells.h"
+#	include "Features/DetailMaps.h"
 #	include "Features/SnowCover.h"
 #	include "Features/SeasonalWeather.h"
 #	include "Features/Upscaling.h"
@@ -47,7 +48,7 @@ namespace
 {
 	using json = nlohmann::json;
 	using namespace CSX::FeatureAPI;
-	constexpr auto DevBenchSchemaRevision = 38;
+	constexpr auto DevBenchSchemaRevision = 39;
 	std::atomic_bool g_registered{ false };
 
 	CSX::Api::ServiceFoundation& Foundation()
@@ -219,6 +220,23 @@ namespace
 				if (!validToggle && !validPercent)
 					return Foundation().MakeError(args, "invalid_settings", "Expected restrictPuddleSlopes or preserveWetnessHighlights boolean, or rainFilmPercent in [0,100]", "validation", false, "wetterness." + name);
 			}
+		}
+		for (const auto* field : { "detailMaps", "detailMapsOperation" })
+			if (args.contains(field) && action != "detail_maps")
+				return Foundation().MakeError(args, "invalid_settings", "Detail Maps fields require detail_maps", "validation", false, field);
+		if (action == "detail_maps") {
+			auto result = OnMain([args] {
+				try {
+					return globals::features::detailMaps.Control(args);
+				} catch (const std::exception& error) {
+					return json{ { "error", error.what() } };
+				}
+			});
+			if (result.contains("error"))
+				return Foundation().MakeError(args, "detail_maps_request_failed", result.at("error"), "request", false);
+			auto response = Foundation().MakeEnvelope(args, true);
+			response["result"] = json{ { "detailMaps", std::move(result) } };
+			return response;
 		}
 		if (action == "gpu_crash_diagnostics") {
 			auto response = Foundation().MakeEnvelope(args, true);
@@ -744,6 +762,12 @@ namespace CSX::Api::FeatureDevBenchBridge
 			snowResult["properties"]["LandscapeSnowColorPaths"] = { { "type", "array" }, { "minItems", 2 }, { "maxItems", 2 },
 				{ "items", { { "type", "string" } } }, { "description", "Loaded main/alternate Data-relative source paths, empty for configured fallback." } };
 			properties["action"]["enum"].push_back("seasonal_weather");
+			properties["action"]["enum"].push_back("detail_maps");
+			const auto detailSchemas = DetailMaps::GetControlSchemas();
+			properties["detailMaps"] = detailSchemas.at("settings");
+			properties["detailMapsOperation"] = { { "type", "string" }, { "enum", { "inspect", "reload" } } };
+			spec["outputSchema"]["properties"]["result"]["properties"]["detailMaps"] = detailSchemas.at("status");
+			spec["description"] = spec["description"].get<std::string>() + " detail_maps inspects surface detail on SE, AE and VR. Optional detailMaps applies validated session settings; omit it for read-only status. FadeEnd must be at least FadeStart+1. detailMapsOperation=reload rereads the separately installed DDS sets and JSON rules; do not combine reload with settings edits. Missing content, unavailable shaders or resource failures preserve the existing surface shader. Reports loaded/ready, settings, set/rule counts, draws and pending shader draws in the previous frame, content errors and resourceError. Menu Save persists settings; this action does not persist them.";
 			properties["seasonalWeather"] = SeasonalWeatherConfig::Schema();
 			properties["seasonalWeather"]["description"] = "Seasonal Weathers settings for monthly regional weather chances.";
 			properties["seasonalRegion"] = SeasonalWeatherConfig::FormKeySchema();

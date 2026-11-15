@@ -863,6 +863,7 @@ namespace SIE
 			Deferred = 1 << 4,
 			// Bit 5 belongs to the character-category output layout.
 			LandscapeSeams = 1 << 6,
+			DetailMaps = 1 << 7,
 			// CSX end
 			Specular = 1 << 9,
 			SoftLighting = 1 << 10,

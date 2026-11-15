@@ -185,6 +185,10 @@ namespace globals
 	}
 	namespace features
 	{
+		struct VolumetricLighting
+		{
+			bool IsDepthDispatchRejected() const { return false; }
+		} volumetricLighting;
 		struct UnifiedWater
 		{
 			bool loaded = true;

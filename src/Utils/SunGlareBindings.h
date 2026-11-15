@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ComIdentity.h"
 #include <d3d11_1.h>
 #include <winrt/base.h>
 
@@ -12,7 +13,8 @@ namespace SunGlare
 		ScopedBindings(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_depth)
 		{
 			context.copy_from(a_context);
-			context1 = context.try_as<ID3D11DeviceContext1>();
+			if (FAILED(context->QueryInterface(IID_PPV_ARGS(context1.put()))))
+				context1 = nullptr;
 			context->VSGetShaderResources(17, 1, previousDepth.put());
 			winrt::com_ptr<ID3D11Buffer> frame;
 			UINT frameFirst = 0, frameCount = 0;
@@ -37,7 +39,9 @@ namespace SunGlare
 						a_depth->GetResource(input.put());
 						dsv->GetResource(output.put());
 						// Read-only depth attachments may also supply the visibility samples.
-						if (input.as<IUnknown>().get() == output.as<IUnknown>().get())
+						const auto inputIdentity = Util::GetComIdentity(input.get());
+						const auto outputIdentity = Util::GetComIdentity(output.get());
+						if (!inputIdentity || !outputIdentity || inputIdentity == outputIdentity)
 							a_depth = nullptr;
 					}
 				}

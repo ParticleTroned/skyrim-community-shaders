@@ -2,8 +2,10 @@
 
 #include "Buffer.h"
 #include "RE/B/BSShadowDirectionalLight.h"
+#include "Utils/AsyncShader.h"
 #include "Utils/LazyShader.h"
 
+#include <array>
 #include <atomic>
 #include <optional>
 
@@ -97,6 +99,13 @@ public:
 	ID3D11ShaderResourceView* shadowView = nullptr;
 
 private:
+	ID3D11ComputeShader* GetComputeMainComposite(bool interior);
+	/** Queues optional preparation without delaying the pass or repeating failed work. */
+	void RequestLuminanceRatioComposite(bool interior) noexcept;
+	std::array<Util::AsyncShader<ID3D11ComputeShader>, 2> luminanceRatioComposites;
+	std::array<uint8_t, 2> compositeMissReports{};
+	uint64_t compositeRevision = 0;
+
 	/// Copies completed opaque depth without changing the active render targets.
 	bool CopySceneDepth();
 	std::optional<uint32_t> finalSceneDepthFrame;

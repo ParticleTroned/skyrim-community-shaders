@@ -130,6 +130,7 @@ namespace SIE
 		std::atomic_bool startupCompilationComplete{ false };
 		std::atomic_bool menuLoaded{ false };
 		bool ResidentOnlyLightingSpecializations() const { return false; }
+		bool UsesRuntimeLightingSpecializationPolicy() const;
 		void RecordLightingSpecializationMiss(uint32_t, bool) {}
 		int blockedKeyIndex = -1;
 		std::string blockedKey;
@@ -175,6 +176,7 @@ namespace SIE
 		RE::BSGraphics::PixelShader* GetPixelShader(const RE::BSShader&, std::uint32_t, PixelShaderLookup);
 		RE::BSGraphics::ComputeShader* GetComputeShader(const RE::BSShader&, std::uint32_t);
 	};
+#include "runtime_specialization_policy.h"
 #include "shader_block_compute_under_test.h"
 #include "shader_block_pixel_under_test.h"
 #include "shader_block_vertex_under_test.h"

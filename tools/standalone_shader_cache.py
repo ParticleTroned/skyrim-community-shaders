@@ -145,6 +145,8 @@ def release_requests(runtime: str, features: dict[str, bool], *, reverse_z_enabl
             if runtime == "VR":
                 macros.append(("FRAMEBUFFER", None))
             add("DeferredCompositeCS.hlsl", macros)
+            if features.get("ImageBasedLighting") and features.get("DynamicCubemaps"):
+                add("DeferredCompositeCS.hlsl", [*macros, ("IBL_LUMINANCE_RATIO", None)])
     if runtime == "VR":
         add("VR/StereoBlendCS.hlsl", [("FRAMEBUFFER", "")], feature="VR")
     for terrain in (False, True) if features.get("TerrainBlending") else (False,):

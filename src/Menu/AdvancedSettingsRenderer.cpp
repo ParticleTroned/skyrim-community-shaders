@@ -174,7 +174,7 @@ void AdvancedSettingsRenderer::RenderShaderThreading()
 	bool residentOnly = shaderCache->ResidentOnlyLightingSpecializations();
 	if (Util::Widgets::Checkbox("Resident-only Lighting Specializations", &residentOnly))
 		shaderCache->SetResidentOnlyLightingSpecializations(residentOnly);
-	Util::AddTooltip("On: use only prepared optional lighting variants after startup. Missing variants keep general shading without requesting the optimization. Off: prepare missing variants asynchronously. Info logs record new misses and preparation results. Already queued work finishes; required general shaders keep their existing policy. Save settings to retain this choice.");
+	Util::AddTooltip("On: use only prepared optional lighting variants, including the IBL deferred composite, after startup. Missing variants keep general shading without requesting the optimization. Off: prepare missing variants asynchronously. Info logs record new misses and preparation results. Already queued work finishes; required general shaders keep their existing policy. Save settings to retain this choice.");
 
 	Util::Widgets::Checkbox("Background Compile on Boot", &menuSettings.BackgroundShaderCompilationOnBoot);
 	if (auto _tt = Util::HoverTooltipWrapper()) {

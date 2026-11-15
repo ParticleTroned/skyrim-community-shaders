@@ -274,6 +274,7 @@ namespace SIE
 		std::atomic_bool menuLoaded{ false };
 		bool residentOnly = false;
 		bool ResidentOnlyLightingSpecializations() const { return residentOnly; }
+		bool UsesRuntimeLightingSpecializationPolicy() const;
 		void RecordLightingSpecializationMiss(uint32_t, bool) {}
 		unsigned compiles = 0, vertexLookups = 0;
 		uint64_t graphicsRevision = 0;
@@ -328,6 +329,7 @@ namespace SIE
 	};
 #include "pixel_lookup.h"
 #include "pixel_prewarm.h"
+#include "runtime_specialization_policy.h"
 #include "shader_support.h"
 }
 namespace Permutations

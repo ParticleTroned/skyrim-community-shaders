@@ -43,3 +43,6 @@ extract_between("${_cache}" "void ShaderCache::PrewarmDeferredPixelShaders("
     "RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader(" "pixel_prewarm.h")
 extract_between("${_pbr}" "void TruePBR::GenerateShaderPermutations("
     "struct ExtendedRendererState" "pbr_prewarm.h")
+
+extract_between("${_cache}" "bool ShaderCache::UsesRuntimeLightingSpecializationPolicy() const"
+    "void ShaderCache::RecordLightingSpecializationMiss(" "runtime_specialization_policy.h")

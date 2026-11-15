@@ -297,6 +297,7 @@ int main()
 		shader.attach(Util::CompileShader(L"Data/Shaders/test.hlsl", macros, "ps_5_0", entry, &timing));
 		assert(shader);
 		assert((timing.bytecodeCompilationQpcTicks > 0) == shouldCompile);
+		assert((timing.sourceCompiles > 0) == shouldCompile);
 		assert(timing.d3dObjectCreationQpcTicks > 0);
 		UINT length = 0;
 		assert(SUCCEEDED(shader->GetPrivateData(Util::WKPDID_D3DDebugObjectNameT, &length, nullptr)) && length > 0);
@@ -305,6 +306,19 @@ int main()
 	assert(SIE::writes == 1 && SIE::manifestFlushes == 1);
 	SIE::GetShaderCacheManifest().Load("Data/ShaderCache/Manifest.json");
 	run(false, defines);
+	{
+		globals::d3d::device = nullptr;
+		HRESULT result = E_FAIL;
+		Util::ShaderCompileTiming timing;
+		winrt::com_ptr<ID3D11DeviceChild> shader;
+		shader.attach(Util::CompileShaderOnDevice(device.get(), L"Data/Shaders/test.hlsl", defines,
+			"ps_5_0", "main", result, &timing));
+		assert(SUCCEEDED(result) && shader && timing.sourceCompiles == 0);
+		winrt::com_ptr<ID3D11Device> owner;
+		shader->GetDevice(owner.put());
+		assert(owner.get() == device.get());
+		globals::d3d::device = device.get();
+	}
 	const auto includeTime = std::filesystem::last_write_time("Data/Shaders/Common/value.hlsli");
 	Write("Data/Shaders/Common/value.hlsli", "#define VALUE 2\n");
 	std::filesystem::last_write_time("Data/Shaders/Common/value.hlsli", includeTime);

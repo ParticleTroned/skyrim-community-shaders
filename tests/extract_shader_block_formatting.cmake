@@ -24,3 +24,6 @@ extract_between(
     "${_source}" "RE::BSGraphics::ComputeShader* ShaderCache::GetComputeShader("
     "ShaderCache::~ShaderCache()" "shader_block_compute_under_test.h"
 )
+
+extract_between("${_source}" "bool ShaderCache::UsesRuntimeLightingSpecializationPolicy() const"
+    "void ShaderCache::RecordLightingSpecializationMiss(" "runtime_specialization_policy.h")

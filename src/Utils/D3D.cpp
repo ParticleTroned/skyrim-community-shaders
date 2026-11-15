@@ -268,6 +268,18 @@ namespace Util
 		HRESULT& a_result,
 		ShaderCompileTiming* a_timing)
 	{
+		return CompileShaderOnDevice(globals::d3d::device, FilePath, Defines, ProgramType, Program, a_result, a_timing);
+	}
+
+	ID3D11DeviceChild* CompileShaderOnDevice(
+		ID3D11Device* device,
+		const wchar_t* FilePath,
+		const std::vector<std::pair<const char*, const char*>>& Defines,
+		const char* ProgramType,
+		const char* Program,
+		HRESULT& a_result,
+		ShaderCompileTiming* a_timing)
+	{
 		a_result = E_INVALIDARG;
 		const auto queryQpc = []() noexcept {
 			LARGE_INTEGER value{};
@@ -288,7 +300,6 @@ namespace Util
 		};
 		if (!FilePath || !*FilePath || !ProgramType || !Program || !*Program)
 			return nullptr;
-		auto device = globals::d3d::device;
 		a_result = E_FAIL;
 		if (!device || !globals::state || !globals::shaderCache)
 			return nullptr;
@@ -384,6 +395,8 @@ namespace Util
 			}
 			logger::debug("Compiling {} with {}", str, DefinesToString(macros));
 			const uint64_t compilationBegin = a_timing ? queryQpc() : 0;
+			if (a_timing)
+				++a_timing->sourceCompiles;
 			const HRESULT compilationResult = a_result = D3DCompileFromFile(
 				FilePath,
 				macros.data(),

@@ -26,6 +26,7 @@ namespace Util
 	{
 		uint64_t bytecodeCompilationQpcTicks = 0;
 		uint64_t d3dObjectCreationQpcTicks = 0;
+		uint64_t sourceCompiles = 0;
 	};
 
 	/** Compile a packaged shader and create its object on the renderer's D3D11 device. */
@@ -37,6 +38,16 @@ namespace Util
 		ShaderCompileTiming* a_timing = nullptr);
 	/** Report compiler/object creation errors so optional paths can preserve allocation failures. */
 	ID3D11DeviceChild* CompileShader(
+		const wchar_t* FilePath,
+		const std::vector<std::pair<const char*, const char*>>& Defines,
+		const char* ProgramType,
+		const char* Program,
+		HRESULT& a_result,
+		ShaderCompileTiming* a_timing = nullptr);
+
+	/** Compile on a caller-retained device, including from a background worker. */
+	ID3D11DeviceChild* CompileShaderOnDevice(
+		ID3D11Device* device,
 		const wchar_t* FilePath,
 		const std::vector<std::pair<const char*, const char*>>& Defines,
 		const char* ProgramType,

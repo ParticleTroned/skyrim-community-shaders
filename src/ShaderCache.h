@@ -724,6 +724,8 @@ namespace SIE
 		void SetResidentOnlyLightingSpecializations(bool enabled);
 		/** Does not cancel work already queued or invalidate resident shaders. */
 		bool ResidentOnlyLightingSpecializations() const { return residentOnlyLightingSpecializations.load(std::memory_order_relaxed); }
+		/** Includes background boot after DataLoaded, before startup work finishes. */
+		bool UsesRuntimeLightingSpecializationPolicy() const;
 		RE::BSGraphics::ComputeShader* GetComputeShader(const RE::BSShader& shader,
 			uint32_t descriptor);
 

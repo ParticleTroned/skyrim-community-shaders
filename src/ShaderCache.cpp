@@ -3567,6 +3567,12 @@ namespace SIE
 			logger::info("[ShaderSpecialization] resident_only={} scope=optional-lighting queued_work=retained", enabled);
 	}
 
+	bool ShaderCache::UsesRuntimeLightingSpecializationPolicy() const
+	{
+		return ShaderCompilationSchedulingPolicy::UseRuntimeSpecializationPolicy(
+			startupCompilationComplete.load(std::memory_order_acquire), menuLoaded.load(std::memory_order_acquire), backgroundCompilation.load(std::memory_order_relaxed));
+	}
+
 	void ShaderCache::RecordLightingSpecializationMiss(uint32_t descriptor, bool suppressed) noexcept
 	try {
 		if (!spdlog::should_log(spdlog::level::info))
@@ -3664,8 +3670,7 @@ namespace SIE
 			return nullptr;
 		const bool specializedLighting = shader.shaderType.get() == RE::BSShader::Type::Lighting &&
 		                                 (descriptor & kLightingSpecializationMask) != 0;
-		const bool gameplaySpecialization = specializedLighting && ShaderCompilationSchedulingPolicy::UseRuntimeSpecializationPolicy(
-																	   startupCompilationComplete.load(std::memory_order_acquire), menuLoaded.load(std::memory_order_acquire), backgroundCompilation.load(std::memory_order_relaxed));
+		const bool gameplaySpecialization = specializedLighting && UsesRuntimeLightingSpecializationPolicy();
 		const bool suppressPreparation = gameplaySpecialization && ResidentOnlyLightingSpecializations();
 		if (gameplaySpecialization && !IsSaveLoadSafeModeActive())
 			RecordLightingSpecializationMiss(descriptor, suppressPreparation);

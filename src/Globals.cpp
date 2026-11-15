@@ -56,11 +56,18 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
+#include "Utils/DeviceContextState.h"
 #include "Utils/Game.h"
 #include "Utils/VRFrameBufferUpload.h"
 #include <array>
 #include <cstring>
 #include <mutex>
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "Diagnostics/GpuCrashDiagnostics.h"
+#	include <atomic>
+#	include <intrin.h>
+#endif
 
 namespace globals
 {
@@ -349,9 +356,92 @@ namespace globals
  */
 	struct ID3D11DeviceContext_Map
 	{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		static void ReportDeviceLoss(ID3D11DeviceContext* a_context, ID3D11Resource* a_resource,
+			UINT a_subresource, D3D11_MAP a_mapType, UINT a_mapFlags, HRESULT a_result, const void* a_caller) noexcept
+		{
+			if (!CSX::Diagnostics::GpuCrash::IsEnabled())
+				return;
+			winrt::com_ptr<ID3D11Device> device;
+			a_context->GetDevice(device.put());
+			if (device.get() != d3d::device)
+				return;
+			const HRESULT reason = device ? device->GetDeviceRemovedReason() : S_OK;
+			if (SUCCEEDED(reason) && a_result != DXGI_ERROR_DEVICE_REMOVED && a_result != DXGI_ERROR_DEVICE_RESET &&
+				a_result != DXGI_ERROR_DEVICE_HUNG && a_result != DXGI_ERROR_DRIVER_INTERNAL_ERROR)
+				return;
+			static std::atomic_bool reported{ false };
+			if (!reported.exchange(true, std::memory_order_relaxed)) {
+				try {
+					HMODULE callerModule = nullptr;
+					char modulePath[MAX_PATH]{};
+					std::uintptr_t callerRva = 0;
+					if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+							reinterpret_cast<LPCSTR>(a_caller), &callerModule)) {
+						GetModuleFileNameA(callerModule, modulePath, MAX_PATH);
+						callerRva = reinterpret_cast<std::uintptr_t>(a_caller) - reinterpret_cast<std::uintptr_t>(callerModule);
+					}
+					D3D11_RESOURCE_DIMENSION type = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+					if (a_resource)
+						a_resource->GetType(&type);
+					logger::error("[GPUCrash] Map failed result=0x{:08X} deviceReason=0x{:08X} context=0x{:X} resource=0x{:X} type={} subresource={} mapType={} flags=0x{:X} caller=0x{:X} module={} callerRva=0x{:X}",
+						static_cast<std::uint32_t>(a_result), static_cast<std::uint32_t>(reason),
+						reinterpret_cast<std::uintptr_t>(a_context), reinterpret_cast<std::uintptr_t>(a_resource),
+						static_cast<UINT>(type), a_subresource, static_cast<UINT>(a_mapType), a_mapFlags,
+						reinterpret_cast<std::uintptr_t>(a_caller), modulePath, callerRva);
+					switch (type) {
+					case D3D11_RESOURCE_DIMENSION_BUFFER:
+						{
+							D3D11_BUFFER_DESC desc{};
+							static_cast<ID3D11Buffer*>(a_resource)->GetDesc(&desc);
+							logger::error("[GPUCrash] Map buffer bytes={} usage={} bind=0x{:X} cpuAccess=0x{:X} misc=0x{:X} stride={}",
+								desc.ByteWidth, static_cast<UINT>(desc.Usage), desc.BindFlags, desc.CPUAccessFlags, desc.MiscFlags, desc.StructureByteStride);
+							break;
+						}
+					case D3D11_RESOURCE_DIMENSION_TEXTURE1D:
+						{
+							D3D11_TEXTURE1D_DESC desc{};
+							static_cast<ID3D11Texture1D*>(a_resource)->GetDesc(&desc);
+							logger::error("[GPUCrash] Map texture1D width={} mips={} array={} format={} usage={} bind=0x{:X} cpuAccess=0x{:X} misc=0x{:X}",
+								desc.Width, desc.MipLevels, desc.ArraySize, static_cast<UINT>(desc.Format), static_cast<UINT>(desc.Usage), desc.BindFlags, desc.CPUAccessFlags, desc.MiscFlags);
+							break;
+						}
+					case D3D11_RESOURCE_DIMENSION_TEXTURE2D:
+						{
+							D3D11_TEXTURE2D_DESC desc{};
+							static_cast<ID3D11Texture2D*>(a_resource)->GetDesc(&desc);
+							logger::error("[GPUCrash] Map texture2D width={} height={} mips={} array={} format={} samples={} quality={} usage={} bind=0x{:X} cpuAccess=0x{:X} misc=0x{:X}",
+								desc.Width, desc.Height, desc.MipLevels, desc.ArraySize, static_cast<UINT>(desc.Format), desc.SampleDesc.Count, desc.SampleDesc.Quality,
+								static_cast<UINT>(desc.Usage), desc.BindFlags, desc.CPUAccessFlags, desc.MiscFlags);
+							break;
+						}
+					case D3D11_RESOURCE_DIMENSION_TEXTURE3D:
+						{
+							D3D11_TEXTURE3D_DESC desc{};
+							static_cast<ID3D11Texture3D*>(a_resource)->GetDesc(&desc);
+							logger::error("[GPUCrash] Map texture3D width={} height={} depth={} mips={} format={} usage={} bind=0x{:X} cpuAccess=0x{:X} misc=0x{:X}",
+								desc.Width, desc.Height, desc.Depth, desc.MipLevels, static_cast<UINT>(desc.Format), static_cast<UINT>(desc.Usage), desc.BindFlags, desc.CPUAccessFlags, desc.MiscFlags);
+							break;
+						}
+					default:
+						break;
+					}
+					if (const auto log = spdlog::default_logger())
+						log->flush();
+				} catch (...) {
+					OutputDebugStringA("[GPUCrash] Failed to write Map failure details.\n");
+				}
+			}
+			CSX::Diagnostics::GpuCrash::ReportFailure(a_result, "ID3D11DeviceContext::Map");
+		}
+#endif
 		static HRESULT thunk(ID3D11DeviceContext* This, ID3D11Resource* pResource, UINT Subresource, D3D11_MAP MapType, UINT MapFlags, D3D11_MAPPED_SUBRESOURCE* pMappedResource)
 		{
 			HRESULT hr = func(This, pResource, Subresource, MapType, MapFlags, pMappedResource);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (FAILED(hr))
+				ReportDeviceLoss(This, pResource, Subresource, MapType, MapFlags, hr, _ReturnAddress());
+#endif
 			if (hr == S_OK) {
 				if (This == d3d::context && Subresource == 0 && *globals::game::perFrame.get() == pResource)
 					globals::game::mappedFrameBuffer = pMappedResource;
@@ -493,6 +583,7 @@ namespace globals
 		// Native context dispatch can change after first use without replacing the context.
 		if (installedContext.get() == a_context)
 			return;
+		Util::RegisterDeviceContextStateForHooks(a_context);
 		InstallVRFrameBufferUploadHook();
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);

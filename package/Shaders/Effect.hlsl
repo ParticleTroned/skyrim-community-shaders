@@ -1011,7 +1011,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	if !defined(MOTIONVECTORS_NORMALS)
 #		if defined(ADDBLEND)
 	float3 additiveColor = AdaptiveBalanceFire::Apply(lightColor);
-	if (!AdaptiveBalanceFire::IsFire()) {
+	if (AdaptiveBalanceFire::IsLightSprite()) {
 		additiveColor = AdaptiveBalanceAppearance::ApplyColor(additiveColor,
 			SharedData::adaptiveBalanceSettings.appearance.lightSpriteIntensity,
 			SharedData::adaptiveBalanceSettings.appearance.lightSpriteCurve, 1.0, 1.0.xxx);

@@ -13,6 +13,27 @@ extract_between(
     "seasonal_weather_selection_under_test.h"
 )
 extract_between(
+    "${_source}" "void SeasonalWeather::DataLoaded" "\nRE::FormID SeasonalWeather::ResolveConfiguredForm"
+    "seasonal_weather_detection_under_test.h"
+)
+extract_between(
     "${_source}" "void SeasonalWeather::Apply" "\nvoid SeasonalWeather::LoadSettings"
     "seasonal_weather_apply_under_test.h"
+)
+extract_between(
+    "${_source}" "\tCategory Classify" "\n\tRE::FormID ResolveFormKey"
+    "seasonal_weather_plan_helpers_under_test.h"
+)
+extract_between(
+    "${_source}" "struct SeasonalWeather::Plan" "\nstd::pair<std::string"
+    "seasonal_weather_plan_type_under_test.h"
+)
+extract_between(
+    "${_source}" "RE::FormID SeasonalWeather::ResolveConfiguredForm" "\nRE::TESWeather* SeasonalWeather::SelectWeather"
+    "seasonal_weather_plan_under_test.h"
+)
+file(READ "${CMAKE_CURRENT_LIST_DIR}/../src/Features/SnowCover/Environment.cpp" _environment)
+extract_between(
+    "${_environment}" "\tfloat GetFractionalGameMonth" "\n\tfloat GetPrecipitationIntensity"
+    "seasonal_weather_calendar_under_test.h"
 )

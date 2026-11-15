@@ -6,7 +6,7 @@ struct GrassAlphaFixture
 	ComPtr<ID3D11Texture2D> target, staging;
 	ComPtr<ID3D11RenderTargetView> rtv;
 	ComPtr<ID3D11SamplerState> sampler;
-	std::array<ComPtr<ID3D11ShaderResourceView>, 2> textures;
+	std::array<ComPtr<ID3D11ShaderResourceView>, 3> textures, normalLengths;
 
 	GrassAlphaFixture()
 	{
@@ -30,12 +30,14 @@ struct GrassAlphaFixture
 		desc.Usage = D3D11_USAGE_IMMUTABLE;
 		desc.CPUAccessFlags = 0;
 		// The third texel fails only after fading; the fourth sits exactly on the threshold.
-		const std::array<Pixel, 8> texels{ Pixel{ 0.2f, 0.3f, 0.4f, 0.25f }, Pixel{ 0.2f, 0.3f, 0.4f, 0.75f },
+		std::array<Pixel, 8> texels{ Pixel{ 0.2f, 0.3f, 0.4f, 0.25f }, Pixel{ 0.2f, 0.3f, 0.4f, 0.75f },
 			Pixel{ 0.2f, 0.3f, 0.4f, 0.75f }, Pixel{ 0.2f, 0.3f, 0.4f, 0.5f },
 			Pixel{ 0.5f, 0.5f, 1, 1 }, Pixel{ 0.5f, 0.5f, 1, 1 }, Pixel{ 0.5f, 0.5f, 1, 1 }, Pixel{ 0.5f, 0.5f, 1, 1 } };
 		D3D11_SUBRESOURCE_DATA initial{ texels.data(), 4 * sizeof(Pixel), 0 };
 		for (UINT atlas = 0; atlas < textures.size(); ++atlas) {
-			desc.Height = atlas + 1;
+			desc.Height = atlas == 0 ? 1 : 2;
+			if (atlas == 2)
+				texels[4][2] = 1.025f;
 			ComPtr<ID3D11Texture2D> texture;
 			Check(device->CreateTexture2D(&desc, &initial, texture.GetAddressOf()));
 			Util::SetResourceName(texture.Get(), "GrassAlphaTest::Texture%u", atlas);
@@ -48,6 +50,37 @@ struct GrassAlphaFixture
 		sample.MaxLOD = D3D11_FLOAT32_MAX;
 		Check(device->CreateSamplerState(&sample, sampler.GetAddressOf()));
 		Util::SetResourceName(sampler.Get(), "GrassAlphaTest::Sampler");
+		Includes includes;
+		ComPtr<ID3DBlob> code, errors;
+		const auto compiled = D3DCompileFromFile(L"features/Grass Optimizations/Shaders/GrassOptimizations/DetectComplexCS.hlsl",
+			nullptr, &includes, "main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+			0, code.GetAddressOf(), errors.GetAddressOf());
+		if (errors)
+			std::cerr << static_cast<const char*>(errors->GetBufferPointer());
+		Check(compiled);
+		ComPtr<ID3D11ComputeShader> classify;
+		Check(device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, classify.GetAddressOf()));
+		Util::SetResourceName(classify.Get(), "GrassAlphaTest::ClassifyCS");
+		context->CSSetShader(classify.Get(), nullptr, 0);
+		for (UINT atlas = 0; atlas < textures.size(); ++atlas) {
+			D3D11_BUFFER_DESC bufferDesc{};
+			bufferDesc.ByteWidth = bufferDesc.StructureByteStride = sizeof(float);
+			bufferDesc.Usage = D3D11_USAGE_DEFAULT;
+			bufferDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+			bufferDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+			ComPtr<ID3D11Buffer> buffer;
+			Check(device->CreateBuffer(&bufferDesc, nullptr, buffer.GetAddressOf()));
+			Util::SetResourceName(buffer.Get(), "GrassAlphaTest::NormalLength%u", atlas);
+			Check(device->CreateShaderResourceView(buffer.Get(), nullptr, normalLengths[atlas].GetAddressOf()));
+			Util::SetResourceName(normalLengths[atlas].Get(), "GrassAlphaTest::NormalLength%u SRV", atlas);
+			ComPtr<ID3D11UnorderedAccessView> output;
+			Check(device->CreateUnorderedAccessView(buffer.Get(), nullptr, output.GetAddressOf()));
+			Util::SetResourceName(output.Get(), "GrassAlphaTest::NormalLength%u UAV", atlas);
+			context->CSSetShaderResources(0, 1, textures[atlas].GetAddressOf());
+			context->CSSetUnorderedAccessViews(0, 1, output.GetAddressOf(), nullptr);
+			context->Dispatch(1, 1, 1);
+		}
+		context->ClearState();
 	}
 
 	std::array<Pixel, 4> DrawPixels()
@@ -90,9 +123,9 @@ VS_OUTPUT NormalVertex(uint vertex : SV_VertexID) {
 #else
 float4 NormalPixel(PS_INPUT input) : SV_Target0 {
 #ifdef GRASS_LIGHTING
-    return float4(input.VertexNormal.xyz, 1);
+    return float4(input.VertexNormal.xyz, input.TextureNormalLength);
 #else
-    return float4(input.AmbientColor.xyz, 1);
+    return float4(input.AmbientColor.xyz, input.TextureNormalLength);
 #endif
 }
 #endif
@@ -136,6 +169,7 @@ float4 NormalPixel(PS_INPUT input) : SV_Target0 {
 		context->VSSetShader(vertex.Get(), nullptr, 0);
 		context->PSSetShader(pixel.Get(), nullptr, 0);
 		context->VSSetShaderResources(3, 1, srv.GetAddressOf());
+		context->VSSetShaderResources(4, 1, normalLengths[2].GetAddressOf());
 		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 		context->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
 		D3D11_VIEWPORT viewport{ 0, 0, 4, 1, 0, 1 };
@@ -151,9 +185,73 @@ float4 NormalPixel(PS_INPUT input) : SV_Target0 {
 					expected = { -expected[1], expected[0], expected[2], 1 };
 				if (!enhanced && flags != 3)
 					expected = { 0, 0, 0, 1 };
+				expected[3] = flags ? 1.05f : 0;
 				for (UINT channel = 0; channel < expected.size(); ++channel)
 					Require(std::isfinite(pixels[texel][channel]) && std::abs(pixels[texel][channel] - expected[channel]) < 1e-5f,
 						"Production grass VS lost authored normal rotation or changed the disabled path");
+			}
+		}
+	}
+
+	void CheckClassificationThreshold(bool vr)
+	{
+		constexpr const char* source = R"(
+#include "RunGrass.hlsl"
+StructuredBuffer<float> TestNormalLength : register(t4);
+PS_INPUT ClassifierVertex(uint vertex : SV_VertexID) {
+    const float2 corners[6] = { float2(0, 0), float2(1, 0), float2(0, 1),
+        float2(0, 1), float2(1, 0), float2(1, 1) };
+    uint texel = vertex / 6;
+    float2 corner = corners[vertex % 6];
+    PS_INPUT input = (PS_INPUT)0;
+    input.HPosition = float4(-1 + (texel + corner.x) * 0.5, 1 - corner.y * 2, 0.5, 1);
+    input.TexCoord.xy = float2((texel + 0.5) / 4, 0.75);
+    input.TextureNormalLength = TestNormalLength[0];
+#ifdef VR
+    input.ClipDistance = input.CullDistance = 1;
+#endif
+    return input;
+}
+float4 ClassifierPixel(PS_INPUT input) : SV_Target0 {
+    bool complex;
+    float4 color = SampleGrassLightingBaseColor(input, complex);
+    return float4(color.xyz, complex ? 1 : 0);
+}
+)";
+		auto defines = GrassDefines(false, vr, true, false, false, false, false, true);
+		auto vertexCode = CompileProgram(defines.data(), true, source, "ClassifierVertex");
+		auto pixelCode = CompileProgram(defines.data(), false, source, "ClassifierPixel");
+		ComPtr<ID3D11VertexShader> vertex;
+		ComPtr<ID3D11PixelShader> pixel;
+		Check(device->CreateVertexShader(vertexCode->GetBufferPointer(), vertexCode->GetBufferSize(), nullptr, vertex.GetAddressOf()));
+		Util::SetResourceName(vertex.Get(), "GrassAlphaTest::ClassifierVS");
+		Check(device->CreatePixelShader(pixelCode->GetBufferPointer(), pixelCode->GetBufferSize(), nullptr, pixel.GetAddressOf()));
+		Util::SetResourceName(pixel.Get(), "GrassAlphaTest::ClassifierPS");
+		ComPtr<ID3D11ShaderReflection> reflection;
+		Check(D3DReflect(pixelCode->GetBufferPointer(), pixelCode->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
+		D3D11ShaderTest::ConstantBuffer settings(device.Get(), reflection.Get(), "SharedData::FeatureData");
+		context->ClearState();
+		context->VSSetShader(vertex.Get(), nullptr, 0);
+		context->PSSetShader(pixel.Get(), nullptr, 0);
+		context->PSSetShaderResources(0, 1, textures[2].GetAddressOf());
+		context->PSSetSamplers(0, 1, sampler.GetAddressOf());
+		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		context->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
+		D3D11_VIEWPORT viewport{ 0, 0, 4, 1, 0, 1 };
+		context->RSSetViewports(1, &viewport);
+		for (float threshold : { 0.01f, 0.1f }) {
+			settings.SetMember("SharedData::grassLightingSettings", "ComplexGrassThreshold", threshold);
+			settings.Bind(context.Get(), D3D11ShaderTest::Stage::Pixel);
+			for (bool cached : { false, true }) {
+				auto value = cached ? normalLengths[2].Get() : nullptr;
+				context->VSSetShaderResources(4, 1, &value);
+				const auto pixels = DrawPixels();
+				for (UINT texel = 0; texel < pixels.size(); ++texel) {
+					const Pixel expected = threshold > 0.05f ? Pixel{ 0.2f, 0.3f, 0.4f, 1 } : Pixel{ 0.5f, 0.5f, texel == 0 ? 1.025f : 1.0f, 0 };
+					for (UINT channel = 0; channel < expected.size(); ++channel)
+						Require(std::isfinite(pixels[texel][channel]) && std::abs(pixels[texel][channel] - expected[channel]) < 1e-5f,
+							"Grass classification cache ignored the live threshold or selected the wrong atlas region");
+				}
 			}
 		}
 	}
@@ -162,6 +260,9 @@ float4 NormalPixel(PS_INPUT input) : SV_Target0 {
 	{
 		constexpr const char* source = R"(
 #include "RunGrass.hlsl"
+#ifdef GRASS_OPTIMIZATIONS
+StructuredBuffer<float> TestNormalLength : register(t4);
+#endif
 PS_INPUT AlphaVertex(uint vertex : SV_VertexID) {
     const float2 corners[6] = { float2(0, 0), float2(1, 0), float2(0, 1),
         float2(0, 1), float2(1, 0), float2(1, 1) };
@@ -173,6 +274,9 @@ PS_INPUT AlphaVertex(uint vertex : SV_VertexID) {
     float2 corner = corners[cornerIndex];
     float4 position = float4(-1 + (texel + corner.x) * 0.5, 1 - corner.y * 2, 0.5, 1);
     PS_INPUT input = (PS_INPUT)0;
+#ifdef GRASS_OPTIMIZATIONS
+    input.TextureNormalLength = TestNormalLength[0];
+#endif
     input.HPosition = position;
     input.WorldPosition = float4(position.xy, 1, 1);
     input.PreviousWorldPosition = input.WorldPosition;
@@ -284,14 +388,25 @@ PS_INPUT AlphaVertex(uint vertex : SV_VertexID) {
 				features->SetMember("SharedData::truePBRSettings", "Enabled", pbr ? 1u : 0u);
 				features->Bind(context.Get(), D3D11ShaderTest::Stage::Pixel);
 			}
-			ID3D11ShaderResourceView* texture = textures[authoredPBR || path == 2 ? 1 : 0].Get();
+			const UINT atlas = authoredPBR || path == 2 ? 1 : 0;
+			ID3D11ShaderResourceView* texture = textures[atlas].Get();
 			context->PSSetShaderResources(0, 1, &texture);
 			for (float threshold : { 0.0f, 0.25f, 0.5f, 0.75f, 1.0f }) {
 				if (alphaReference) {
 					alphaReference->SetVariable("AlphaTestRefRS", threshold);
 					alphaReference->Bind(context.Get(), D3D11ShaderTest::Stage::Pixel);
 				}
+				ID3D11ShaderResourceView* empty = nullptr;
+				context->VSSetShaderResources(4, 1, &empty);
 				const auto pixels = DrawPixels();
+				if (optimized) {
+					context->VSSetShaderResources(4, 1, normalLengths[atlas].GetAddressOf());
+					const auto cached = DrawPixels();
+					for (UINT texel = 0; texel < pixels.size(); ++texel)
+						for (UINT channel = 0; channel < pixels[texel].size(); ++channel)
+							Require(std::isfinite(cached[texel][channel]) && std::abs(cached[texel][channel] - pixels[texel][channel]) < 1e-5f,
+								"Cached grass classification changed production shading or alpha coverage");
+				}
 				if (billboard && !depth && threshold == 0) {
 					for (UINT texel = 0; texel < pixels.size(); ++texel)
 						for (UINT channel = 0; channel < 3; ++channel)
@@ -339,6 +454,8 @@ PS_INPUT AlphaVertex(uint vertex : SV_VertexID) {
 unsigned CheckGrassAlphaCoverage()
 {
 	GrassAlphaFixture fixture;
+	for (bool vr : { false, true })
+		fixture.CheckClassificationThreshold(vr);
 	for (bool vr : { false, true })
 		for (bool enhanced : { false, true })
 			fixture.CheckBillboardVertexNormals(vr, enhanced);

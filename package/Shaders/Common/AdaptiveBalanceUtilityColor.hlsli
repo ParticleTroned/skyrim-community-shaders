@@ -1,6 +1,8 @@
 #ifndef __ADAPTIVE_BALANCE_UTILITY_COLOR_HLSLI__
 #define __ADAPTIVE_BALANCE_UTILITY_COLOR_HLSLI__
 
+#include "Common/PerformanceCostReference.hlsli"
+
 // Included inside Color after the colour-space helpers and scene-draw gate.
 
 /// Adjust working-space RGB while leaving neutral values and object previews untouched.
@@ -26,7 +28,7 @@ float3 AdjustUtilityColor(float3 color, float saturation, float gammaOffset)
 	return AdjustUtilityColor(color, saturation, gammaOffset, ENABLE_LL_COLOR_ADJUSTMENTS);
 }
 
-/// Compose subtype adjustments with the existing shared point-light grading.
+/// Select the light-type colour controls composed once during upload.
 float2 PointLightUtilityAdjustment(bool isLinear, uint lightFlags)
 {
 	float2 adjustment = float2(1.0, 0.0);
@@ -35,14 +37,22 @@ float2 PointLightUtilityAdjustment(bool isLinear, uint lightFlags)
 		SharedData::AdaptiveBalanceAppearanceSettings appearance = SharedData::adaptiveBalanceSettings.appearance;
 		adjustment = isLinear ? float2(appearance.linearPointLightSaturation, appearance.linearPointLightGammaOffset) :
 		                        float2(appearance.nonlinearPointLightSaturation, appearance.pointLightGammaOffset);
+#if CSX_PERF_REFERENCE_FLAGS & CSX_PERF_POINT_LIGHT_COMPOSITION
 		float2 subtype = float2(1.0, 0.0);
+#else
+		float2 subtype = adjustment;
+#endif
 		if ((lightFlags & PointLightFlagSpot) != 0)
 			subtype = isLinear ? float2(appearance.linearSpotlightSaturation, appearance.linearSpotlightGammaOffset) :
 			                     float2(appearance.spotlightSaturation, appearance.spotlightGammaOffset);
 		else if ((lightFlags & PointLightFlagOmnidirectionalBulb) != 0)
 			subtype = isLinear ? float2(appearance.linearOmnidirectionalBulbSaturation, appearance.linearOmnidirectionalBulbGammaOffset) :
 			                     float2(appearance.omnidirectionalBulbSaturation, appearance.omnidirectionalBulbGammaOffset);
+#if CSX_PERF_REFERENCE_FLAGS & CSX_PERF_POINT_LIGHT_COMPOSITION
 		adjustment = float2(clamp(adjustment.x * subtype.x, 0.0, 2.0), clamp(adjustment.y + subtype.y, -1.0, 1.0));
+#else
+		adjustment = subtype;
+#endif
 	}
 	return adjustment;
 }

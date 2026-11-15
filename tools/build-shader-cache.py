@@ -3047,6 +3047,7 @@ def build_runtime(
         standalone_tasks = standalone_shader_cache.resolve_tasks(
             runtime, feature_states,
             shader_cache_global_state(cache_dir, runtime, shader_cache_abi),
+            reverse_z_enabled=reverse_z_enabled,
         )
         standalone_shader_cache.compile_tasks(standalone_tasks, stage, cache_dir, fxc, jobs)
         write_shader_cache_manifest(

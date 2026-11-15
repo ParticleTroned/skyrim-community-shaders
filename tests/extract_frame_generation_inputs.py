@@ -33,6 +33,7 @@ def extract(root, output):
     methods = [function(source, signature) for signature in [
         "\tuint ClampToggleUInt(uint value)\n",
         "\tvoid SanitizeFrameGenerationSettings(",
+        "\tbool IsCommunityShadersMenuOpen()\n",
         "void Upscaling::PrepareFrameGenerationInputs()",
         "bool Upscaling::CopySharedD3D12Resources()",
         "bool Upscaling::IsFrameGenerationDx12PathActive()",

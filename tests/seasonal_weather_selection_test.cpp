@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <cassert>
+#include <format>
 #include <functional>
 #include <future>
 #include <iterator>
@@ -63,9 +64,48 @@ namespace RE
 	};
 	struct TESRegion : TESForm
 	{};
+	struct TESDataHandler
+	{
+		bool full = false;
+		bool light = false;
+		static TESDataHandler* GetSingleton()
+		{
+			static TESDataHandler data;
+			return &data;
+		}
+		const TESDataHandler* LookupLoadedModByName(std::string_view name)
+		{
+			return full && name == "Seasonal Weathers Framework.esp" ? this : nullptr;
+		}
+		const TESDataHandler* LookupLoadedLightModByName(std::string_view name)
+		{
+			return light && name == "Seasonal Weathers Framework.esp" ? this : nullptr;
+		}
+	};
+}
+constexpr int NO_ERROR = 0;
+int hookCalls = 0;
+namespace REL
+{
+	struct RelocationID
+	{
+		RelocationID(int, int) {}
+		uintptr_t address() const { return 1; }
+	};
 }
 namespace Util
 {
+	struct FormEditorIDIndex
+	{};
+	struct HookResult
+	{
+		int error = NO_ERROR;
+	};
+	HookResult InstallDetour(uintptr_t, void**, void*)
+	{
+		++hookCalls;
+		return {};
+	}
 	unsigned SpidToFormId(const std::string& key);
 	std::string GetFormFileKey(const RE::TESForm* form);
 }
@@ -88,11 +128,17 @@ struct SeasonalWeather
 	std::atomic_bool enabled{ true };
 	std::atomic_bool faulted{ false };
 	std::atomic_bool available{ true };
+	std::atomic_bool frameworkDetected{ false };
 	std::atomic_uint64_t adjustedSelections{ 0 };
 	std::mutex mutex;
 	SeasonalWeatherConfig::Settings settings;
 	std::unordered_map<std::string, unsigned> configuredForms;
+	Util::FormEditorIDIndex editorIDIndex;
+	std::string installationError;
+	std::string GetDisplayName() const { return "Seasonal Weathers"; }
+	void DataLoaded();
 	void Apply(const json& patch);
+	void ApplyEditorEdits(const SeasonalWeatherConfig::Settings& original, const SeasonalWeatherConfig::Settings& edited);
 	std::function<Plan()> prepare;
 	Plan BuildPlan(RE::TESRegion*) { return prepare(); }
 	static inline RE::TESWeather* (*originalSelect)(RE::TESRegion*) = nullptr;
@@ -112,11 +158,15 @@ namespace logger
 	template <class... Args>
 	void error(const char*, Args&&...)
 	{}
+	template <class... Args>
+	void info(const char*, Args&&...)
+	{}
 }
 
 RE::FormID ResolveFormKey(const std::string& key);
 
 #include "seasonal_weather_apply_under_test.h"
+#include "seasonal_weather_detection_under_test.h"
 #include "seasonal_weather_list_under_test.h"
 #include "seasonal_weather_selection_under_test.h"
 
@@ -267,10 +317,14 @@ int main()
 		return SeasonalWeather::SelectWeather(nullptr);
 	});
 	entered.wait();
-	auto other = std::async(std::launch::async, [] {
+	std::promise<void> otherStarted;
+	auto started = otherStarted.get_future();
+	auto other = std::async(std::launch::async, [&] {
 		CSX::Api::mainThread = false;
+		otherStarted.set_value();
 		return SeasonalWeather::SelectWeather(nullptr);
 	});
+	started.wait();
 	const bool serialized = other.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout;
 	releaseNative.set_value();
 	Require(owner.get() == &snowWeather && other.get() == &nativeWeather && serialized);
@@ -309,6 +363,34 @@ int main()
 		Require(false);
 	} catch (const std::invalid_argument&) {}
 	Require(feature.settings.SnowAssignments.front().Weather == "0x2~skyrim.esm");
+	const auto originalSettings = feature.settings;
+	auto editorSettings = originalSettings;
+	editorSettings.MonthlyWeights[0][0] = 2;
+	feature.Apply({ { "Enabled", false } });
+	feature.ApplyEditorEdits(originalSettings, editorSettings);
+	Require(!feature.enabled && feature.settings.MonthlyWeights[0][0] == 2);
+	feature.ApplyEditorEdits(originalSettings, editorSettings);
+	Require(!feature.enabled && feature.settings.MonthlyWeights[0][0] == 2);
+	editorSettings.MonthlyWeights[0][0] = 3;
+	editorSettings.ExcludedWorldspaces.clear();
+	const auto concurrentSettings = SeasonalWeatherConfig::Serialize(feature.settings);
+	try {
+		feature.ApplyEditorEdits(originalSettings, editorSettings);
+		Require(false);
+	} catch (const std::invalid_argument&) {}
+	Require(SeasonalWeatherConfig::Serialize(feature.settings) == concurrentSettings);
+	feature.ApplyEditorEdits(originalSettings, originalSettings);
+	Require(SeasonalWeatherConfig::Serialize(feature.settings) == concurrentSettings);
 	data.weatherTypes.clear();
 	Require(testAllocation::outstanding == 0);
+	const auto beforeDetection = SeasonalWeatherConfig::Serialize(feature.settings);
+	auto* handler = RE::TESDataHandler::GetSingleton();
+	for (int mode = 0; mode < 3; ++mode) {
+		handler->full = mode == 1;
+		handler->light = mode == 2;
+		feature.DataLoaded();
+		Require(feature.frameworkDetected == (mode != 0));
+		Require(feature.available && hookCalls == mode + 1);
+		Require(SeasonalWeatherConfig::Serialize(feature.settings) == beforeDetection);
+	}
 }

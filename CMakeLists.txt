@@ -3013,6 +3013,7 @@ if(BUILD_CONTROLLER_TESTS)
         wetterness_highlights_test WetternessHighlights
         tests/wetterness_highlights_test.cpp
     )
+    set_tests_properties(WetternessHighlights PROPERTIES TIMEOUT 300)
     include("${PROJECT_SOURCE_DIR}/tests/wetterness_runtime.cmake")
     add_d3d_shader_test(
         snow_cover_color_test SnowCoverColor tests/snow_cover_color_test.cpp

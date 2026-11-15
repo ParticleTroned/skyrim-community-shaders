@@ -1293,6 +1293,7 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 		// - PackedRainReflectionControl[10..19]: in-rain cubemap suppression (derived from Rain Reflection Balance)
 		// - PackedRainReflectionControl[20..29]: in-rain wet-film specular boost (derived from Rain Reflection Balance)
 		// - PackedRainReflectionControl[30]: occlusion projection validity flag
+		// - PackedRainReflectionControl[31]: restrict puddles to nearly horizontal mesh surfaces
 		uint packedPostRainControl = CS_WETNESS_SETTINGS.PackedPostRainControl;
 		float postRainSpecBoostFromClarity = saturate((float)(packedPostRainControl & 0x3FFu) * (1.0 / 1023.0));
 		float puddleSkyReflectionScale = saturate((float)((packedPostRainControl >> 10) & 0x3FFu) * (1.0 / 1023.0));
@@ -1302,9 +1303,18 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 		float inRainCubemapSuppressionFromBalance = saturate((float)((packedRainReflectionControl >> 10) & 0x3FFu) * (1.0 / 1023.0));
 		float inRainFilmSpecularBoostFromBalance = saturate((float)((packedRainReflectionControl >> 20) & 0x3FFu) * (1.0 / 1023.0));
 		const bool hasOcclusionViewProj = (packedRainReflectionControl & (1u << 30)) != 0;
+		const bool restrictPuddleSlopes = (packedRainReflectionControl & (1u << 31)) != 0;
 		float wetnessDistanceFadeRange = max(1.0, asfloat(CS_WETNESS_SETTINGS.WetnessDistanceFadeRangePacked));
 		float wetnessDistanceFade = lerp(1.0, 0.0, saturate(viewPosition.z / wetnessDistanceFadeRange));
 		float rainContactWetnessScale = max(0.0, CS_WETNESS_SETTINGS.RainContactWetnessScale);
+#		if !defined(SKINNED) && defined(MODELSPACENORMALS)
+		float flatSurfacePuddleMask = 0.0;
+		// Position derivatives must precede spatially divergent puddle/exposure branches.
+		[branch] if (restrictPuddleSlopes && CS_WETNESS_SETTINGS.PuddleWetness > 0.0)
+		{
+			flatSurfacePuddleMask = Wetterness::GetGeometricPuddleMask(-cross(ddx(input.WorldPosition.xyz), ddy(input.WorldPosition.xyz)));
+		}
+#		endif
 
 		// Calculate wetness angle and occlusion
 		float minWetnessValue = CS_WETNESS_SETTINGS.MinRainWetness;
@@ -1542,9 +1552,21 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 		const bool puddleRuntimeActive = puddleAllowed && puddleWetness > 0.0 && wetnessDistanceFade > 0.0;
 		if (puddleRuntimeActive) {
 			float puddleMaxAngleSafe = max(CS_WETNESS_SETTINGS.PuddleMaxAngle, 1e-3);
-			float puddleSlopeStart = max(0.0, puddleMaxAngleSafe * 0.45);
-			float puddleSlopeEnd = min(1.0, max(puddleSlopeStart + 1e-3, puddleMaxAngleSafe));
-			float puddleSlopeMask = smoothstep(puddleSlopeStart, puddleSlopeEnd, saturate(worldNormal.z));
+			float puddleSlopeMask;
+			[branch] if (restrictPuddleSlopes)
+			{
+#			if defined(MODELSPACENORMALS)
+				puddleSlopeMask = flatSurfacePuddleMask;
+#			else
+				puddleSlopeMask = Wetterness::GetFlatSurfacePuddleMask(vertexNormal);
+#			endif
+			}
+			else
+			{
+				float puddleSlopeStart = max(0.0, puddleMaxAngleSafe * 0.45);
+				float puddleSlopeEnd = min(1.0, max(puddleSlopeStart + 1e-3, puddleMaxAngleSafe));
+				puddleSlopeMask = smoothstep(puddleSlopeStart, puddleSlopeEnd, saturate(worldNormal.z));
+			}
 			// Slope gate is exact: if this is zero, downstream puddle/noise terms are guaranteed to be zero.
 			if (puddleSlopeMask > 0.0) {
 				[branch] if (CS_WETNESS_SETTINGS.PuddleMaskMode == Wetterness::PUDDLE_MASK_SIMPLE)

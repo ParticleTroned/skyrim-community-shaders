@@ -234,6 +234,75 @@ namespace
 		Require(reduced > 0 && protectedFlat > 0, "Fixture did not exercise the reported sparkle regression");
 		std::cout << "PASS VR=" << vr << " PBR=" << pbr << " samples=" << compared << " reduced=" << reduced << " flatProtected=" << protectedFlat << " preservedBaselineNonfinite=" << baselineNonfinite << '\n';
 	}
+
+	void CheckPuddleSlopes(ID3D11Device* device, ID3D11DeviceContext* context)
+	{
+		Fixture fixture(device, false, false, "CheckPuddleSlopes");
+		const auto samples = fixture.Run(context, 0, 0, 0, 0);
+		float previous = 1;
+		for (size_t i = 0; i < 1024; ++i) {
+			const auto& sample = samples[i * 3];
+			Require(std::isfinite(sample[0]) && sample[0] >= 0 && sample[0] <= previous,
+				"Puddle slope coverage must decrease monotonically");
+			if (sample[1] <= 3)
+				Require(sample[0] == 1, "Nearly flat surfaces lost puddle eligibility");
+			else if (sample[1] >= 8)
+				Require(sample[0] == 0, "Standing puddles survived on a slope above 8 degrees");
+			else
+				Require(sample[0] > 0 && sample[0] < 1, "Puddle slope transition must fade smoothly");
+			Require(sample[2] == 0 && sample[3] == 0, "Downward or degenerate normals admitted puddles");
+			const auto& geometric = samples[i * 3 + 1];
+			Require(Close(geometric[0], sample[0]) && Close(geometric[1], sample[0]),
+				"Geometric puddle eligibility changed with distance or resolution");
+			Require(geometric[2] == 0 && geometric[3] == 0, "Downward or degenerate geometry admitted puddles");
+			Require(Close(samples[i * 3 + 2][0], sample[0]), "Geometric derivative orientation disagrees with the mesh slope");
+			previous = sample[0];
+		}
+		std::cout << "PASS: puddle slope coverage, samples=1024\n";
+	}
+
+	void CheckWetnessPixelShaders()
+	{
+		struct Material
+		{
+			const char* define;
+			bool pbr, skinned;
+		};
+		const std::array materials{
+			Material{ "LANDSCAPE", false, false }, Material{ "MODELSPACENORMALS", false, false }, Material{ "ENVMAP", false, false },
+			Material{ "LANDSCAPE", true, false }, Material{ "MODELSPACENORMALS", true, true }, Material{ "VC", true, false }
+		};
+		for (bool vr : { false, true }) {
+			for (bool deferred : { false, true }) {
+				for (const auto& material : materials) {
+					PackageIncludes includes("package/Shaders", "features/Wetterness/Shaders");
+					std::vector<D3D_SHADER_MACRO> defines{
+						{ "PSHADER", "1" }, { "WETTERNESS", "1" }, { material.define, "1" }
+					};
+					if (vr)
+						defines.push_back({ "VR", "1" });
+					if (deferred)
+						defines.push_back({ "DEFERRED", "1" });
+					if (material.pbr)
+						defines.push_back({ "TRUE_PBR", "1" });
+					if (material.skinned)
+						defines.push_back({ "SKINNED", "1" });
+					defines.push_back({ nullptr, nullptr });
+					std::cout << "Compile wetness pixel shader VR=" << vr << " deferred=" << deferred << " PBR=" << material.pbr
+							  << " material=" << material.define << " skinned=" << material.skinned << std::endl;
+					ComPtr<ID3DBlob> bytecode, errors;
+					// Full material permutations use the production compiler flags, including warning reporting.
+					const auto compiled = D3DCompileFromFile(L"package/Shaders/Lighting.hlsl", defines.data(), &includes, "main", "ps_5_0",
+						D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+						0, bytecode.GetAddressOf(), errors.GetAddressOf());
+					if (errors)
+						std::cerr << static_cast<const char*>(errors->GetBufferPointer());
+					Check(compiled);
+					std::cout << "PASS\n";
+				}
+			}
+		}
+	}
 }
 
 int main()
@@ -245,6 +314,8 @@ int main()
 		Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION,
 			device.GetAddressOf(), nullptr, context.GetAddressOf()));
 		CheckDistribution(device.Get(), context.Get());
+		CheckPuddleSlopes(device.Get(), context.Get());
+		CheckWetnessPixelShaders();
 		for (bool vr : { false, true })
 			for (bool pbr : { false, true })
 				CheckLighting(device.Get(), context.Get(), vr, pbr);

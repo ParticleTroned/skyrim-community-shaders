@@ -13,7 +13,7 @@ public:
 	virtual inline std::string GetShortName() override { return "Wetterness"; }
 	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
 	virtual inline std::string_view GetShaderDefineName() override { return "WETTERNESS"; }
-	std::string_view GetShaderCacheAbiVersion() override { return "4"; }
+	std::string_view GetShaderCacheAbiVersion() override { return "5"; }
 	virtual std::string_view GetCategory() const override { return "Water"; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
@@ -212,6 +212,7 @@ public:
 
 	Settings settings;
 	PuddleMaskMode puddleMaskMode = PuddleMaskMode::Textured;
+	bool restrictPuddleSlopes = false;
 	bool enableWeatherDrivenDryingModel = true;
 	float puddleDryingHours = 15.0f;
 	float puddleLayout = 3.0f;

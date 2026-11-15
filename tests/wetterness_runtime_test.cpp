@@ -412,6 +412,27 @@ namespace
 		data = f.Step();
 		Require(data.settings.MaxShoreWetness == 0 && !f.wetness.IsRuntimeProcessingActive(), "Unloaded feature retained effects");
 	}
+
+	void CheckPuddleSlopeToggle()
+	{
+		Fixture f;
+		Require(!f.wetness.restrictPuddleSlopes, "Puddle slope restriction must default off");
+		f.Rain();
+		f.Step();
+		const auto original = f.Step(8 * 3600);
+		f.wetness.restrictPuddleSlopes = true;
+		const auto restricted = f.Step(0);
+		constexpr uint32_t slopeBit = 1u << 31;
+		Require((original.PackedRainReflectionControl & slopeBit) == 0 &&
+					restricted.PackedRainReflectionControl == (original.PackedRainReflectionControl | slopeBit),
+			"Slope toggle corrupted packed reflection or occlusion controls");
+		Require(original.Wetness == restricted.Wetness && original.PuddleWetness == restricted.PuddleWetness &&
+					original.Raining == restricted.Raining,
+			"Slope toggle changed accumulated rain or wetness");
+		f.wetness.restrictPuddleSlopes = false;
+		Require(f.Step(0).PackedRainReflectionControl == original.PackedRainReflectionControl,
+			"Disabling slope restriction did not restore the original shader controls");
+	}
 }
 
 int main()
@@ -421,6 +442,7 @@ int main()
 		CheckGrassAndClock();
 		CheckTransitionsAndOverrides();
 		CheckRainMetadata();
+		CheckPuddleSlopeToggle();
 		std::cout << "Wetterness runtime lifecycle passed\n";
 		return 0;
 	} catch (const std::exception& error) {

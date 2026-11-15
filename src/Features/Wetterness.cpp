@@ -38,6 +38,7 @@ namespace
 	constexpr double RAIN_TIMER_WRAP_SECONDS = 65536.0;
 	constexpr uint32_t MAX_OCCLUSION_VIEW_PROJ_REUSE_FRAMES = 6u;
 	constexpr uint32_t RAIN_REFLECTION_CONTROL_OCCLUSION_VALID_BIT = (1u << 30);
+	constexpr uint32_t RAIN_REFLECTION_CONTROL_RESTRICT_PUDDLE_SLOPES_BIT = (1u << 31);
 	constexpr float MIN_TRANSITION_SPEED = 0.2f;
 	constexpr float MAX_TRANSITION_SPEED = 8.0f;
 	constexpr float MIN_RAINDROP_GRID_SIZE = 1e-3f;
@@ -1699,6 +1700,10 @@ void Wetterness::DrawSettings()
 	if (page.Is("puddles")) {
 		MenuUI::SectionHeading("Puddle coverage");
 		DrawPuddleMaskSettings();
+		Util::Widgets::Checkbox("Restrict Puddles to Flat Surfaces", &restrictPuddleSlopes);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Use the mesh slope for puddle placement: full coverage below 3 degrees, fading out by 8 degrees. Switch off to compare the original placement. Rain film and accumulated wetness are preserved.");
+		}
 		Util::Widgets::SliderFloat("Puddle Wetness", &settings.MaxPuddleWetness, 0.0f, 6.0f);
 		markPresetDirtyIfEdited();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1707,7 +1712,7 @@ void Wetterness::DrawSettings()
 
 		Util::Widgets::SliderFloat("Puddle Max Angle", &settings.PuddleMaxAngle, 0.0f, 1.0f);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Puddle slope limit. Higher restricts puddles to flatter ground; lower allows steeper slopes.");
+			ImGui::TextUnformatted("Original puddle slope limit. Higher favors flatter ground. Restrict Puddles to Flat Surfaces overrides this placement limit.");
 		}
 
 		Util::Widgets::SliderFloat("Puddle Radius", &settings.PuddleRadiusWorldUnits, PUDDLE_RADIUS_UI_MIN_GAME_UNITS, PUDDLE_RADIUS_UI_MAX_GAME_UNITS, "%.0f units", ImGuiSliderFlags_AlwaysClamp);
@@ -2145,7 +2150,8 @@ json Wetterness::CapturePerformanceSettingsState() const
 		{ "RainGrassGlossiness", rainGrassGlossiness },
 		{ "RainGrassSpecularStrength", rainGrassSpecularStrength },
 		{ "RainGrassDarkening", rainGrassDarkening },
-		{ "PuddleMaskMode", static_cast<uint32_t>(puddleMaskMode) }
+		{ "PuddleMaskMode", static_cast<uint32_t>(puddleMaskMode) },
+		{ "RestrictPuddleSlopes", restrictPuddleSlopes }
 	};
 }
 
@@ -2182,6 +2188,7 @@ void Wetterness::RestorePerformanceCostMeasurementState(const json& a_state)
 {
 	if (!a_state.is_object())
 		return;
+	restrictPuddleSlopes = a_state.value("RestrictPuddleSlopes", restrictPuddleSlopes);
 
 	if (a_state.contains("Settings"))
 		settings = a_state.at("Settings").get<Settings>();
@@ -2615,9 +2622,13 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 	// bits  0.. 9 = post-rain cubemap glare reduction (derived from Post-Rain Water Clarity)
 	// bits 10..19 = in-rain cubemap suppression (derived from Rain Reflection Balance)
 	// bits 20..29 = in-rain film specular boost (derived from Rain Reflection Balance)
+	// bit 31 = restrict standing puddles to nearly horizontal mesh surfaces
 	uint32_t packedRainReflectionControl = PackThreeUnorm10(postRainCubemapGlareReductionFromClarity, inRainCubemapSuppressionFromBalance, inRainFilmSpecularBoostFromBalance);
 	if (hasValidOcclusionProjection) {
 		packedRainReflectionControl |= RAIN_REFLECTION_CONTROL_OCCLUSION_VALID_BIT;
+	}
+	if (restrictPuddleSlopes) {
+		packedRainReflectionControl |= RAIN_REFLECTION_CONTROL_RESTRICT_PUDDLE_SLOPES_BIT;
 	}
 	data.PackedRainReflectionControl = packedRainReflectionControl;
 	// Remaining wetness packed lane carries wetness distance fade in game units.
@@ -2698,6 +2709,9 @@ void Wetterness::LoadSettings(json& o_json)
 	enableWeatherDrivenDryingModel = true;
 	debugSettings = {};
 	puddleMaskMode = PuddleMaskMode::Textured;
+	restrictPuddleSlopes = isObject && o_json.contains("RestrictPuddleSlopes") ?
+	                           JsonValueToBool(o_json["RestrictPuddleSlopes"], false) :
+	                           false;
 	if (isObject) {
 		try {
 			settings = o_json.get<Settings>();
@@ -2806,6 +2820,7 @@ void Wetterness::SaveSettings(json& o_json)
 	rainGrassDarkening = ClampRainGrassDarkening(rainGrassDarkening);
 	o_json["RainGrassDarkening"] = rainGrassDarkening;
 	o_json["PuddleMaskMode"] = static_cast<uint32_t>(puddleMaskMode);
+	o_json["RestrictPuddleSlopes"] = restrictPuddleSlopes;
 	o_json["EnableWeatherDrivenDryingModel"] = enableWeatherDrivenDryingModel;
 
 	o_json["DebugSettings"] = debugSettings;
@@ -2814,6 +2829,7 @@ void Wetterness::SaveSettings(json& o_json)
 void Wetterness::RestoreDefaultSettings()
 {
 	settings = {};
+	restrictPuddleSlopes = false;
 	puddleMaskMode = PuddleMaskMode::Textured;
 	enableWeatherDrivenDryingModel = true;
 	puddleDryingHours = DEFAULT_PUDDLE_DRYING_HOURS;

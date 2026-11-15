@@ -9,7 +9,21 @@ cbuffer TestInputs : register(b12)
 };
 RWStructuredBuffer<float4> Results : register(u0);
 
-[numthreads(64, 1, 1)] void main(uint3 id : SV_DispatchThreadID) {
+[numthreads(64, 1, 1)] void CheckPuddleSlopes(uint3 id : SV_DispatchThreadID) {
+	float angle = float(id.x) * (90.0 / 1023.0);
+	float3 meshNormal = float3(sin(radians(angle)), 0, cos(radians(angle)));
+	Results[id.x * 3] = float4(Wetterness::GetFlatSurfacePuddleMask(meshNormal), angle,
+		Wetterness::GetFlatSurfacePuddleMask(-meshNormal), Wetterness::GetFlatSurfacePuddleMask(float3(0, 0, 0)));
+	Results[id.x * 3 + 1] = float4(
+		Wetterness::GetGeometricPuddleMask(meshNormal * 1e-12), Wetterness::GetGeometricPuddleMask(meshNormal * 1e12),
+		Wetterness::GetGeometricPuddleMask(-meshNormal), Wetterness::GetGeometricPuddleMask(float3(0, 0, 0)));
+	float3 positionDx = float3(meshNormal.z, 0, -meshNormal.x);
+	float3 positionDy = float3(0, -1, 0);
+	Results[id.x * 3 + 2] = float4(Wetterness::GetGeometricPuddleMask(-cross(positionDx, positionDy)), 0, 0, 0);
+}
+
+	[numthreads(64, 1, 1)] void main(uint3 id : SV_DispatchThreadID)
+{
 	const float roughnesses[8] = { 0.005, 0.03, 0.05, 0.10, 0.18, 0.35, 0.70, 1.0 };
 	const float roughness = roughnesses[id.x % 8];
 	const float viewZ = lerp(0.02, 1.0, float((id.x / 8) % 8) / 7.0);
@@ -49,8 +63,7 @@ RWStructuredBuffer<float4> Results : register(u0);
 		state.pointLightHighlightReduction, state.params.lightColorScale, isPointLight ? 1.0 : 0.0);
 }
 
-	[numthreads(64, 1, 1)] void CheckDistribution(uint3 id : SV_DispatchThreadID)
-{
+[numthreads(64, 1, 1)] void CheckDistribution(uint3 id : SV_DispatchThreadID) {
 	const float roughness = lerp(0.005, 1.0, float(id.x % 32) / 31.0);
 	const uint angle = id.x / 32;
 	const float NdotH = angle < 16 ? 1.0 - float(angle) * exp2(-24.0) : float(31 - angle) / 16.0;

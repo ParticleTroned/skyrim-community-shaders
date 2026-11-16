@@ -1958,19 +1958,19 @@
         "SurvivalEnabled": false
     },
     "Texture Streaming": {
-        "Enabled": false
+        "Enabled": true
     },
     "Preset Compatibility": {
         "contractVersion": 1,
         "presetId": "csx-amd-performance",
-        "presetVersion": "d2026.11.06.1",
+        "presetVersion": "d2026.11.16.1",
         "target": {
             "runtime": "VR",
             "minimumVersion": "3.21",
             "maximumVersionExclusive": "3.22"
         },
         "settingsContract": {
-            "revision": 33,
+            "revision": 34,
             "sourceTreeSha256": "5B1D2966F87C62D884BCCD80F80379C1059075D821C5792E295205EB65974CC4"
         }
     },
@@ -1983,7 +1983,7 @@
         "EnableFarLOD": true,
         "EnableMeshLOD": false,
         "EnableMidLOD": true,
-        "EnableOcclusionCulling": true,
+        "EnableOcclusionCulling": false,
         "Enabled": true,
         "FarLODCoverageBias": 1.0,
         "FarLODMaxDensity": 0.20000000298023224,

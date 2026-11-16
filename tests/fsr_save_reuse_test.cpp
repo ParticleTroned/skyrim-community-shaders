@@ -258,16 +258,16 @@ struct FidelityFX
 	LifecycleResult PollPendingRuntimeUpscalerTeardownFence(const char*) { return pendingFenceResponse; }
 	void RecordRuntimeProviderResult(bool) {}
 	bool AreRuntimeUpscalerContextsCompatible(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) const { return contextsCompatible; }
+	auto Resources()
+	{
+		return std::array{ &runtimeColorShared, &runtimeDepthShared, &runtimeMotionShared,
+			&runtimeReactiveShared, &runtimeTransparencyShared, &runtimeOutputShared };
+	}
 	LifecycleResult DestroyRuntimeUpscalerResources(bool)
 	{
 		for (auto* resources : Resources())
 			for (auto& resource : *resources) resource.reset();
 		return LifecycleResult::Ready;
-	}
-	auto Resources()
-	{
-		return std::array{ &runtimeColorShared, &runtimeDepthShared, &runtimeMotionShared,
-			&runtimeReactiveShared, &runtimeTransparencyShared, &runtimeOutputShared };
 	}
 	auto Descriptors()
 	{

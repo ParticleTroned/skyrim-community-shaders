@@ -6,6 +6,7 @@
 #include "VRSubmitTemporalSnapshot.h"
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "ColourPipelineProbe.h"
+#	include <atomic>
 #endif
 
 #include <algorithm>
@@ -4257,7 +4258,9 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(
 	std::array<std::array<WrappedResource*, FSRSharedGuidePolicy::kGuideCount>, 2> guideInputs{};
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	constexpr auto probeRoute = Probe::Route::CompositorSubmit;
+	static std::atomic_uint64_t nextCompositorProbeBatch{ 1 };
 	const bool probeSubmit = a_compositorSubmit && a_regions.size() == 2 && Probe::WantsVendorCapture();
+	const uint64_t probeBatch = probeSubmit ? nextCompositorProbeBatch.fetch_add(1, std::memory_order_relaxed) : 0;
 	const auto observeSubmit = [&](Probe::Stage a_stage) noexcept {
 		if (!probeSubmit || !Probe::WantsVendorCapture())
 			return;
@@ -4284,6 +4287,7 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(
 					.displayHeight = region.displayHeight,
 					.requestedHighDynamicRangeInput = status.contract.highDynamicRangeInput,
 					.requestedAutoExposure = status.contract.autoExposure,
+					.compositorBatch = probeBatch,
 				};
 				if (output) {
 					metadata.effectiveHighDynamicRangeInput = dispatch.highDynamicRangeInput;

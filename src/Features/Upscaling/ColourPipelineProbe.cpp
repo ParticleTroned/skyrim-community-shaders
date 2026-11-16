@@ -922,6 +922,12 @@ namespace CSX::Diagnostics::ColourPipelineProbe
 				FailLocked("the colour-pipeline capture observed no engine frame");
 				return;
 			}
+			if (a_route == Route::CompositorSubmit &&
+				(!a_dispatch.compositorBatch ||
+					(g_state.state == ProbeState::Capturing && g_state.dispatch.compositorBatch != a_dispatch.compositorBatch))) {
+				FailLocked("capture stages crossed compositor provider batches");
+				return;
+			}
 			if (g_state.state == ProbeState::Armed) {
 				if (a_stage != Stage::FsrInput)
 					return;

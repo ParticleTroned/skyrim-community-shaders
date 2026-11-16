@@ -73,7 +73,8 @@ namespace CSX::Diagnostics::ColourPipelineProbe::Policy
 	{
 		if (!a_dispatch.dispatchSerial || a_dispatch.frame != a_frame ||
 			a_dispatch.colourContractRevision != a_revision ||
-			a_dispatch.contextIndex != a_eye || a_dispatch.path.empty())
+			a_dispatch.contextIndex != a_eye || a_dispatch.path.empty() ||
+			a_input.compositorBatch != a_dispatch.compositorBatch)
 			return false;
 		a_input = a_dispatch;
 		return true;

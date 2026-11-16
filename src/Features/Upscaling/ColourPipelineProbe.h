@@ -35,6 +35,7 @@ namespace CSX::Diagnostics::ColourPipelineProbe
 		std::uint64_t dispatchQpc = 0;
 		FSRDispatchInputTelemetry::Snapshot submittedInputs{};
 		std::string path;
+		std::uint64_t compositorBatch = 0;
 	};
 
 	/** Arm one bounded VR capture; return its immutable generation receipt. */

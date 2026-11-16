@@ -79,6 +79,7 @@ int main()
 		float jitterX = 0;
 		float jitterY = 0;
 		float frameTimeDeltaMilliseconds = 0;
+		std::uint64_t compositorBatch = 0;
 	};
 	for (const auto* path : { "host", "runtime-fsr3", "runtime-fsr4", "runtime-to-host-fallback" }) {
 		for (std::uint32_t eye : { 0u, 1u }) {
@@ -101,6 +102,16 @@ int main()
 			unavailable.path.clear();
 			Require(!Policy::BindInputDispatch(input, unavailable, 8, 3, eye));
 		}
+	}
+	// An input-only attempt leaves old samples for both eyes in the same frame.
+	for (std::uint32_t eye : { 0u, 1u }) {
+		Dispatch input{ .frame = 8, .colourContractRevision = 3, .contextIndex = eye, .compositorBatch = 10 };
+		Dispatch output{ .frame = 8, .colourContractRevision = 3, .contextIndex = eye, .dispatchSerial = 123 + eye, .path = "runtime-fsr4", .compositorBatch = 11 };
+		Require(!Policy::BindInputDispatch(input, output, 8, 3, eye));
+		Require(input.compositorBatch == 10 && input.dispatchSerial == 0 && input.path.empty());
+		input.compositorBatch = output.compositorBatch;
+		Require(Policy::BindInputDispatch(input, output, 8, 3, eye));
+		Require(input.compositorBatch == 11 && input.dispatchSerial == 123 + eye);
 	}
 	constexpr auto maximum = std::numeric_limits<std::uint32_t>::max();
 	Require(Policy::ValidRectangle(4096, 2048, 2048, 0, 2048, 2048));

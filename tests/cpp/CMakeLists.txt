@@ -169,6 +169,11 @@ target_include_directories(
     PRIVATE "${CMAKE_SOURCE_DIR}/extern/AntiLag2-SDK"
 )
 
+target_compile_definitions(
+    cpp_tests
+    PRIVATE CPP_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
+)
+
 # Exercise capture policy in both production and DevBench configurations.
 add_executable(
     screenshot_tests_devbench

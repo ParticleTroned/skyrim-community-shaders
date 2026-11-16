@@ -10,10 +10,10 @@ permissions:
 
 env:
     NR_UPSTREAM_DEV: d9e807cf562e34d54e112538dd992963ce63ae0a
-    NR_GUIDED_HEAD: 83f270b59add225bc41be835b7f6b7d05a1d8612
-    NR_PERIPHERAL_HEAD: 16da57855fd553de432e95b119aa53a9ccbf2d6b
+    NR_GUIDED_HEAD: 6d42106e2fb79b02280c9e33a0e5d6de1be1cdbe
+    NR_PERIPHERAL_HEAD: 268d5e975921f9677c29ef5318312e50cd08aaab
     NR_COMBAT_HEAD: da68ba5dfd91d36aa4dd81b4dc8e34a374095b6a
-    NR_SCENE_HEAD: 223fd7eaeeac8ef7f9600d08dcb7a030f3c9e22f
+    NR_SCENE_HEAD: 24a947cfc975ad77cf6f53373626a54d7ba2e34b
 
 concurrency:
     group: nr-integration-${{ github.ref }}

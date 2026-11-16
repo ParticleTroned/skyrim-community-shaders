@@ -6,6 +6,28 @@ against Open Shaders `dev` at
 and the merge resolutions needed to use the features together. Keep the
 upstream PRs in draft until runtime testing is complete.
 
+## November 16 shader include correction
+
+The `792bd9cd` AIO can fail with `NR encoder or color-transfer shader
+unavailable`. Four shared NR headers used five sibling-relative includes,
+while the runtime's `Util::CustomInclude` resolves every include beneath
+`Data/Shaders`. Native FXC and DXC include lookup accepted those paths during
+CI, so the earlier successful compiler checks did not establish runtime
+include compatibility.
+
+The guided, peripheral and scene PRs now qualify those includes with
+`Common/`. This changes only dependency paths; shader calculations, plugin
+code, settings and the combat PR are unchanged. The shader-only hotfix can
+be installed after the November 15 AIO. Exit the game before installing it
+and relaunch afterward to clear the in-memory failed-shader cache. Retry NR
+alone does not clear that cache. A full shader-cache clear also resets it.
+
+The integration adds a regression to the existing Windows C++ unit-test job
+that compiles the real NR shaders through the production include handler.
+It covers SE/VR and both depth conventions, including the typed-depth encoder.
+The new Windows regression and in-game VR plus flat validation must be
+reported separately from the preceding build's results.
+
 ## Build and source
 
 The combined source branch and downloadable Actions artifacts live in
@@ -22,10 +44,10 @@ rebase preserves the earlier implementation and follow-up fixes in each PR.
 
 | Order | Implementation                                                                                 | Feature branch                                                                                                                         | Included head                              |
 | ----- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| 1     | [RGB-guided reconstruction (#1053)](https://github.com/alandtse/open-shaders/pull/1053)        | [Guided reconstruction](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-guided-reconstruction-20261031)   | `83f270b59add225bc41be835b7f6b7d05a1d8612` |
-| 2     | [Peripheral compression (#1054)](https://github.com/alandtse/open-shaders/pull/1054)           | [Peripheral compression](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-peripheral-compression-20261031) | `16da57855fd553de432e95b119aa53a9ccbf2d6b` |
+| 1     | [RGB-guided reconstruction (#1053)](https://github.com/alandtse/open-shaders/pull/1053)        | [Guided reconstruction](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-guided-reconstruction-20261031)   | `6d42106e2fb79b02280c9e33a0e5d6de1be1cdbe` |
+| 2     | [Peripheral compression (#1054)](https://github.com/alandtse/open-shaders/pull/1054)           | [Peripheral compression](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-peripheral-compression-20261031) | `268d5e975921f9677c29ef5318312e50cd08aaab` |
 | 3     | [Pause NR during combat (#1055)](https://github.com/alandtse/open-shaders/pull/1055)           | [Combat pause](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-combat-pause-20261031)                     | `da68ba5dfd91d36aa4dd81b4dc8e34a374095b6a` |
-| 4     | [Reduced-model material selection (#1056)](https://github.com/alandtse/open-shaders/pull/1056) | [Scene selection](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-scene-selection-20261031)               | `223fd7eaeeac8ef7f9600d08dcb7a030f3c9e22f` |
+| 4     | [Reduced-model material selection (#1056)](https://github.com/alandtse/open-shaders/pull/1056) | [Scene selection](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-scene-selection-20261031)               | `24a947cfc975ad77cf6f53373626a54d7ba2e34b` |
 
 The refresh uses `main-VR` at
 `75799ca034562ea124b9aa19e94e531a639a9ec3` as its source baseline. It brings

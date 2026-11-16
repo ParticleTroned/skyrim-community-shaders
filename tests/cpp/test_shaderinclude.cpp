@@ -160,6 +160,66 @@ TEST_CASE_METHOD(IncludeFixture, "Nested shader compilation matches bytecode und
 	CHECK(std::memcmp(compiled->GetBufferPointer(), baseline->GetBufferPointer(), compiled->GetBufferSize()) == 0);
 }
 
+TEST_CASE_METHOD(IncludeFixture, "Neural Rendering shaders compile with runtime include resolution", "[shader-include][nr]")
+{
+	const std::filesystem::path sourceRoot(CPP_TEST_SOURCE_ROOT);
+	for (const auto* shaderRoot : { "package/Shaders", "features/Upscaling/Shaders" })
+		std::filesystem::copy(sourceRoot / shaderRoot, "Data/Shaders",
+			std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing);
+
+	struct Request
+	{
+		const wchar_t* source;
+		const char* entry;
+		std::vector<D3D_SHADER_MACRO> defines;
+	};
+	const Request requests[]{
+		{ L"Upscaling/EncodeTexturesCS.hlsl", "main", { { "DEPTH_OUTPUT", "" } } },
+		{ L"Upscaling/EncodeTexturesCS.hlsl", "main", { { "DEPTH_OUTPUT", "" }, { "DLSS", "" } } },
+		{ L"Upscaling/NeuralRendering/ColorTransferCS.hlsl", "Prepare", {} },
+		{ L"Upscaling/NeuralRendering/ColorTransferCS.hlsl", "Composite", {} },
+		{ L"Upscaling/NeuralRendering/ColorTransferCS.hlsl", "PrepareToneData", {} },
+		{ L"Upscaling/NeuralRendering/CategoryAlphaCS.hlsl", "main", {} },
+		{ L"Upscaling/NeuralRendering/GainReuseCS.hlsl", "StoreGain", {} },
+		{ L"Upscaling/NeuralRendering/GainReuseCS.hlsl", "ReuseGain", {} },
+		{ L"Upscaling/NeuralRendering/MotionOffsetCS.hlsl", "Offset", {} },
+		{ L"Upscaling/NeuralRendering/LowResCS.hlsl", "Downsample", {} },
+		{ L"Upscaling/NeuralRendering/LowResCS.hlsl", "ExpandGain", {} },
+		{ L"Upscaling/NeuralRendering/LowResCS.hlsl", "ExpandGain", { { "NR_RGB_GUIDED_RECONSTRUCTION", "1" } } },
+		{ L"Upscaling/NeuralRendering/LowResCS.hlsl", "Downsample", { { "NR_PERIPHERAL_COMPRESSION", "1" } } },
+		{ L"Upscaling/NeuralRendering/LowResCS.hlsl", "ExpandGain", { { "NR_PERIPHERAL_COMPRESSION", "1" } } },
+		{ L"Upscaling/NeuralRendering/LowResCS.hlsl", "ExpandGain", { { "NR_RGB_GUIDED_RECONSTRUCTION", "1" }, { "NR_PERIPHERAL_COMPRESSION", "1" } } },
+	};
+	for (const bool vr : { false, true }) {
+		for (const bool reverseZ : { false, true }) {
+			for (const auto& request : requests) {
+				auto defines = request.defines;
+				defines.insert(defines.end(), { { "COMPUTESHADER", "" }, { "WINPC", "" }, { "DX11", "" } });
+				if (vr)
+					defines.push_back({ "VR", "" });
+				if (reverseZ)
+					defines.push_back({ "REVERSE_Z", "" });
+				std::ostringstream parameters;
+				for (const auto& define : defines)
+					parameters << define.Name << '=' << define.Definition << ' ';
+				defines.push_back({ nullptr, nullptr });
+				const auto source = std::filesystem::path("Data/Shaders") / request.source;
+				Util::CustomInclude handler(source);
+				winrt::com_ptr<ID3DBlob> compiled;
+				winrt::com_ptr<ID3DBlob> errors;
+				const auto result = D3DCompileFromFile(source.c_str(), defines.data(), &handler, request.entry, "cs_5_0",
+					D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3 | D3DCOMPILE_SKIP_VALIDATION,
+					0, compiled.put(), errors.put());
+				CAPTURE(source, request.entry, parameters.str());
+				INFO((errors ? static_cast<const char*>(errors->GetBufferPointer()) : "No compiler errors"));
+				INFO(output.str());
+				CHECK(SUCCEEDED(result));
+				CHECK(compiled);
+			}
+		}
+	}
+}
+
 TEST_CASE_METHOD(IncludeFixture, "Missing includes preserve Windows errors and suppress duplicate reports", "[shader-include]")
 {
 	std::filesystem::remove(path);

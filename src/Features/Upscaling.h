@@ -4301,7 +4301,7 @@ public:
 		uint64_t a_transitionEpoch);
 #endif
 	void QueueVRFpsStabilizerLoadSync(
-		uint32_t a_frame, VRVendorRelatchPolicy::LoadingMenuClose a_close = {});
+		VRVendorRelatchPolicy::LoadingMenuClose a_close, std::optional<uint64_t> a_discoveryEdge = std::nullopt);
 	void ApplyPendingVRFpsStabilizerLoadSync();
 	bool ShouldStageVRRenderScaleTransition(bool a_renderScaleModeEnabled, uint32_t a_qualityMode) const;
 	bool ShouldDeferVRUpscalingTransitionSettings() const;

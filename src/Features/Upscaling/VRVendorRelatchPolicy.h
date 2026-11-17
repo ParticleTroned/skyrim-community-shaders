@@ -53,6 +53,16 @@ namespace VRVendorRelatchPolicy
 		}
 	};
 
+	[[nodiscard]] constexpr bool MatchesStabilizerSyncDiscovery(
+		LoadingMenuClose a_observedClose, std::uint64_t a_observedEdge,
+		LoadingMenuClose a_currentClose, std::uint64_t a_currentEdge, bool a_open) noexcept
+	{
+		// Startup may have no serial or close frame. Its edge still owns the observation.
+		return !a_open && a_observedEdge == a_currentEdge &&
+		       a_observedClose.serial == a_currentClose.serial &&
+		       a_observedClose.frame == a_currentClose.frame;
+	}
+
 	[[nodiscard]] constexpr bool IsRetainedSaveLoadTail(
 		std::uint64_t a_retainedSerial, std::uint32_t a_retainedCloseFrame,
 		std::uint64_t a_currentSerial, std::uint32_t a_currentCloseFrame,

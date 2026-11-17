@@ -65,6 +65,16 @@ namespace
 	}
 	static_assert(CoversDelayedCloseAfterStabilizerSyncCancellation());
 
+	constexpr LoadingMenuClose startupSync{};
+	static_assert(MatchesStabilizerSyncDiscovery(startupSync, 0, startupSync, 0, false));
+	static_assert(!MatchesStabilizerSyncDiscovery(startupSync, 0, startupSync, 1, false));
+	static_assert(!MatchesStabilizerSyncDiscovery(startupSync, 0, { 1, 0 }, 1, true));
+	static_assert(MatchesStabilizerSyncDiscovery(loadingClose, 9, loadingClose, 9, false));
+	static_assert(!MatchesStabilizerSyncDiscovery(loadingClose, 9, { 8, 0 }, 10, true));
+	static_assert(!MatchesStabilizerSyncDiscovery(loadingClose, 9, { 8, 150 }, 11, false));
+	static_assert(!MatchesStabilizerSyncDiscovery(loadingClose, 9, { 7, 101 }, 9, false));
+	static_assert(!MatchesStabilizerSyncDiscovery(loadingClose, 9, loadingClose, 9, true));
+
 	constexpr bool CoversRetainedSaveLoadThenCellTransition()
 	{
 		constexpr std::uint64_t loadSerial = 7;

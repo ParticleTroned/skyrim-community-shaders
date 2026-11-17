@@ -97,6 +97,15 @@ jobs:
                   cmake-preset: ${{ matrix.compiler.cmake-preset }}
                   build-dir: ${{ matrix.compiler.build-dir }}
 
+            - name: Set up Python for controller tests
+              uses: actions/setup-python@v6
+              with:
+                  python-version: "3.12"
+
+            - name: Install shader cache tools for controller tests
+              shell: pwsh
+              run: python -m pip install -r tools/shader-cache-requirements.txt
+
             - name: Test repository tool environment
               shell: pwsh
               run: pwsh -NoProfile -File ./tests/tool_environment_test.ps1

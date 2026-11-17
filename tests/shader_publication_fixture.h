@@ -92,7 +92,9 @@ namespace RE
 	{
 		enum class Type
 		{
-			Water
+			Water,
+			Lighting,
+			Effect
 		};
 		struct
 		{
@@ -188,6 +190,19 @@ struct Device
 } testDevice;
 namespace Util
 {
+	enum class SpecializationFamily : uint8_t
+	{
+		Lighting,
+		Effect,
+		Composite
+	};
+
+	struct ShaderSpecializationRequest
+	{
+		SpecializationFamily family;
+		uint32_t descriptor;
+	};
+
 	template <class... Args>
 	void SetResourceName(Resource* shader, const char* format, Args... args)
 	{
@@ -285,6 +300,8 @@ struct ShaderCache
 	std::atomic_uint64_t deferredEvictionCount{ 0 };
 	void Clear();
 	bool IsDiskCacheActive() const { return false; }
+	// Discovery history is independent of publication and generation ownership.
+	void RememberShaderSpecialization(Util::ShaderSpecializationRequest) noexcept {}
 	bool IsTaskStale(std::optional<uint64_t> a_taskGeneration) const;
 	bool IsTaskStale(std::optional<uint64_t> a_taskGeneration, RE::BSShader::Type a_type) const;
 	RE::BSGraphics::VertexShader* MakeAndAddVertexShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = {});

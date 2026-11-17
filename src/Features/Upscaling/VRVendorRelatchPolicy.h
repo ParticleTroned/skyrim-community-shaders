@@ -78,6 +78,23 @@ namespace VRVendorRelatchPolicy
 		       MatchesStabilizerSyncDiscovery(a_queued.close, a_queued.edge, a_pending.close, a_pending.edge, false);
 	}
 
+	enum class StabilizerSyncOutcome : std::uint8_t
+	{
+		Resolved,
+		Refused,
+		NoProfile
+	};
+
+	[[nodiscard]] constexpr StabilizerSyncOutcome SelectStabilizerSyncOutcome(
+		bool a_hasProfile, bool a_profileMatches, bool a_handoffAccepted) noexcept
+	{
+		if (!a_hasProfile)
+			return StabilizerSyncOutcome::NoProfile;
+		return a_profileMatches || a_handoffAccepted ?
+		           StabilizerSyncOutcome::Resolved :
+		           StabilizerSyncOutcome::Refused;
+	}
+
 	[[nodiscard]] constexpr bool IsRetainedSaveLoadTail(
 		std::uint64_t a_retainedSerial, std::uint32_t a_retainedCloseFrame,
 		std::uint64_t a_currentSerial, std::uint32_t a_currentCloseFrame,

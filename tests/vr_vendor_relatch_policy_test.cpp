@@ -123,6 +123,17 @@ namespace
 	}
 	static_assert(CoversStaleStabilizerConsumer());
 
+	constexpr bool CoversStabilizerSyncDisposition()
+	{
+		constexpr StabilizerSyncOwner owner{ { 12, 400 }, 20 };
+		return CanClaimStabilizerSync(owner, owner, owner, owner, false) &&
+		       SelectStabilizerSyncOutcome(true, false, false) == StabilizerSyncOutcome::Refused &&
+		       SelectStabilizerSyncOutcome(true, true, false) == StabilizerSyncOutcome::Resolved &&
+		       SelectStabilizerSyncOutcome(true, false, true) == StabilizerSyncOutcome::Resolved &&
+		       SelectStabilizerSyncOutcome(false, false, false) == StabilizerSyncOutcome::NoProfile;
+	}
+	static_assert(CoversStabilizerSyncDisposition());
+
 	constexpr bool CoversRetainedSaveLoadThenCellTransition()
 	{
 		constexpr std::uint64_t loadSerial = 7;

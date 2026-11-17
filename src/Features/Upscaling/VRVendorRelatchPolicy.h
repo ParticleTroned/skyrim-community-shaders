@@ -27,6 +27,32 @@ namespace VRVendorRelatchPolicy
 		       a_cachedFrame == a_currentFrame && a_cachedNative == a_currentNative;
 	}
 
+	struct WorldResolutionPlanWitness
+	{
+		std::uint32_t frame = (std::numeric_limits<std::uint32_t>::max)();
+		NativeResolutionPlanKey nativePlan;
+
+		constexpr bool operator==(const WorldResolutionPlanWitness&) const noexcept = default;
+
+		[[nodiscard]] constexpr bool Matches(
+			std::uint32_t a_frame, NativeResolutionPlanKey a_plan) const noexcept
+		{
+			return CanReuseRuntimeResolutionPlan(frame, a_frame, nativePlan, a_plan);
+		}
+	};
+
+	struct LoadingMenuClose
+	{
+		std::uint64_t serial = 0;
+		std::uint32_t frame = 0;
+
+		[[nodiscard]] constexpr bool Matches(
+			std::uint64_t a_serial, std::uint32_t a_frame, bool a_open) const noexcept
+		{
+			return !a_open && serial != 0 && serial == a_serial && frame == a_frame;
+		}
+	};
+
 	[[nodiscard]] constexpr bool IsRetainedSaveLoadTail(
 		std::uint64_t a_retainedSerial, std::uint32_t a_retainedCloseFrame,
 		std::uint64_t a_currentSerial, std::uint32_t a_currentCloseFrame,

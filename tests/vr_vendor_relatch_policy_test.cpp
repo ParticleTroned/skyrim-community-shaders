@@ -35,6 +35,19 @@ namespace
 	}
 	static_assert(CoversSameFrameNativeResolutionOwnership());
 
+	constexpr WorldResolutionPlanWitness renderedWorld{ 19, { 4, 5, 2048, 2160 } };
+	static_assert(renderedWorld.Matches(19, { 4, 5, 2048, 2160 }));
+	static_assert(!renderedWorld.Matches(19, { 4, 6, 2048, 2160 }));
+	static_assert(!renderedWorld.Matches(20, { 4, 5, 2048, 2160 }));
+	static_assert(!WorldResolutionPlanWitness{}.Matches(UINT32_MAX, {}));
+
+	constexpr LoadingMenuClose loadingClose{ 7, 100 };
+	static_assert(loadingClose.Matches(7, 100, false));
+	static_assert(!loadingClose.Matches(7, 101, false));
+	static_assert(!loadingClose.Matches(8, 100, false));
+	static_assert(!loadingClose.Matches(7, 100, true));
+	static_assert(!LoadingMenuClose{}.Matches(0, 0, false));
+
 	constexpr bool CoversRetainedSaveLoadThenCellTransition()
 	{
 		constexpr std::uint64_t loadSerial = 7;

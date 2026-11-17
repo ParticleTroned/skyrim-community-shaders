@@ -3802,11 +3802,17 @@ private:
 
 	mutable std::mutex submitTemporalInputsMutex;
 	SubmitTemporalInputs submitTemporalInputs;
+	VRVendorRelatchPolicy::WorldResolutionPlanWitness vrViewportResolutionPlan;
+	VRVendorRelatchPolicy::WorldResolutionPlanWitness vrCompletedWorldResolutionPlan;
 	std::atomic_uint64_t submitTemporalCompositorCycle{ 0 };
 	inline static thread_local const SubmitTemporalSnapshot* submitTemporalDispatchSnapshot = nullptr;
 	inline static thread_local const VRSubmitColorContract::Contract* submitColorDispatchContract = nullptr;
 
 public:
+	/** Captures the viewport plan at world-render entry and invalidates the previous completion. */
+	[[nodiscard]] VRVendorRelatchPolicy::WorldResolutionPlanWitness BeginVRWorldResolutionObservation();
+	/** Publishes the completed world only if it used the same viewport plan throughout. */
+	void CompleteVRWorldResolutionObservation(VRVendorRelatchPolicy::WorldResolutionPlanWitness a_observation);
 	/** Captures both world cameras before post-processing can replace engine constants. */
 	void CaptureSubmitTemporalSnapshot();
 	void InvalidateSubmitTemporalSnapshot();
@@ -4852,8 +4858,9 @@ private:
 	[[nodiscard]] bool IsVRPostLoadCompositorHoldOwnedByLoadingSerial(
 		uint64_t a_loadingSerial) const noexcept;
 	void NotifyVRPostLoadCompositorLoadingMenuOpened(uint64_t a_loadingSerial);
-	void NotifyVRPostLoadCompositorLoadingMenuClosed(uint64_t a_loadingSerial);
-	void CompleteVRLoadingMenuCloseOutsideLocks(uint64_t a_loadingSerial);
+	void NotifyVRPostLoadCompositorLoadingMenuClosed(
+		uint64_t a_loadingSerial, std::optional<uint32_t> a_closeFrame = std::nullopt);
+	void CompleteVRLoadingMenuCloseOutsideLocks(VRVendorRelatchPolicy::LoadingMenuClose a_close);
 	[[nodiscard]] static uint64_t GetVRPostLoadCompositorHoldSoftDeadlineMilliseconds(
 		VRPostLoadCompositorHoldRoute a_route) noexcept;
 	[[nodiscard]] static uint64_t GetVRPostLoadCompositorHoldHardDeadlineMilliseconds(

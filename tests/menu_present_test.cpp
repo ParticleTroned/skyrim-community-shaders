@@ -201,10 +201,15 @@ void LogFrameIntervalSpikeIfNeeded(uint64_t, uint64_t, uint64_t, uint64_t, HRESU
 
 struct IDXGISwapChain_Present
 {
+#define LogFirstPresentFailure LogFirstPresentFailureOnce
+#include "menu_present_failure_under_test.h"
+#undef LogFirstPresentFailure
+
 	static void LogFirstPresentFailure(HRESULT result)
 	{
 		++presentFailures;
 		loggedFailure = result;
+		LogFirstPresentFailureOnce(result);
 	}
 
 #include "menu_present_under_test.h"
@@ -281,6 +286,10 @@ int main()
 	presentResult = S_OK;
 	const auto probeResult = IDXGISwapChain_Present::thunk(nullptr, 0, DXGI_PRESENT_TEST);
 	passed = passed && probeResult == S_OK && presentCalls == 1 && effects == 0 && renderOrder == "present;";
-	passed = passed && failureLogs == 1 && failureFlushes == 1 && deviceReasonQueries == 1;
+	if (failureLogs != 1 || failureFlushes != 1 || deviceReasonQueries != 1) {
+		std::printf("FAIL: Present diagnostics logs=%u flushes=%u deviceReasonQueries=%u\n",
+			failureLogs, failureFlushes, deviceReasonQueries);
+		passed = false;
+	}
 	return passed ? EXIT_SUCCESS : EXIT_FAILURE;
 }

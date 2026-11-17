@@ -75,6 +75,41 @@ namespace
 	static_assert(!MatchesStabilizerSyncDiscovery(loadingClose, 9, { 7, 101 }, 9, false));
 	static_assert(!MatchesStabilizerSyncDiscovery(loadingClose, 9, loadingClose, 9, true));
 
+	constexpr bool CoversSupersededStabilizerDestinationObservation()
+	{
+		constexpr StabilizerSyncOwner oldOwner{ { 7, 100 }, 9 };
+		constexpr StabilizerSyncOwner nextOwner{ { 8, 150 }, 11 };
+		constexpr std::uint32_t sameDestinationCell = 0x42;
+		std::uint32_t observedCell = 0;
+		std::uint32_t observedWorldFrame = 0;
+		const auto publish = [&](StabilizerSyncOwner owner, std::uint32_t frame) {
+			if (MatchesStabilizerSyncDiscovery(owner.close, owner.edge, nextOwner.close, nextOwner.edge, false) &&
+				observedCell != sameDestinationCell) {
+				observedWorldFrame = frame;
+				observedCell = sameDestinationCell;
+			}
+		};
+
+		// The newer open clears observation state before the old sampler resumes.
+		publish(oldOwner, 110);
+		if (observedCell != 0 || observedWorldFrame != 0)
+			return false;
+
+		publish(nextOwner, 151);
+		const auto ready = [&](std::uint32_t worldFrame) {
+			return IsStabilizerDestinationSyncReady({
+				.completedWorldFrameAfterClose = worldFrame > nextOwner.close.frame,
+				.sourceCellKnown = true,
+				.currentCellKnown = true,
+				.destinationCellChanged = true,
+				.completedWorldFrameAfterDestinationObservation = worldFrame > observedWorldFrame,
+			});
+		};
+		return observedCell == sameDestinationCell && observedWorldFrame == 151 &&
+		       !ready(151) && ready(152);
+	}
+	static_assert(CoversSupersededStabilizerDestinationObservation());
+
 	constexpr bool CoversRetainedSaveLoadThenCellTransition()
 	{
 		constexpr std::uint64_t loadSerial = 7;

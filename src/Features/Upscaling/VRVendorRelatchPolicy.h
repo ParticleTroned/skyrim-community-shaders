@@ -53,6 +53,12 @@ namespace VRVendorRelatchPolicy
 		}
 	};
 
+	struct StabilizerSyncOwner
+	{
+		LoadingMenuClose close;
+		std::uint64_t edge = 0;
+	};
+
 	[[nodiscard]] constexpr bool MatchesStabilizerSyncDiscovery(
 		LoadingMenuClose a_observedClose, std::uint64_t a_observedEdge,
 		LoadingMenuClose a_currentClose, std::uint64_t a_currentEdge, bool a_open) noexcept

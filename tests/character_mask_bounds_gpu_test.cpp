@@ -601,7 +601,7 @@ namespace
 			}
 		}
 
-		auto Read(const Sample& sample, std::vector<Bounds>& destination, Clock::time_point deadline,
+		NeuralRendering::CharacterMaskReadbackResult Read(const Sample& sample, std::vector<Bounds>& destination, Clock::time_point deadline,
 			NeuralRendering::CharacterMaskReadbackCompletion completion = {})
 		{
 			return NeuralRendering::ReadCharacterMaskBounds(context_.Get(), sample.query.Get(),

@@ -31,6 +31,10 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
+#include "Upscaling/FSRColorContractDevBenchBridge.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "RenderMap/D3DContextHooks.h"
+#endif
 #include "Upscaling/FSRHostLifecyclePolicy.h"
 #include "Upscaling/FSRTemporalTuningDevBenchBridge.h"
 #include "Upscaling/FSRTemporalTuningSerialization.h"
@@ -21685,6 +21689,7 @@ struct BSOpenVR_GetRenderTargetSize
 void Upscaling::DataLoaded()
 {
 	VRRenderScaleDevBenchBridge::Install();
+	FSRColorContractDevBenchBridge::Install();
 	FSRTemporalTuningDevBenchBridge::Install();
 	ApplyOpenCompositeUpscalingBlocker(true);
 	const auto blocker = GetOpenCompositeUpscalingBlocker();
@@ -42491,6 +42496,14 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		a_upscalemethod == UpscaleMethod::kFSR &&
 		fsrRuntimePathCurrent &&
 		foveatedDispatchChanged;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const bool fsrColorContractReplacementReady =
+		a_upscalemethod == UpscaleMethod::kFSR &&
+		fidelityFX.GetDevBenchFsrColorContractReplacementState() ==
+			FSRColorContractPolicy::ReplacementState::Ready;
+#else
+	constexpr bool fsrColorContractReplacementReady = false;
+#endif
 	const auto canPreserveFSRResourcesForCurrentVRPlan = [&]() {
 		if (!globals::game::isVR ||
 			runtimeResolutionPlan.finalOutputSize.x <= 0.0f ||
@@ -42545,6 +42558,7 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		fsrRuntimePathChanged ||
 		fsrRuntimeFsr4ConfiguredChanged ||
 		fsrRuntimeVersionChanged ||
+		fsrColorContractReplacementReady ||
 		qualityModeChanged ||
 		dlssPresetResourceChanged ||
 		renderScaleModeChanged ||
@@ -42614,6 +42628,7 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			fsrRuntimePathChanged ||
 			fsrRuntimeFsr4ConfiguredChanged ||
 			(fsrRuntimeVersionChanged && !fidelityFX.IsRuntimeFsr4FailureLatched()) ||
+			fsrColorContractReplacementReady ||
 			dlssResourceSettingsChanged ||
 			fsrQualityModeChanged;
 		if (requiresFullPipelineUnbind)
@@ -42847,7 +42862,16 @@ bool Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		// Host FSR3 and runtime upscaler providers keep separate temporal state.
 		// Ordinary path changes rebuild; provider quarantine may retain a compatible
 		// host context and reset its history while the runtime path falls back.
-		if (!upscaleModeChanged && fsrRuntimePathChanged && a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreatedForQuality) {
+		if (!upscaleModeChanged && fsrColorContractReplacementReady && !fsrResourcesRecreatedForQuality) {
+			const auto destroyResult = fidelityFX.DestroyFSRResources();
+			if (!acceptFSRResourceLifecycleResult(destroyResult, "colour-contract FSR resource teardown"))
+				return false;
+			const auto createResult = createFSRResourcesWhenSafe();
+			if (!acceptFSRResourceLifecycleResult(createResult, "colour-contract FSR resource creation"))
+				return false;
+			fsrResourcesRecreatedForQuality = true;
+			RequestHistoryReset();
+		} else if (!upscaleModeChanged && fsrRuntimePathChanged && a_upscalemethod == UpscaleMethod::kFSR && !fsrResourcesRecreatedForQuality) {
 			if (!runtimeFailureFallbackCanPreserveHostFSR) {
 				const auto destroyResult = fidelityFX.DestroyFSRResources();
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -43035,10 +43059,24 @@ bool Upscaling::EnsureResourcesCurrent(UpscaleMethod a_upscalemethod)
 
 	const uint32_t currentFrame = GetFrameScopedUpscalingWorkFrame();
 	const uint64_t currentGateState = GetVRVendorEffectiveWorkGateState();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const auto fsrColorContractReplacementState =
+		a_upscalemethod == UpscaleMethod::kFSR ?
+			fidelityFX.GetDevBenchFsrColorContractReplacementState() :
+			FSRColorContractPolicy::ReplacementState::None;
+	const bool pendingFsrColorContractReplacement =
+		fsrColorContractReplacementState != FSRColorContractPolicy::ReplacementState::None;
+	const bool fsrColorContractReplacementReady =
+		fsrColorContractReplacementState == FSRColorContractPolicy::ReplacementState::Ready;
+#else
+	constexpr bool pendingFsrColorContractReplacement = false;
+	constexpr bool fsrColorContractReplacementReady = false;
+#endif
 	if (currentFrame != std::numeric_limits<uint32_t>::max() &&
 		resourceCheckLastCompletedFrame == currentFrame &&
 		resourceCheckLastCompletedMethod == a_upscalemethod &&
-		resourceCheckLastCompletedGateState == currentGateState) {
+		resourceCheckLastCompletedGateState == currentGateState &&
+		!fsrColorContractReplacementReady) {
 		return true;
 	}
 
@@ -43056,6 +43094,7 @@ bool Upscaling::EnsureResourcesCurrent(UpscaleMethod a_upscalemethod)
 		!pendingDLSSReset.load(std::memory_order_acquire) &&
 		!pendingFSRResetBlocksStableCheck &&
 		!fsrResourcesNeedRetirement &&
+		!pendingFsrColorContractReplacement &&
 		!pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) &&
 		!perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) &&
 		!vrRenderScaleResourceTrackingSyncPending.load(std::memory_order_acquire) &&
@@ -69105,6 +69144,27 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 
 void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5)
 {
+	const auto runOriginal = [&] {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		auto& runtime = CSX::RenderMap::GetRuntime();
+		auto* renderer = globals::game::renderer;
+		const auto publication = globals::state ? globals::state->GetRenderTargetResourcePublicationGeneration() : 0;
+		const bool activated = runtime.ActivatePostProcessingWindow(
+			static_cast<std::uint32_t>(a_target), globals::state ? globals::state->frameCount : 0, publication);
+		const auto source = renderer && runtime.IsCapturing() ? CSX::RenderMap::DescribeResource(
+																	renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN].texture) :
+		                                                        CSX::RenderMap::ResourceObservationInput{};
+		const auto targetIndex = static_cast<std::uint32_t>(a_target);
+		const auto destination = renderer && runtime.IsCapturing() && targetIndex < std::size(renderer->GetRuntimeData().renderTargets) ?
+		                             CSX::RenderMap::DescribeResource(renderer->GetRuntimeData().renderTargets[targetIndex].texture) :
+		                             CSX::RenderMap::ResourceObservationInput{};
+		const auto transferScope = runtime.EnterPostProcessing(source, destination, targetIndex, publication);
+		if (activated)
+			runtime.CompleteWindowBootstrap(CSX::RenderMap::CapturePostProcessingBootstrap(globals::d3d::context));
+#endif
+		func(a_this, a3, a_target, a_4, a_5);
+	};
+
 	auto& upscaling = globals::features::upscaling;
 	upscaling.InvalidateFrameGenerationInputs();
 	if (globals::game::isVR)
@@ -69112,7 +69172,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	auto upscaleMethod = upscaling.GetRuntimeUpscaleMethod();
 
 	if (!upscaling.ApplyPendingPostLoadRuntimeReset(upscaleMethod)) {
-		func(a_this, a3, a_target, a_4, a_5);
+		runOriginal();
 		return;
 	}
 
@@ -69149,7 +69209,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		// validation before their native physical contract can become stable.
 		if (upscaling.GetVRNativeRestorePresentationGuardActiveEpoch() != 0 &&
 			!globals::features::vr.InstallSubmitHook()) {
-			func(a_this, a3, a_target, a_4, a_5);
+			runOriginal();
 			return;
 		}
 
@@ -69166,7 +69226,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 			// A fixed DLAA/FSR-AA frame without a ready provider must retain
 			// Skyrim's temporal fallback. Disabling it here exposes the raw frame
 			// that users report as persistent shimmer/flicker during gated loads.
-			func(a_this, a3, a_target, a_4, a_5);
+			runOriginal();
 			return;
 		}
 
@@ -69177,7 +69237,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
 
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
-		func(a_this, a3, a_target, a_4, a_5);
+		runOriginal();
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 		return;
 	}
@@ -69198,7 +69258,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 		upscaling.PrepareFullResolutionPostProcessing();
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
-		func(a_this, a3, a_target, a_4, a_5);
+		runOriginal();
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 		upscaling.PrepareFullResolutionPostProcessing();
 		return;
@@ -69233,7 +69293,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		}
 
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
-		func(a_this, a3, a_target, a_4, a_5);
+		runOriginal();
 		BSImagespaceShaderISTemporalAA->taaEnabled = false;
 
 		upscaling.ApplyDynamicResolutionState(globals::game::graphicsState);
@@ -69262,7 +69322,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 
 	if (upscaleMethod == UpscaleMethod::kNONE) {
 		// Keep vanilla TAA/water stabilization state untouched when no upscaler is active.
-		func(a_this, a3, a_target, a_4, a_5);
+		runOriginal();
 		return;
 	}
 
@@ -69271,7 +69331,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		upscaling.PrepareFullResolutionPostProcessing();
 
 	BSImagespaceShaderISTemporalAA->taaEnabled = upscaleMethod == UpscaleMethod::kTAA;
-	func(a_this, a3, a_target, a_4, a_5);
+	runOriginal();
 
 	BSImagespaceShaderISTemporalAA->taaEnabled = false;
 

@@ -1,0 +1,471 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "urn:csx:schema:derived-render-graph:1",
+    "title": "CSX derived render graph",
+    "type": "object",
+    "required": [
+        "schema",
+        "reportId",
+        "generatedAtUtc",
+        "generatedBy",
+        "inputs",
+        "nodes",
+        "edges",
+        "ambiguities",
+        "gaps",
+        "decisionWindows",
+        "extensions"
+    ],
+    "additionalProperties": false,
+    "properties": {
+        "schema": { "$ref": "#/$defs/schemaIdentity" },
+        "reportId": { "type": "string", "pattern": "^render-graph-[A-Za-z0-9][A-Za-z0-9._-]*$" },
+        "generatedAtUtc": { "type": "string", "format": "date-time" },
+        "generatedBy": {
+            "type": "object",
+            "required": ["name", "version", "gitCommit"],
+            "additionalProperties": false,
+            "properties": {
+                "name": { "type": "string", "minLength": 1 },
+                "version": { "type": "string", "minLength": 1 },
+                "gitCommit": { "type": ["string", "null"], "pattern": "^[A-Fa-f0-9]{40}$" }
+            }
+        },
+        "inputs": {
+            "type": "array",
+            "minItems": 2,
+            "items": { "$ref": "#/$defs/input" }
+        },
+        "nodes": { "type": "array", "items": { "$ref": "#/$defs/node" } },
+        "edges": { "type": "array", "items": { "$ref": "#/$defs/edge" } },
+        "ambiguities": { "type": "array", "items": { "$ref": "#/$defs/ambiguity" } },
+        "gaps": { "type": "array", "items": { "$ref": "#/$defs/gap" } },
+        "decisionWindows": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/decisionWindow" }
+        },
+        "extensions": { "$ref": "#/$defs/extensions" }
+    },
+    "$defs": {
+        "schemaIdentity": {
+            "type": "object",
+            "required": ["name", "major", "minor", "producerVersion"],
+            "additionalProperties": false,
+            "properties": {
+                "name": { "const": "csx.derived-render-graph" },
+                "major": { "const": 1 },
+                "minor": { "type": "integer", "minimum": 0 },
+                "producerVersion": { "type": "string", "minLength": 1 }
+            }
+        },
+        "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+        "confidence": { "enum": ["confirmed", "high", "medium", "low", "unknown"] },
+        "evidenceClass": {
+            "enum": [
+                "source-proven",
+                "static-reverse-engineered",
+                "runtime-observed",
+                "correlated",
+                "validated-across-runs",
+                "inferred"
+            ]
+        },
+        "input": {
+            "type": "object",
+            "required": ["kind", "path", "sha256", "schemaMajor"],
+            "additionalProperties": false,
+            "properties": {
+                "kind": {
+                    "enum": ["shader-manifest", "engine-map", "capture-manifest", "events", "other"]
+                },
+                "path": { "type": "string", "minLength": 1 },
+                "sha256": { "$ref": "#/$defs/sha256" },
+                "schemaMajor": { "type": "integer", "minimum": 1 }
+            }
+        },
+        "node": {
+            "type": "object",
+            "required": ["id", "kind", "label", "sourceRefs", "attributes", "extensions"],
+            "additionalProperties": false,
+            "properties": {
+                "id": { "type": "string", "pattern": "^node-[a-z][a-z0-9-]*-[0-9]{4,}$" },
+                "kind": {
+                    "enum": [
+                        "scene-object",
+                        "geometry",
+                        "geometry-setup",
+                        "shader-property",
+                        "material",
+                        "material-texture-binding",
+                        "render-pass",
+                        "engine-shader",
+                        "technique",
+                        "shader-compile-unit",
+                        "shader-compilation-context",
+                        "csx-pass",
+                        "pipeline-state",
+                        "device-context",
+                        "command-recording",
+                        "command-list",
+                        "command-list-finish",
+                        "command-execution",
+                        "resource",
+                        "resource-version",
+                        "submission",
+                        "eye-submit",
+                        "visibility-test",
+                        "draw",
+                        "dispatch",
+                        "copy",
+                        "resource-operation",
+                        "phase"
+                    ]
+                },
+                "label": { "type": "string", "minLength": 1 },
+                "sourceRefs": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/sourceRef" }
+                },
+                "attributes": { "type": "object", "additionalProperties": true },
+                "extensions": { "$ref": "#/$defs/extensions" }
+            }
+        },
+        "sourceRef": {
+            "type": "object",
+            "required": ["kind", "value"],
+            "additionalProperties": false,
+            "properties": {
+                "kind": {
+                    "enum": [
+                        "shader-manifest",
+                        "engine-map",
+                        "capture-manifest",
+                        "capture-event",
+                        "observation"
+                    ]
+                },
+                "value": { "type": ["string", "integer"] }
+            }
+        },
+        "edge": {
+            "type": "object",
+            "required": [
+                "id",
+                "type",
+                "from",
+                "to",
+                "evidenceClass",
+                "confidence",
+                "evidence",
+                "ambiguityGroup",
+                "attributes",
+                "extensions"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "id": { "type": "string", "pattern": "^edge-[0-9]{4,}$" },
+                "type": {
+                    "enum": [
+                        "owns",
+                        "uses",
+                        "creates",
+                        "selects",
+                        "submits",
+                        "implemented-by",
+                        "compiled-under",
+                        "intercepted-by",
+                        "binds",
+                        "prepares",
+                        "draws",
+                        "reads",
+                        "writes",
+                        "tests",
+                        "result-for",
+                        "precedes",
+                        "represented-by",
+                        "uses-material-state",
+                        "binds-texture",
+                        "resolves-to-resource",
+                        "same-observed-object",
+                        "versions",
+                        "consumes",
+                        "presents",
+                        "contributes-to",
+                        "carries-forward",
+                        "records",
+                        "finishes",
+                        "materializes",
+                        "executes"
+                    ]
+                },
+                "from": { "type": "string", "pattern": "^node-[a-z][a-z0-9-]*-[0-9]{4,}$" },
+                "to": { "type": "string", "pattern": "^node-[a-z][a-z0-9-]*-[0-9]{4,}$" },
+                "evidenceClass": { "$ref": "#/$defs/evidenceClass" },
+                "confidence": { "$ref": "#/$defs/confidence" },
+                "evidence": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "$ref": "#/$defs/evidenceRef" }
+                },
+                "ambiguityGroup": {
+                    "type": ["string", "null"],
+                    "pattern": "^ambiguity-[0-9]{4,}$"
+                },
+                "attributes": { "type": "object", "additionalProperties": true },
+                "extensions": { "$ref": "#/$defs/extensions" }
+            }
+        },
+        "evidenceRef": {
+            "type": "object",
+            "required": ["captureId", "eventSequences", "engineEvidenceRefs", "note"],
+            "additionalProperties": false,
+            "properties": {
+                "captureId": {
+                    "type": ["string", "null"],
+                    "pattern": "^capture-[A-Za-z0-9][A-Za-z0-9._-]*$"
+                },
+                "eventSequences": {
+                    "type": "array",
+                    "items": { "type": "integer", "minimum": 0 },
+                    "uniqueItems": true
+                },
+                "engineEvidenceRefs": {
+                    "type": "array",
+                    "items": { "type": "string", "pattern": "^evidence-[0-9]{4}$" },
+                    "uniqueItems": true
+                },
+                "note": { "type": "string" }
+            }
+        },
+        "ambiguity": {
+            "type": "object",
+            "required": ["id", "question", "candidateEdgeIds", "resolutionRequired", "extensions"],
+            "additionalProperties": false,
+            "properties": {
+                "id": { "type": "string", "pattern": "^ambiguity-[0-9]{4,}$" },
+                "question": { "type": "string", "minLength": 1 },
+                "candidateEdgeIds": {
+                    "type": "array",
+                    "minItems": 2,
+                    "items": { "type": "string", "pattern": "^edge-[0-9]{4,}$" },
+                    "uniqueItems": true
+                },
+                "resolutionRequired": { "type": "string", "minLength": 1 },
+                "extensions": { "$ref": "#/$defs/extensions" }
+            }
+        },
+        "gap": {
+            "type": "object",
+            "required": ["id", "kind", "description", "relatedNodeIds", "blocking", "extensions"],
+            "additionalProperties": false,
+            "properties": {
+                "id": { "type": "string", "pattern": "^gap-[0-9]{4,}$" },
+                "kind": {
+                    "enum": [
+                        "missing-static-map",
+                        "missing-event",
+                        "dropped-events",
+                        "uncorrelated",
+                        "unsupported-route",
+                        "incomplete-capture",
+                        "other"
+                    ]
+                },
+                "description": { "type": "string", "minLength": 1 },
+                "relatedNodeIds": {
+                    "type": "array",
+                    "items": { "type": "string", "pattern": "^node-[a-z][a-z0-9-]*-[0-9]{4,}$" },
+                    "uniqueItems": true
+                },
+                "blocking": { "type": "boolean" },
+                "extensions": { "$ref": "#/$defs/extensions" }
+            }
+        },
+        "decisionWindow": {
+            "type": "object",
+            "required": [
+                "id",
+                "candidateNode",
+                "suppressionStage",
+                "visibilityAvailable",
+                "decisionDeadline",
+                "result",
+                "savings",
+                "evidence",
+                "reason",
+                "extensions"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "id": { "type": "string", "pattern": "^decision-window-[0-9]{4}$" },
+                "candidateNode": {
+                    "type": "string",
+                    "pattern": "^node-[a-z][a-z0-9-]*-[0-9]{4,}$"
+                },
+                "suppressionStage": {
+                    "enum": [
+                        "before-accumulation",
+                        "before-batch-submission",
+                        "before-draw",
+                        "gpu-predication-or-indirect",
+                        "vertex-shader"
+                    ]
+                },
+                "visibilityAvailable": { "$ref": "#/$defs/eventPoint" },
+                "decisionDeadline": { "$ref": "#/$defs/eventPoint" },
+                "result": { "enum": ["viable", "not-viable", "not-proven"] },
+                "savings": {
+                    "type": "array",
+                    "items": {
+                        "enum": [
+                            "cpu-traversal",
+                            "pass-construction",
+                            "batch-submission",
+                            "draw-submission",
+                            "gpu-vertex",
+                            "gpu-pixel",
+                            "gpu-other"
+                        ]
+                    },
+                    "uniqueItems": true
+                },
+                "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidenceRef" } },
+                "reason": { "type": "string", "minLength": 1 },
+                "eyeCoverage": { "$ref": "#/$defs/eyeCoverage" },
+                "extensions": { "$ref": "#/$defs/extensions" }
+            }
+        },
+        "eyeCoverage": {
+            "type": "object",
+            "required": [
+                "result",
+                "eyes",
+                "physicalSubmissionCount",
+                "stereoMechanism",
+                "routes",
+                "ambiguityIds",
+                "searchTruncated",
+                "reason"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "result": { "enum": ["observed", "ambiguous", "not-proven"] },
+                "eyes": {
+                    "type": "array",
+                    "items": { "enum": ["left", "right", "both", "mono", "unknown"] },
+                    "uniqueItems": true
+                },
+                "physicalSubmissionCount": { "type": "integer", "minimum": 0 },
+                "stereoMechanism": {
+                    "enum": [
+                        "shared-resource-distinct-bounds",
+                        "shared-resource-same-bounds",
+                        "distinct-resources",
+                        "single-both-eye-submission",
+                        "not-proven"
+                    ]
+                },
+                "routes": { "type": "array", "items": { "$ref": "#/$defs/eyeRoute" } },
+                "ambiguityIds": {
+                    "type": "array",
+                    "items": { "type": "string", "pattern": "^ambiguity-[0-9]{4,}$" },
+                    "uniqueItems": true
+                },
+                "searchTruncated": { "type": "boolean" },
+                "reason": { "type": "string", "minLength": 1 }
+            }
+        },
+        "eyeRoute": {
+            "type": "object",
+            "required": [
+                "eye",
+                "eyeSubmitNode",
+                "sourceResourceObservationId",
+                "submittedResourceObservationId",
+                "submittedBounds",
+                "mechanism",
+                "eventSequences",
+                "resourceObservationIds",
+                "transferOperations",
+                "confidence"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "eye": { "enum": ["left", "right", "both", "mono", "unknown"] },
+                "eyeSubmitNode": { "type": "string", "pattern": "^node-eye-submit-[0-9]{4,}$" },
+                "sourceResourceObservationId": { "type": "string", "minLength": 1 },
+                "submittedResourceObservationId": { "type": "string", "minLength": 1 },
+                "submittedBounds": { "$ref": "#/$defs/textureBounds" },
+                "mechanism": { "enum": ["same-allocation", "resource-flow"] },
+                "eventSequences": {
+                    "type": "array",
+                    "minItems": 2,
+                    "items": { "type": "integer", "minimum": 0 },
+                    "uniqueItems": true
+                },
+                "resourceObservationIds": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "type": "string", "minLength": 1 }
+                },
+                "transferOperations": {
+                    "type": "array",
+                    "items": {
+                        "enum": ["copy-resource", "copy-subresource-region", "resolve-subresource"]
+                    }
+                },
+                "confidence": { "$ref": "#/$defs/confidence" }
+            }
+        },
+        "textureBounds": {
+            "type": "object",
+            "required": ["uMin", "vMin", "uMax", "vMax"],
+            "additionalProperties": false,
+            "properties": {
+                "uMin": { "type": "number" },
+                "vMin": { "type": "number" },
+                "uMax": { "type": "number" },
+                "vMax": { "type": "number" }
+            }
+        },
+        "eventPoint": {
+            "type": "object",
+            "required": [
+                "captureId",
+                "sequence",
+                "timestampQpc",
+                "cpuFrame",
+                "eye",
+                "readinessDomain",
+                "gpuTimestampTicks"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "captureId": {
+                    "type": "string",
+                    "pattern": "^capture-[A-Za-z0-9][A-Za-z0-9._-]*$"
+                },
+                "sequence": { "type": "integer", "minimum": 0 },
+                "timestampQpc": { "type": "integer", "minimum": 0 },
+                "cpuFrame": { "type": ["integer", "null"], "minimum": 0 },
+                "eye": { "enum": ["left", "right", "both", "mono", "unknown"] },
+                "readinessDomain": {
+                    "enum": [
+                        "cpu-observed",
+                        "gpu-ordered",
+                        "gpu-completed",
+                        "gpu-resource-consumable",
+                        "cpu-readback-complete",
+                        "unknown"
+                    ]
+                },
+                "gpuTimestampTicks": { "type": ["integer", "null"], "minimum": 0 }
+            }
+        },
+        "extensions": {
+            "type": "object",
+            "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$" },
+            "additionalProperties": true
+        }
+    }
+}

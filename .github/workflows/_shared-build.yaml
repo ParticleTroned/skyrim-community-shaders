@@ -98,13 +98,21 @@ jobs:
                   build-dir: ${{ matrix.compiler.build-dir }}
 
             - name: Set up Python for controller tests
+              id: controller_python
               uses: actions/setup-python@v6
               with:
                   python-version: "3.12"
 
             - name: Install shader cache tools for controller tests
+              id: controller_dependencies
               shell: pwsh
-              run: python -m pip install -r tools/shader-cache-requirements.txt
+              env:
+                  CONTROLLER_PYTHON: ${{ steps.controller_python.outputs.python-path }}
+              run: |
+                  & $env:CONTROLLER_PYTHON -m pip install -r tools/shader-cache-requirements.txt
+                  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+                  $pythonPath = (Resolve-Path -LiteralPath $env:CONTROLLER_PYTHON).Path.Replace([char]92, [char]47)
+                  Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "cmake_python=$pythonPath" -Encoding UTF8
 
             - name: Test repository tool environment
               shell: pwsh
@@ -123,7 +131,7 @@ jobs:
               uses: lukka/run-cmake@v10
               with:
                   configurePreset: ${{ matrix.compiler.cmake-preset }}
-                  configurePresetAdditionalArgs: "['-DBUILD_SHADER_TESTS=OFF', '-DBUILD_CONTROLLER_TESTS=ON', '-DCSX_REQUIRE_CLEAN_PROVENANCE=ON', '-DCSX_TEST_BUILD=${{ inputs.test-build-id }}', '-DCSX_RELEASE_VERSION=${{ steps.release_identity.outputs.release_version }}', '-DZIP_TO_DIST=${{ (inputs.test-build-id != '' || inputs.package-nr) && 'OFF' || 'ON' }}', '-DDEVBENCH_BRIDGE=OFF', '-DTRACY_SUPPORT=OFF']"
+                  configurePresetAdditionalArgs: "['-DBUILD_SHADER_TESTS=OFF', '-DBUILD_CONTROLLER_TESTS=ON', '-DPython3_EXECUTABLE:FILEPATH=${{ steps.controller_dependencies.outputs.cmake_python }}', '-DCSX_REQUIRE_CLEAN_PROVENANCE=ON', '-DCSX_TEST_BUILD=${{ inputs.test-build-id }}', '-DCSX_RELEASE_VERSION=${{ steps.release_identity.outputs.release_version }}', '-DZIP_TO_DIST=${{ (inputs.test-build-id != '' || inputs.package-nr) && 'OFF' || 'ON' }}', '-DDEVBENCH_BRIDGE=OFF', '-DTRACY_SUPPORT=OFF']"
                   buildPreset: ${{ matrix.compiler.cmake-preset }}
 
             - name: Verify DLL provenance sidecar

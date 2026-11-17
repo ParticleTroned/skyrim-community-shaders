@@ -4852,7 +4852,8 @@ private:
 		bool a_beginLoadProtection = false,
 		VRPostLoadCompositorHoldRoute a_route =
 			VRPostLoadCompositorHoldRoute::None,
-		uint64_t a_loadingSerial = 0);
+		uint64_t a_loadingSerial = 0,
+		uint64_t a_expectedIdleEpoch = 0);
 	void ArmVRRenderTransitionCompositorCover(
 		uint64_t a_loadingSerial,
 		const char* a_reason);

@@ -110,6 +110,19 @@ namespace
 	}
 	static_assert(CoversSupersededStabilizerDestinationObservation());
 
+	constexpr bool CoversStaleStabilizerConsumer()
+	{
+		constexpr StabilizerSyncOwner first{ { 12, 400 }, 20 };
+		constexpr StabilizerSyncOwner second{ { 13, 400 }, 22 };
+		constexpr StabilizerSyncOwner nextOpen{ { 13, 0 }, 21 };
+		return CanClaimStabilizerSync(first, first, first, first, false) &&
+		       !CanClaimStabilizerSync(first, first, first, nextOpen, true) &&
+		       !CanClaimStabilizerSync(first, first, second, second, false) &&
+		       !CanClaimStabilizerSync(second, first, second, second, false) &&
+		       CanClaimStabilizerSync(second, second, second, second, false);
+	}
+	static_assert(CoversStaleStabilizerConsumer());
+
 	constexpr bool CoversRetainedSaveLoadThenCellTransition()
 	{
 		constexpr std::uint64_t loadSerial = 7;

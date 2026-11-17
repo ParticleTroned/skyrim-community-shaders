@@ -69,6 +69,15 @@ namespace VRVendorRelatchPolicy
 		       a_observedClose.frame == a_currentClose.frame;
 	}
 
+	[[nodiscard]] constexpr bool CanClaimStabilizerSync(
+		StabilizerSyncOwner a_queued, StabilizerSyncOwner a_ready,
+		StabilizerSyncOwner a_pending, StabilizerSyncOwner a_current, bool a_open) noexcept
+	{
+		return MatchesStabilizerSyncDiscovery(a_queued.close, a_queued.edge, a_current.close, a_current.edge, a_open) &&
+		       MatchesStabilizerSyncDiscovery(a_queued.close, a_queued.edge, a_ready.close, a_ready.edge, false) &&
+		       MatchesStabilizerSyncDiscovery(a_queued.close, a_queued.edge, a_pending.close, a_pending.edge, false);
+	}
+
 	[[nodiscard]] constexpr bool IsRetainedSaveLoadTail(
 		std::uint64_t a_retainedSerial, std::uint32_t a_retainedCloseFrame,
 		std::uint64_t a_currentSerial, std::uint32_t a_currentCloseFrame,

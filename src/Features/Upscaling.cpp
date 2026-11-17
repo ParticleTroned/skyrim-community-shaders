@@ -21773,7 +21773,7 @@ void Upscaling::CompleteVRLoadingMenuCloseOutsideLocks(
 		}
 	}
 	if (globals::state && IsSaveLoadTransitionContextActive(globals::state))
-		QueueVRFpsStabilizerLoadSync(globals::state->frameCount);
+		QueueVRFpsStabilizerLoadSync(a_close.frame, a_close);
 	if (globals::state &&
 		GetVRStartupLoadKind() == VRStartupLoadKind::NewGame &&
 		!g_vrRaceSexMenuOpenFromEvent.load(std::memory_order_acquire)) {
@@ -21910,6 +21910,7 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 				g_vrLoadingTransitionCloseTickMs.store(0, std::memory_order_release);
 				g_vrLoadingTransitionTailEndFrame.store(0, std::memory_order_release);
 				ArmVRLoadingMenuCloseReconciliationLocked(loadingSerial);
+				upscaling.pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
 				upscaling.ArmVRVendorWorkGate(
 					VRVendorWorkGateSource::LoadingMenu,
 					"LoadingMenu open");
@@ -21962,7 +21963,6 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 				upscaling.ResetVRPostLoadCompositorHold();
 			}
 			ResetVRMenuPresentationTrackingState();
-			globals::features::upscaling.pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
 		} else if (ownsClose) {
 			upscaling.CompleteVRLoadingMenuCloseOutsideLocks({ loadingSerial, closeFrame });
 		}
@@ -25555,14 +25555,34 @@ bool Upscaling::IsVRUpscalingTransitionProfileNoOp(
 	       IsVRRenderScalePhysicalContractConverged(a_targetMethod, qualityMode);
 }
 
-void Upscaling::QueueVRFpsStabilizerLoadSync(uint32_t a_frame)
+void Upscaling::QueueVRFpsStabilizerLoadSync(
+	uint32_t a_frame, VRVendorRelatchPolicy::LoadingMenuClose a_close)
 {
-	if (!IsVRFpsStabilizerSyncActive()) {
+	const bool syncActive = IsVRFpsStabilizerSyncActive();
+	std::unique_lock holdLock(vrPostLoadCompositorHoldMutex, std::defer_lock);
+	std::unique_lock serialLock(g_vrLoadingTransitionSerialMutex, std::defer_lock);
+	if (a_close.serial != 0) {
+		// Inactive sync can retire the hold, whose lock order is hold -> serial.
+		if (!syncActive)
+			holdLock.lock();
+		serialLock.lock();
+		if (!a_close.Matches(
+				g_vrLoadingTransitionSerial.load(std::memory_order_relaxed),
+				g_vrLoadingTransitionCloseFrame.load(std::memory_order_relaxed),
+				g_vrLoadingTransitionSerialOpen.load(std::memory_order_relaxed))) {
+			return;
+		}
+	}
+
+	if (!syncActive) {
 		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
 		vrPostLoadCompositorHoldAwaitingSyncEpoch.store(0, std::memory_order_release);
 		if (IsVRInitialLoadPresentationProtectionActive() &&
 			!IsVRPostLoadCompositorHoldActive()) {
-			ResetVRPostLoadCompositorHold();
+			if (holdLock.owns_lock())
+				ResetVRPostLoadPresentationProtectionLocked();
+			else
+				ResetVRPostLoadCompositorHold();
 		}
 		return;
 	}

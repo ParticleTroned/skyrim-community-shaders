@@ -48,6 +48,23 @@ namespace
 	static_assert(!loadingClose.Matches(7, 100, true));
 	static_assert(!LoadingMenuClose{}.Matches(0, 0, false));
 
+	constexpr bool CoversDelayedCloseAfterStabilizerSyncCancellation()
+	{
+		constexpr LoadingMenuClose oldClose{ 7, 100 };
+		constexpr LoadingMenuClose newClose{ 8, 150 };
+		std::uint32_t queuedFrame = oldClose.frame;
+		// The new open clears the pending sync before the old callback resumes.
+		queuedFrame = 0;
+		if (oldClose.Matches(newClose.serial, 0, true))
+			queuedFrame = oldClose.frame;
+		if (oldClose.Matches(newClose.serial, newClose.frame, false) || queuedFrame != 0)
+			return false;
+		if (newClose.Matches(newClose.serial, newClose.frame, false))
+			queuedFrame = newClose.frame;
+		return queuedFrame == newClose.frame;
+	}
+	static_assert(CoversDelayedCloseAfterStabilizerSyncCancellation());
+
 	constexpr bool CoversRetainedSaveLoadThenCellTransition()
 	{
 		constexpr std::uint64_t loadSerial = 7;

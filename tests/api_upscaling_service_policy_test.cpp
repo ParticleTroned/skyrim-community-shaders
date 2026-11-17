@@ -45,6 +45,43 @@ int main()
 				fsrCapabilities) == kConditionNone,
 			"FSR4 fallback bypassed base-method unavailability");
 
+		Snapshot001 before;
+		before.stateRevision = 1;
+		before.capabilityRevision = 2;
+		auto after = before;
+		Check(CSX::Api::IsUpscalingSnapshotBracketStable(Status::kSuccess, before, Status::kSuccess, after),
+			"unchanged native API bracket was rejected");
+		after.stateRevision = 13;
+		Check(!CSX::Api::IsUpscalingSnapshotBracketStable(Status::kSuccess, before, Status::kSuccess, after),
+			"different revision authorities or a changed API revision were correlated");
+		after = before;
+		++after.capabilityRevision;
+		Check(!CSX::Api::IsUpscalingSnapshotBracketStable(Status::kSuccess, before, Status::kSuccess, after),
+			"changed capability revision was correlated");
+		Check(!CSX::Api::IsUpscalingSnapshotBracketStable(Status::kBusy, before, Status::kSuccess, before),
+			"unavailable before observation was correlated");
+		Check(!CSX::Api::IsUpscalingSnapshotBracketStable(Status::kSuccess, before, Status::kServiceUnavailable, before),
+			"unavailable after observation was correlated");
+		before.stateRevision = 0;
+		Check(!CSX::Api::IsUpscalingSnapshotBracketStable(Status::kSuccess, before, Status::kSuccess, before),
+			"uninitialized API revision was correlated");
+
+		before.stateRevision = 1;
+		before.capabilityRevision = 0;
+		after = before;
+		Check(!CSX::Api::IsUpscalingSnapshotBracketStable(Status::kSuccess, before, Status::kSuccess, after),
+			"uninitialized capability revisions were correlated");
+		after.capabilityRevision = 2;
+		Check(!CSX::Api::IsUpscalingSnapshotBracketStable(Status::kSuccess, before, Status::kSuccess, after),
+			"missing before capability authority was correlated");
+		before.capabilityRevision = 2;
+		after.capabilityRevision = 0;
+		Check(!CSX::Api::IsUpscalingSnapshotBracketStable(Status::kSuccess, before, Status::kSuccess, after),
+			"missing after capability authority was correlated");
+		after = before;
+		Check(CSX::Api::IsUpscalingSnapshotBracketStable(Status::kSuccess, before, Status::kSuccess, after),
+			"restored nonzero capability authority was rejected");
+
 		const auto directLoading = CSX::Api::ResolveUpscalingAdmission(
 			kConditionLoadingTransition | kConditionTransitionPending,
 			RequestPurpose::kDirect,

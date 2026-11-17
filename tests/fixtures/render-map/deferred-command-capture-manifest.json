@@ -1,0 +1,14 @@
+{
+    "schema": {
+        "name": "csx.render-capture-manifest",
+        "major": 1,
+        "minor": 4,
+        "producerVersion": "schema-contract-test"
+    },
+    "captureId": "capture-deferred-command-contract",
+    "status": "complete",
+    "createdAtUtc": "2026-09-01T00:00:00Z",
+    "completion": {
+        "truncated": false
+    }
+}

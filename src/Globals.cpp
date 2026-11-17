@@ -1,6 +1,10 @@
 #include "Globals.h"
 #include "Features/ReverseZ.h"
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "RenderMap/D3DContextHooks.h"
+#endif
+
 #include "Deferred.h"
 #include "Features/AdaptiveBrightness.h"
 #include "Features/CSEditor.h"
@@ -62,10 +66,8 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Diagnostics/GpuCrashDiagnostics.h"
-#	include <algorithm>
 #	include <atomic>
 #	include <intrin.h>
-#	include <vector>
 #endif
 
 namespace globals
@@ -574,83 +576,16 @@ namespace globals
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
-	struct ID3D11DeviceContext_Dispatch
-	{
-		static void thunk(ID3D11DeviceContext* This, UINT x, UINT y, UINT z)
-		{
-			if (This != d3d::context || !CSX::Diagnostics::GpuCrash::IsEnabled()) {
-				func(This, x, y, z);
-				return;
-			}
-			const auto token = CSX::Diagnostics::GpuCrash::BeginPass("D3D11::Dispatch");
-			const SKSE::stl::scope_exit finish([&] { CSX::Diagnostics::GpuCrash::EndPass(token); });
-			CSX::Diagnostics::GpuCrash::RecordDispatch("D3D11::Dispatch", 0, x, y, z, false);
-			func(This, x, y, z);
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct ID3D11DeviceContext_DispatchIndirect
-	{
-		static void thunk(ID3D11DeviceContext* This, ID3D11Buffer* arguments, UINT offset)
-		{
-			if (This != d3d::context || !CSX::Diagnostics::GpuCrash::IsEnabled()) {
-				func(This, arguments, offset);
-				return;
-			}
-			const auto token = CSX::Diagnostics::GpuCrash::BeginPass("D3D11::DispatchIndirect");
-			const SKSE::stl::scope_exit finish([&] { CSX::Diagnostics::GpuCrash::EndPass(token); });
-			CSX::Diagnostics::GpuCrash::RecordDispatch("D3D11::DispatchIndirect", 0, 0, 0, 0, false, arguments, offset);
-			func(This, arguments, offset);
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-#endif
-
 	/// Share draw hooks for underwater composition and live HDR observation.
 	void InstallD3DHooks(ID3D11DeviceContext* a_context)
 	{
 		static std::mutex installationMutex;
 		static winrt::com_ptr<ID3D11DeviceContext> installedContext;
 		std::scoped_lock lock(installationMutex);
-#ifdef DEVBENCH_BRIDGE_ENABLED
-		const bool rendererHooksInstalled = installedContext.get() == a_context;
-		if (!rendererHooksInstalled)
-			Util::RegisterDeviceContextStateForHooks(a_context);
-		struct DispatchHookCoverage
-		{
-			winrt::com_ptr<ID3D11DeviceContext> context;
-			Util::VirtualHookResult direct;
-			Util::VirtualHookResult indirect;
-		};
-		static std::vector<DispatchHookCoverage> dispatchCoverage;
-		// Diagnostics can arm after renderer hooks exist; each context gets one independent attempt.
-		if (a_context && CSX::Diagnostics::GpuCrash::IsEnabled() &&
-			std::none_of(dispatchCoverage.begin(), dispatchCoverage.end(),
-				[a_context](const auto& coverage) { return coverage.context.get() == a_context; })) {
-			auto& coverage = dispatchCoverage.emplace_back();
-			coverage.context.copy_from(a_context);
-			coverage.direct = Util::InstallVirtualFunctionHook(a_context, 41,
-				reinterpret_cast<void**>(&ID3D11DeviceContext_Dispatch::func), reinterpret_cast<void*>(ID3D11DeviceContext_Dispatch::thunk));
-			coverage.indirect = Util::InstallVirtualFunctionHook(a_context, 42,
-				reinterpret_cast<void**>(&ID3D11DeviceContext_DispatchIndirect::func), reinterpret_cast<void*>(ID3D11DeviceContext_DispatchIndirect::thunk));
-			logger::info("[GPUCrash] Compute dispatch hooks context=0x{:X} direct(error={}, detourError={}, method={}) indirect(error={}, detourError={}, method={}); coverage is limited to the renderer immediate context",
-				reinterpret_cast<std::uintptr_t>(a_context),
-				coverage.direct.error, coverage.direct.detourError, static_cast<int>(coverage.direct.method),
-				coverage.indirect.error, coverage.indirect.detourError, static_cast<int>(coverage.indirect.method));
-			if (coverage.direct.error != NO_ERROR || coverage.indirect.error != NO_ERROR)
-				logger::error("[GPUCrash] Compute dispatch hook coverage is incomplete; installation is not retried on this context");
-		}
-		// Native context dispatch can change after first use without replacing the context.
-		if (rendererHooksInstalled)
-			return;
-#else
 		// Native context dispatch can change after first use without replacing the context.
 		if (installedContext.get() == a_context)
 			return;
 		Util::RegisterDeviceContextStateForHooks(a_context);
-#endif
 		InstallVRFrameBufferUploadHook();
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
@@ -665,6 +600,7 @@ namespace globals
 		stl::detour_vfunc<38, ID3D11DeviceContext_DrawAuto>(a_context);
 		stl::detour_vfunc<39, ID3D11DeviceContext_DrawIndexedInstancedIndirect>(a_context);
 		stl::detour_vfunc<40, ID3D11DeviceContext_DrawInstancedIndirect>(a_context);
+		CSX::RenderMap::InstallD3DContextHooks(a_context);
 #endif
 		installedContext.copy_from(a_context);
 	}

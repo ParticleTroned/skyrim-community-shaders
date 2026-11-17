@@ -16,6 +16,11 @@
 #include <utility>
 #include <vector>
 
+#include "FSRColorContractPolicy.h"
+#include "FSRColorContractReceiptPolicy.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "FSRDispatchInputTelemetry.h"
+#endif
 #include "FSRSharedGuidePolicy.h"
 
 #include <FidelityFX/host/backends/dx11/ffx_dx11.h>
@@ -106,13 +111,53 @@ public:
 		float sharpness = 0.0f;
 	};
 #ifdef DEVBENCH_BRIDGE_ENABLED
+	struct FsrColorContractSnapshot
+	{
+		uint64_t revision = 0;
+		bool highDynamicRangeInput = true;
+		bool autoExposure = true;
+		bool hostContextValid = false;
+		bool hostContextHighDynamicRangeInput = true;
+		bool hostContextAutoExposure = true;
+		uint64_t hostContextGeneration = 0;
+		bool runtimeContextValid = false;
+		bool runtimeContextHighDynamicRangeInput = true;
+		bool runtimeContextAutoExposure = true;
+		uint64_t runtimeContextGeneration = 0;
+	};
+
 	struct RuntimeUpscalerDispatchSnapshot
 	{
 		bool valid = false;
 		uint32_t frame = 0;
 		RuntimeUpscalerFramePath path = RuntimeUpscalerFramePath::kInactive;
 		uint64_t serial = 0;
+		uint64_t contextGeneration = 0;
+		uint32_t contextIndex = 0;
+		uint32_t renderWidth = 0;
+		uint32_t renderHeight = 0;
+		uint32_t displayWidth = 0;
+		uint32_t displayHeight = 0;
+		bool highDynamicRangeInput = true;
+		bool autoExposure = true;
+		bool exposureResourceBound = false;
+		float preExposure = 1.0f;
+		float configuredSharpness = 0.0f;
+		float effectiveSharpness = 0.0f;
+		bool sharpeningEnabled = false;
+		uint64_t dispatchQpc = 0;
+		FSRDispatchInputTelemetry::Snapshot submittedInputs{};
 	};
+
+	struct FsrColorContractStatusSnapshot
+	{
+		FsrColorContractSnapshot contract{};
+		RuntimeUpscalerDispatchSnapshot dispatch{};
+		std::array<RuntimeUpscalerDispatchSnapshot, 2> eyeDispatches{};
+	};
+
+	using FsrColorContractSetResult =
+		FSRColorContractReceiptPolicy::SetReceipt<FsrColorContractStatusSnapshot>;
 #endif
 
 	static constexpr const wchar_t* PluginDir = L"Data\\Shaders\\Upscaling\\FidelityFX";
@@ -269,6 +314,15 @@ public:
 	std::string GetRuntimeUpscalerRequestedVersionString() const;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	/** @brief Render-thread-only copy used to publish actual FSR path evidence under the controller lock. */
+	/** @brief Returns one coherent FSR request, context, and dispatch evidence snapshot. */
+	FsrColorContractStatusSnapshot GetDevBenchFsrColorContractStatusSnapshot() const noexcept;
+	/** @brief Atomically changes the request and captures its complete operation receipt. */
+	FsrColorContractSetResult SetDevBenchFsrColorContract(
+		uint64_t a_expectedRevision,
+		bool a_highDynamicRangeInput,
+		bool a_autoExposure) noexcept;
+	/** @brief Returns the coherent render-thread disposition for a changed FSR processing contract. */
+	[[nodiscard]] FSRColorContractPolicy::ReplacementState GetDevBenchFsrColorContractReplacementState() const noexcept;
 	RuntimeUpscalerDispatchSnapshot GetRuntimeUpscalerDispatchSnapshotForRenderThread() const;
 #endif
 
@@ -280,9 +334,11 @@ public:
 		uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight,
 		float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness, bool* a_usedRuntimeUpscaler = nullptr);
 	/** @brief Dispatch both ready VR runtime-FSR contexts in one interop transaction when eligible. */
-	StereoUpscaleResult UpscaleStereoRegions(const std::array<UpscaleRegionParameters, 2>& a_regions);
+	StereoUpscaleResult UpscaleStereoRegions(const std::array<UpscaleRegionParameters, 2>& a_regions,
+		bool a_compositorSubmit = false);
 
 private:
+	const std::string& GetRuntimeUpscalerFramePathLabel(RuntimeUpscalerFramePath a_path) const;
 	bool ConfirmFrameGenerationDisabled(uint64_t a_frameID) noexcept;
 	void QuarantineFrameGenerationForSession(const char* a_reason, bool a_disableConfirmed = false) noexcept;
 	std::atomic_bool frameGenerationSessionQuarantined{ false };
@@ -456,9 +512,32 @@ private:
 	RuntimeUpscalerFramePath GetRuntimeUpscalerProviderFramePath(uint32_t a_requestedVersion) const;
 	void RecordRuntimeUpscalerFramePath(RuntimeUpscalerFramePath a_path);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	void RecordDevBenchSuccessfulDispatch(RuntimeUpscalerFramePath a_path);
-	mutable std::mutex devBenchSuccessfulDispatchMutex;
+	[[nodiscard]] uint64_t GetDevBenchFsrColorContractState() const noexcept;
+	[[nodiscard]] uint64_t GetDevBenchFsrColorContractFlags() const noexcept;
+	[[nodiscard]] FsrColorContractStatusSnapshot GetDevBenchFsrColorContractStatusSnapshotLocked() const noexcept;
+	void PublishDevBenchFsrColorContext(bool a_runtime, uint64_t a_flags) noexcept;
+	void ClearDevBenchFsrColorContext(bool a_runtime) noexcept;
+	void InvalidateDevBenchSuccessfulDispatch(uint32_t a_contextIndex);
+	void RecordDevBenchSuccessfulDispatch(
+		RuntimeUpscalerFramePath a_path,
+		uint32_t a_contextIndex,
+		uint32_t a_renderWidth,
+		uint32_t a_renderHeight,
+		uint32_t a_displayWidth,
+		uint32_t a_displayHeight,
+		float a_configuredSharpness, float a_effectiveSharpness,
+		bool a_sharpeningEnabled, uint64_t a_dispatchQpc,
+		const FSRDispatchInputTelemetry::Snapshot& a_submittedInputs);
+	std::atomic<uint64_t> devBenchFsrColorContractState{ FSRColorContractPolicy::kDefaultState };
+	std::atomic<uint64_t> devBenchHostContextColorContract{ 0 };
+	std::atomic<uint64_t> devBenchRuntimeContextColorContract{ 0 };
+	std::atomic<uint64_t> devBenchHostContextGeneration{ 0 };
+	std::atomic<uint64_t> devBenchRuntimeContextGeneration{ 0 };
+	std::atomic<uint32_t> devBenchHostContextLastDispatchFrame{ 0 };
+	std::atomic<uint32_t> devBenchRuntimeContextLastDispatchFrame{ 0 };
+	mutable std::mutex devBenchFsrColorContractMutex;
 	RuntimeUpscalerDispatchSnapshot devBenchSuccessfulDispatch{};
+	std::array<RuntimeUpscalerDispatchSnapshot, 2> devBenchSuccessfulEyeDispatches{};
 	uint64_t devBenchSuccessfulDispatchSerial = 0;
 #endif
 	LifecycleResult EnsureRuntimeUpscalerInterop();
@@ -482,13 +561,15 @@ private:
 		const D3D11_TEXTURE2D_DESC& a_reactiveDesc,
 		const D3D11_TEXTURE2D_DESC& a_transparencyDesc,
 		const D3D11_TEXTURE2D_DESC& a_outputDesc);
-	LifecycleResult ExecuteRuntimeUpscalerBatch(const RuntimeDispatchPlan& a_plan, std::span<const UpscaleRegionParameters> a_regions);
+	LifecycleResult ExecuteRuntimeUpscalerBatch(const RuntimeDispatchPlan& a_plan, std::span<const UpscaleRegionParameters> a_regions,
+		bool a_compositorSubmit = false);
 	/** Returns a retained exact full-eye guide import, or null to use the copy fallback. */
 	WrappedResource* ResolveRuntimeSharedGuide(uint32_t a_eye, FSRSharedGuidePolicy::Guide a_guide,
 		ID3D11Resource* a_source, const D3D11_TEXTURE2D_DESC& a_desc);
 	[[nodiscard]] bool HasQuarantinedRuntimeSharedGuides(const UpscaleRegionParameters& a_region) const noexcept;
 	[[nodiscard]] bool CanDispatchHostFallbackForRegions(std::span<const UpscaleRegionParameters> a_regions, const RuntimeDispatchPlan& a_plan) const;
-	LifecycleResult DispatchRuntimeUpscalerBatch(std::span<const UpscaleRegionParameters> a_regions);
+	LifecycleResult DispatchRuntimeUpscalerBatch(std::span<const UpscaleRegionParameters> a_regions, RuntimeUpscalerFramePath a_path,
+		bool a_compositorSubmit);
 	LifecycleResult DestroyRuntimeUpscalerContexts(bool a_waitForIdle = true);
 	LifecycleResult DestroyRuntimeUpscalerResources(bool a_waitForIdle = true);
 	LifecycleResult RetireQuarantinedRuntimeUpscalerResources();

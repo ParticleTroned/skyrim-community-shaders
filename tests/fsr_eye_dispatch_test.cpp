@@ -258,7 +258,7 @@ struct FidelityFX
 		plan.contextsCompatible = runtimeContextsCompatible;
 #include "fsr_runtime_gate_under_test.h"
 	}
-	LifecycleResult ExecuteRuntimeUpscalerBatch(const RuntimeDispatchPlan&, std::span<const UpscaleRegionParameters> a_regions)
+	LifecycleResult ExecuteRuntimeUpscalerBatch(const RuntimeDispatchPlan&, std::span<const UpscaleRegionParameters> a_regions, bool = false)
 	{
 		++runtimeCalls;
 		runtimeRegionCount += static_cast<uint32_t>(a_regions.size());
@@ -304,7 +304,7 @@ struct FidelityFX
 	UpscaleResult UpscaleRegion(uint32_t, ID3D11Resource*, ID3D11Resource*, ID3D11Resource*,
 		ID3D11Resource*, ID3D11Resource*, ID3D11Resource*, uint32_t, uint32_t,
 		uint32_t, uint32_t, float, float, float, bool* = nullptr);
-	StereoUpscaleResult UpscaleStereoRegions(const std::array<UpscaleRegionParameters, 2>&);
+	StereoUpscaleResult UpscaleStereoRegions(const std::array<UpscaleRegionParameters, 2>&, bool = false);
 };
 
 struct Upscaling

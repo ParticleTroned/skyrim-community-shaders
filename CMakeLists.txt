@@ -4173,6 +4173,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/main_thread_dispatch_policy_test.cpp
     )
     add_controller_test(
+        colour_pipeline_probe_policy_test
+        ColourPipelineProbePolicy
+        tests/colour_pipeline_probe_policy_test.cpp
+    )
+    add_controller_test(
         vr_render_scale_preparation_policy_test
         VRRenderScalePreparationPolicy
         tests/vr_render_scale_preparation_policy_test.cpp
@@ -5036,6 +5041,110 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(
         ApiRuntimeThreadAffinity
+        PROPERTIES LABELS "ControllerTests"
+    )
+
+    add_executable(
+        render_map_collector_test
+        EXCLUDE_FROM_ALL
+        tests/render_map_collector_test.cpp
+        src/RenderMap/Collector.cpp
+    )
+    target_compile_features(render_map_collector_test PRIVATE cxx_std_23)
+    target_include_directories(
+        render_map_collector_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(
+        render_map_collector_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    add_test(NAME RenderMapCollector COMMAND render_map_collector_test)
+    set_tests_properties(RenderMapCollector PROPERTIES LABELS "ControllerTests")
+
+    add_executable(
+        render_map_runtime_test
+        EXCLUDE_FROM_ALL
+        tests/render_map_runtime_test.cpp
+        src/RenderMap/Collector.cpp
+        src/RenderMap/Runtime.cpp
+    )
+    target_compile_features(render_map_runtime_test PRIVATE cxx_std_23)
+    target_compile_definitions(
+        render_map_runtime_test
+        PRIVATE CSX_RENDER_MAP_TESTING=1
+    )
+    target_include_directories(
+        render_map_runtime_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(
+        render_map_runtime_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    add_test(NAME RenderMapRuntime COMMAND render_map_runtime_test)
+    set_tests_properties(RenderMapRuntime PROPERTIES LABELS "ControllerTests")
+
+    add_executable(
+        render_map_context_hooks_test
+        EXCLUDE_FROM_ALL
+        tests/render_map_context_hooks_test.cpp
+        src/RenderMap/D3DContextHooks.cpp
+        src/RenderMap/Runtime.cpp
+        src/RenderMap/Collector.cpp
+    )
+    target_compile_features(render_map_context_hooks_test PRIVATE cxx_std_23)
+    target_compile_definitions(
+        render_map_context_hooks_test
+        PRIVATE
+            CSX_RENDER_MAP_TESTING=1
+            CSX_RENDER_MAP_CONTEXT_TESTING=1
+            CSX_RENDER_MAP_ACTIVATION_TESTING=1
+            NOMINMAX
+            WIN32_LEAN_AND_MEAN
+    )
+    target_include_directories(
+        render_map_context_hooks_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}/tests"
+    )
+    add_test(NAME RenderMapContextHooks COMMAND render_map_context_hooks_test)
+    add_test(
+        NAME RenderMapContextContract
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}" -P
+            "${PROJECT_SOURCE_DIR}/tests/render_map_context_contract_test.cmake"
+    )
+    set_tests_properties(
+        RenderMapContextHooks
+        PROPERTIES LABELS "ControllerTests"
+    )
+
+    add_executable(
+        render_map_controller_test
+        EXCLUDE_FROM_ALL
+        tests/render_map_controller_test.cpp
+        src/RenderMap/Artifacts.cpp
+        src/RenderMap/Collector.cpp
+        src/RenderMap/Controller.cpp
+        src/RenderMap/Runtime.cpp
+        src/RenderMap/Serialization.cpp
+    )
+    target_compile_features(render_map_controller_test PRIVATE cxx_std_23)
+    target_compile_definitions(
+        render_map_controller_test
+        PRIVATE CSX_RENDER_MAP_ACTIVATION_TESTING=1
+    )
+    target_include_directories(
+        render_map_controller_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(
+        render_map_controller_test
+        PRIVATE nlohmann_json::nlohmann_json bcrypt.lib
+    )
+    add_test(NAME RenderMapController COMMAND render_map_controller_test)
+    set_tests_properties(
+        RenderMapController
         PROPERTIES LABELS "ControllerTests"
     )
 

@@ -10,6 +10,176 @@ namespace
 {
 	using namespace VRVendorRelatchPolicy;
 
+	constexpr bool CoversSameFrameNativeResolutionOwnership()
+	{
+		constexpr auto frame = 22066u;
+		constexpr NativeResolutionPlanKey noNative{};
+		constexpr NativeResolutionPlanKey published{ 4, 5, 2048, 2160 };
+		auto cached = noNative;
+		if (!CanReuseRuntimeResolutionPlan(frame, frame, cached, noNative) ||
+			CanReuseRuntimeResolutionPlan(frame, frame, cached, published))
+			return false;
+
+		cached = published;
+		auto changed = published;
+		++changed.generation;
+		if (!CanReuseRuntimeResolutionPlan(frame, frame, cached, published) ||
+			CanReuseRuntimeResolutionPlan(frame, frame, cached, changed) ||
+			CanReuseRuntimeResolutionPlan(frame, frame, cached, noNative))
+			return false;
+
+		cached = noNative;
+		return CanReuseRuntimeResolutionPlan(frame, frame, cached, noNative) &&
+		       !CanReuseRuntimeResolutionPlan(frame, frame + 1, cached, noNative) &&
+		       !CanReuseRuntimeResolutionPlan(UINT32_MAX, UINT32_MAX, cached, noNative);
+	}
+	static_assert(CoversSameFrameNativeResolutionOwnership());
+
+	constexpr WorldResolutionPlanWitness renderedWorld{ 19, { 4, 5, 2048, 2160 } };
+	static_assert(renderedWorld.Matches(19, { 4, 5, 2048, 2160 }));
+	static_assert(!renderedWorld.Matches(19, { 4, 6, 2048, 2160 }));
+	static_assert(!renderedWorld.Matches(20, { 4, 5, 2048, 2160 }));
+	static_assert(!WorldResolutionPlanWitness{}.Matches(UINT32_MAX, {}));
+
+	constexpr LoadingMenuClose loadingClose{ 7, 100 };
+	static_assert(loadingClose.Matches(7, 100, false));
+	static_assert(!loadingClose.Matches(7, 101, false));
+	static_assert(!loadingClose.Matches(8, 100, false));
+	static_assert(!loadingClose.Matches(7, 100, true));
+	static_assert(!LoadingMenuClose{}.Matches(0, 0, false));
+
+	constexpr bool CoversDelayedCloseAfterStabilizerSyncCancellation()
+	{
+		constexpr LoadingMenuClose oldClose{ 7, 100 };
+		constexpr LoadingMenuClose newClose{ 8, 150 };
+		std::uint32_t queuedFrame = oldClose.frame;
+		// The new open clears the pending sync before the old callback resumes.
+		queuedFrame = 0;
+		if (oldClose.Matches(newClose.serial, 0, true))
+			queuedFrame = oldClose.frame;
+		if (oldClose.Matches(newClose.serial, newClose.frame, false) || queuedFrame != 0)
+			return false;
+		if (newClose.Matches(newClose.serial, newClose.frame, false))
+			queuedFrame = newClose.frame;
+		return queuedFrame == newClose.frame;
+	}
+	static_assert(CoversDelayedCloseAfterStabilizerSyncCancellation());
+
+	constexpr LoadingMenuClose startupSync{};
+	static_assert(MatchesStabilizerSyncDiscovery(startupSync, 0, startupSync, 0, false));
+	static_assert(!MatchesStabilizerSyncDiscovery(startupSync, 0, startupSync, 1, false));
+	static_assert(!MatchesStabilizerSyncDiscovery(startupSync, 0, { 1, 0 }, 1, true));
+	static_assert(MatchesStabilizerSyncDiscovery(loadingClose, 9, loadingClose, 9, false));
+	static_assert(!MatchesStabilizerSyncDiscovery(loadingClose, 9, { 8, 0 }, 10, true));
+	static_assert(!MatchesStabilizerSyncDiscovery(loadingClose, 9, { 8, 150 }, 11, false));
+	static_assert(!MatchesStabilizerSyncDiscovery(loadingClose, 9, { 7, 101 }, 9, false));
+	static_assert(!MatchesStabilizerSyncDiscovery(loadingClose, 9, loadingClose, 9, true));
+
+	constexpr bool CoversSupersededStabilizerDestinationObservation()
+	{
+		constexpr StabilizerSyncOwner oldOwner{ { 7, 100 }, 9 };
+		constexpr StabilizerSyncOwner nextOwner{ { 8, 150 }, 11 };
+		constexpr std::uint32_t sameDestinationCell = 0x42;
+		std::uint32_t observedCell = 0;
+		std::uint32_t observedWorldFrame = 0;
+		const auto publish = [&](StabilizerSyncOwner owner, std::uint32_t frame) {
+			if (MatchesStabilizerSyncDiscovery(owner.close, owner.edge, nextOwner.close, nextOwner.edge, false) &&
+				observedCell != sameDestinationCell) {
+				observedWorldFrame = frame;
+				observedCell = sameDestinationCell;
+			}
+		};
+
+		// The newer open clears observation state before the old sampler resumes.
+		publish(oldOwner, 110);
+		if (observedCell != 0 || observedWorldFrame != 0)
+			return false;
+
+		publish(nextOwner, 151);
+		const auto ready = [&](std::uint32_t worldFrame) {
+			return IsStabilizerDestinationSyncReady({
+				.completedWorldFrameAfterClose = worldFrame > nextOwner.close.frame,
+				.sourceCellKnown = true,
+				.currentCellKnown = true,
+				.destinationCellChanged = true,
+				.completedWorldFrameAfterDestinationObservation = worldFrame > observedWorldFrame,
+			});
+		};
+		return observedCell == sameDestinationCell && observedWorldFrame == 151 &&
+		       !ready(151) && ready(152);
+	}
+	static_assert(CoversSupersededStabilizerDestinationObservation());
+
+	constexpr bool CoversStaleStabilizerConsumer()
+	{
+		constexpr StabilizerSyncOwner first{ { 12, 400 }, 20 };
+		constexpr StabilizerSyncOwner second{ { 13, 400 }, 22 };
+		constexpr StabilizerSyncOwner nextOpen{ { 13, 0 }, 21 };
+		return CanClaimStabilizerSync(first, first, first, first, false) &&
+		       !CanClaimStabilizerSync(first, first, first, nextOpen, true) &&
+		       !CanClaimStabilizerSync(first, first, second, second, false) &&
+		       !CanClaimStabilizerSync(second, first, second, second, false) &&
+		       CanClaimStabilizerSync(second, second, second, second, false);
+	}
+	static_assert(CoversStaleStabilizerConsumer());
+
+	constexpr bool CoversStabilizerSyncDisposition()
+	{
+		constexpr StabilizerSyncOwner owner{ { 12, 400 }, 20 };
+		return CanClaimStabilizerSync(owner, owner, owner, owner, false) &&
+		       SelectStabilizerSyncOutcome(true, false, false) == StabilizerSyncOutcome::Refused &&
+		       SelectStabilizerSyncOutcome(true, true, false) == StabilizerSyncOutcome::Resolved &&
+		       SelectStabilizerSyncOutcome(true, false, true) == StabilizerSyncOutcome::Resolved &&
+		       SelectStabilizerSyncOutcome(false, false, false) == StabilizerSyncOutcome::NoProfile;
+	}
+	static_assert(CoversStabilizerSyncDisposition());
+
+	constexpr bool CoversRetainedSaveLoadThenCellTransition()
+	{
+		constexpr std::uint64_t loadSerial = 7;
+		constexpr std::uint32_t saveLoadClose = 100;
+		constexpr std::uint32_t nextCellClose = 150;
+		return IsRetainedSaveLoadTail(loadSerial, saveLoadClose, loadSerial, saveLoadClose, false) &&
+		       !IsRetainedSaveLoadTail(loadSerial, saveLoadClose, loadSerial, nextCellClose, false) &&
+		       !IsRetainedSaveLoadTail(loadSerial, saveLoadClose, loadSerial + 1, nextCellClose, false) &&
+		       !IsRetainedSaveLoadTail(loadSerial, saveLoadClose, loadSerial, saveLoadClose, true);
+	}
+	static_assert(CoversRetainedSaveLoadThenCellTransition());
+
+	constexpr bool CoversRetainedSaveLoadDestination()
+	{
+		const RetainedSaveLoadDestination matched{ 7, 7, 7, 100, 101, 102, 103, false, true };
+		auto candidate = matched;
+		candidate.recoveryLoadingSerial = 6;
+		if (HasRetainedSaveLoadDestination(candidate))
+			return false;
+		candidate = matched;
+		candidate.holdLoadingSerial = 8;
+		if (HasRetainedSaveLoadDestination(candidate))
+			return false;
+		candidate = matched;
+		candidate.completedWorldFrame = 100;
+		if (HasRetainedSaveLoadDestination(candidate))
+			return false;
+		candidate = matched;
+		candidate.completedWorldFrame = 101;
+		if (HasRetainedSaveLoadDestination(candidate))
+			return false;
+		candidate = matched;
+		candidate.completedWorldFrame = 104;
+		if (HasRetainedSaveLoadDestination(candidate))
+			return false;
+		candidate = matched;
+		candidate.loadingOpen = true;
+		if (HasRetainedSaveLoadDestination(candidate))
+			return false;
+		candidate = matched;
+		candidate.inGameLoadHold = false;
+		return !HasRetainedSaveLoadDestination(candidate) &&
+		       HasRetainedSaveLoadDestination(matched);
+	}
+	static_assert(CoversRetainedSaveLoadDestination());
+
 	static_assert(!ShouldDeferPresentationSuccessor(0, 0, false));
 	static_assert(ShouldDeferPresentationSuccessor(7, 0, false));
 	static_assert(!ShouldDeferPresentationSuccessor(7, 7, false));

@@ -1833,6 +1833,71 @@ def append_character_category_variants(
     return added
 
 
+def append_lighting_specialization_variants(
+    config: dict[str, Any], source_root: Path, feature_states: dict[str, bool]
+) -> int:
+    """Cover weather and deferred lighting states alongside general pixels."""
+    header = (source_root / "src/ShaderCache.h").read_text(encoding="utf-8")
+    specializations = []
+    mask = 0
+    for symbol, macro, feature, feature_macro, deferred_only in (
+        ("kLightingDryWeather", "DRY_WEATHER", "Wetterness", "WETTERNESS", False),
+        ("kLightingSnowCoverInactive", "SNOW_COVER_INACTIVE", "SnowCover", "SNOW_COVER", False),
+        ("kLightingNoContactShadows", "LLF_NO_CONTACT_SHADOWS", "LightLimitFix", "LIGHT_LIMIT_FIX", True),
+        ("kLightingNoLegacySubsurface", "NO_LEGACY_SUBSURFACE", None, None, True),
+    ):
+        match = re.search(rf"{symbol} = 1u << (\d+);", header)
+        if match is None or int(match[1]) >= 32:
+            raise SystemExit(f"cannot locate runtime Lighting specialization flag: {symbol}")
+        flag = 1 << int(match[1])
+        if mask & flag:
+            raise SystemExit("overlapping runtime Lighting specialization flags")
+        mask |= flag
+        specializations.append((flag, macro, feature, feature_macro, deferred_only))
+    macros = {macro for _, macro, _, _, _ in specializations}
+    delta = 0
+    for shader in config["shaders"]:
+        if shader["file"] != "Lighting.hlsl" or "PSHADER" not in shader["configs"]:
+            continue
+        stage = shader["configs"]["PSHADER"]
+        shared = [*config.get("common_defines", []), *config.get("common_pshader_defines", []),
+                  *config.get("file_common_defines", {}).get("Lighting.hlsl", {}).get("PSHADER", []),
+                  *stage.get("common_defines", [])]
+        shared_names = define_names(shared)
+        if macros & shared_names:
+            raise SystemExit("Lighting specialization must be scoped to a pixel entry")
+        entries: dict[str, dict[str, Any]] = {}
+        for entry in stage["entries"]:
+            key = re.fullmatch(r"Lighting:Pixel:([0-9A-F]{1,8})", entry["entry"])
+            if key is None:
+                raise SystemExit(f"invalid Lighting pixel entry: {entry['entry']}")
+            descriptor = int(key[1], 16)
+            defines = entry.get("defines", [])
+            names = define_names(defines)
+            for flag, macro, _, _, _ in specializations:
+                if bool(descriptor & flag) != (macro in names):
+                    raise SystemExit(f"Lighting specialization flag/macros disagree: {entry['entry']}")
+            general = [value for value in defines if normalized_define_name(value) not in macros]
+            variants = [(descriptor & ~mask, general)]
+            for flag, macro, feature, feature_macro, deferred_only in specializations:
+                if deferred_only and "DEFERRED" not in shared_names | names:
+                    continue
+                if feature is not None and not (feature_states.get(feature) and feature_macro in shared_names | names):
+                    continue
+                variants += [(bits | flag, [*values, macro]) for bits, values in tuple(variants)]
+            for bits, values in variants:
+                variant_key = f"Lighting:Pixel:{bits:X}"
+                existing = entries.get(variant_key)
+                if existing is not None:
+                    if pixel_entry_define_identity("Lighting.hlsl", variant_key, existing.get("defines", [])) != pixel_entry_define_identity("Lighting.hlsl", variant_key, values):
+                        raise SystemExit(f"conflicting Lighting specialization variant: {variant_key}")
+                    continue
+                entries[variant_key] = {**entry, "entry": variant_key, "defines": values}
+        delta += len(entries) - len(stage["entries"])
+        stage["entries"] = list(entries.values())
+    return delta
+
+
 def append_effect_lighting_variants(
     config: dict[str, Any], source_root: Path, feature_states: dict[str, bool]
 ) -> int:
@@ -1946,6 +2011,8 @@ def filter_profile_defines(
     normalize_water_pixel_variants(config)
     category_count = append_character_category_variants(config, source_root)
     print(f"shader config: added {category_count} deferred character category variants")
+    lighting_delta = append_lighting_specialization_variants(config, source_root, feature_states)
+    print(f"shader config: Lighting specialization changed pixel variants by {lighting_delta}")
     effect_delta = append_effect_lighting_variants(config, source_root, feature_states)
     print(f"shader config: ambient Effect specialization changed pixel variants by {effect_delta}")
     prepare_fxc_defines(config)

@@ -1125,6 +1125,96 @@ class ShaderCachePackagingTests(unittest.TestCase):
         )
 
 
+class LightingSpecializationWorkloadTests(unittest.TestCase):
+    def test_weather_combinations_preserve_category_layouts_and_vertices(self) -> None:
+        vertex = {"entry": "Lighting:Vertex:200001", "defines": ["VC", "SHADOW_DIR"]}
+        config = {"shaders": [{"file": "Lighting.hlsl", "configs": {
+            "VSHADER": {"entries": [vertex.copy()]},
+            "PSHADER": {"common_defines": ["WETTERNESS", "SNOW_COVER", "LIGHT_LIMIT_FIX"], "entries": [
+                {"entry": "Lighting:Pixel:280011", "defines": [
+                    "VC", "DEFERRED", "DRY_WEATHER", "SNOW_COVER_INACTIVE",
+                ]},
+            ]},
+        }}]}
+        BUILDER.append_character_category_variants(config, REPO)
+        states = {"Wetterness": True, "SnowCover": True, "LightLimitFix": True}
+        self.assertEqual(BUILDER.append_lighting_specialization_variants(config, REPO, states), 30)
+        stages = config["shaders"][0]["configs"]
+        self.assertEqual(stages["VSHADER"]["entries"], [vertex])
+        entries = {entry["entry"]: entry["defines"] for entry in stages["PSHADER"]["entries"]}
+        self.assertEqual(set(entries), {
+            f"Lighting:Pixel:{0x11 | category | weather | deferred:X}"
+            for category in (0, 0x20) for weather in (0, 0x200000, 0x80000, 0x280000)
+            for deferred in (0, 0x2000, 0x20000, 0x22000)
+        })
+        for key, defines in entries.items():
+            descriptor = int(key.rsplit(":", 1)[1], 16)
+            self.assertEqual("DRY_WEATHER" in defines, bool(descriptor & 0x200000))
+            self.assertEqual("SNOW_COVER_INACTIVE" in defines, bool(descriptor & 0x80000))
+            self.assertEqual("CHARACTER_CATEGORY" in defines, bool(descriptor & 0x20))
+            self.assertEqual("LLF_NO_CONTACT_SHADOWS" in defines, bool(descriptor & 0x2000))
+            self.assertEqual("NO_LEGACY_SUBSURFACE" in defines, bool(descriptor & 0x20000))
+            identity = BUILDER.pixel_entry_define_identity("Lighting.hlsl", key, defines)
+            self.assertEqual(identity[("Lighting", f"{descriptor:X}.pso")].count("11:DRY_WEATHER0:"), bool(descriptor & 0x200000))
+        self.assertEqual(BUILDER.append_lighting_specialization_variants(config, REPO, states), 0)
+
+    def test_requires_each_loaded_feature_and_its_macro(self) -> None:
+        for wet in (False, True):
+            for snow in (False, True):
+                for macros in ([], ["WETTERNESS"], ["SNOW_COVER"], ["WETTERNESS", "SNOW_COVER"]):
+                    with self.subTest(wet=wet, snow=snow, macros=macros):
+                        config = {"common_defines": [macros], "shaders": [{
+                            "file": "Lighting.hlsl", "configs": {"PSHADER": {"entries": [
+                                {"entry": "Lighting:Pixel:1", "defines": ["VC"]},
+                            ]}},
+                        }]}
+                        BUILDER.append_lighting_specialization_variants(config, REPO, {"Wetterness": wet, "SnowCover": snow})
+                        expected = {1}
+                        if wet and "WETTERNESS" in macros:
+                            expected |= {value | 0x200000 for value in tuple(expected)}
+                        if snow and "SNOW_COVER" in macros:
+                            expected |= {value | 0x80000 for value in tuple(expected)}
+                        self.assertEqual({entry["entry"] for entry in config["shaders"][0]["configs"]["PSHADER"]["entries"]},
+                                         {f"Lighting:Pixel:{value:X}" for value in expected})
+
+    def test_rejects_mismatched_conflicting_and_shared_specializations(self) -> None:
+        for entries in (
+            [{"entry": "Lighting:Pixel:200001", "defines": ["VC"]}],
+            [{"entry": "Lighting:Pixel:1", "defines": ["VC", "SNOW_COVER_INACTIVE"]}],
+            [{"entry": "Lighting:Pixel:1", "defines": ["VC"]},
+             {"entry": "Lighting:Pixel:280001", "defines": ["TEXTURE", "DRY_WEATHER", "SNOW_COVER_INACTIVE"]}],
+        ):
+            with self.subTest(entries=entries), self.assertRaises(SystemExit):
+                BUILDER.append_lighting_specialization_variants({"shaders": [{
+                    "file": "Lighting.hlsl", "configs": {"PSHADER": {
+                        "common_defines": ["WETTERNESS", "SNOW_COVER"], "entries": entries,
+                    }},
+                }]}, REPO, {"Wetterness": True, "SnowCover": True})
+        for macro in ("DRY_WEATHER", "SNOW_COVER_INACTIVE", "LLF_NO_CONTACT_SHADOWS", "NO_LEGACY_SUBSURFACE"):
+            with self.subTest(macro=macro), self.assertRaises(SystemExit):
+                BUILDER.append_lighting_specialization_variants({"common_pshader_defines": [[macro]], "shaders": [{
+                    "file": "Lighting.hlsl", "configs": {"PSHADER": {"entries": []}},
+                }]}, REPO, {})
+
+    def test_deferred_specializations_require_their_render_path(self) -> None:
+        for deferred, loaded, has_macro in ((False, True, True), (True, False, True), (True, True, False), (True, True, True)):
+            with self.subTest(deferred=deferred, loaded=loaded, has_macro=has_macro):
+                config = {"shaders": [{"file": "Lighting.hlsl", "configs": {"PSHADER": {
+                    "common_defines": ["LIGHT_LIMIT_FIX"] if has_macro else [],
+                    "entries": [{"entry": "Lighting:Pixel:11" if deferred else "Lighting:Pixel:1",
+                                 "defines": ["VC", "DEFERRED"] if deferred else ["VC"]}],
+                }}}]}
+                BUILDER.append_lighting_specialization_variants(config, REPO, {"LightLimitFix": loaded})
+                entries = config["shaders"][0]["configs"]["PSHADER"]["entries"]
+                self.assertEqual(len(entries), 1 if not deferred else 4 if loaded and has_macro else 2)
+                for entry in entries:
+                    defines = entry["defines"]
+                    if "NO_LEGACY_SUBSURFACE" in defines:
+                        self.assertTrue(deferred)
+                    if "LLF_NO_CONTACT_SHADOWS" in defines:
+                        self.assertTrue(deferred and loaded and has_macro)
+
+
 class EffectLightingWorkloadTests(unittest.TestCase):
     def test_specialization_retains_general_and_category_layouts(self) -> None:
         macro = "AMBIENT_WORLD_EFFECT_LIGHTING"

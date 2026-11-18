@@ -2575,6 +2575,10 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(VRGrassLifetime PROPERTIES TIMEOUT 30)
 
+    add_controller_test(vr_task_queue_test VRTaskQueue tests/vr_task_queue_test.cpp)
+    target_link_libraries(vr_task_queue_test PRIVATE xbyak::xbyak)
+    set_tests_properties(VRTaskQueue PROPERTIES TIMEOUT 30)
+
     set(_native_lighting_material_guard_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/native-lighting-material-guard"
     )

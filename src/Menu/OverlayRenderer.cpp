@@ -866,7 +866,8 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 			ImGui::TextColored(themeSettings.StatusPalette.Error, "%s", issueMessage.c_str());
 		}
 		if (state->IsDeveloperMode()) {
-			int32_t threadLimit = backgroundCompilation ? shaderCache->backgroundCompilationThreadCount : shaderCache->compilationThreadCount;
+			const auto threadLimits = shaderCache->GetCompilationThreadLimits();
+			int32_t threadLimit = backgroundCompilation ? threadLimits.second : threadLimits.first;
 			int compilationRunning = (int)shaderCache->compilationPool.get_tasks_running();
 			int heavyInFlight = shaderCache->GetHeavyTasksInFlight();
 			int heavyLimit = static_cast<int>(Util::GetPerformanceCoreCount());

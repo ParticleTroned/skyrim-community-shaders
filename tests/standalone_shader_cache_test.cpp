@@ -128,7 +128,16 @@ namespace SIE
 		bool enabled = true, held = false, skipUnchanged = true;
 		bool optionalSourceAllowed = true;
 		mutable int optionalChecksRemaining = -1;
-		bool CanCompileOptionalShaderSources() const { return optionalSourceAllowed && (optionalChecksRemaining < 0 || optionalChecksRemaining-- > 0); }
+		enum class OptionalStage
+		{
+			Cache,
+			Source,
+			Device
+		};
+		bool TryAdmitOptionalShaderStage(OptionalStage) const { return optionalSourceAllowed && (optionalChecksRemaining < 0 || optionalChecksRemaining-- > 0); }
+		Util::ContentHash::Hash128 CaptureStandaloneCompileStateDigest() const { return CaptureGlobalCompileState().digest; }
+		uint64_t GetGraphicsShaderRevision() const { return compilationSet.generation.load(); }
+		uint64_t GetShaderPreparationInputGeneration() const { return 0; }
 		struct Compilation
 		{
 			std::atomic_uint64_t generation = 0;
@@ -493,8 +502,22 @@ int main()
 		optional = nullptr;
 		optional.attach(Util::CompileShaderOnDevice(device.get(), L"Data/Shaders/test.hlsl", defines,
 			"ps_5_0", "main", result, &timing, true));
-		assert(optional && !timing.deferred && !timing.sourceCompiles);
+		assert(!optional && timing.deferred && !timing.sourceCompiles);
 		cache.optionalSourceAllowed = true;
+		// Keep bytecode when creation loses its permit, then create without a
+		// cache read or another compiler invocation in the next window.
+		Util::ShaderBytecodeContinuation continuation;
+		cache.optionalChecksRemaining = 1;
+		timing = {};
+		optional.attach(Util::CompileShaderOnDevice(device.get(), L"Data/Shaders/test.hlsl", defines,
+			"ps_5_0", "main", result, &timing, true, nullptr, &continuation));
+		assert(!optional && timing.deferred && continuation.blob && !timing.sourceCompiles);
+		const auto beforeResume = compilerCalls;
+		cache.optionalChecksRemaining = -1;
+		timing = {};
+		optional.attach(Util::CompileShaderOnDevice(device.get(), L"Data/Shaders/test.hlsl", defines,
+			"ps_5_0", "main", result, &timing, true, nullptr, &continuation));
+		assert(optional && !continuation.blob && compilerCalls == beforeResume && !timing.sourceCompiles);
 	}
 	const auto identity = SIE::BuildStandaloneCompileKey(request).packDigest;
 	auto variant = request;

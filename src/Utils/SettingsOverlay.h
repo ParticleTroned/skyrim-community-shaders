@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ShaderPreparationSettings.h"
 #include <nlohmann/json.hpp>
 
 #include <array>
@@ -118,6 +119,8 @@ namespace Util::Settings
 								  { "PBR Verbose JSON Logging", false }, { "Partial Precision", false } } }
 			};
 			Detail::OverlayKnownValue(target, a_user, schemas.at(std::string(a_section)));
+			if (a_section == "General" && a_user.contains("Optimised Shader Preparation"))
+				target["Optimised Shader Preparation"] = static_cast<int>(ReadShaderPreparationMode(a_user));
 		}
 		return true;
 	}

@@ -78,15 +78,15 @@
   "Preset Compatibility": {
     "contractVersion": 1,
     "presetId": "csx-unified-performance",
-    "presetVersion": "d2026.11.06.1",
+    "presetVersion": "d2026.11.16.1",
     "target": {
       "runtime": "VR",
       "minimumVersion": "3.21",
       "maximumVersionExclusive": "3.22"
     },
     "settingsContract": {
-      "revision": 33,
-      "sourceTreeSha256": "6907896C661CA49FA95972E241928551B4E3F13978E74374022E79DA31F2A4A2"
+      "revision": 34,
+      "sourceTreeSha256": "61F9951481D45696B112F1FE93E0B7C29CAEEDB4C661CC5F5F624C469FF65299"
     }
   },
   "Upscaling": {
@@ -128,7 +128,7 @@
     "antiLag2Enabled": false
   },
   "Texture Streaming": {
-    "Enabled": false
+    "Enabled": true
   },
   "Neural Rendering": {
     "schemaVersion": 1,
@@ -2408,7 +2408,7 @@
     "EnableFarLOD": true,
     "EnableMeshLOD": false,
     "EnableMidLOD": true,
-    "EnableOcclusionCulling": true,
+    "EnableOcclusionCulling": false,
     "Enabled": true,
     "FarLODCoverageBias": 1.0,
     "FarLODMaxDensity": 0.20000000298023224,

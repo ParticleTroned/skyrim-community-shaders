@@ -34,7 +34,7 @@ namespace
 {
 	constexpr uint32_t PassMask = static_cast<uint32_t>(State::ExtraShaderDescriptors::NoSnow) | static_cast<uint32_t>(State::ExtraShaderDescriptors::NoFoliageTint) |
 	                              static_cast<uint32_t>(State::ExtraShaderDescriptors::SnowRooftop) | static_cast<uint32_t>(State::ExtraShaderDescriptors::SnowLODTree) |
-	                              static_cast<uint32_t>(State::ExtraShaderDescriptors::SnowInactive);
+	                              static_cast<uint32_t>(State::ExtraShaderDescriptors::SnowInactive) | static_cast<uint32_t>(State::ExtraShaderDescriptors::SnowFoliage);
 	constexpr float MaxFrameSeconds = 0.1f;
 	constexpr float MinAngleRange = 0.001f;
 	constexpr float SnowBoundsPadding = 512.0f;
@@ -787,8 +787,10 @@ uint32_t SnowCover::BeginPass(const RE::BSRenderPass* pass)
 {
 	auto* state = globals::state;
 	const uint32_t previous = state->permutationData.ExtraShaderDescriptor & PassMask;
-	if (!active.load(std::memory_order_relaxed) || !wsettings.EnableSnowCover || !texturesLoaded || !pass || !pass->shader || pass->shader->shaderType.get() != RE::BSShader::Type::Lighting || !pass->geometry)
+	if (!active.load(std::memory_order_relaxed) || !wsettings.EnableSnowCover || !texturesLoaded || !pass || !pass->shader || pass->shader->shaderType.get() != RE::BSShader::Type::Lighting || !pass->geometry) {
+		state->permutationData.ExtraShaderDescriptor &= ~PassMask;
 		return previous;
+	}
 	uint32_t flags = 0;
 	auto* reference = pass->geometry->GetUserData();
 	const char* name = pass->geometry->name.c_str();
@@ -804,6 +806,8 @@ uint32_t SnowCover::BeginPass(const RE::BSRenderPass* pass)
 		flags |= static_cast<uint32_t>(State::ExtraShaderDescriptors::SnowRooftop);
 	if (!reference && SnowEnvironment::IsObjectLODTree(name, pass->shaderProperty))
 		flags |= static_cast<uint32_t>(State::ExtraShaderDescriptors::SnowLODTree);
+	if (SnowEnvironment::IsFoliageCard(pass))
+		flags |= static_cast<uint32_t>(State::ExtraShaderDescriptors::SnowFoliage);
 	if (settings.EnableBoundsCulling && IsSnowFree(pass, flags))
 		flags |= static_cast<uint32_t>(State::ExtraShaderDescriptors::SnowInactive);
 	if (flags == previous)

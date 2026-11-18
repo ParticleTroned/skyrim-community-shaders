@@ -2575,6 +2575,10 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(VRGrassLifetime PROPERTIES TIMEOUT 30)
 
+    add_controller_test(vr_task_queue_test VRTaskQueue tests/vr_task_queue_test.cpp)
+    target_link_libraries(vr_task_queue_test PRIVATE xbyak::xbyak)
+    set_tests_properties(VRTaskQueue PROPERTIES TIMEOUT 30)
+
     set(_native_lighting_material_guard_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/native-lighting-material-guard"
     )
@@ -2899,6 +2903,37 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(PBRMaterialRegistry PROPERTIES TIMEOUT 30)
     add_controller_test(snow_cover_math_test SnowCoverMath tests/snow_cover_math_test.cpp)
+    set(_snow_pass_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/snow-pass-test"
+    )
+    set(_snow_pass_headers
+        "${_snow_pass_test_dir}/snow_flags_under_test.h"
+        "${_snow_pass_test_dir}/snow_mask_under_test.h"
+        "${_snow_pass_test_dir}/snow_pass_under_test.h"
+        "${_snow_pass_test_dir}/snow_equals_under_test.h"
+        "${_snow_pass_test_dir}/snow_lod_tree_under_test.h"
+        "${_snow_pass_test_dir}/snow_foliage_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_snow_pass_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_snow_pass_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_snow_pass.cmake"
+        DEPENDS
+            src/State.h
+            src/Features/SnowCover.cpp
+            tests/extract_snow_pass.cmake
+            src/Features/SnowCover/Environment.cpp
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(snow_cover_pass_test SnowCoverPass tests/snow_cover_pass_test.cpp)
+    target_sources(snow_cover_pass_test PRIVATE ${_snow_pass_headers})
+    target_include_directories(
+        snow_cover_pass_test
+        PRIVATE "${_snow_pass_test_dir}"
+    )
     add_controller_test(
         snow_cover_color_source_test SnowCoverColorSource
         tests/snow_cover_color_source_test.cpp
@@ -4710,6 +4745,55 @@ if(BUILD_CONTROLLER_TESTS)
         ShaderCompilationSchedulingPolicy
         tests/shader_compilation_scheduling_policy_test.cpp
     )
+    set(_optional_preparation_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/optional_preparation_test"
+    )
+    set(_optional_preparation_headers
+        "${_optional_preparation_dir}/optional_members.h"
+        "${_optional_preparation_dir}/optional_phase.h"
+        "${_optional_preparation_dir}/optional_scheduler.h"
+    )
+    add_custom_command(
+        OUTPUT ${_optional_preparation_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_optional_preparation_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_optional_shader_preparation.cmake"
+        DEPENDS
+            src/ShaderCache.h
+            src/ShaderCacheSpecializations.cpp
+            tests/extract_optional_shader_preparation.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_custom_target(
+        optional_shader_preparation_sources
+        DEPENDS ${_optional_preparation_headers}
+    )
+    add_controller_test(optional_shader_preparation_test OptionalShaderPreparation tests/optional_shader_preparation_test.cpp)
+    add_dependencies(
+        optional_shader_preparation_test
+        optional_shader_preparation_sources
+    )
+    target_include_directories(
+        optional_shader_preparation_test
+        PRIVATE "${_optional_preparation_dir}"
+    )
+    target_link_libraries(
+        optional_shader_preparation_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    if(MSVC)
+        target_compile_options(
+            optional_shader_preparation_test
+            PRIVATE /UNDEBUG
+        )
+    else()
+        target_compile_options(
+            optional_shader_preparation_test
+            PRIVATE -UNDEBUG
+        )
+    endif()
     add_controller_test(
         vr_depth_culling_cache_refresh_policy_test
         VRDepthCullingCacheRefreshPolicy

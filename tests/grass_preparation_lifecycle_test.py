@@ -22,6 +22,8 @@ class GrassPreparationLifecycleTests(unittest.TestCase):
             "bool GrassBucketRenderer::Impl::CurrentBucket(",
             "void GrassBucketRenderer::Impl::ReindexBuckets(",
             "bool GrassBucketRenderer::Impl::PrepareBackground(",
+            "void GrassBucketRenderer::Impl::SubmitBackgroundPreparation(",
+            "void GrassBucketRenderer::Impl::FailBackgroundPreparation(",
             "void GrassBucketRenderer::Impl::EndBackgroundPreparation(",
             "void GrassBucketRenderer::EndFrame(",
             "GrassBucketRenderer::~GrassBucketRenderer("))
@@ -47,6 +49,7 @@ namespace BS {
 std::function<void()> pending;
 std::thread worker;
 int pools = 0;
+bool failSubmission = false;
 void Start() { if (pending) worker = std::thread(std::exchange(pending, {})); }
 void Complete() { Start(); if (worker.joinable()) worker.join(); }
 template<class... T> struct thread_pool {
@@ -54,6 +57,7 @@ template<class... T> struct thread_pool {
     ~thread_pool() { Complete(); }
     template<class F> auto submit_task(F fn) {
         if (pending) throw std::runtime_error("More than one pending job");
+        if (failSubmission) throw std::runtime_error("Worker submission failed");
         auto task = std::make_shared<std::packaged_task<decltype(fn())()>>(fn);
         auto future = task->get_future(); pending = [task] { (*task)(); }; return future;
     }
@@ -145,14 +149,17 @@ struct GrassBucketRenderer {
         void PollCounters() {}
         void RejectCapture(CaptureRejection) {}
         void EraseResident(uintptr_t identity) { residents.erase(identity); }
+        size_t cacheRunBuilds = 0, recordReusePasses = 0, fadeRefreshes = 0;
         void CacheRuns(Bucket& bucket) {
+            ++cacheRunBuilds;
             GrassPreparation::BuildRuns(bucket.runs, bucket.sources.size(), [&](size_t index) -> const Source& { return bucket.sources[index]; });
         }
         void UpdateLODDemand(const GrassPolicy::Settings&) {}
         void PollLODLoads() {}
         struct { void EndFrame(uint32_t) {} } textureCache;
-        void ReuseRecordBuffers(std::vector<Bucket>&) {}
+        void ReuseRecordBuffers(std::vector<Bucket>&) { ++recordReusePasses; }
         void RefreshFades() {
+            ++fadeRefreshes;
             for (const auto& bucket : buckets) for (const auto& source : bucket.sources) {
                 const auto& live = residents.at(source.identity);
                 if (live.generation != source.generation) throw std::runtime_error("Stale source retained");
@@ -166,6 +173,13 @@ struct GrassBucketRenderer {
 };
 METHODS
 void Require(bool condition, const char* message) { if (!condition) throw std::runtime_error(message); }
+// Isolate publication tests; full-frame tests below exercise synchronous draw admission.
+bool PrepareAndEndFrame(GrassBucketRenderer::Impl& state) {
+    const bool ready = state.PrepareBackground();
+    state.frame = globals::state->frameCount;
+    state.EndBackgroundPreparation(state.frameSettings, !state.HasCurrentPreparation());
+    return ready;
+}
 void CheckChangedModelAndSplitQueue() {
     GrassBucketRenderer renderer;
     auto& state = *renderer.impl;
@@ -174,17 +188,17 @@ void CheckChangedModelAndSplitQueue() {
         Source item{}; item.identity = id; item.queue = queue;
         state.residents.emplace(id, std::move(item));
     }
-    state.PrepareBackground(); BS::Complete();
+    PrepareAndEndFrame(state); BS::Complete();
     state.residents.at(1).model = "changed.nif"; ++state.residentRevision;
-    state.PrepareBackground();
+    PrepareAndEndFrame(state);
     Require(state.admitted.empty(), "Old model metadata was published after the resident model changed");
     Require(queue->compatible, "A stale job invalidated the newer queue");
-    BS::Complete(); state.PrepareBackground();
+    BS::Complete(); PrepareAndEndFrame(state);
     Require(state.admitted.empty() && !queue->compatible, "A split queue was left permanently eligible without complete batch coverage");
     const auto replacement = std::make_shared<Queue>(); replacement->members = {1};
     state.residents.at(1).queue = replacement;
     queue->members = {2}; queue->compatible = true; ++state.residentRevision;
-    state.PrepareBackground(); BS::Complete(); state.PrepareBackground();
+    PrepareAndEndFrame(state); BS::Complete(); PrepareAndEndFrame(state);
     Require(state.admitted.size() == 2 && !state.preparationJob, "Reassigned queues did not recover batching");
 }
 void CheckLatePublicationKeepsCurrentPreparation() {
@@ -194,7 +208,7 @@ void CheckLatePublicationKeepsCurrentPreparation() {
         auto& state = *renderer.impl;
         Source item{}; item.identity = 1; item.queue = std::make_shared<Queue>(); item.queue->members = {1};
         state.residents.emplace(1, std::move(item));
-        Require(!state.PrepareBackground() && state.preparationJob, "Unpublished work skipped synchronous recovery");
+        Require(!PrepareAndEndFrame(state) && state.preparationJob, "Unpublished work skipped synchronous recovery");
         if (newerRevision) ++state.residentRevision;
         state.preparedRevision = state.residentRevision;
         state.preparedBatching = state.frameSettings.CrossCellBatching;
@@ -206,7 +220,7 @@ void CheckLatePublicationKeepsCurrentPreparation() {
         state.ReindexBuckets();
         if (workerFails) beforeHash = [] { throw std::runtime_error("Obsolete preparation failed"); };
         BS::Complete(); beforeHash = {};
-        Require(state.PrepareBackground() && !state.preparationJob && !state.preparationFailed,
+        Require(PrepareAndEndFrame(state) && !state.preparationJob && !state.preparationFailed,
             "A late worker result displaced synchronous recovery or disabled preparation");
         Require(state.preparedRevision == state.residentRevision && state.buckets.size() == 1 &&
                 state.buckets.front().records.get() == records && state.admitted.contains(1),
@@ -231,19 +245,19 @@ void CheckFramePreparationBeforeAdmission() {
     }
     state.frame = globals::state->frameCount - 1;
     state.PrepareFrame();
-    Require(state.preparationJob && state.buckets.size() == 1 && state.admitted.size() == 2 &&
+    Require(!state.preparationJob && !state.preparationWorker && state.buckets.size() == 1 && state.admitted.size() == 2 &&
             state.preparedRevision == state.residentRevision,
-        "First grass draw reached admission before synchronous preparation completed");
+        "First draw skipped synchronous preparation or duplicated it on a worker");
     state.buckets.front().records = std::make_unique<int>(73);
     const auto* records = state.buckets.front().records.get();
     ++globals::state->frameCount; state.PrepareFrame();
     Require(state.buckets.front().records.get() == records && state.admitted.size() == 2,
-        "Unchanged frame rebuilt while the worker was still pending");
+        "Unchanged frame rebuilt its current preparation");
     Source added{}; added.identity = 3; added.queue = queue;
     state.residents.emplace(3, std::move(added)); queue->members.push_back(3);
     ++state.residentRevision;
     ++globals::state->frameCount; state.PrepareFrame();
-    Require(state.buckets.size() == 1 && state.admitted.size() == 3 && state.admitted.contains(3) &&
+    Require(!state.preparationJob && state.buckets.size() == 1 && state.admitted.size() == 3 && state.admitted.contains(3) &&
             state.preparedRevision == state.residentRevision,
         "Newly visible grass waited for the older worker snapshot");
     settings.CrossCellBatching = false;
@@ -251,7 +265,7 @@ void CheckFramePreparationBeforeAdmission() {
         source.queue = std::make_shared<Queue>(); source.queue->batching = false; source.queue->members = {id};
     }
     ++globals::state->frameCount; state.PrepareFrame();
-    Require(state.buckets.size() == 3 && state.admitted.size() == 3 && !state.preparedBatching &&
+    Require(!state.preparationJob && state.buckets.size() == 3 && state.admitted.size() == 3 && !state.preparedBatching &&
             state.preparedRevision == state.residentRevision,
         "Changed batching mode skipped current synchronous preparation");
     state.buckets.front().records = std::make_unique<int>(91);
@@ -259,7 +273,203 @@ void CheckFramePreparationBeforeAdmission() {
     BS::Complete();
     ++globals::state->frameCount; state.PrepareFrame();
     Require(!state.preparationJob && state.buckets.front().records.get() == records && state.admitted.size() == 3,
-        "Late worker publication displaced current frame preparation");
+        "Unchanged frame displaced current preparation and its reusable records");
+}
+void CheckFrameEndPreparation() {
+    for (int completion : {0, 1, 2, 3}) {
+        GrassBucketRenderer renderer;
+        auto& state = *renderer.impl;
+        auto& settings = globals::features::grassOptimizations.settings;
+        const auto previousSettings = settings;
+        const SKSE::stl::scope_exit restore([&] { settings = previousSettings; BS::failSubmission = false; beforeHash = {}; });
+        settings = state.frameSettings;
+        auto queue = std::make_shared<Queue>(); queue->members = {1};
+        Source first{}; first.identity = 1; first.queue = queue;
+        state.residents.emplace(1, std::move(first));
+        state.frame = globals::state->frameCount - 1;
+        state.PrepareFrame();
+        renderer.EndFrame();
+        Require(!state.preparationJob && !state.preparationWorker && state.cacheRunBuilds == 1,
+            "Current preparation submitted redundant end-of-frame work");
+
+        Source added{}; added.identity = 2; added.queue = queue;
+        state.residents.emplace(2, std::move(added)); queue->members.push_back(2);
+        ++state.residentRevision;
+        BS::failSubmission = completion == 3;
+        renderer.EndFrame();
+        BS::failSubmission = false;
+        if (completion == 3) {
+            Require(state.preparationFailed && !state.preparationJob,
+                "Failed submission retained a borrowed snapshot or escaped EndFrame");
+        } else {
+            Require(state.preparationJob && state.preparedRevision != state.residentRevision,
+                "Post-draw changes were not submitted ahead of the next frame");
+            const auto* pending = state.preparationJob.get();
+            renderer.EndFrame();
+            Require(state.preparationJob.get() == pending, "Repeated EndFrame duplicated pending work");
+            if (completion == 2) beforeHash = [] { throw std::runtime_error("Worker layout failed"); };
+            if (completion != 1) BS::Complete();
+            beforeHash = {};
+        }
+
+        ++globals::state->frameCount;
+        state.PrepareFrame();
+        Require(state.admitted.size() == 2 && state.HasCurrentPreparation(),
+            "Draw admission did not recover current complete coverage");
+        Require(state.cacheRunBuilds == (completion == 0 ? 1u : 2u),
+            "Ready worker result was rebuilt or unfinished work skipped synchronous recovery");
+        renderer.EndFrame();
+        Require(bool(state.preparationJob) == (completion == 1),
+            "Recovery submitted duplicate work or released an unfinished snapshot");
+        BS::Complete();
+        ++globals::state->frameCount;
+        state.PrepareFrame();
+        renderer.EndFrame();
+        Require(!state.preparationJob && state.HasCurrentPreparation() &&
+                state.cacheRunBuilds == (completion == 0 ? 1u : 2u),
+            "Late completion displaced current preparation or restarted worker work");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+        Require(state.preparationSubmitted == (completion == 3 ? 0u : 1u) &&
+                state.preparationPublished == (completion == 0 ? 1u : 0u) &&
+                state.preparationDiscarded == (completion == 1 ? 1u : 0u),
+            "Submission, publication or discard telemetry did not match the frame lifecycle");
+        Require(state.preparationFrames == 3 && state.preparationRenderNanoseconds > 0,
+            "Render preparation accounting lost the draw frames or submission time");
+#endif
+    }
+}
+void CheckFrameEndSubmissionGates() {
+    for (int reason : {0, 1, 2, 3, 4, 5}) {
+        GrassBucketRenderer renderer;
+        auto& state = *renderer.impl;
+        auto& settings = globals::features::grassOptimizations.settings;
+        const auto previousSettings = settings;
+        const SKSE::stl::scope_exit restore([&] { settings = previousSettings; });
+        settings = state.frameSettings;
+        state.frame = globals::state->frameCount - 1;
+        state.PrepareFrame();
+        ++state.residentRevision;
+        if (reason == 0) ++globals::state->frameCount;
+        if (reason == 1) settings.Enabled = false;
+        if (reason == 2) settings.CrossCellBatching = !state.frameSettings.CrossCellBatching;
+        if (reason == 3) state.preparationRequest += 2;
+        if (reason == 4) state.preparationRequest = 0;
+        if (reason == 5) state.frameSettings.Enabled = false;
+        renderer.EndFrame();
+        Require(!state.preparationJob && !state.preparationWorker,
+            "Inactive frame or unapplied settings submitted worker preparation");
+    }
+}
+void CheckObsoleteFrameEndResult() {
+    for (bool workerFails : {false, true}) {
+        GrassBucketRenderer renderer;
+        auto& state = *renderer.impl;
+        auto& settings = globals::features::grassOptimizations.settings;
+        const auto previousSettings = settings;
+        const SKSE::stl::scope_exit restore([&] { settings = previousSettings; beforeHash = {}; });
+        settings = state.frameSettings;
+        const auto queue = std::make_shared<Queue>(); queue->members = {1};
+        Source first{}; first.identity = 1; first.queue = queue;
+        state.residents.emplace(1, std::move(first));
+        state.frame = globals::state->frameCount - 1;
+        state.PrepareFrame();
+        Source second{}; second.identity = 2; second.queue = queue;
+        state.residents.emplace(2, std::move(second)); queue->members.push_back(2); ++state.residentRevision;
+        renderer.EndFrame();
+        Require(bool(state.preparationJob), "Post-draw changes did not start preparation");
+        if (workerFails) beforeHash = [] { throw std::runtime_error("Superseded layout failed"); };
+        BS::Complete(); beforeHash = {};
+        Source third{}; third.identity = 3; third.queue = queue;
+        state.residents.emplace(3, std::move(third)); queue->members.push_back(3); ++state.residentRevision;
+        ++globals::state->frameCount;
+        state.PrepareFrame();
+        renderer.EndFrame();
+        Require(state.HasCurrentPreparation() && state.admitted.size() == 3 && !state.preparationJob && !state.preparationFailed,
+            "Obsolete result or failure prevented current synchronous recovery");
+        Require(state.cacheRunBuilds == 2 && state.recordReusePasses == 2 && state.fadeRefreshes == 2,
+            "Obsolete preparation performed publication, validation or fade work before synchronous recovery");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+        Require(state.preparationSubmitted == 1 && state.preparationPublished == 0 && state.preparationDiscarded == 1,
+            "Obsolete revision was published or submitted again after recovery");
+#endif
+    }
+}
+void CheckInvalidatedFrameEndCapture() {
+    for (bool removed : {false, true}) {
+        GrassBucketRenderer renderer;
+        auto& state = *renderer.impl;
+        auto& settings = globals::features::grassOptimizations.settings;
+        const auto previousSettings = settings;
+        const SKSE::stl::scope_exit restore([&] { settings = previousSettings; });
+        settings = state.frameSettings;
+        Source first{}; first.identity = 1; first.queue = std::make_shared<Queue>(); first.queue->members = {1};
+        state.residents.emplace(1, std::move(first));
+        state.frame = globals::state->frameCount - 1;
+        state.PrepareFrame();
+        Source stale{}; stale.identity = 2; stale.queue = std::make_shared<Queue>(); stale.queue->members = {2};
+        if (removed) stale.lifetime->alive = false;
+        else ++stale.lifetime->generation;
+        state.residents.emplace(2, std::move(stale)); ++state.residentRevision;
+        renderer.EndFrame();
+        Require(!state.preparationJob && !state.preparationWorker && !state.preparationFailed,
+            "Known invalidated capture submitted worker work that the next draw must discard");
+        ++globals::state->frameCount;
+        state.PrepareFrame();
+        renderer.EndFrame();
+        Require(state.HasCurrentPreparation() && state.admitted.size() == 1 && state.admitted.contains(1) &&
+                !state.residents.contains(2) && !state.preparationFailed,
+            "Invalidated end-of-frame capture did not recover through draw-time pruning");
+    }
+}
+void CheckBatchingChangeWithWorker() {
+    for (bool initialBatching : {false, true})
+    for (bool workerReady : {false, true}) {
+        GrassBucketRenderer renderer;
+        auto& state = *renderer.impl;
+        auto& settings = globals::features::grassOptimizations.settings;
+        const auto previousSettings = settings;
+        const SKSE::stl::scope_exit restore([&] { settings = previousSettings; });
+        settings = state.frameSettings;
+        settings.CrossCellBatching = initialBatching;
+        auto queue = std::make_shared<Queue>(); queue->batching = initialBatching;
+        for (uintptr_t id : {1, 2, 3}) {
+            if (!initialBatching) { queue = std::make_shared<Queue>(); queue->batching = false; }
+            Source item{}; item.identity = id; item.queue = queue; queue->members.push_back(id);
+            state.residents.emplace(id, std::move(item)); ++state.residentRevision;
+            if (id == 2) {
+                state.frame = globals::state->frameCount - 1;
+                state.PrepareFrame();
+            }
+        }
+        renderer.EndFrame();
+        Require(bool(state.preparationJob), "Post-draw resident change did not submit a worker");
+        if (workerReady) BS::Complete();
+        settings.CrossCellBatching = !initialBatching;
+        queue = std::make_shared<Queue>(); queue->batching = !initialBatching;
+        for (auto& [id, item] : state.residents) {
+            if (initialBatching) { queue = std::make_shared<Queue>(); queue->batching = false; }
+            item.queue = queue; queue->members.push_back(id);
+        }
+        ++state.residentRevision;
+        ++globals::state->frameCount;
+        state.PrepareFrame();
+        Require(state.HasCurrentPreparation() && state.preparedBatching == settings.CrossCellBatching &&
+                state.admitted.size() == 3 && state.buckets.size() == (initialBatching ? 3u : 1u) &&
+                bool(state.preparationJob) == !workerReady,
+            "Changed batching mode reached draw admission without current complete preparation");
+        state.buckets.front().records = std::make_unique<int>(91);
+        const auto* records = state.buckets.front().records.get();
+        renderer.EndFrame(); BS::Complete();
+        ++globals::state->frameCount;
+        state.PrepareFrame(); renderer.EndFrame();
+        Require(state.HasCurrentPreparation() && state.admitted.size() == 3 && !state.preparationJob &&
+                !state.preparationFailed && state.buckets.front().records.get() == records,
+            "Old batching result replaced synchronous admission or its reusable GPU records");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+        Require(state.preparationSubmitted == 1 && state.preparationPublished == 0 && state.preparationDiscarded == 1,
+            "Changed batching mode published or duplicated obsolete worker work");
+#endif
+    }
 }
 #ifdef DEVBENCH_BRIDGE_ENABLED
 void CheckUnusedRetirement() {
@@ -280,7 +490,7 @@ void CheckUnusedRetirement() {
         });
         auto owner = std::weak_ptr(item.nativeOwner);
         state.residents.emplace(1, std::move(item));
-        renderer.SetBackgroundPreparationEnabled(true); state.PrepareBackground();
+        renderer.SetBackgroundPreparationEnabled(true); PrepareAndEndFrame(state);
         state.residents.clear();
         renderer.EndFrame();
         Require(state.preparationPending, "EndFrame waited for unfinished preparation");
@@ -305,7 +515,7 @@ int main() {
         auto& state = *renderer.impl;
         Require(state.preparationRequest == 1, "Background preparation did not default on");
         state.frameSettings.Enabled = false;
-        Require(!state.PrepareBackground() && !state.preparationWorker, "Disabled GO started a preparation worker");
+        Require(!PrepareAndEndFrame(state) && !state.preparationWorker, "Disabled GO started a preparation worker");
         state.frameSettings.Enabled = true;
         auto a = std::make_shared<Queue>(); a->members = {1,2};
         auto b = std::make_shared<Queue>(); b->members = {3};
@@ -320,7 +530,7 @@ int main() {
         });
         std::weak_ptr<int> nativeOwner = state.residents.at(2).nativeOwner;
         renderer.SetBackgroundPreparationEnabled(true);
-        Require(!state.PrepareBackground() && state.preparationPending && state.admitted.empty(), "Pending job skipped synchronous preparation");
+        Require(!PrepareAndEndFrame(state) && state.preparationPending && state.admitted.empty(), "Pending job skipped synchronous preparation");
         std::promise<void> entered, release;
         auto started = entered.get_future(); auto resume = release.get_future();
         bool gated = false;
@@ -330,33 +540,35 @@ int main() {
         BS::Start(); started.wait();
         state.residents.at(2).lifetime->alive = false;
         state.residents.erase(2); a->members = {1}; ++state.residentRevision;
-        const bool remainedPending = !state.PrepareBackground() && state.preparationSubmitted == 1;
+        const bool remainedPending = !PrepareAndEndFrame(state) && state.preparationSubmitted == 1;
         release.set_value();
         BS::Complete();
         beforeHash = {};
         Require(remainedPending, "Pending work blocked or duplicated submission");
         Require(!nativeOwner.expired(), "Worker released a captured native owner");
-        Require(!state.PrepareBackground() && state.admitted.size() == 1 && state.admitted.contains(3),
-            "Stale partial queue published or unaffected queue was lost");
+        Require(!PrepareAndEndFrame(state) && state.admitted.empty(),
+            "Obsolete revision was partially published before synchronous recovery");
         Require(a->compatible, "Stale partial coverage invalidated the newer queue membership");
         Require(nativeOwner.expired() && releasedOnOwner, "Native snapshot was not retired on its owner thread");
-        Require(state.preparationRejectedBuckets == 1 && state.preparationSubmitted == 2, "Revision change did not coalesce into one replacement job");
+        Require(state.preparationDiscarded == 1 && state.preparationRejectedBuckets == 0 && state.preparationSubmitted == 2,
+            "Obsolete revision was validated or did not coalesce into one replacement job");
         ++state.residents.at(3).lifetime->generation; ++state.residents.at(3).generation; ++state.residentRevision;
-        Require(!state.PrepareBackground() && !state.admitted.contains(3), "Regenerated source retained old admission");
-        BS::Complete(); state.PrepareBackground();
-        Require(state.admitted.size() == 1 && state.admitted.contains(1), "Mixed stale publication lost complete current queues");
+        Require(!PrepareAndEndFrame(state) && !state.admitted.contains(3), "Regenerated source retained old admission");
+        BS::Complete(); PrepareAndEndFrame(state);
+        Require(state.admitted.empty() && state.preparationDiscarded == 2, "Obsolete generation was partially published");
         const auto published = state.preparationPublished.load();
+        const auto discarded = state.preparationDiscarded.load();
         renderer.SetBackgroundPreparationEnabled(false);
-        Require(!state.PrepareBackground() && state.preparationPending, "Disabling waited for pending work");
+        Require(!PrepareAndEndFrame(state) && state.preparationPending, "Disabling waited for pending work");
         BS::Complete();
-        Require(!state.PrepareBackground() && !state.preparationPending && state.preparationPublished == published && state.preparationDiscarded == 1,
+        Require(!PrepareAndEndFrame(state) && !state.preparationPending && state.preparationPublished == published && state.preparationDiscarded == discarded + 1,
             "Disabled worker result was published");
         state.diagnostics = true;
-        renderer.SetBackgroundPreparationEnabled(true); state.PrepareBackground(); BS::Complete(); state.PrepareBackground();
+        renderer.SetBackgroundPreparationEnabled(true); PrepareAndEndFrame(state); BS::Complete(); PrepareAndEndFrame(state);
         Require(state.admitted.size() == 2 && !state.preparationPending, "Re-enabled preparation did not publish all current queues");
         Require(state.bucketRebuilds == 1 && state.persistentBucketFrames == 0, "Publication frame was also counted as reuse");
         const auto submitted = state.preparationSubmitted.load();
-        state.PrepareBackground();
+        PrepareAndEndFrame(state);
         Require(state.preparationSubmitted == submitted && BS::pools == 1, "Stable frame rebuilt or created another worker");
         Require(state.persistentBucketFrames == 1, "Stable frame was not counted as reuse");
         auto snapshot = state.buckets.front().sources;
@@ -371,19 +583,19 @@ int main() {
         snapshot.front().contractValid = false;
         Require(!state.CurrentBucket(snapshot), "Changed material contract was accepted");
         state.residents.at(1).groups.front().count = GrassPolicy::kMaxBatchInstances + 1; ++state.residentRevision;
-        state.PrepareBackground(); BS::Complete();
-        Require(!state.PrepareBackground() && state.preparationFailed && !state.preparationPending, "Worker failure did not restore synchronous fallback");
-        Require(!state.PrepareBackground(), "Failed worker retried without a new toggle");
+        PrepareAndEndFrame(state); BS::Complete();
+        Require(!PrepareAndEndFrame(state) && state.preparationFailed && !state.preparationPending, "Worker failure did not restore synchronous fallback");
+        Require(!PrepareAndEndFrame(state), "Failed worker retried without a new toggle");
         renderer.SetBackgroundPreparationEnabled(false); renderer.SetBackgroundPreparationEnabled(true);
-        state.PrepareBackground(); BS::Complete();
+        PrepareAndEndFrame(state); BS::Complete();
         renderer.SetBackgroundPreparationEnabled(false); renderer.SetBackgroundPreparationEnabled(true);
         state.residents.at(1).groups.front().count = 1;
-        Require(!state.PrepareBackground() && !state.preparationFailed && state.preparationPending,
+        Require(!PrepareAndEndFrame(state) && !state.preparationFailed && state.preparationPending,
             "Obsolete worker failure disabled a newly toggled run");
-        BS::Complete(); state.PrepareBackground();
+        BS::Complete(); PrepareAndEndFrame(state);
         Require(!state.preparationFailed && state.admitted.size() == 2, "Fresh run did not recover from obsolete failure");
         renderer.SetBackgroundPreparationEnabled(false); renderer.SetBackgroundPreparationEnabled(true);
-        Require(!state.PrepareBackground() && !state.preparationFailed && state.preparationPending, "Fresh toggle did not recover after failure");
+        Require(!PrepareAndEndFrame(state) && !state.preparationFailed && state.preparationPending, "Fresh toggle did not recover after failure");
         {
             GrassBucketRenderer ending;
             renderer.impl.swap(ending.impl);
@@ -393,6 +605,11 @@ int main() {
         CheckChangedModelAndSplitQueue();
         CheckLatePublicationKeepsCurrentPreparation();
         CheckFramePreparationBeforeAdmission();
+        CheckFrameEndPreparation();
+        CheckFrameEndSubmissionGates();
+        CheckObsoleteFrameEndResult();
+        CheckInvalidatedFrameEndCapture();
+        CheckBatchingChangeWithWorker();
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }
@@ -403,20 +620,20 @@ int main() {
         auto& state = *renderer.impl;
         Require(state.preparationRequest == 1, "Production background preparation did not default on");
         state.frameSettings.Enabled = false;
-        Require(!state.PrepareBackground() && !state.preparationWorker, "Disabled production GO created a worker");
+        Require(!PrepareAndEndFrame(state) && !state.preparationWorker, "Disabled production GO created a worker");
         state.frameSettings.Enabled = true;
         Source item{}; item.identity = 1; item.queue = std::make_shared<Queue>(); item.queue->members = {1};
         state.residents.emplace(1, std::move(item));
-        Require(!state.PrepareBackground() && state.preparationJob && state.admitted.empty(), "Default production path skipped synchronous preparation while pending");
-        BS::Complete(); state.PrepareBackground();
+        Require(!PrepareAndEndFrame(state) && state.preparationJob && state.admitted.empty(), "Default production path skipped synchronous preparation while pending");
+        BS::Complete(); PrepareAndEndFrame(state);
         Require(state.admitted.contains(1) && !state.preparationJob, "Production worker result did not publish");
-        state.PrepareBackground();
+        PrepareAndEndFrame(state);
         Require(!state.preparationJob && BS::pools == 1, "Production stable frame created redundant work");
         state.residents.at(1).groups.front().count = GrassPolicy::kMaxBatchInstances + 1;
         ++state.residentRevision;
-        state.PrepareBackground(); BS::Complete();
-        Require(!state.PrepareBackground() && state.preparationFailed && !state.preparationJob, "Production failure did not restore synchronous preparation");
-        Require(!state.PrepareBackground(), "Failed production worker retried without recovery");
+        PrepareAndEndFrame(state); BS::Complete();
+        Require(!PrepareAndEndFrame(state) && state.preparationFailed && !state.preparationJob, "Production failure did not restore synchronous preparation");
+        Require(!PrepareAndEndFrame(state), "Failed production worker retried without recovery");
         {
             GrassBucketRenderer ending;
             auto& pending = *ending.impl;
@@ -426,18 +643,23 @@ int main() {
             retained.nativeOwner = std::shared_ptr<int>(new int, [&](int* p) { releasedOnOwner = std::this_thread::get_id() == ownerThread; delete p; });
             auto owner = std::weak_ptr(retained.nativeOwner);
             pending.residents.emplace(2, std::move(retained));
-            pending.PrepareBackground(); pending.residents.clear();
+            PrepareAndEndFrame(pending); pending.residents.clear();
             BS::Complete(); ++globals::state->frameCount;
             ending.EndFrame();
             Require(!pending.preparationJob && owner.expired() && releasedOnOwner, "Idle production snapshot did not retire on its owner thread");
             --globals::state->frameCount;
             pending.residents.emplace(2, Source{2}); ++pending.residentRevision;
-            pending.PrepareBackground();
+            PrepareAndEndFrame(pending);
         }
         Require(!BS::pending, "Production shutdown did not drain its borrowed snapshot");
         CheckChangedModelAndSplitQueue();
         CheckLatePublicationKeepsCurrentPreparation();
         CheckFramePreparationBeforeAdmission();
+        CheckFrameEndPreparation();
+        CheckFrameEndSubmissionGates();
+        CheckObsoleteFrameEndResult();
+        CheckInvalidatedFrameEndCapture();
+        CheckBatchingChangeWithWorker();
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

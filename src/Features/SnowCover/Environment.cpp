@@ -1,4 +1,5 @@
 #include "Environment.h"
+#include "Foliage.h"
 #include "Globals.h"
 #include "Utils/StringUtils.h"
 #include <algorithm>
@@ -57,6 +58,34 @@ namespace SnowEnvironment
 		default:
 			return false;
 		}
+	}
+
+	bool IsFoliageCard(const RE::BSRenderPass* pass)
+	{
+		if (!pass || !pass->geometry)
+			return false;
+		const auto* property = pass->shaderProperty;
+		const auto* alpha = pass->geometry->GetGeometryRuntimeData().alphaProperty.get();
+		if (!property || !alpha || !alpha->GetAlphaTesting())
+			return false;
+		using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
+		if (property->flags.any(Flag::kSoftLighting))
+			return true;
+		const bool twoSided = property->flags.any(Flag::kTwoSided);
+		auto* reference = pass->geometry->GetUserData();
+		auto* base = reference ? reference->GetBaseObject() : nullptr;
+		const auto type = base ? base->GetFormType() : RE::FormType::None;
+		const bool plantReference = type == RE::FormType::Tree || type == RE::FormType::Flora;
+		if (plantReference)
+			return SnowFoliage::IsFoliageCard(true, twoSided, false, true, true);
+		if (!twoSided)
+			return false;
+		bool plant = !reference && IsObjectLODTree(pass->geometry->name.c_str(), property);
+		if (type == RE::FormType::Static) {
+			const auto* model = base->As<RE::TESModel>();
+			plant = model && model->GetModel() && SnowFoliage::IsVegetationModel(model->GetModel());
+		}
+		return SnowFoliage::IsFoliageCard(true, twoSided, false, plant);
 	}
 
 	RE::NiBound MergeBounds(const RE::NiBound& a_lhs, const RE::NiBound& a_rhs)

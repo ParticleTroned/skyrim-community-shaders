@@ -363,9 +363,10 @@ void SettingsTabRenderer::RenderShadersTab()
 
 		auto state = globals::state;
 		if (state->IsDeveloperMode()) {
+			const auto threadLimits = shaderCache->GetCompilationThreadLimits();
 			ImGui::Text("Threads: %d compile, %d background, %d pool | P-cores: %d",
-				(int)shaderCache->compilationThreadCount,
-				(int)shaderCache->backgroundCompilationThreadCount,
+				threadLimits.first,
+				threadLimits.second,
 				(int)shaderCache->compilationPool.get_thread_count(),
 				(int)Util::GetPerformanceCoreCount());
 		}

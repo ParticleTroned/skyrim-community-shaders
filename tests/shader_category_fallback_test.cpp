@@ -166,6 +166,7 @@ struct TestContext
 		++binds;
 	}
 };
+void OutputDebugStringA(const char*) {}
 namespace SIE
 {
 	struct ShaderCache;
@@ -277,23 +278,41 @@ namespace SIE
 		std::atomic_bool backgroundCompilation{ false };
 		std::atomic_bool startupCompilationComplete{ false };
 		std::atomic_bool menuLoaded{ false };
-		bool residentOnly = false;
-		bool ResidentOnlyLightingSpecializations() const { return residentOnly; }
+		using Mode = ShaderCompilationSchedulingPolicy::PreparationMode;
+		Mode preparationMode = Mode::StartupOnly;
+		bool ResidentOnlyLightingSpecializations() const { return preparationMode == Mode::StartupOnly; }
+		std::set<uint32_t> optionalRequests;
+		bool QueueOptionalPixelShader(const RE::BSShader&, uint32_t descriptor)
+		{
+			if (!safeLoad)
+				optionalRequests.insert(descriptor);
+			return !safeLoad;
+		}
+
+		void RequestPixelSpecialization(const RE::BSShader&, uint32_t);
+		inline static uint64_t nextInput = 0;
+		uint64_t fixtureInputs = ++nextInput;
+		uint64_t GetShaderPreparationInputGeneration() const { return fixtureInputs; }
+		void ReplayLivePixelSpecializations(const RE::BSShader&, uint32_t) {}
+		void RememberShaderSpecialization(Util::ShaderSpecializationRequest request)
+		{
+			if (std::ranges::find(fixtureHistory, request) == fixtureHistory.end())
+				fixtureHistory.push_back(request);
+		}
 		bool UsesRuntimeLightingSpecializationPolicy() const;
-		void RecordLightingSpecializationMiss(RE::BSShader::Type, uint32_t, bool) {}
 		std::mutex specializationBasesMutex;
 		std::array<std::unordered_set<uint32_t>, 2> specializationBases;
-		std::vector<Util::ShaderSpecializationRequest> discoveries;
+		std::vector<Util::ShaderSpecializationRequest> fixtureHistory;
 		bool diskCacheActive = true;
 		bool IsDiskCacheActive() const { return diskCacheActive; }
-		bool CanCompileOptionalShaderSources() const { return ShaderCompilationSchedulingPolicy::CanCompileOptionalSources(startupCompilationComplete, menuLoaded, backgroundCompilation); }
+		bool IsBlockingShaderStartup() const { return ShaderCompilationSchedulingPolicy::IsBlockingStartup(startupCompilationComplete, menuLoaded, backgroundCompilation); }
 		void RegisterSpecializationBase(RE::BSShader::Type, uint32_t);
 		void PrewarmDiscoveredPixelShaders(const RE::BSShader&);
 		int startupHistoryReads = 0;
 		auto GetStartupShaderSpecializations()
 		{
 			++startupHistoryReads;
-			return discoveries;
+			return fixtureHistory;
 		}
 		unsigned compiles = 0, vertexLookups = 0;
 		uint64_t graphicsRevision = 0;
@@ -346,6 +365,7 @@ namespace SIE
 		RE::BSGraphics::PixelShader* GetPixelShader(const RE::BSShader&, uint32_t, PixelShaderLookup = PixelShaderLookup::Compile);
 		void SelectLightingPixelShader(const RE::BSShader&, uint32_t);
 	};
+#include "pixel_discovery.h"
 #include "pixel_lookup.h"
 #include "pixel_prewarm.h"
 #include "runtime_specialization_policy.h"
@@ -364,6 +384,8 @@ namespace Permutations
 	}
 	std::set<uint32_t> GeneratePBRUtilityPixelPermutations() { return {}; }
 }
+#include "pbr_startup_permutations.h"
+
 struct TruePBR
 {
 	bool loaded = true;
@@ -1067,7 +1089,7 @@ void TestFallbackShaderRecovery()
 		for (bool residentOnly : { false, true }) {
 			Fixture f;
 			f.cache.startupCompilationComplete = true;
-			f.cache.residentOnly = residentOnly;
+			f.cache.preparationMode = residentOnly ? Cache::Mode::StartupOnly : Cache::Mode::Gameplay;
 			ID3D11VertexShader vertexShader;
 			RE::BSGraphics::VertexShader vertex{ &vertexShader };
 			f.cache.vertex = &vertex;
@@ -1142,11 +1164,6 @@ void TestStartupLightingDescriptors(bool forwardCached)
 				expected.erase(1u);
 			if (categories)
 				expected.insert(1u | deferredFlag | category);
-			if (!materialFlags) {
-				expected.insert(1u | deferredFlag | Cache::kLightingNoLegacySubsurface);
-				if (categories)
-					expected.insert(1u | deferredFlag | category | Cache::kLightingNoLegacySubsurface);
-			}
 			Require(f.cache.compilationSet.requests == expected);
 			for (const auto descriptor : expected)
 				Require(f.cache.compilationSet.precompiles.at(descriptor));
@@ -1198,7 +1215,7 @@ void TestResidentLightingSpecializations()
 		constexpr uint32_t descriptor = 1u;
 		auto* standard = f.cache.Add(f.shader, descriptor);
 		f.cache.startupCompilationComplete = true;
-		f.cache.residentOnly = true;
+		f.cache.preparationMode = Cache::Mode::StartupOnly;
 		f.cache.async = false;
 		const auto specialized = descriptor | flag;
 		Require(f.cache.GetPixelShader(f.shader, specialized, Cache::PixelShaderLookup::Draw) == standard);
@@ -1211,14 +1228,14 @@ void TestResidentLightingSpecializations()
 		++f.cache.graphicsRevision;
 		Require(f.cache.GetPixelShader(f.shader, specialized, Cache::PixelShaderLookup::Draw) == standard);
 		Require(f.cache.compilationSet.requests.empty());
-		f.cache.residentOnly = false;
+		f.cache.preparationMode = Cache::Mode::Gameplay;
 		Require(!f.cache.GetPixelShader(f.shader, specialized, Cache::PixelShaderLookup::Specialization));
-		Require(f.cache.compilationSet.requests.contains(specialized) && f.cache.compiles == 0);
+		Require(f.cache.optionalRequests.contains(specialized) && f.cache.compiles == 0);
 		f.cache.compilationSet.requests.clear();
-		f.cache.residentOnly = true;
+		f.cache.preparationMode = Cache::Mode::StartupOnly;
 		f.cache.startupCompilationComplete = false;
 		Require(f.cache.GetPixelShader(f.shader, specialized, Cache::PixelShaderLookup::Precompile) == standard);
-		Require(f.cache.compilationSet.requests.contains(specialized));
+		Require(f.cache.compilationSet.requests.empty());
 		f.cache.compilationSet.requests.clear();
 		f.cache.backgroundCompilation = true;
 		f.cache.menuLoaded = true;
@@ -1226,6 +1243,74 @@ void TestResidentLightingSpecializations()
 		Require(f.cache.compilationSet.requests.empty() && f.cache.compiles == 0);
 		Require(f.cache.GetPixelShader(f.shader, descriptor + 1, Cache::PixelShaderLookup::Draw) != nullptr);
 		Require(f.cache.compiles == 1 && f.cache.compilationSet.requests.empty());
+	}
+}
+
+void TestStartupPermutationBudget()
+{
+	using Cache = SIE::ShaderCache;
+	for (bool seams : { false, true }) {
+		const auto descriptors = StartupPermutations::GeneratePBRLightingPixelPermutations(seams);
+		Require(descriptors.size() == (seams ? 96 : 88));
+		for (bool nativeDeferredNormalization : { false, true }) {
+			for (bool categories : { false, true }) {
+				Fixture f;
+				f.deferred.deferredPass = false;
+				const auto prepareLookup = [](uint32_t& a_vertexDescriptor, uint32_t& a_pixelDescriptor, bool a_forceDeferred) {
+					auto* deferred = globals::deferred;
+					const uint32_t lightingPixelShaderFlags = 0;
+					switch (RE::BSShader::Type::Lighting) {
+#include "lighting_lookup.h"
+					}
+				};
+				std::set<uint32_t> before, general;
+				const auto category = Cache::GetCharacterCategoryFlag(RE::BSShader::Type::Lighting);
+				for (auto descriptor : descriptors) {
+					const bool deferred = descriptor & static_cast<uint32_t>(Cache::LightingShaderFlags::Deferred);
+					auto vertex = descriptor;
+					prepareLookup(vertex, descriptor, nativeDeferredNormalization && deferred);
+					const auto base = descriptor & ~Cache::GetPixelSpecializationMask(RE::BSShader::Type::Lighting);
+					general.insert(base);
+					before.insert(base);
+					before.insert(descriptor);
+					if (deferred) {
+						if (categories) {
+							general.insert(base | category);
+							before.insert(base | category);
+							before.insert(descriptor | category);
+						}
+						f.cache.PrewarmDeferredPixelShaders(f.shader, descriptor, categories, true);
+					} else {
+						f.cache.GetPixelShader(f.shader, descriptor, Cache::PixelShaderLookup::Precompile);
+					}
+				}
+				const auto normalized = seams ? 88u : 80u;
+				Require(f.cache.compilationSet.requests == general && f.cache.fixtureHistory.empty());
+				Require(general.size() == normalized * (categories ? 3 : 2) / 2);
+				Require(before.size() == (nativeDeferredNormalization ? normalized * (categories ? 5 : 3) / 2 : general.size()));
+				std::cout << "Startup candidates seams=" << seams << " native-deferred=" << nativeDeferredNormalization << " categories=" << categories << ": " << before.size() << " -> " << general.size() << '\n';
+			}
+		}
+	}
+}
+
+void TestAllModeDiscovery()
+{
+	using Cache = SIE::ShaderCache;
+	constexpr uint32_t base = 0x10011u;
+	for (const auto mode : { Cache::Mode::StartupOnly, Cache::Mode::Transitions, Cache::Mode::Gameplay }) {
+		Fixture f;
+		f.cache.startupCompilationComplete = true;
+		f.cache.preparationMode = mode;
+		f.cache.async = false;
+		auto* general = f.cache.Add(f.shader, base);
+		const auto requested = base | Cache::kLightingDryWeather;
+		for (int i = 0; i < 3; ++i)
+			Require(f.cache.GetPixelShader(f.shader, requested, Cache::PixelShaderLookup::Draw) == general);
+		Require(f.cache.fixtureHistory.size() == 1 && f.cache.fixtureHistory[0].descriptor == requested);
+		Require(f.cache.optionalRequests.size() == 1 && f.cache.compiles == 0 && f.cache.compilationSet.requests.empty());
+		auto* resident = f.cache.Add(f.shader, requested);
+		Require(f.cache.GetPixelShader(f.shader, requested, Cache::PixelShaderLookup::Draw) == resident);
 	}
 }
 
@@ -1238,7 +1323,7 @@ void TestDiscoveredSpecializationReplay()
 		const auto family = type == RE::BSShader::Type::Lighting ? Util::SpecializationFamily::Lighting : Util::SpecializationFamily::Effect;
 		const auto flag = type == RE::BSShader::Type::Lighting ? Cache::kLightingNoMeshVariation : Cache::kEffectAmbientWorldIBL;
 		const uint32_t base = 1;
-		f.cache.discoveries = { { family, base | flag }, { family, 2u | flag }, { family, base }, { Util::SpecializationFamily::Composite, 3 } };
+		f.cache.fixtureHistory = { { family, base | flag }, { family, 2u | flag }, { family, base }, { Util::SpecializationFamily::Composite, 3 } };
 		f.cache.RegisterSpecializationBase(type, base);
 		f.cache.PrewarmDiscoveredPixelShaders(f.shader);
 		Require(f.cache.compilationSet.requests == std::set<uint32_t>{ base | flag });
@@ -1256,8 +1341,8 @@ void TestDiscoveredSpecializationReplay()
 		f.cache.menuLoaded = false;
 		f.cache.diskCacheActive = false;
 		f.cache.PrewarmDiscoveredPixelShaders(f.shader);
-		Require(f.cache.compilationSet.requests.empty());
-		Require(f.cache.startupHistoryReads == 1);
+		Require(f.cache.compilationSet.requests == std::set<uint32_t>{ base | flag });
+		Require(f.cache.startupHistoryReads == 2);
 	}
 }
 
@@ -1272,7 +1357,7 @@ void TestEffectSpecializationFallback()
 	Require(!(specialization & category));
 	Require(Cache::GetPixelSpecializationMask(RE::BSShader::Type::Effect) == specialization);
 	Require(Cache::GetPixelSpecializationMask(RE::BSShader::Type::Water) == 0);
-	f.cache.residentOnly = true;
+	f.cache.preparationMode = Cache::Mode::StartupOnly;
 	f.cache.startupCompilationComplete = true;
 	auto* general = f.cache.Add(f.shader, descriptor);
 	Require(f.cache.GetPixelShader(f.shader, descriptor | category | specialization, Cache::PixelShaderLookup::Draw) == general);
@@ -1295,7 +1380,7 @@ void TestDetailMapsSpecializationFallback()
 		const auto category = categories ? Cache::GetCharacterCategoryFlag(RE::BSShader::Type::Lighting) : 0u;
 		const auto descriptor = 0x10011u | category | detail;
 		f.cache.startupCompilationComplete = true;
-		f.cache.residentOnly = true;
+		f.cache.preparationMode = Cache::Mode::StartupOnly;
 		auto* general = f.cache.Add(f.shader, descriptor);
 		Require(f.cache.GetPixelShader(f.shader, descriptor | Cache::kLightingNoMeshVariation, Cache::PixelShaderLookup::Draw) == general);
 		Require(f.cache.compiles == 0 && f.cache.compilationSet.requests.empty());
@@ -1346,6 +1431,8 @@ int main()
 			TestCombinedLightingSpecializations();
 			TestDetailMapsSpecializationFallback();
 			TestResidentLightingSpecializations();
+			TestAllModeDiscovery();
+			TestStartupPermutationBudget();
 			TestEffectSpecializationFallback();
 			TestDiscoveredSpecializationReplay();
 			TestPBRPrewarming();

@@ -1,0 +1,7 @@
+include("${PROJECT_ROOT}/tests/extract_source_region.cmake")
+file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
+file(READ "${PROJECT_ROOT}/src/ShaderCacheSpecializations.cpp" _source)
+file(READ "${PROJECT_ROOT}/src/ShaderCache.h" _header)
+extract_between("${_header}" "\t\tstruct OptionalPreparation" "\t\tstd::atomic_uint32_t pendingCompositePreparations" "optional_members.h")
+extract_between("${_source}" "\tbool ShaderCache::IsBlockingShaderStartup() const" "\tvoid ShaderCache::RegisterShaderPreparationEvents()" "optional_phase.h")
+extract_between("${_source}" "\tvoid ShaderCache::SetPreparationMode(" "\tvoid ShaderCache::RegisterSpecializationBase(" "optional_scheduler.h")

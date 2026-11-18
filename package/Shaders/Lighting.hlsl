@@ -1924,6 +1924,9 @@ void ApplyWetnessDarkening(
 		if (wetDarkeningBlend > 0.0 && (wetnessDarkeningAmount != 0.0 || any(material.BaseColor < 0.0))) {
 			float3 wetDarkenedBaseColor = pow(abs(material.BaseColor), 1.0 + wetnessDarkeningAmount);
 			material.BaseColor = lerp(material.BaseColor, wetDarkenedBaseColor, wetDarkeningBlend);
+#		if defined(TRUE_PBR) && defined(SNOW_COVER) && defined(TREE_ANIM)
+			Foliage::DarkenSnowSubstrate(material, wetnessDarkeningAmount, wetDarkeningBlend);
+#		endif
 		}
 #		if !defined(SKIN) && !defined(HAIR)
 		[branch] if (shorePersistentDarkeningEnabled)
@@ -1935,6 +1938,9 @@ void ApplyWetnessDarkening(
 			if (shoreDarkeningBlend > 0.0 && (shoreDarkeningAmount != 0.0 || any(material.BaseColor < 0.0))) {
 				float3 shoreDarkenedBaseColor = pow(abs(material.BaseColor), 1.0 + shoreDarkeningAmount);
 				material.BaseColor = lerp(material.BaseColor, shoreDarkenedBaseColor, shoreDarkeningBlend);
+#			if defined(TRUE_PBR) && defined(SNOW_COVER) && defined(TREE_ANIM)
+				Foliage::DarkenSnowSubstrate(material, shoreDarkeningAmount, shoreDarkeningBlend);
+#			endif
 			}
 		}
 #		endif
@@ -3215,8 +3221,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	material.GlintDensityRandomization = clamp(glintParameters.w, PBR::Constants::MinGlintDensityRandomization, PBR::Constants::MaxGlintDensityRandomization);
 
 #		if defined(GLINT) && !defined(SNOW_COVER)
-	float glintNoise = Random::R1Modified(float(SharedData::FrameCount), (Random::pcg2d(uint2(Stereo::EyeStableNoiseCoord(input.Position.xy, SharedData::BufferDim.xy))) / 4294967296.0).x);
-	Glints::PrecomputeGlints(glintNoise, uvOriginal, uvOriginal_ddx, uvOriginal_ddy, material.GlintScreenSpaceScale, material.GlintCache);
+	[branch] if (material.GlintLogMicrofacetDensity > PBR::Constants::GlintEnableThreshold)
+	{
+		float glintNoise = Random::R1Modified(float(SharedData::FrameCount), (Random::pcg2d(uint2(Stereo::EyeStableNoiseCoord(input.Position.xy, SharedData::BufferDim.xy))) / 4294967296.0).x);
+		Glints::PrecomputeGlints(glintNoise, uvOriginal, uvOriginal_ddx, uvOriginal_ddy, material.GlintScreenSpaceScale, material.GlintCache);
+	}
 #		endif
 
 	baseColor.xyz *= 1 - material.Metallic;
@@ -3452,9 +3461,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if !defined(TREE_ANIM)
 		bool snowBillboard = false;
 #		endif
-#		if defined(DO_ALPHA_TEST) && defined(LOD_BLENDING) && !defined(TREE_ANIM)  // should only match object lod trees (ultra trees), they have no special define
+#		if defined(DO_ALPHA_TEST) && !defined(TREE_ANIM)
 		float3 snowCardNormal = normalize(cross(ddx(input.WorldPosition.xyz), ddy(input.WorldPosition.xyz)));
-		if (snowActive && Lighting::HasSoftLighting()) {
+		if (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SnowFoliage) {
 			snowBillboard = abs(dot(snowCardNormal, vertexNormal)) < 0.5;
 			[branch] if (SharedData::snowCoverSettings.EnableExpensiveFoliage)
 			{
@@ -3462,7 +3471,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				TexColorSampler.GetDimensions(width, height);
 				float hasAlpha = 1 - TexColorSampler.SampleLevel(SampColorSampler, uv, 6).a;
 				if (snowBillboard || hasAlpha > 0.001)
-					snowOcclusion = 1 - TexColorSampler.Sample(SampColorSampler, uv - float2(0, 2.0 / max(height, 1u))).a;
+					snowOcclusion *= 1 - TexColorSampler.Sample(SampColorSampler, uv - float2(0, 2.0 / max(height, 1u))).a;
 			}
 		}
 #		endif
@@ -3511,7 +3520,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif
 			}
 #		endif
-#		if defined(DO_ALPHA_TEST) && defined(LOD_BLENDING) && !defined(TREE_ANIM)
+#		if defined(DO_ALPHA_TEST) && !defined(TREE_ANIM)
 			if (snowBillboard)
 				snowNormal = normalize(float3(snowCardNormal.xy, abs(snowCardNormal.z) + SnowCover::FoliageNormalBias));
 #		endif

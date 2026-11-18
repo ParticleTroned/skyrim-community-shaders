@@ -10,6 +10,7 @@
 #include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
 #include "EngineFixes/SunOcclusionPollFix.h"
 #include "EngineFixes/VRGrassLifetimeFix.h"
+#include "EngineFixes/VRTaskQueueFix.h"
 
 const std::vector<EngineFix*>& EngineFix::GetOnPostPostLoadFixesList()
 {
@@ -21,6 +22,7 @@ const std::vector<EngineFix*>& EngineFix::GetOnPostPostLoadFixesList()
 	static ShadowmapRasterizerFix shadowmapRasterizerFix;
 	static SunOcclusionPollFix sunOcclusionPollFix;
 	static VRGrassLifetimeFix vrGrassLifetimeFix;
+	static VRTaskQueueFix vrTaskQueueFix;
 
 	static std::vector<EngineFix*> fixes = {
 		&sunShadowReceiverFix,
@@ -31,7 +33,8 @@ const std::vector<EngineFix*>& EngineFix::GetOnPostPostLoadFixesList()
 		&shadowmapCascadeCullingFix,
 		&shadowmapRasterizerFix,
 		&sunOcclusionPollFix,
-		&vrGrassLifetimeFix
+		&vrGrassLifetimeFix,
+		&vrTaskQueueFix
 	};
 
 	return fixes;

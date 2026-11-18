@@ -36,9 +36,9 @@ namespace
 		Util::ShaderInclude::StartupCache startupIncludeCache;
 		bool completed = false, dataLoaded = false, background = false, watcher = false;
 		bool UseFileWatcher() const { return watcher; }
-		bool CanCompileOptionalShaderSources() const
+		bool IsBlockingShaderStartup() const
 		{
-			return ShaderCompilationSchedulingPolicy::CanCompileOptionalSources(completed, dataLoaded, background);
+			return ShaderCompilationSchedulingPolicy::IsBlockingStartup(completed, dataLoaded, background);
 		}
 		void FinishStartupPreparation();
 		Util::ShaderInclude::StartupCache* GetStartupIncludeCache(bool developerMode);

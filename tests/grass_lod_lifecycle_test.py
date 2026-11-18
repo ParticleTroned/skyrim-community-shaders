@@ -792,7 +792,8 @@ struct GrassBucketRenderer {
         GrassLOD::Cache<LODKey, Mesh> lodMeshes;
         std::vector<Bucket> buckets{1}, dormantBuckets{1};
         void UpdateLODDemand(const GrassPolicy::Settings&);
-        void EndBackgroundPreparation(const GrassPolicy::Settings&) {}
+        bool HasCurrentPreparation() const { return true; }
+        void EndBackgroundPreparation(const GrassPolicy::Settings&, bool) {}
         std::array<const Mesh*, 2> LODMeshes(const Source&);
         std::vector<LODKey> pendingLoads;
         void CancelRetiredLODLoads() {

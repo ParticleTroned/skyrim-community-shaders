@@ -158,6 +158,19 @@ CROSS_MODLIST_SHADER_VARIANTS = {
 }
 
 
+# Lighting uses the same unskinned hair/decal descriptors in SE/AE and VR.
+SHARED_SHADER_VARIANTS = {
+    "Lighting.hlsl": {
+        "PSHADER": {
+            "Lighting:Pixel:6108001": ("DEPTH_WRITE_DECALS", "DO_ALPHA_TEST", "HAIR"),
+            "Lighting:Pixel:6108011": ("DEFERRED", "DEPTH_WRITE_DECALS", "DO_ALPHA_TEST", "HAIR"),
+            "Lighting:Pixel:6118001": ("ANISO_LIGHTING", "DEPTH_WRITE_DECALS", "DO_ALPHA_TEST", "HAIR"),
+            "Lighting:Pixel:6118011": ("ANISO_LIGHTING", "DEFERRED", "DEPTH_WRITE_DECALS", "DO_ALPHA_TEST", "HAIR"),
+        },
+    },
+}
+
+
 @dataclass(frozen=True)
 class CacheProfile:
     name: str
@@ -1496,8 +1509,8 @@ def append_missing_defines(defines: object, names: tuple[str, ...]) -> None:
             existing.add(normalized_define_name(name))
 
 
-def append_cross_modlist_variants(config: dict[str, object]) -> None:
-    """Merge known SE permutations that are absent from a single capture."""
+def append_declared_shader_variants(config: dict[str, object], variants: dict) -> None:
+    """Merge reviewed descriptor/macro pairs without replacing captured entries."""
     shaders = config.get("shaders")
     if not isinstance(shaders, list):
         raise SystemExit("shader config shaders must be a list")
@@ -1507,11 +1520,11 @@ def append_cross_modlist_variants(config: dict[str, object]) -> None:
         for shader in shaders
         if isinstance(shader, dict) and isinstance(shader.get("file"), str)
     }
-    for file_name, stage_additions in CROSS_MODLIST_SHADER_VARIANTS.items():
+    for file_name, stage_additions in variants.items():
         shader = shaders_by_file.get(file_name)
         if not isinstance(shader, dict):
             raise SystemExit(
-                f"shader config is missing cross-modlist source {file_name}"
+                f"shader config is missing declared variant source {file_name}"
             )
         stage_configs = shader.get("configs")
         if not isinstance(stage_configs, dict):
@@ -1561,7 +1574,7 @@ def append_cross_modlist_variants(config: dict[str, object]) -> None:
                         != {define.strip() for define in defines}
                     ):
                         raise SystemExit(
-                            f"cross-modlist variant {entry_name} conflicts with "
+                            f"declared variant {entry_name} conflicts with "
                             "the captured shader config"
                         )
                     continue
@@ -1569,6 +1582,11 @@ def append_cross_modlist_variants(config: dict[str, object]) -> None:
                 entry = {"entry": entry_name, "defines": list(defines)}
                 entries.append(entry)
                 entries_by_name[entry_name] = entry
+
+
+def append_cross_modlist_variants(config: dict[str, object]) -> None:
+    """Merge known SE permutations that are absent from a single capture."""
+    append_declared_shader_variants(config, CROSS_MODLIST_SHADER_VARIANTS)
 
 
 def apply_cache_profile_defines(
@@ -1833,6 +1851,109 @@ def append_character_category_variants(
     return added
 
 
+def lighting_detail_map_policy(source_root: Path) -> tuple[int, int, frozenset[int]]:
+    """Read the runtime's forward-enabled prewarm policy, rejecting policy drift."""
+    header = (source_root / "src/Features/DetailMapsPolicy.h").read_text(encoding="utf-8")
+    flag_match = re.search(r"ShaderFlag = 1u << (\d+);", header)
+    body_match = re.search(r"IsEligible\(uint32_t descriptor, bool allowForward\)\s*\{(.*?)\n\t\}", header, re.DOTALL)
+    if flag_match is None or int(flag_match[1]) >= 32 or body_match is None:
+        raise SystemExit("cannot locate runtime Detail Maps descriptor policy")
+    body = re.sub(r"\s+", "", body_match[1])
+    policy = re.fullmatch(
+        r"constexpruint32_texcluded=(.*?);"
+        r"if\(\(descriptor&excluded\)\|\|\(!allowForward&&!\(descriptor&\(1u<<4\)\)\)\)returnfalse;"
+        r"switch\(\(descriptor>>24\)&0x3F\)\{((?:case\d+:)+)returntrue;default:returnfalse;\}",
+        body,
+    )
+    if policy is None:
+        raise SystemExit("unsupported runtime Detail Maps eligibility policy")
+    flag = 1 << int(flag_match[1])
+    excluded = 0
+    for term in policy[1].split("|"):
+        if term == "ShaderFlag":
+            excluded |= flag
+            continue
+        bit = re.fullmatch(r"\(1u<<(\d+)\)", term)
+        if bit is None or int(bit[1]) >= 32:
+            raise SystemExit("unsupported runtime Detail Maps exclusion mask")
+        excluded |= 1 << int(bit[1])
+    techniques = frozenset(int(value) for value in re.findall(r"case(\d+):", policy[2]))
+    if not excluded & flag or any(value >= 64 for value in techniques):
+        raise SystemExit("invalid runtime Detail Maps eligibility bounds")
+    return flag, excluded, techniques
+
+
+def append_lighting_specialization_variants(
+    config: dict[str, Any], source_root: Path, feature_states: dict[str, bool]
+) -> int:
+    """Cover weather, deferred lighting and eligible Detail Maps pixel states."""
+    header = (source_root / "src/ShaderCache.h").read_text(encoding="utf-8")
+    detail_flag, detail_excluded, detail_techniques = lighting_detail_map_policy(source_root)
+    specializations = []
+    mask = 0
+    for symbol, macro, feature, feature_macro, deferred_only in (
+        ("kLightingDryWeather", "DRY_WEATHER", "Wetterness", "WETTERNESS", False),
+        ("kLightingSnowCoverInactive", "SNOW_COVER_INACTIVE", "SnowCover", "SNOW_COVER", False),
+        ("kLightingNoContactShadows", "LLF_NO_CONTACT_SHADOWS", "LightLimitFix", "LIGHT_LIMIT_FIX", True),
+        ("kLightingNoLegacySubsurface", "NO_LEGACY_SUBSURFACE", None, None, True),
+        ("DetailMaps", "DETAIL_MAPS", "DetailMaps", None, False),
+    ):
+        match = re.search(rf"\b{symbol} = 1u? << (\d+)[,;]", header)
+        if match is None or int(match[1]) >= 32:
+            raise SystemExit(f"cannot locate runtime Lighting specialization flag: {symbol}")
+        flag = 1 << int(match[1])
+        if macro == "DETAIL_MAPS" and flag != detail_flag:
+            raise SystemExit("Detail Maps feature and shader descriptor flags disagree")
+        if mask & flag:
+            raise SystemExit("overlapping runtime Lighting specialization flags")
+        mask |= flag
+        specializations.append((flag, macro, feature, feature_macro, deferred_only))
+    macros = {macro for _, macro, _, _, _ in specializations}
+    delta = 0
+    for shader in config["shaders"]:
+        if shader["file"] != "Lighting.hlsl" or "PSHADER" not in shader["configs"]:
+            continue
+        stage = shader["configs"]["PSHADER"]
+        shared = [*config.get("common_defines", []), *config.get("common_pshader_defines", []),
+                  *config.get("file_common_defines", {}).get("Lighting.hlsl", {}).get("PSHADER", []),
+                  *stage.get("common_defines", [])]
+        shared_names = define_names(shared)
+        if macros & shared_names:
+            raise SystemExit("Lighting specialization must be scoped to a pixel entry")
+        entries: dict[str, dict[str, Any]] = {}
+        for entry in stage["entries"]:
+            key = re.fullmatch(r"Lighting:Pixel:([0-9A-F]{1,8})", entry["entry"])
+            if key is None:
+                raise SystemExit(f"invalid Lighting pixel entry: {entry['entry']}")
+            descriptor = int(key[1], 16)
+            defines = entry.get("defines", [])
+            names = define_names(defines)
+            for flag, macro, _, _, _ in specializations:
+                if bool(descriptor & flag) != (macro in names):
+                    raise SystemExit(f"Lighting specialization flag/macros disagree: {entry['entry']}")
+            general = [value for value in defines if normalized_define_name(value) not in macros]
+            variants = [(descriptor & ~mask, general)]
+            for flag, macro, feature, feature_macro, deferred_only in specializations:
+                if deferred_only and "DEFERRED" not in shared_names | names:
+                    continue
+                if feature is not None and not (feature_states.get(feature) and (feature_macro is None or feature_macro in shared_names | names)):
+                    continue
+                if flag == detail_flag and ((descriptor & ~mask) & detail_excluded or ((descriptor >> 24) & 0x3F) not in detail_techniques):
+                    continue
+                variants += [(bits | flag, [*values, macro]) for bits, values in tuple(variants)]
+            for bits, values in variants:
+                variant_key = f"Lighting:Pixel:{bits:X}"
+                existing = entries.get(variant_key)
+                if existing is not None:
+                    if pixel_entry_define_identity("Lighting.hlsl", variant_key, existing.get("defines", [])) != pixel_entry_define_identity("Lighting.hlsl", variant_key, values):
+                        raise SystemExit(f"conflicting Lighting specialization variant: {variant_key}")
+                    continue
+                entries[variant_key] = {**entry, "entry": variant_key, "defines": values}
+        delta += len(entries) - len(stage["entries"])
+        stage["entries"] = list(entries.values())
+    return delta
+
+
 def append_effect_lighting_variants(
     config: dict[str, Any], source_root: Path, feature_states: dict[str, bool]
 ) -> int:
@@ -1943,9 +2064,12 @@ def filter_profile_defines(
         additional_file_defines=additional_file_defines,
         add_cross_modlist_variants=add_cross_modlist_variants,
     )
+    append_declared_shader_variants(config, SHARED_SHADER_VARIANTS)
     normalize_water_pixel_variants(config)
     category_count = append_character_category_variants(config, source_root)
     print(f"shader config: added {category_count} deferred character category variants")
+    lighting_delta = append_lighting_specialization_variants(config, source_root, feature_states)
+    print(f"shader config: Lighting specialization changed pixel variants by {lighting_delta}")
     effect_delta = append_effect_lighting_variants(config, source_root, feature_states)
     print(f"shader config: ambient Effect specialization changed pixel variants by {effect_delta}")
     prepare_fxc_defines(config)

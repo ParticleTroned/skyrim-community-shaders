@@ -153,28 +153,29 @@ void AdvancedSettingsRenderer::RenderShaderThreading()
 	const int32_t poolThreads = static_cast<int32_t>(shaderCache->compilationPool.get_thread_count());
 	const int32_t maxThreads = std::max(1, poolThreads);
 
-	// Snap the persisted values back into the valid range — a stale config can
-	// otherwise leave compilationThreadCount above maxThreads, which would
-	// render the slider in an out-of-range state.
-	shaderCache->compilationThreadCount = std::clamp(shaderCache->compilationThreadCount, 1, maxThreads);
-	shaderCache->backgroundCompilationThreadCount = std::clamp(shaderCache->backgroundCompilationThreadCount, 1, maxThreads);
-
-	Util::Widgets::SliderInt("Compiler Threads", &shaderCache->compilationThreadCount, 1, maxThreads, "%d", ImGuiSliderFlags_AlwaysClamp);
+	const auto previousLimits = shaderCache->GetCompilationThreadLimits();
+	auto normalThreads = std::clamp(previousLimits.first, 1, maxThreads);
+	auto backgroundThreads = std::clamp(previousLimits.second, 1, maxThreads);
+	Util::Widgets::SliderInt("Compiler Threads", &normalThreads, 1, maxThreads, "%d", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
 			"How much processor capacity prepares shaders at startup. Higher values may finish sooner but leave less capacity for other programs.");
 	}
-	Util::Widgets::SliderInt("Background Compiler Threads", &shaderCache->backgroundCompilationThreadCount, 1, maxThreads, "%d", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderInt("Background Compiler Threads", &backgroundThreads, 1, maxThreads, "%d", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Gameplay compile threads. Default: half the performance cores to protect render-thread time; workers resume normal game priority after startup. Higher compiles faster but may stutter.");
+			"Background compiler concurrency, also shared by optional Lighting, Effect and Composite preparation. Default: half the logical processors on the highest efficiency class (including SMT). Optional work uses cooperative priority. More workers may increase frame-time variation.");
 	}
 
+	if (normalThreads != previousLimits.first || backgroundThreads != previousLimits.second)
+		shaderCache->SetCompilationThreadLimits(normalThreads, backgroundThreads);
+
 	auto& menuSettings = globals::menu->GetSettings();
-	bool residentOnly = shaderCache->ResidentOnlyLightingSpecializations();
-	if (Util::Widgets::Checkbox("Resident-only Lighting Specializations", &residentOnly))
-		shaderCache->SetResidentOnlyLightingSpecializations(residentOnly);
-	Util::AddTooltip("On: use only prepared optional lighting variants, including ambient Effect variants and IBL/Linear Lighting deferred composites, after startup. Missing variants keep general shading without requesting the optimization. Off: load valid cached variants asynchronously. Missing variants keep general shading and are remembered for the next blocking startup. Optional source compilation never starts during gameplay or background boot. Already-running compiler calls finish; required general shaders keep their existing policy. Save settings to retain this choice.");
+	int mode = static_cast<int>(shaderCache->GetPreparationMode());
+	const char* modes[] = { "Next restart", "Transitions (experimental)", "Gameplay (experimental)" };
+	if (Util::Widgets::Combo("Optimised shader preparation", &mode, modes, IM_ARRAYSIZE(modes)))
+		shaderCache->SetPreparationMode(ShaderCompilationSchedulingPolicy::ValidatePreparationMode(mode));
+	Util::AddTooltip("Every mode records discoveries and uses suitable optimised shaders already in memory. Next restart: prepare missing variants at the next normal blocking startup, including variants cached only on disk. This is stricter than the old checkbox's OFF state; both old values migrate to Next restart. Transitions (experimental): also prepare during confirmed loading and engine sleep/wait time passage. Gameplay (experimental): also prepare while playing using Background Compiler Threads; this may affect frame times. Work already running may finish after a transition closes; its next stage waits for permission. Background Compile on Boot stays independent. Saving/reloading a game is not a process restart. Save settings to retain this choice.");
 
 	Util::Widgets::Checkbox("Background Compile on Boot", &menuSettings.BackgroundShaderCompilationOnBoot);
 	if (auto _tt = Util::HoverTooltipWrapper()) {

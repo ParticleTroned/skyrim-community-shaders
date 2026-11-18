@@ -114,7 +114,7 @@
     "antiLag2Enabled": false
   },
   "Texture Streaming": {
-    "Enabled": false
+    "Enabled": true
   },
   "Neural Rendering": {
     "schemaVersion": 1,
@@ -2394,7 +2394,7 @@
     "EnableFarLOD": true,
     "EnableMeshLOD": false,
     "EnableMidLOD": true,
-    "EnableOcclusionCulling": true,
+    "EnableOcclusionCulling": false,
     "Enabled": true,
     "FarLODCoverageBias": 1.0,
     "FarLODMaxDensity": 0.20000000298023224,

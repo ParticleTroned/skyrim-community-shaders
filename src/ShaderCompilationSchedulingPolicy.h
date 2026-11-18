@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 
 namespace ShaderCompilationSchedulingPolicy
@@ -45,6 +46,40 @@ namespace ShaderCompilationSchedulingPolicy
 		InGame,
 	};
 
+	/** Cumulative preparation windows; resident optimisations are always usable. */
+	enum class PreparationMode : std::uint8_t
+	{
+		StartupOnly,
+		Transitions,
+		Gameplay,
+	};
+
+	/** Immutable identity captured before optional compiler inputs are assembled. */
+	struct PreparationIdentity
+	{
+		std::uint64_t revision = 0, inputs = 0, owner = 0;
+		bool operator==(const PreparationIdentity&) const = default;
+	};
+
+	[[nodiscard]] constexpr PreparationMode ValidatePreparationMode(std::int64_t value) noexcept
+	{
+		return value >= 0 && value <= 2 ? static_cast<PreparationMode>(value) : PreparationMode::StartupOnly;
+	}
+
+	[[nodiscard]] constexpr bool CanPrepareOptional(PreparationMode mode, bool blockingStartup,
+		bool runtimeReady, bool transition) noexcept
+	{
+		return blockingStartup || (runtimeReady && (mode == PreparationMode::Gameplay ||
+													   (mode == PreparationMode::Transitions && transition)));
+	}
+
+	/** The configured limit never grants more physical pool slots. */
+	[[nodiscard]] constexpr std::size_t DispatchLimit(std::int32_t normal, std::int32_t background,
+		bool backgroundMode, std::size_t poolCapacity) noexcept
+	{
+		return std::min(static_cast<std::size_t>(std::max(backgroundMode ? background : normal, 1)), poolCapacity);
+	}
+
 	enum class WorkerThreadPriorityMode
 	{
 		CooperativeBackground,
@@ -70,8 +105,8 @@ namespace ShaderCompilationSchedulingPolicy
 		return startupComplete || (dataLoaded && backgroundMode);
 	}
 
-	/** A skipped startup never authorizes optional source compilation during background boot. */
-	[[nodiscard]] constexpr bool CanCompileOptionalSources(bool startupComplete, bool dataLoaded, bool backgroundMode) noexcept
+	/** Background boot is distinct from the normal blocking startup phase. */
+	[[nodiscard]] constexpr bool IsBlockingStartup(bool startupComplete, bool dataLoaded, bool backgroundMode) noexcept
 	{
 		return !startupComplete && !dataLoaded && !backgroundMode;
 	}

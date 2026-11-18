@@ -99,5 +99,11 @@ int main()
 	history.Flush();
 	assert(!history.persistenceFailed && history.savedRevision == 5);
 	assert(nlohmann::json::parse(persisted)["requests"].size() == 5);
+	add(6);
+	history.limitWarningPending = true;
+	logger::fail = true;
+	history.Flush();
+	logger::fail = false;
+	assert(!history.persistenceFailed && history.savedRevision == 6);
 	std::cout << "Discovery persistence: coalescing, concurrent discoveries, atomic-only writes, failure recovery and final dirty flush passed\n";
 }

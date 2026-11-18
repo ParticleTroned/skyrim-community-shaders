@@ -620,10 +620,10 @@ void CheckStreamingConflict()
 	simulatedSPSLoaded = false;
 	TextureStreaming native;
 	native.PostPostLoad();
-	Require(native.loaded && !native.state->enabled && !native.state->requestedEnabled && !native.state->externalStreamingConflict && originHookReady && hookInstalls == 1,
+	Require(native.loaded && native.state->enabled && native.state->requestedEnabled && !native.state->externalStreamingConflict && originHookReady && hookInstalls == 1,
 		"Removing SPS and restarting did not permit native streaming");
 	native.Configure(true, 2);
-	Require(native.state->enabled && native.state->requestedEnabled, "Enabling the default-off master failed without SPS");
+	Require(native.state->enabled && native.state->requestedEnabled, "Enabling the master failed without SPS");
 	native.PostPostLoad();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	Require(CSX::Diagnostics::Stutters::AssetLoadHooks::ddsAvailable, "DDS hook availability must reach diagnostics");
@@ -883,7 +883,7 @@ int main()
 		loaded.DrawSettings();
 		Require(!loaded.state->categories.emissiveStatics && !Util::disabled, "Unavailable UI changed coverage or leaked ImGui disable state");
 		loaded.RestoreDefaultSettings();
-		Require(!loaded.state->enabled && !loaded.state->requestedEnabled && loaded.state->modes == Modes{} && loaded.state->maximumDrop == 2 && loaded.state->categories == Categories{}, "Reset did not restore default coverage");
+		Require(loaded.state->enabled && loaded.state->requestedEnabled && loaded.state->modes == Modes{} && loaded.state->maximumDrop == 2 && loaded.state->categories == Categories{}, "Reset did not restore default coverage");
 		originHookReady = true;
 		saved.erase("Categories");
 		feature.LoadSettings(saved);
@@ -904,13 +904,13 @@ int main()
 		Require(restoredMaster.state->enabled && restoredMaster.state->modes.continuous && restoredMaster.state->maximumDrop == 3,
 			"Re-enabling lost detailed tuning");
 		TextureStreaming mode;
-		Require(!mode.state->enabled && !mode.state->requestedEnabled && mode.state->modes == Modes{} && !mode.state->ReductionRequested(), "Streaming master did not default off with pressure mode retained");
+		Require(mode.state->enabled && mode.state->requestedEnabled && mode.state->modes == Modes{} && !mode.state->ReductionRequested(), "Streaming master did not default on with pressure mode retained");
 		nlohmann::json absent = nlohmann::json::object();
 		mode.LoadSettings(absent);
-		Require(!mode.state->enabled && mode.state->modes.onPressure && !mode.state->modes.continuous, "Missing saved settings enabled streaming or lost pressure mode");
+		Require(mode.state->enabled && mode.state->modes.onPressure && !mode.state->modes.continuous, "Missing saved settings disabled streaming or lost pressure mode");
 		absent["Modes"] = SerializeModes(Modes{ false, true });
 		mode.LoadSettings(absent);
-		Require(!mode.state->enabled && mode.state->modes.continuous, "A trigger implicitly enabled the missing master switch");
+		Require(mode.state->enabled && mode.state->modes.continuous, "A saved trigger disabled the default-enabled master switch");
 		mode.RestoreDefaultSettings();
 		mode.Configure(true, 2);
 		mode.state->pressure.conserving = true;

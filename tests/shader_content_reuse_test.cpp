@@ -147,7 +147,7 @@ namespace
 		}
 		bool IsDiskCacheActive() const { return active; }
 		bool IsSkipUnchangedShaders() const { return skipUnchanged; }
-		bool CanCompileOptionalShaderSources() const { return startup; }
+		bool IsBlockingShaderStartup() const { return startup; }
 	};
 
 	// clang-format off

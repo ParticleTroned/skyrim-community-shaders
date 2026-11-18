@@ -9,7 +9,7 @@
 
 namespace StreamingTextures
 {
-	inline constexpr bool DefaultEnabled = false;
+	inline constexpr bool DefaultEnabled = true;
 	/** Persistent residency controls shared by the menu, saved configuration and automation. */
 	struct Options
 	{

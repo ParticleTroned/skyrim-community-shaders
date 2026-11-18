@@ -83,6 +83,7 @@ namespace
 			thread_local ResponseStrings strings;
 			strings.statistics = cache ? cache->GetShaderStatsString() : std::string{};
 			const bool diskCacheRequested = cache && cache->IsDiskCache();
+			const auto threadLimits = cache ? cache->GetCompilationThreadLimits() : std::pair<int32_t, int32_t>{ 0, 0 };
 			a_output = {
 				.structSize = sizeof(Snapshot001),
 				.available = cache && state ? 1u : 0u,
@@ -113,8 +114,8 @@ namespace
 				.slowTasks = cache ? cache->GetSlowTasks() : 0,
 				.verySlowTasks = cache ? cache->GetVerySlowTasks() : 0,
 				.heavyTasksInFlight = cache ? static_cast<std::uint32_t>((std::max)(cache->GetHeavyTasksInFlight(), 0)) : 0,
-				.foregroundThreadCount = cache ? static_cast<std::uint32_t>((std::max)(cache->compilationThreadCount, 0)) : 0,
-				.backgroundThreadCount = cache ? static_cast<std::uint32_t>((std::max)(cache->backgroundCompilationThreadCount, 0)) : 0,
+				.foregroundThreadCount = cache ? static_cast<std::uint32_t>((std::max)(threadLimits.first, 0)) : 0,
+				.backgroundThreadCount = cache ? static_cast<std::uint32_t>((std::max)(threadLimits.second, 0)) : 0,
 				.buildId = BuildProvenance::GetBuildId().data(),
 				.shaderCacheAbiId = BuildProvenance::GetShaderCacheAbiId().data(),
 				.shaderCompilerIdentity = BuildProvenance::GetShaderCompilerIdentity().c_str(),
@@ -127,8 +128,7 @@ namespace
 		{
 			if (!IsOwnerThread())
 				return 0;
-			return static_cast<std::uint32_t>((std::min<std::size_t>)(
-				Feature::GetFeatureList().size(), std::numeric_limits<std::uint32_t>::max()));
+			return static_cast<std::uint32_t>((std::min<std::size_t>)(Feature::GetFeatureList().size(), std::numeric_limits<std::uint32_t>::max()));
 		}
 
 		Status GetFeature(std::uint32_t a_index, FeatureDescriptor001& a_output) const
@@ -310,7 +310,7 @@ namespace
 			}
 
 			const bool persistenceRequested = persistenceRelevant &&
-				(forcePersistence || (mutation.flags & CSX::ShaderAPI::kMutationPersist) != 0);
+			                                  (forcePersistence || (mutation.flags & CSX::ShaderAPI::kMutationPersist) != 0);
 			if (persistenceRequested && (!forcePersistence || changed)) {
 				persisted = state->Save();
 				if (!persisted) {
@@ -460,16 +460,22 @@ namespace
 			return Status::kInvalidArgument;
 		if (a_output->structSize < sizeof(Snapshot001))
 			return Status::kStructureTooSmall;
-		try { return ServiceFrom(a_context).GetSnapshot(*a_output); }
-		catch (...) { return Status::kInternalError; }
+		try {
+			return ServiceFrom(a_context).GetSnapshot(*a_output);
+		} catch (...) {
+			return Status::kInternalError;
+		}
 	}
 
 	std::uint32_t GetFeatureCount(const void* a_context)
 	{
 		if (!a_context)
 			return 0;
-		try { return ServiceFrom(a_context).GetFeatureCount(); }
-		catch (...) { return 0; }
+		try {
+			return ServiceFrom(a_context).GetFeatureCount();
+		} catch (...) {
+			return 0;
+		}
 	}
 
 	Status GetFeatureDescriptor(const void* a_context, std::uint32_t a_index, FeatureDescriptor001* a_output)
@@ -478,8 +484,11 @@ namespace
 			return Status::kInvalidArgument;
 		if (a_output->structSize < sizeof(FeatureDescriptor001))
 			return Status::kStructureTooSmall;
-		try { return ServiceFrom(a_context).GetFeature(a_index, *a_output); }
-		catch (...) { return Status::kInternalError; }
+		try {
+			return ServiceFrom(a_context).GetFeature(a_index, *a_output);
+		} catch (...) {
+			return Status::kInternalError;
+		}
 	}
 
 	Status Preflight(const void* a_context, const MutationRequest001* a_request, Preflight001* a_output)
@@ -488,8 +497,11 @@ namespace
 			return Status::kInvalidArgument;
 		if (a_request->structSize < sizeof(MutationRequest001) || a_output->structSize < sizeof(Preflight001))
 			return Status::kStructureTooSmall;
-		try { return ServiceFrom(a_context).Preflight(*a_request, *a_output); }
-		catch (...) { return Status::kInternalError; }
+		try {
+			return ServiceFrom(a_context).Preflight(*a_request, *a_output);
+		} catch (...) {
+			return Status::kInternalError;
+		}
 	}
 
 	Status Execute(const void* a_context, const MutationRequest001* a_request, MutationReceipt001* a_output)
@@ -498,8 +510,11 @@ namespace
 			return Status::kInvalidArgument;
 		if (a_request->structSize < sizeof(MutationRequest001) || a_output->structSize < sizeof(MutationReceipt001))
 			return Status::kStructureTooSmall;
-		try { return ServiceFrom(a_context).Execute(*a_request, *a_output); }
-		catch (...) { return Status::kInternalError; }
+		try {
+			return ServiceFrom(a_context).Execute(*a_request, *a_output);
+		} catch (...) {
+			return Status::kInternalError;
+		}
 	}
 
 	ShaderService& GetService()
@@ -539,10 +554,10 @@ namespace CSX::Api
 				.minor = ShaderAPI::ServiceMinor,
 				.schemaRevision = ShaderAPI::SchemaRevision,
 				.capabilities = ServiceAPI::kCapabilityInspection |
-					ServiceAPI::kCapabilityRuntimeMutation |
-					ServiceAPI::kCapabilityPersistentMutation |
-					ServiceAPI::kCapabilityDestructiveOperations |
-					ServiceAPI::kCapabilityTransactions,
+			                    ServiceAPI::kCapabilityRuntimeMutation |
+			                    ServiceAPI::kCapabilityPersistentMutation |
+			                    ServiceAPI::kCapabilityDestructiveOperations |
+			                    ServiceAPI::kCapabilityTransactions,
 				.interfacePointer = GetShaderService001(),
 			});
 			if (status != ServiceAPI::Status::kSuccess)

@@ -1,5 +1,6 @@
 #ifndef __PBR_DEPENDENCY_HLSL__
 #define __PBR_DEPENDENCY_HLSL__
+#include "Common/FoliageSnow.hlsli"
 #include "Common/LightingCommon.hlsli"
 
 #include "Common/BRDF.hlsli"
@@ -13,14 +14,15 @@
 namespace PBR
 {
 #if defined(GLINT)
-	float3 SpecularMicrofacetWithGlint(float noise, float roughness, float3 F0, float NdotL, float NdotV, float NdotH, float VdotH, float3 glintH,
+	float3 SpecularMicrofacetWithGlint(float noise, float roughness, float3 F0, float NdotL, float NdotV, float NdotH, float VdotH, float3x3 tbnTr, float3 H,
 		float logDensity, float microfacetRoughness, float densityRandomization, Glints::GlintCachedVars glintCache,
 		out float3 F)
 	{
 		float D = BRDF::D_GGX(roughness, NdotH);
-		[branch] if (logDensity > 1.1)
+		[branch] if (logDensity > Constants::GlintEnableThreshold)
 		{
 			float D_max = BRDF::D_GGX(roughness, 1);
+			float3 glintH = mul(tbnTr, H);
 			D = Glints::SampleGlints2023NDF(noise, logDensity, microfacetRoughness, densityRandomization, glintCache, glintH, D, D_max).x;
 		}
 		float G = BRDF::Vis_SmithJointApprox(roughness, NdotV, NdotL);
@@ -148,7 +150,7 @@ namespace PBR
 		{
 			float3 F;  // Fresnel reflectance at current (V,H) angle
 #if defined(GLINT)
-			float3 Fr = SpecularMicrofacetWithGlint(material.Noise, material.Roughness, material.F0, satNdotL, satNdotV, satNdotH, satVdotH, mul(tbnTr, H),
+			float3 Fr = SpecularMicrofacetWithGlint(material.Noise, material.Roughness, material.F0, satNdotL, satNdotV, satNdotH, satVdotH, tbnTr, H,
 				material.GlintLogMicrofacetDensity, material.GlintMicrofacetRoughness, material.GlintDensityRandomization, material.GlintCache, F);
 #else
 			float3 Fr = SpecularMicrofacet(material.Roughness, material.F0, satNdotL, satNdotV, satNdotH, satVdotH, F);
@@ -176,7 +178,7 @@ namespace PBR
 				// invalidates any thickness assumption. Use only the current normal/light/view angles.
 				float foliageTransmission = saturate(-NdotL) * BRDF::Diffuse_Lambert();
 				foliageTransmission += GetFoliageTransmission(NdotL, VdotL);
-				lightingOutput.transmission += material.BaseColor * foliageTransmission * detailedLightColor * kD;
+				lightingOutput.transmission += Foliage::GetUncoveredColor(material) * foliageTransmission * detailedLightColor * kD;
 			}
 #	endif
 			[branch] if ((PBRFlags & Flags::Subsurface) != 0)
@@ -302,7 +304,7 @@ namespace PBR
 		// This is intentionally additive and AO-independent: it restores a small indirect
 		// ambient response for animated foliage after the AO adjustment.
 		[branch] if (SharedData::foliageLightingSettings.EnableFoliageAmbientBoost != 0)
-			lobeWeights.diffuse += material.BaseColor * SharedData::foliageLightingSettings.FoliageAmbientAmount;
+			lobeWeights.diffuse += Foliage::GetUncoveredColor(material) * SharedData::foliageLightingSettings.FoliageAmbientAmount;
 #endif
 		lobeWeights.specular *= specularAO;
 

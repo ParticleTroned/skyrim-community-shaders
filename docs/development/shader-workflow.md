@@ -54,80 +54,72 @@ edits between preprocessing and compilation. `ShaderContentReuse` checks
 legacy startup batching, failed-write recovery, concurrent persistence,
 and the transition to normal checkpoints using the production policy.
 
-## Optional lighting specialization diagnostics
+## Optional shader preparation
 
-Advanced > Shaders > Threading has **Resident-only Lighting
-Specializations**. Off (default) loads valid cached optional variants
-asynchronously during gameplay. A missing, stale, or rejected cache entry
-retains general shading and records the variant for a later startup; it
-never falls through to optional source compilation. On uses resident variants and retains general
-shading on an optional miss. It suppresses new requests after startup,
-including background boot once game data is loaded. It neither invalidates
-shaders nor cancels queued work. Required general shaders retain their
-normal compilation policy. Save settings to persist the choice.
+Advanced > Shaders > Threading has **Optimised shader preparation**:
 
-Discovered variants are prepared on the next blocking startup. Pixel
-requests must match a base descriptor admitted by that startup's shader
-enumeration; stale or unsupported descriptors cannot introduce arbitrary
-compiler inputs. Composite requests select only the six supported
-interior/exterior combinations. Both use current features, macros and
-content-verified cache admission. Startup waits for composite preparation
-as well as graphics tasks. Background startup skips this optional source
-preparation, retaining discoveries for a later blocking startup. Switching
-to background mode prevents further optional compiler invocations; a
-compiler invocation already running must finish.
+-   **Next restart** (default) records discoveries and uses optimisations
+    already resident in memory. New cache reads, compilation and D3D creation
+    wait for a normal blocking process startup, even with valid disk bytecode.
+-   **Transitions (experimental)** also admits preparation during confirmed
+    loading and engine sleep/wait intervals. Opening a selection menu alone
+    does not grant permission. Loading admission does not depend on
+    Stabilizer, synchronisation or an upscaling profile change.
+-   **Gameplay (experimental)** also admits asynchronous preparation while
+    playing. This can affect frame times.
 
-Discovery history is bounded to 8192 unique requests and persisted
-atomically by the existing cache writer, outside save/load I/O blocking, in
+The policies are cumulative; none disables resident optimisations. Live
+weather, material and lighting conditions still select the shader. Detail
+Maps and required/general shader compilation retain their existing policy.
+The scope includes optional Lighting and Effect pixel shaders and the six
+IBL/Linear Lighting Composite variants. Runtime work shares **Background
+Compiler Threads**, the existing total worker accounting and cooperative
+priority; required queued work takes precedence.
+
+Closing a transition or lowering permission stops new stage admissions.
+An active compiler invocation cannot be cancelled and may finish after play
+resumes. Bytecode awaiting D3D creation keeps its continuation for another
+eligible window, releasing its worker. Publication uses the current
+configuration/source generation and retained device, after lifecycle
+protection ends. A general shader remains available throughout preparation.
+Initial world entry and save/load persistence protection remain separate.
+Reflection runs on the worker. Owner-thread publication is bounded per frame
+by Background Compiler Threads and does not create device objects. Ready and
+completed queues avoid rescanning the optional backlog on every frame.
+
+Both values of the old **Resident-only Lighting Specializations** checkbox
+migrate to **Next restart**. The old OFF state allowed cache-only gameplay
+preparation; the new default is stricter. A valid explicit new enum wins.
+Missing or invalid values select Next restart. Save settings to persist a
+session change. Saving/reloading a game is not a process restart.
+**Background Compile on Boot** remains independent and skips optional
+blocking-startup preparation without changing the selected policy.
+
+Discovery uses the existing bounded, deduplicated history (8192 requests,
+512 KiB input limit) and atomic deferred writer outside persistence holds:
 `Data/SKSE/Plugins/CommunityShaders/ShaderSpecializations-<runtime>.json`.
-SE and AE share the `SE` history; VR uses `VR`. This stores descriptors,
-not shader bytecode, paths or macros. Malformed or incompatible history is
-ignored with a warning. Shutdown flushes remaining discoveries after workers stop.
-Failed persistence retains general shading and is
-reported through DevBench. Disabling disk caching or cache reads prevents
-gameplay cache reuse but does not authorize optional source compilation.
-
-This covers dry Wetterness, inactive Snow Cover, absent mesh variation,
-absent local lights, disabled contact shadows and unused legacy subsurface
-scattering. Dry Wetterness follows the uploaded dry state, retaining the
-existing drying timeline, debug overrides and persistent shoreline
-darkening.
-
-The same policy covers ambient world Effect lighting and deferred
-composite specializations for IBL luminance ratio, linear lighting, or
-both. Eligibility uses the effective settings uploaded for the current
-frame. A missing optional shader retains the general shader while
-preparation is allowed, or for the whole miss when resident-only is on.
-
-At Info level, `[ShaderSpecialization]` reports each missing descriptor
-once per graphics-cache revision and policy (`request=allowed` or
-`request=suppressed`). These are resident misses, not counts of source
-compilation. Miss reporting is bounded to 8192 descriptor/policy pairs per
-revision and explicitly reports when further misses are omitted.
-Miss logs use the existing background pool to avoid disk flushes on the
-draw thread, so their output can lag preparation logs.
-`prepared` entries report the bytecode source, `source_compiles` (actual
-compiler invocations, including retries), publication success and elapsed
-preparation time. Disk or shared-bytecode reuse can report zero source
-compiles while still creating a D3D shader. Elapsed time includes cache
-work and object creation; it is not a frame-time or stutter measurement.
-`source=deferred_until_startup` records an optional cache miss; it is not a
-compiler failure. The graphics task finishes without a shader while its
-general fallback remains available.
-Composite entries use `composite_revision`, variant and interior/exterior
-identity instead of a pixel descriptor. Their miss reports are bounded to
-the six variants and two request policies per composite-cache revision.
+SE/AE share `SE`; VR uses `VR`. History records family/descriptor pairs,
+not save state, weather, macros or bytecode. Startup replay validates its
+enumerated bases; live replay validates requests against a current base.
+Startup enumeration prepares general pixel descriptors only, stripping
+optional specialization flags injected by draw-time lookup. Optional startup
+variants come from validated discovery history instead of duplicating every
+enumerated deferred descriptor. Shader mathematics and runtime selection are
+unchanged. Persistence failures leave resident/general shading usable and
+appear in status.
 
 DevBench `communityshaders.shader_api`, action `specializationPolicy`, reads
-the setting; supplying boolean `residentOnly` changes it for the session.
-The normal settings save can persist that choice. The snapshot reports
-`compilation.residentOnlyLightingSpecializations` and
-`compilation.specializationPreparation`. The latter reports the gameplay
-policy, current source-compilation permission, discovery count,
-persistence failures and outstanding composite workers. The policy action
-returns the same data as `preparation`. Use the same compiled
-revision and cache conditions for comparisons; a cache warmed in the first
-condition cannot measure cold first-use behavior in the second condition.
+or sets integer `preparationMode`: 0 restart, 1 transitions, 2 gameplay.
+The deprecated `residentOnly` input maps either value to 0; an explicit enum
+wins. Its legacy output is true only for mode 0. `preparation` and snapshot
+`compilation.specializationPreparation` report the mode, admission reason,
+window generation/kinds, shared budget, queued/deferred/in-flight and
+awaiting-publication counts,
+cache/source/device stage admissions, cache hits, compiler invocations,
+post-window completions, discovery count and persistence failure.
+Stage counts describe admissions rather than instantaneous physical API
+boundaries. Frame-time or performance claims require controlled runtime
+measurements with comparable cache, scene and headset conditions.
 
 ## Verifying refactors
 

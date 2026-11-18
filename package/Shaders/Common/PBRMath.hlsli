@@ -12,6 +12,7 @@ namespace PBR
 		static const float MaxRoughness = 1.0f;
 		static const float MinGlintDensity = 1.0f;
 		static const float MaxGlintDensity = 40.0f;
+		static const float GlintEnableThreshold = 1.1f;
 		static const float MinGlintRoughness = 0.005f;
 		static const float MaxGlintRoughness = 0.3f;
 		static const float MinGlintDensityRandomization = 0.0f;

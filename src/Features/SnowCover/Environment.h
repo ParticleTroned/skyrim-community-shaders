@@ -7,6 +7,8 @@ namespace SnowEnvironment
 	std::string_view GetCurrentWorldspaceOrCellEditorID();
 	bool IsObjectLODTree(const char* name, const RE::BSShaderProperty* property);
 	bool IsHarvestableFlora(RE::TESObjectREFR* ref);
+	/** Classifies the current cut-out submesh without relying on repurposed PBR flags. */
+	bool IsFoliageCard(const RE::BSRenderPass* pass);
 	RE::NiBound MergeBounds(const RE::NiBound& lhs, const RE::NiBound& rhs);
 	float GetFractionalGameMonth(const RE::Calendar& calendar);
 	float GetPrecipitationIntensity(const RE::TESWeather* weather);

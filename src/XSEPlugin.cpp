@@ -278,6 +278,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 
 				// Register scene settings event handler (Interior Only transitions)
 				SceneSettingsManager::MenuOpenCloseEventHandler::Register();
+				shaderCache->RegisterShaderPreparationEvents();
 
 				// External shader-facing requirements must become immutable before
 				// any cache compatibility decision or shader compilation.

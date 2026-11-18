@@ -285,6 +285,29 @@ class ShaderCompileIdentityTests(unittest.TestCase):
                 self.assertGreater(len(tasks), 1000)
                 self.assertEqual(len(compile_task_defines(tasks)), len(tasks))
 
+    def test_vr_lighting_cache_covers_detail_and_hair_decal_runtime_requests(self) -> None:
+        fixture = json.loads((REPO / "tests/data/shader_cache_vr_lighting_runtime_requests.json").read_text(encoding="utf-8"))
+        states = {"DetailMaps": True, "Wetterness": True, "SnowCover": True, "LightLimitFix": True,
+                  "AdaptiveBrightness": True, "ImageBasedLighting": True, "DynamicCubemaps": True}
+        with tempfile.TemporaryDirectory() as temporary:
+            filtered = BUILDER.filter_profile_defines(
+                BUILDER.configs_for(REPO)["VR"], Path(temporary) / "VR.yaml", yaml,
+                BUILDER.SHIPPED_CACHE_PROFILE, feature_states=states,
+                additional_excluded_defines=frozenset({"HORIZON_FIX"}),
+            )
+            generated = compile_task_defines(parse_shader_configs(str(filtered)))
+            self.assertEqual(len(fixture["requests"]), 73)
+            for request in fixture["requests"]:
+                descriptor = request["descriptor"]
+                expected = compile_task_defines([(
+                    "Lighting.hlsl", "PSHADER", "Lighting:Pixel:" + descriptor,
+                    [*fixture["commonDefines"], *request["defines"], "PSHADER=", "VR="],
+                )])
+                with self.subTest(descriptor=descriptor):
+                    for key, macros in expected.items():
+                        self.assertIn(key, generated)
+                        self.assertEqual(generated[key], macros)
+
     def test_category_cache_covers_both_runtime_layouts(self) -> None:
         flags = BUILDER.character_category_flags(REPO)
         self.assertEqual(flags, {

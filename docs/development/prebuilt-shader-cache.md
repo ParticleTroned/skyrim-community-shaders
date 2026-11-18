@@ -152,6 +152,14 @@ vertex descriptors are unchanged because the dry-weather bit has a different
 meaning in that stage. Per-draw mesh-variation and local-light specializations
 remain outside this overlay and compile on demand.
 
+When Detail Maps is loaded, eligible Lighting pixels also receive matching
+`DETAIL_MAPS` variants. The builder reads the runtime's eligibility mask and
+techniques from `DetailMapsPolicy.h`, including its forward-enabled startup
+prewarm path, and rejects unsupported policy changes. These entries combine
+with weather states, deferred specializations and category layouts. The
+shared inventory also includes unskinned hair/decal pixel variants for both
+SE/AE and VR. Captured provenance and vertex entries remain unchanged.
+
 Both bundled profiles apply `PBR_GRASS=1` and the empty
 `GRASS_OPTIMIZATIONS` macro to RunGrass vertex and pixel stages only. Macro
 values must match the native factory: empty `PBR_GRASS` is a different cache

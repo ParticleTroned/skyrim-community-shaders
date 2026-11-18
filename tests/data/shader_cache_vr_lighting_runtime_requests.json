@@ -1,0 +1,484 @@
+{
+    "commonDefines": [
+        "ADAPTIVE_BALANCE=",
+        "CLOUD_SHADOWS=",
+        "CS_HAIR=",
+        "DYNAMIC_CUBEMAPS=",
+        "EXTENDED_MATERIALS=",
+        "EXTENDED_TRANSLUCENCY=",
+        "IBL=",
+        "ISL=",
+        "LIGHT_LIMIT_FIX=",
+        "LOD_BLENDING=",
+        "SCREEN_SPACE_SHADOWS=",
+        "SHADOWSPLITCOUNT=3",
+        "SKYLIGHTING=",
+        "SNOW_COVER=",
+        "SSS=",
+        "TERRAIN_BLENDING=",
+        "TERRAIN_SHADOWS=",
+        "TERRAIN_VARIATION=",
+        "UNIFIED_WATER=",
+        "VC=",
+        "VOLUMETRIC_SHADOWS=",
+        "WATER_EFFECTS=",
+        "WETTERNESS="
+    ],
+    "requests": [
+        {
+            "descriptor": "11C031",
+            "defines": [
+                "ANISO_LIGHTING=",
+                "CHARACTER_CATEGORY=",
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "DO_ALPHA_TEST=",
+                "PROJECTED_UV="
+            ]
+        },
+        {
+            "descriptor": "3104031",
+            "defines": [
+                "CHARACTER_CATEGORY=",
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "DO_ALPHA_TEST=",
+                "PARALLAX="
+            ]
+        },
+        {
+            "descriptor": "3104011",
+            "defines": ["DEFERRED=", "DETAIL_MAPS=", "DO_ALPHA_TEST=", "PARALLAX="]
+        },
+        {
+            "descriptor": "1114031",
+            "defines": [
+                "ANISO_LIGHTING=",
+                "CHARACTER_CATEGORY=",
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "DO_ALPHA_TEST=",
+                "ENVMAP="
+            ]
+        },
+        {
+            "descriptor": "11C011",
+            "defines": [
+                "ANISO_LIGHTING=",
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "DO_ALPHA_TEST=",
+                "PROJECTED_UV="
+            ]
+        },
+        {
+            "descriptor": "114031",
+            "defines": [
+                "ANISO_LIGHTING=",
+                "CHARACTER_CATEGORY=",
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "DO_ALPHA_TEST="
+            ]
+        },
+        {
+            "descriptor": "3004031",
+            "defines": ["CHARACTER_CATEGORY=", "DEFERRED=", "DETAIL_MAPS=", "PARALLAX="]
+        },
+        {
+            "descriptor": "1C031",
+            "defines": [
+                "ANISO_LIGHTING=",
+                "CHARACTER_CATEGORY=",
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "PROJECTED_UV="
+            ]
+        },
+        {
+            "descriptor": "1114011",
+            "defines": ["ANISO_LIGHTING=", "DEFERRED=", "DETAIL_MAPS=", "DO_ALPHA_TEST=", "ENVMAP="]
+        },
+        {
+            "descriptor": "B104033",
+            "defines": [
+                "CHARACTER_CATEGORY=",
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "DO_ALPHA_TEST=",
+                "ENVMAP=",
+                "MULTI_LAYER_PARALLAX=",
+                "SKINNED="
+            ]
+        },
+        {
+            "descriptor": "1014031",
+            "defines": [
+                "ANISO_LIGHTING=",
+                "CHARACTER_CATEGORY=",
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "ENVMAP="
+            ]
+        },
+        {
+            "descriptor": "14031",
+            "defines": ["ANISO_LIGHTING=", "CHARACTER_CATEGORY=", "DEFERRED=", "DETAIL_MAPS="]
+        },
+        {
+            "descriptor": "B004033",
+            "defines": [
+                "CHARACTER_CATEGORY=",
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "ENVMAP=",
+                "MULTI_LAYER_PARALLAX=",
+                "SKINNED="
+            ]
+        },
+        {
+            "descriptor": "3004011",
+            "defines": ["DEFERRED=", "DETAIL_MAPS=", "PARALLAX="]
+        },
+        {
+            "descriptor": "B104013",
+            "defines": [
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "DO_ALPHA_TEST=",
+                "ENVMAP=",
+                "MULTI_LAYER_PARALLAX=",
+                "SKINNED="
+            ]
+        },
+        {
+            "descriptor": "1C011",
+            "defines": ["ANISO_LIGHTING=", "DEFERRED=", "DETAIL_MAPS=", "PROJECTED_UV="]
+        },
+        {
+            "descriptor": "114011",
+            "defines": ["ANISO_LIGHTING=", "DEFERRED=", "DETAIL_MAPS=", "DO_ALPHA_TEST="]
+        },
+        {
+            "descriptor": "1014011",
+            "defines": ["ANISO_LIGHTING=", "DEFERRED=", "DETAIL_MAPS=", "ENVMAP="]
+        },
+        {
+            "descriptor": "14011",
+            "defines": ["ANISO_LIGHTING=", "DEFERRED=", "DETAIL_MAPS="]
+        },
+        {
+            "descriptor": "B004013",
+            "defines": ["DEFERRED=", "DETAIL_MAPS=", "ENVMAP=", "MULTI_LAYER_PARALLAX=", "SKINNED="]
+        },
+        {
+            "descriptor": "B104031",
+            "defines": [
+                "CHARACTER_CATEGORY=",
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "DO_ALPHA_TEST=",
+                "ENVMAP=",
+                "MULTI_LAYER_PARALLAX="
+            ]
+        },
+        {
+            "descriptor": "B004031",
+            "defines": [
+                "CHARACTER_CATEGORY=",
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "ENVMAP=",
+                "MULTI_LAYER_PARALLAX="
+            ]
+        },
+        {
+            "descriptor": "B104011",
+            "defines": [
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "DO_ALPHA_TEST=",
+                "ENVMAP=",
+                "MULTI_LAYER_PARALLAX="
+            ]
+        },
+        {
+            "descriptor": "B004011",
+            "defines": ["DEFERRED=", "DETAIL_MAPS=", "ENVMAP=", "MULTI_LAYER_PARALLAX="]
+        },
+        {
+            "descriptor": "E10C031",
+            "defines": [
+                "CHARACTER_CATEGORY=",
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "DO_ALPHA_TEST=",
+                "MULTI_INDEX=",
+                "PROJECTED_UV=",
+                "SPARKLE="
+            ]
+        },
+        {
+            "descriptor": "11C001",
+            "defines": ["ANISO_LIGHTING=", "DETAIL_MAPS=", "DO_ALPHA_TEST=", "PROJECTED_UV="]
+        },
+        {
+            "descriptor": "3104001",
+            "defines": ["DETAIL_MAPS=", "DO_ALPHA_TEST=", "PARALLAX="]
+        },
+        {
+            "descriptor": "1114001",
+            "defines": ["ANISO_LIGHTING=", "DETAIL_MAPS=", "DO_ALPHA_TEST=", "ENVMAP="]
+        },
+        {
+            "descriptor": "E00C031",
+            "defines": [
+                "CHARACTER_CATEGORY=",
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "MULTI_INDEX=",
+                "PROJECTED_UV=",
+                "SPARKLE="
+            ]
+        },
+        {
+            "descriptor": "E10C011",
+            "defines": [
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "DO_ALPHA_TEST=",
+                "MULTI_INDEX=",
+                "PROJECTED_UV=",
+                "SPARKLE="
+            ]
+        },
+        {
+            "descriptor": "C10C031",
+            "defines": [
+                "CHARACTER_CATEGORY=",
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "DO_ALPHA_TEST=",
+                "PROJECTED_UV=",
+                "TREE_ANIM="
+            ]
+        },
+        {
+            "descriptor": "114001",
+            "defines": ["ANISO_LIGHTING=", "DETAIL_MAPS=", "DO_ALPHA_TEST="]
+        },
+        {
+            "descriptor": "1C001",
+            "defines": ["ANISO_LIGHTING=", "DETAIL_MAPS=", "PROJECTED_UV="]
+        },
+        {
+            "descriptor": "3004001",
+            "defines": ["DETAIL_MAPS=", "PARALLAX="]
+        },
+        {
+            "descriptor": "E00C011",
+            "defines": ["DEFERRED=", "DETAIL_MAPS=", "MULTI_INDEX=", "PROJECTED_UV=", "SPARKLE="]
+        },
+        {
+            "descriptor": "C104031",
+            "defines": [
+                "CHARACTER_CATEGORY=",
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "DO_ALPHA_TEST=",
+                "TREE_ANIM="
+            ]
+        },
+        {
+            "descriptor": "1014001",
+            "defines": ["ANISO_LIGHTING=", "DETAIL_MAPS=", "ENVMAP="]
+        },
+        {
+            "descriptor": "C10C011",
+            "defines": [
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "DO_ALPHA_TEST=",
+                "PROJECTED_UV=",
+                "TREE_ANIM="
+            ]
+        },
+        {
+            "descriptor": "C00C031",
+            "defines": [
+                "CHARACTER_CATEGORY=",
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "PROJECTED_UV=",
+                "TREE_ANIM="
+            ]
+        },
+        {
+            "descriptor": "14001",
+            "defines": ["ANISO_LIGHTING=", "DETAIL_MAPS="]
+        },
+        {
+            "descriptor": "C104011",
+            "defines": ["DEFERRED=", "DETAIL_MAPS=", "DO_ALPHA_TEST=", "TREE_ANIM="]
+        },
+        {
+            "descriptor": "110C031",
+            "defines": [
+                "CHARACTER_CATEGORY=",
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "DO_ALPHA_TEST=",
+                "ENVMAP=",
+                "PROJECTED_UV="
+            ]
+        },
+        {
+            "descriptor": "C004031",
+            "defines": ["CHARACTER_CATEGORY=", "DEFERRED=", "DETAIL_MAPS=", "TREE_ANIM="]
+        },
+        {
+            "descriptor": "C00C011",
+            "defines": ["DEFERRED=", "DETAIL_MAPS=", "PROJECTED_UV=", "TREE_ANIM="]
+        },
+        {
+            "descriptor": "B104001",
+            "defines": ["DETAIL_MAPS=", "DO_ALPHA_TEST=", "ENVMAP=", "MULTI_LAYER_PARALLAX="]
+        },
+        {
+            "descriptor": "1104031",
+            "defines": [
+                "CHARACTER_CATEGORY=",
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "DO_ALPHA_TEST=",
+                "ENVMAP="
+            ]
+        },
+        {
+            "descriptor": "110C011",
+            "defines": ["DEFERRED=", "DETAIL_MAPS=", "DO_ALPHA_TEST=", "ENVMAP=", "PROJECTED_UV="]
+        },
+        {
+            "descriptor": "100C031",
+            "defines": [
+                "CHARACTER_CATEGORY=",
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "ENVMAP=",
+                "PROJECTED_UV="
+            ]
+        },
+        {
+            "descriptor": "10C031",
+            "defines": [
+                "CHARACTER_CATEGORY=",
+                "DEFERRED=",
+                "DETAIL_MAPS=",
+                "DO_ALPHA_TEST=",
+                "PROJECTED_UV="
+            ]
+        },
+        {
+            "descriptor": "C004011",
+            "defines": ["DEFERRED=", "DETAIL_MAPS=", "TREE_ANIM="]
+        },
+        {
+            "descriptor": "B004001",
+            "defines": ["DETAIL_MAPS=", "ENVMAP=", "MULTI_LAYER_PARALLAX="]
+        },
+        {
+            "descriptor": "1104011",
+            "defines": ["DEFERRED=", "DETAIL_MAPS=", "DO_ALPHA_TEST=", "ENVMAP="]
+        },
+        {
+            "descriptor": "100C011",
+            "defines": ["DEFERRED=", "DETAIL_MAPS=", "ENVMAP=", "PROJECTED_UV="]
+        },
+        {
+            "descriptor": "10C011",
+            "defines": ["DEFERRED=", "DETAIL_MAPS=", "DO_ALPHA_TEST=", "PROJECTED_UV="]
+        },
+        {
+            "descriptor": "104031",
+            "defines": ["CHARACTER_CATEGORY=", "DEFERRED=", "DETAIL_MAPS=", "DO_ALPHA_TEST="]
+        },
+        {
+            "descriptor": "C031",
+            "defines": ["CHARACTER_CATEGORY=", "DEFERRED=", "DETAIL_MAPS=", "PROJECTED_UV="]
+        },
+        {
+            "descriptor": "1004031",
+            "defines": ["CHARACTER_CATEGORY=", "DEFERRED=", "DETAIL_MAPS=", "ENVMAP="]
+        },
+        {
+            "descriptor": "C011",
+            "defines": ["DEFERRED=", "DETAIL_MAPS=", "PROJECTED_UV="]
+        },
+        {
+            "descriptor": "4031",
+            "defines": ["CHARACTER_CATEGORY=", "DEFERRED=", "DETAIL_MAPS="]
+        },
+        {
+            "descriptor": "104011",
+            "defines": ["DEFERRED=", "DETAIL_MAPS=", "DO_ALPHA_TEST="]
+        },
+        {
+            "descriptor": "1004011",
+            "defines": ["DEFERRED=", "DETAIL_MAPS=", "ENVMAP="]
+        },
+        {
+            "descriptor": "E10C001",
+            "defines": [
+                "DETAIL_MAPS=",
+                "DO_ALPHA_TEST=",
+                "MULTI_INDEX=",
+                "PROJECTED_UV=",
+                "SPARKLE="
+            ]
+        },
+        {
+            "descriptor": "4011",
+            "defines": ["DEFERRED=", "DETAIL_MAPS="]
+        },
+        {
+            "descriptor": "E00C001",
+            "defines": ["DETAIL_MAPS=", "MULTI_INDEX=", "PROJECTED_UV=", "SPARKLE="]
+        },
+        {
+            "descriptor": "C10C001",
+            "defines": ["DETAIL_MAPS=", "DO_ALPHA_TEST=", "PROJECTED_UV=", "TREE_ANIM="]
+        },
+        {
+            "descriptor": "C00C001",
+            "defines": ["DETAIL_MAPS=", "PROJECTED_UV=", "TREE_ANIM="]
+        },
+        {
+            "descriptor": "110C001",
+            "defines": ["DETAIL_MAPS=", "DO_ALPHA_TEST=", "ENVMAP=", "PROJECTED_UV="]
+        },
+        {
+            "descriptor": "10C001",
+            "defines": ["DETAIL_MAPS=", "DO_ALPHA_TEST=", "PROJECTED_UV="]
+        },
+        {
+            "descriptor": "1104001",
+            "defines": ["DETAIL_MAPS=", "DO_ALPHA_TEST=", "ENVMAP="]
+        },
+        {
+            "descriptor": "100C001",
+            "defines": ["DETAIL_MAPS=", "ENVMAP=", "PROJECTED_UV="]
+        },
+        {
+            "descriptor": "1004001",
+            "defines": ["DETAIL_MAPS=", "ENVMAP="]
+        },
+        {
+            "descriptor": "6108011",
+            "defines": ["DEFERRED=", "DEPTH_WRITE_DECALS=", "DO_ALPHA_TEST=", "HAIR="]
+        },
+        {
+            "descriptor": "4019",
+            "defines": ["DEFERRED=", "DETAIL_MAPS=", "TRUE_PBR="]
+        }
+    ]
+}

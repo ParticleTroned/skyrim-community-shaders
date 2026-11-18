@@ -1126,6 +1126,64 @@ class ShaderCachePackagingTests(unittest.TestCase):
 
 
 class LightingSpecializationWorkloadTests(unittest.TestCase):
+    def test_detail_maps_pairs_only_runtime_eligible_pixels(self) -> None:
+        flag, excluded, techniques = BUILDER.lighting_detail_map_policy(REPO)
+        self.assertEqual(flag, 1 << 14)
+        self.assertEqual(excluded, sum(1 << bit for bit in (2, 6, 14, 18, 30, 31)))
+        self.assertEqual(techniques, {0, 1, 2, 3, 7, 11, 12, 14})
+        descriptors = {1 | (technique << 24) for technique in range(20)}
+        descriptors |= {1 | (1 << bit) for bit in (2, 6, 18, 30, 31)}
+        descriptors |= {value | 0x10 for value in tuple(descriptors)}
+        vertex = {"entry": "Lighting:Vertex:1", "defines": ["VC"]}
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled):
+                config = {"shaders": [{"file": "Lighting.hlsl", "configs": {
+                    "VSHADER": {"entries": [vertex.copy()]},
+                    "PSHADER": {"entries": [{"entry": f"Lighting:Pixel:{value:X}",
+                                             "defines": ["VC", "DEFERRED"] if value & 0x10 else ["VC"]}
+                                            for value in sorted(descriptors)]},
+                }}]}
+                BUILDER.append_lighting_specialization_variants(config, REPO, {"DetailMaps": enabled})
+                stages = config["shaders"][0]["configs"]
+                self.assertEqual(stages["VSHADER"]["entries"], [vertex])
+                entries = {int(entry["entry"].rsplit(":", 1)[1], 16): entry["defines"] for entry in stages["PSHADER"]["entries"]}
+                eligible = {value for value in descriptors if not value & excluded and (value >> 24) & 0x3F in techniques}
+                eligible |= {value | 0x20000 for value in tuple(eligible) if value & 0x10}
+                self.assertEqual({value & ~flag for value in entries if value & flag}, eligible if enabled else set())
+                for value, defines in entries.items():
+                    self.assertEqual("DETAIL_MAPS" in defines, bool(value & flag))
+                    if value & flag:
+                        self.assertEqual([name for name in defines if name != "DETAIL_MAPS"], entries[value & ~flag])
+                self.assertEqual(BUILDER.append_lighting_specialization_variants(config, REPO, {"DetailMaps": enabled}), 0)
+
+    def test_detail_maps_rejects_macro_mismatch_and_policy_drift(self) -> None:
+        for key, defines in (("4001", []), ("1", ["DETAIL_MAPS"])):
+            with self.subTest(key=key), self.assertRaisesRegex(SystemExit, "flag/macros disagree"):
+                BUILDER.append_lighting_specialization_variants({"shaders": [{"file": "Lighting.hlsl", "configs": {
+                    "PSHADER": {"entries": [{"entry": "Lighting:Pixel:" + key, "defines": defines}]},
+                }}]}, REPO, {"DetailMaps": True})
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            policy = source / "src/Features/DetailMapsPolicy.h"
+            policy.parent.mkdir(parents=True)
+            text = (REPO / "src/Features/DetailMapsPolicy.h").read_text(encoding="utf-8")
+            policy.write_text(text.replace("descriptor >> 24", "descriptor >> 25"), encoding="utf-8")
+            with self.assertRaisesRegex(SystemExit, "unsupported runtime Detail Maps eligibility"):
+                BUILDER.lighting_detail_map_policy(source)
+
+    def test_shared_hair_decal_overlay_is_idempotent_and_rejects_conflicts(self) -> None:
+        config = {"shaders": [{"file": "Lighting.hlsl", "configs": {"PSHADER": {"entries": []}}}]}
+        BUILDER.append_declared_shader_variants(config, BUILDER.SHARED_SHADER_VARIANTS)
+        original = copy.deepcopy(config)
+        BUILDER.append_declared_shader_variants(config, BUILDER.SHARED_SHADER_VARIANTS)
+        self.assertEqual(config, original)
+        entries = config["shaders"][0]["configs"]["PSHADER"]["entries"]
+        self.assertEqual(len(entries), 4)
+        self.assertEqual({entry["entry"] for entry in entries}, set(BUILDER.SHARED_SHADER_VARIANTS["Lighting.hlsl"]["PSHADER"]))
+        entries[0]["defines"] = ["HAIR"]
+        with self.assertRaisesRegex(SystemExit, "conflicts with"):
+            BUILDER.append_declared_shader_variants(config, BUILDER.SHARED_SHADER_VARIANTS)
+
     def test_weather_combinations_preserve_category_layouts_and_vertices(self) -> None:
         vertex = {"entry": "Lighting:Vertex:200001", "defines": ["VC", "SHADOW_DIR"]}
         config = {"shaders": [{"file": "Lighting.hlsl", "configs": {

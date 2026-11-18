@@ -784,7 +784,7 @@ namespace
 		ID3D11DepthStencilState* depth, ID3D11RasterizerState* raster)
 	{
 		winrt::com_ptr<ID3D11DeviceContext1> context1, nestedContext;
-		winrt::com_ptr<ID3DDeviceContextState> isolated, nested;
+		std::unique_ptr<Util::IsolatedDeviceContextState> isolated, nested;
 		Require(Util::CreateIsolatedDeviceContextState(device, context, context1, isolated, "ReverseZStateTest::Isolated"), "Isolated context creation failed");
 		Require(Util::CreateIsolatedDeviceContextState(device, context, nestedContext, nested, "ReverseZStateTest::Nested"), "Nested context creation failed");
 		D3D11_TEXTURE2D_DESC desc{};

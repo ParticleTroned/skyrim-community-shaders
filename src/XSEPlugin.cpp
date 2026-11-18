@@ -19,6 +19,7 @@
 #include "Features/HorizonFix.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
+#include "Features/RenderDoc.h"
 #include "Features/Skylighting.h"
 #include "Features/Upscaling.h"
 #include "Features/VR/StabilizerIntegration.h"
@@ -485,6 +486,7 @@ bool Load()
 
 	CheckIncompatiblePlugins();
 	if (errors.empty()) {
+		globals::features::renderDoc.Load();
 		Hooks::InstallEarlyHooks();
 		logger::info("Calling feature Load methods");
 		Feature::ForEachLoadedFeature("Load", [](Feature* feature) { feature->Load(); });

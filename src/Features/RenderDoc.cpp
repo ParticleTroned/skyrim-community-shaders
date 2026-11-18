@@ -3,6 +3,7 @@
 #include "Features/RenderDoc.h"
 
 #include "Globals.h"
+#include "Utils/DeviceContextState.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Format.h"
 #include "Utils/StringUtils.h"
@@ -42,74 +43,55 @@ RenderDoc* RenderDoc::GetSingleton()
 
 void RenderDoc::Load()
 {
-	// Only load RenderDoc if the user has enabled capture
-	if (!enableRenderDocCapture) {
-		logger::debug("[RenderDoc] RenderDoc capture disabled, skipping initialization");
+	if (std::exchange(loadAttempted, true))
 		return;
-	}
 
-	// Load RenderDoc only from our expected location. Do not fall back to system PATH.
-	std::filesystem::path renderdocPath = GetRenderDocDllPath();
-	if (renderdocPath.empty() || !std::filesystem::exists(renderdocPath)) {
-		logger::debug("[RenderDoc] renderdoc.dll not found at expected path: {}", renderdocPath.string());
+	// Injection owns its module; keep it loaded even if API negotiation fails.
+	auto module = GetModuleHandleW(L"renderdoc.dll");
+	if (!module && enableRenderDocCapture) {
+		const auto path = GetRenderDocDllPath();
+		if (!path.empty() && std::filesystem::exists(path))
+			module = LoadLibraryW(path.c_str());
+		if (!module)
+			logger::warn("[RenderDoc] Could not load configured capture library");
+	}
+	renderDocModule = module;
+	if (!module)
 		return;
+	wchar_t loadedPath[MAX_PATH]{};
+	if (GetModuleFileNameW(module, loadedPath, static_cast<DWORD>(std::size(loadedPath))) != 0) {
+		const auto loadedVersion = Util::GetDllVersion(loadedPath);
+		logger::info("[RenderDoc] Loaded {} from {}", loadedVersion ? Util::GetFormattedVersion(*loadedVersion) : "unknown version", Util::WStringToString(loadedPath));
 	}
 
-	std::wstring widePath = renderdocPath.wstring();
-	HMODULE moduleHandle = LoadLibraryW(widePath.c_str());
-	logger::debug("[RenderDoc] Attempting to load renderdoc.dll from {}", renderdocPath.string());
-
-	renderDocModule = moduleHandle;
-	if (!renderDocModule) {
-		logger::debug("[RenderDoc] Failed to load renderdoc.dll from {}", renderdocPath.string());
-		return;
-	}
-
-	// Log RenderDoc DLL version if possible. Prefer the actual loaded module path
-	try {
-		std::wstring dllPathW;
-		// If we had a computed path and it exists, prefer that; otherwise ask the OS for the loaded module filename
-		if (!renderdocPath.empty() && std::filesystem::exists(renderdocPath)) {
-			dllPathW = renderdocPath.wstring();
-		} else {
-			wchar_t buf[MAX_PATH]{ 0 };
-			if (GetModuleFileNameW((HMODULE)renderDocModule, buf, (DWORD)std::size(buf)) != 0) {
-				dllPathW = std::wstring(buf);
-			}
-		}
-
-		if (!dllPathW.empty()) {
-			auto ver = Util::GetDllVersion(dllPathW);
-			if (ver.has_value()) {
-				logger::info("[RenderDoc] Loaded renderdoc.dll version {} (from {})", Util::GetFormattedVersion(*ver), Util::WStringToString(dllPathW));
-			} else {
-				logger::info("[RenderDoc] Loaded renderdoc.dll (version unknown) from {}", Util::WStringToString(dllPathW));
-			}
-		} else {
-			logger::info("[RenderDoc] Loaded renderdoc.dll (module path unknown)");
-		}
-	} catch (...) {
-		logger::info("[RenderDoc] Loaded renderdoc.dll (version lookup failed)");
-	}
-
-	// Get the API function pointer
-	auto RENDERDOC_GetAPI = (pRENDERDOC_GetAPI)GetProcAddress((HMODULE)renderDocModule, "RENDERDOC_GetAPI");
-	if (!RENDERDOC_GetAPI) {
-		logger::warn("[RenderDoc] Failed to get RENDERDOC_GetAPI function");
-		FreeLibrary((HMODULE)renderDocModule);
-		renderDocModule = nullptr;
-		return;
-	}
-
-	// Get the API interface
-	int ret = RENDERDOC_GetAPI(eRENDERDOC_API_Version_1_7_0, (void**)&renderDocApi);
-	if (ret != 1 || !renderDocApi) {
-		logger::warn("[RenderDoc] Failed to get API interface");
-		FreeLibrary((HMODULE)renderDocModule);
-		renderDocModule = nullptr;
+	using StateCompatibilityVersion = uint32_t(__cdecl*)();
+	const auto stateVersion = reinterpret_cast<StateCompatibilityVersion>(GetProcAddress(module, "RENDERDOC_GetD3D11StateCompatibilityVersion"));
+	safeStateRestoration = stateVersion && stateVersion() >= 2;
+	Util::UseManualDeviceContextState(safeStateRestoration);
+	if (!safeStateRestoration)
+		logger::warn("[RenderDoc] Capture library lacks safe D3D11 state restoration; VR upscaling remains disabled");
+	const auto getAPI = reinterpret_cast<pRENDERDOC_GetAPI>(GetProcAddress(module, "RENDERDOC_GetAPI"));
+	if (!getAPI || getAPI(eRENDERDOC_API_Version_1_3_0, reinterpret_cast<void**>(&renderDocApi)) != 1 || !renderDocApi) {
 		renderDocApi = nullptr;
+		logger::warn("[RenderDoc] API 1.3 is required for vendor passthrough; upscaling remains disabled");
 		return;
 	}
+	vendorPassthrough = renderDocApi->SetCaptureOptionU32(eRENDERDOC_Option_AllowUnsupportedVendorExtensions, 0x10DE) == 1;
+	if (!vendorPassthrough)
+		logger::warn("[RenderDoc] NvAPI passthrough rejected; upscaling remains disabled");
+	if (safeStateRestoration) {
+		RENDERDOC_API_1_7_0* stereoAPI = nullptr;
+		if (getAPI(eRENDERDOC_API_Version_1_4_0, reinterpret_cast<void**>(&stereoAPI)) == 1 && stereoAPI)
+			renderDocApi = stereoAPI;
+		else {
+			safeStateRestoration = false;
+			logger::warn("[RenderDoc] API 1.4 is required for stereo capture cancellation");
+		}
+	}
+	lastCaptureCount = renderDocApi->GetNumCaptures();
+	// External capture sessions retain their paths, overlay and hotkeys.
+	if (!enableRenderDocCapture)
+		return;
 
 	// Build a base capture file path template including the Skyrim runtime and version so captures are easy to identify
 	try {
@@ -138,17 +120,6 @@ void RenderDoc::Load()
 	// Menu input owns capture hotkeys so they respect the configured frame count.
 	renderDocApi->SetCaptureKeys(nullptr, 0);
 
-	// RenderDoc disables vendor extensions (NvAPI) by default: nvapi_QueryInterface returns
-	// NULL for unsupported NvAPI interfaces (known or whitelisted ones still pass through).
-	// Skyrim relies on NvAPI for D3D11, and on hybrid graphics systems this makes the
-	// driver remove the device at the first Present, crashing the game shortly after
-	// startup. 0x10DE is the NVIDIA vendor id, enabling NvAPI passthrough.
-	// Available since RenderDoc 1.3.0.
-	const int result = renderDocApi->SetCaptureOptionU32(eRENDERDOC_Option_AllowUnsupportedVendorExtensions, 0x10DE);
-	if (result != 1) {
-		logger::warn("[RenderDoc] Failed to enable NvAPI passthrough (renderdoc.dll rejected vendor extensions, result {})", result);
-	}
-
 	// Initialize capture count tracking
 	lastCaptureCount = renderDocApi->GetNumCaptures();
 
@@ -166,10 +137,12 @@ void RenderDoc::DrawSettings()
 {
 	static MenuUI::ActionFeedback feedback;
 	const bool captureReady = enableRenderDocCapture && IsAvailable();
+	if (renderDocModule && !safeStateRestoration)
+		Util::Text::WrappedWarning("DLSS and Render Scale capture require the CSX-compatible RenderDoc fork with D3D11 state restoration support. Install its DLL and restart.");
 	if (enableRenderDocCapture && !IsAvailable())
 		Util::Text::WrappedWarning("RenderDoc unavailable. Enable it, save settings and restart. If still unavailable, check that Data/Renderdoc/renderdoc.dll is installed and loads.");
 	else if (!enableRenderDocCapture && IsAvailable())
-		Util::Text::WrappedWarning("Save settings and restart to unload RenderDoc. Capture overhead remains until then.");
+		Util::Text::WrappedWarning("RenderDoc remains loaded for this session. Disable capture, save and restart without external injection to unload it.");
 	MenuUI::SettingsPage page("RenderDoc", {
 											   { "capture", "Capture", "Enable capture, then choose the frames to record.", "Capture activation and frames", true, true, "Choose capture and storage", nullptr, nullptr, captureReady },
 											   { "storage", "Storage", "Monitor storage and remove old captures.", "Disk usage and cleanup", true, true, nullptr },
@@ -204,7 +177,7 @@ void RenderDoc::DrawSettings()
 				if (Util::Widgets::SliderInt("Capture Frames", &captureFrameCountUI, static_cast<int>(kMinCaptureFrameCount), static_cast<int>(kMaxCaptureFrameCount), "%d", ImGuiSliderFlags_AlwaysClamp)) {
 					SetCaptureFrameCount(static_cast<uint32_t>(captureFrameCountUI));
 				}
-				Util::AddTooltip("Number of consecutive frames to capture. 1 uses a normal RenderDoc capture; higher values use TriggerMultiFrameCapture.");
+				Util::AddTooltip("Number of consecutive frames to capture. Compatible VR captures include both submit eyes in each frame.");
 
 				if (ImGui::Button("Create Capture")) {
 					// Check available disk space before allowing capture
@@ -594,6 +567,8 @@ void RenderDoc::SetCaptureEnabled(bool a_enabled)
 		}
 	}
 	enableRenderDocCapture = a_enabled;
+	if (!a_enabled)
+		vrFrameCapture.CancelPending();
 }
 
 void RenderDoc::DrawSettingsEnabledControl()
@@ -676,7 +651,7 @@ const std::vector<CaptureFileInfo>& RenderDoc::GetCachedCaptureFiles()
 	auto cacheAge = now - cacheLastUpdate;
 	auto maxAge = std::chrono::seconds(kCacheRefreshIntervalSeconds);
 
-	if (!cacheValid || cacheAge > maxAge) {
+	if (cacheInvalidated.exchange(false) || !cacheValid || cacheAge > maxAge) {
 		RefreshCaptureFileCache();
 	}
 
@@ -685,36 +660,41 @@ const std::vector<CaptureFileInfo>& RenderDoc::GetCachedCaptureFiles()
 
 void RenderDoc::InvalidateCaptureCache()
 {
-	cacheValid = false;
-	cacheLastUpdate = std::chrono::steady_clock::time_point::min();
+	cacheInvalidated.store(true);
+}
+
+void RenderDoc::BeginVRFrameCapture(uint64_t cycle, bool posesReady)
+{
+	if (IsUpscalingCompatible())
+		vrFrameCapture.Begin(renderDocApi, globals::d3d::device, cycle, posesReady);
+}
+
+void RenderDoc::CompleteVRFrameCapture(uint64_t cycle)
+{
+	if (IsUpscalingCompatible() && vrFrameCapture.IsActive()) {
+		vrFrameCapture.Complete(renderDocApi, cycle);
+		InvalidateCaptureCache();
+	}
 }
 
 void RenderDoc::TriggerCapture()
 {
-	if (!renderDocApi) {
-		logger::warn("[RenderDoc] Cannot trigger capture - RenderDoc API not available");
-		return;
-	}
-
-	logger::info("[RenderDoc] Triggering immediate capture");
-	renderDocApi->TriggerCapture();
-
-	// Invalidate cache so it refreshes when next accessed (capture should appear in list)
-	InvalidateCaptureCache();
+	TriggerMultiFrameCapture(1);
 }
 
 void RenderDoc::TriggerMultiFrameCapture(uint32_t a_frameCount)
 {
 	if (!renderDocApi) {
-		logger::warn("[RenderDoc] Cannot trigger multi-frame capture - RenderDoc API not available");
+		logger::warn("[RenderDoc] Cannot capture without the capture API");
 		return;
 	}
-
-	const uint32_t frameCount = std::clamp(a_frameCount, kMinCaptureFrameCount, kMaxCaptureFrameCount);
-	logger::info("[RenderDoc] Triggering multi-frame capture for {} frame(s)", frameCount);
-	renderDocApi->TriggerMultiFrameCapture(frameCount);
-
-	// Invalidate cache so it refreshes when next accessed (capture should appear in list)
+	const uint32_t frames = std::clamp(a_frameCount, kMinCaptureFrameCount, kMaxCaptureFrameCount);
+	if (IsUpscalingCompatible()) {
+		vrFrameCapture.Queue(frames);
+		logger::info("[RenderDoc] Queued {} stereo capture(s) through both submit eyes", frames);
+	} else {
+		renderDocApi->TriggerMultiFrameCapture(frames);
+	}
 	InvalidateCaptureCache();
 }
 
@@ -969,7 +949,9 @@ void RenderDoc::ApplyAutomaticCommentsToNewCaptures()
 
 std::string RenderDoc::GetOverlayWarningMessage() const
 {
-	return "RenderDoc capture is active and severely affects performance. CSX Upscaling and Frame Generation are disabled.\nCapture with F12, Print Screen or the RenderDoc page's Capture button. Disable capture on that page.";
+	return IsUpscalingCompatible() ?
+	           "RenderDoc is active and affects performance. VR upscaling capture is enabled; Frame Generation is disabled." :
+	           "RenderDoc is active and affects performance. The compatible VR upscaling path is unavailable; Upscaling and Frame Generation are disabled.";
 }
 
 void RenderDoc::ClearFailedDeletions()

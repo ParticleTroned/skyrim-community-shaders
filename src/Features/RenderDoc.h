@@ -1,6 +1,8 @@
 #pragma once
 
 #include "Feature.h"
+#include "Features/VR/RenderDocFrameCapture.h"
+#include <atomic>
 #include <filesystem>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -35,7 +37,17 @@ public:
 
 	// Core RenderDoc functionality
 	bool IsAvailable() const { return renderDocApi != nullptr; }
-	bool ShouldBlockUpscaling() const { return enableRenderDocCapture || IsAvailable(); }
+	/** Allows VR upscaling only after vendor passthrough and the creation bridge succeed. */
+	bool ShouldBlockUpscaling() const { return (enableRenderDocCapture || renderDocModule) && !upscalingCompatible; }
+	bool IsUpscalingCompatible() const { return upscalingCompatible; }
+	bool HasVendorPassthrough() const { return vendorPassthrough; }
+	bool HasSafeStateRestoration() const { return safeStateRestoration; }
+	/** Records the verified startup bridge before the game creates its device. */
+	void SetUpscalingCompatible(bool compatible) { upscalingCompatible = compatible; }
+	/** Bounds VR captures around complete compositor cycles, including both submit eyes. */
+	void BeginVRFrameCapture(uint64_t cycle, bool posesReady);
+	void CompleteVRFrameCapture(uint64_t cycle);
+	const RenderDocFrameCapture& GetVRCaptureState() const { return vrFrameCapture; }
 	void TriggerCapture();
 	void TriggerMultiFrameCapture(uint32_t a_frameCount);
 	bool HandleCaptureHotkey(uint32_t a_vkKey);
@@ -91,6 +103,12 @@ public:
 	std::string GetOverlayWarningMessage() const;
 
 private:
+	RenderDocFrameCapture vrFrameCapture;
+	std::atomic_bool cacheInvalidated{ false };
+	bool loadAttempted = false;
+	bool vendorPassthrough = false;
+	bool safeStateRestoration = false;
+	bool upscalingCompatible = false;
 	void SetCaptureEnabled(bool a_enabled);
 	bool TriggerConfiguredCapture(bool a_checkDiskSpace = true);
 	uint32_t GetCaptureFrameCount() const;
@@ -141,6 +159,6 @@ public:
 	static constexpr uint64_t kObservedPerFrameBytes = 256ULL * 1024ULL * 1024ULL;  // ~256 MB per frame observed for multi-frame captures
 	static constexpr uint32_t kCacheRefreshIntervalSeconds = 5;                     // Cache refresh interval
 	static constexpr size_t kCommentsBufferSize = 1024;                             // Size of comments input buffer
-	static constexpr uint32_t kMinCaptureFrameCount = 1;
-	static constexpr uint32_t kMaxCaptureFrameCount = 120;
+	static constexpr uint32_t kMinCaptureFrameCount = RenderDocFrameCapture::kMinFrames;
+	static constexpr uint32_t kMaxCaptureFrameCount = RenderDocFrameCapture::kMaxFrames;
 };

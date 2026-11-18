@@ -436,9 +436,11 @@ struct Upscaling
 		uint32_t neuralRenderingCentralAreaPercent = 100, neuralRenderingCentralFeatherPixels = 64;
 	};
 };
+#include "Features/VR/RenderDocFrameCapture.h"
 #include "settings_model_resolution_under_test.h"
 struct RenderDoc
 {
+	RenderDocFrameCapture vrFrameCapture;
 	bool enableRenderDocCapture = false;
 	uint32_t captureFrameCount = 1;
 	static constexpr uint32_t kMinCaptureFrameCount = 1, kMaxCaptureFrameCount = 120;
@@ -759,7 +761,9 @@ int main()
 			capture.SetCaptureEnabled(true);
 			capture.SetCaptureEnabled(true);
 			require(state.frameAnnotations && !state.useFrameAnnotations, "repeated capture enable preserves the annotation baseline");
+			capture.vrFrameCapture.Queue(3);
 			capture.RestoreDefaultSettings();
+			require(capture.vrFrameCapture.Pending() == 0, "disabling capture cancels queued stereo captures");
 			require(!capture.enableRenderDocCapture && !state.frameAnnotations && capture.GetCaptureFrameCount() == 1, "capture defaults restore the pre-capture annotation setting");
 			for (const bool annotations : { false, true }) {
 				capture.SetCaptureEnabled(true);

@@ -5,6 +5,7 @@
 
 #	include "Api/ServiceRegistry.h"
 #	include "BuildProvenance.h"
+#	include "Features/RenderDoc.h"
 #	include "VRAPI/CSserviceapi.h"
 #	include "VRAPI/CSupscalingapi.h"
 
@@ -525,6 +526,18 @@ namespace
 	json BuildResult(const json& a_args)
 	{
 		const auto action = Lower(a_args.value("action", std::string("snapshot")));
+		if (action == "renderdoc") {
+			const auto& capture = *RenderDoc::GetSingleton();
+			return { { "action", action }, { "loaded", capture.renderDocModule != nullptr },
+				{ "vendorPassthrough", capture.HasVendorPassthrough() },
+				{ "safeStateRestoration", capture.HasSafeStateRestoration() },
+				{ "upscalingCompatible", capture.IsUpscalingCompatible() },
+				{ "captureApiAvailable", capture.IsAvailable() },
+				{ "stereoCapture", { { "pending", capture.GetVRCaptureState().Pending() },
+									   { "active", capture.GetVRCaptureState().IsActive() },
+									   { "completed", capture.GetVRCaptureState().Completed() },
+									   { "failed", capture.GetVRCaptureState().Failed() } } } };
+		}
 		if (action == "registry")
 			return RegistryInventory();
 
@@ -705,7 +718,7 @@ namespace
 		return {
 			{ "error", "unknown action" },
 			{ "action", action },
-			{ "supported", json::array({ "registry", "capabilities", "snapshot", "preflight", "apply", "operation", "events" }) },
+			{ "supported", json::array({ "registry", "capabilities", "snapshot", "preflight", "apply", "operation", "events", "renderdoc" }) },
 		};
 	}
 
@@ -751,7 +764,7 @@ namespace CSX::Api::UpscalingDevBenchBridge
 		if (g_installAttempted.exchange(true, std::memory_order_acq_rel))
 			return;
 		static constexpr const char* descriptor =
-			R"({"description":"Reply and event strings replace invalid UTF-8 with U+FFFD; request validation remains strict. Exercise the registered public csx.upscaling ABI through DevBench. Mutations require exact build identity and idempotency keys. Enabled Renderscale NR rejects incompatible profiles with neural_render_scale_required. It requires scaled DLSS and, in VR, active Render Scale. DLAA, native AA, TAA, FSR and None cannot be selected until NR is disabled or another NR mode is chosen. Foveated NR requires DLSS or FSR and a configured FOV mask. FSR Foveated NR uses the Full resolution final-scene path and shared FOV mask. FSR rejects Renderscale NR with or without FOV. Full resolution NR supports FSR with or without its optional FOV restriction.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["registry","capabilities","snapshot","preflight","apply","operation","events"],"default":"snapshot"},"expectedBuildId":{"type":"string"},"expectedStateRevision":{"type":"integer","minimum":0},"target":{"type":"object","properties":{"method":{"type":"string","enum":["none","taa","fsr","dlss"]},"qualityMode":{"type":"string","enum":["native_aa","hoshipa","ultra_quality","quality","balanced","performance","ultra_performance"]},"renderScaleMode":{"type":"boolean","description":"Must remain true while VR Renderscale NR is enabled. Disable NR or choose another NR mode before turning Render Scale off."},"dlssProfile":{"type":"string","enum":["J","K","L","M","F","E"]},"fsrRuntime":{"type":"string","enum":["fsr3","auto","fsr4"],"description":"auto selects an unpinned runtime provider by device capability. fsr4 is a legacy alias for auto, not an actual-provider guarantee. fsr3 explicitly selects FSR3. Responses retain fsrRuntime for compatibility and add fsrSelection; query communityshaders.fsr_temporal_tuning status for actual provider identity."}},"required":["method","qualityMode"]},"purpose":{"type":"string","enum":["direct","environment_profile_transition"]},"persistence":{"type":"string","enum":["runtime_only","persist_when_stable"]},"clientId":{"type":"string"},"commandId":{"type":"string"},"reason":{"type":"string"},"operationId":{"type":"integer","minimum":0},"afterEventId":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":500}}},"outputSchema":{"type":"object","description":"Invalid UTF-8 in output strings is replaced with U+FFFD; valid UTF-8 output is unchanged."}})";
+			R"({"description":"Reply and event strings replace invalid UTF-8 with U+FFFD; request validation remains strict. Exercise the registered public csx.upscaling ABI through DevBench. The read-only renderdoc action reports startup capture API, NvAPI passthrough, safe D3D11 state restoration and verified VR upscaling compatibility, plus queued, active, completed and failed stereo captures. Mutations require exact build identity and idempotency keys. Enabled Renderscale NR rejects incompatible profiles with neural_render_scale_required. It requires scaled DLSS and, in VR, active Render Scale. DLAA, native AA, TAA, FSR and None cannot be selected until NR is disabled or another NR mode is chosen. Foveated NR requires DLSS or FSR and a configured FOV mask. FSR Foveated NR uses the Full resolution final-scene path and shared FOV mask. FSR rejects Renderscale NR with or without FOV. Full resolution NR supports FSR with or without its optional FOV restriction.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["registry","capabilities","snapshot","preflight","apply","operation","events","renderdoc"],"default":"snapshot"},"expectedBuildId":{"type":"string"},"expectedStateRevision":{"type":"integer","minimum":0},"target":{"type":"object","properties":{"method":{"type":"string","enum":["none","taa","fsr","dlss"]},"qualityMode":{"type":"string","enum":["native_aa","hoshipa","ultra_quality","quality","balanced","performance","ultra_performance"]},"renderScaleMode":{"type":"boolean","description":"Must remain true while VR Renderscale NR is enabled. Disable NR or choose another NR mode before turning Render Scale off."},"dlssProfile":{"type":"string","enum":["J","K","L","M","F","E"]},"fsrRuntime":{"type":"string","enum":["fsr3","auto","fsr4"],"description":"auto selects an unpinned runtime provider by device capability. fsr4 is a legacy alias for auto, not an actual-provider guarantee. fsr3 explicitly selects FSR3. Responses retain fsrRuntime for compatibility and add fsrSelection; query communityshaders.fsr_temporal_tuning status for actual provider identity."}},"required":["method","qualityMode"]},"purpose":{"type":"string","enum":["direct","environment_profile_transition"]},"persistence":{"type":"string","enum":["runtime_only","persist_when_stable"]},"clientId":{"type":"string"},"commandId":{"type":"string"},"reason":{"type":"string"},"operationId":{"type":"integer","minimum":0},"afterEventId":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":500}}},"outputSchema":{"type":"object","description":"Invalid UTF-8 in output strings is replaced with U+FFFD; valid UTF-8 output is unchanged."}})";
 		devBench->RegisterTool("communityshaders.upscaling_api", descriptor, &ToolHandler, nullptr);
 		g_registered.store(true, std::memory_order_release);
 		logger::info("UpscalingDevBenchBridge: registered communityshaders.upscaling_api with devbench build {}", devBench->GetBuildNumber());

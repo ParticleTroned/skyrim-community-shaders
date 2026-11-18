@@ -43,6 +43,9 @@ an explicit `VIRTUALENV_OVERRIDE_APP_DATA` is preserved.
 The Prettier hook pins its Node runtime so a new cache does not select an
 unsupported prerelease from Node's download index.
 
+For capture builds and the VR stereo integration contract, see
+[Building CSX with RenderDoc](renderdoc.md).
+
 ## Settings search metadata
 
 The DLL build runs `tools/generate-control-catalog.py` to produce immutable

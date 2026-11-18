@@ -62,6 +62,7 @@
 #include "Utils/FileSystem.h"
 #include "Utils/FullscreenPassState.h"
 #include "Utils/Game.h"
+#include "Utils/ImportThunk.h"
 #include "Utils/MenuLookup.h"
 #include "Utils/NormalizedCoordinates.h"
 #include "Utils/OpenCompositeInterop.h"
@@ -1845,14 +1846,15 @@ namespace
 	bool IsRenderDocUpscalingBlocked(bool a_probeProcessForDll = false)
 	{
 		const auto& renderDoc = globals::features::renderDoc;
-		return renderDoc.ShouldBlockUpscaling() || IsRenderDocDllLoaded(a_probeProcessForDll);
+		return renderDoc.ShouldBlockUpscaling() ||
+		       (IsRenderDocDllLoaded(a_probeProcessForDll) && !renderDoc.IsUpscalingCompatible());
 	}
 
 	const char* GetRenderDocUpscalingBlockReason()
 	{
 		const auto& renderDoc = globals::features::renderDoc;
 		if (renderDoc.IsAvailable())
-			return "RenderDoc capture is active";
+			return "RenderDoc VR compatibility requirements are not satisfied";
 		if (renderDoc.enableRenderDocCapture)
 			return "RenderDoc capture is enabled";
 		return "renderdoc.dll is loaded";
@@ -22883,6 +22885,32 @@ void Upscaling::FaderMenuAdvanceMovieHook::thunk(
 		effectiveCurrentTime);
 }
 
+bool Upscaling::InstallRenderDocDeviceCreationBridge()
+{
+	constexpr std::uintptr_t kVRD3D11CreationImportThunkRva = 0x13B6DA2;
+	constexpr std::size_t kImportJumpBytes = 6;
+	const auto& module = REL::Module::get();
+	const auto thunk = module.base() + kVRD3D11CreationImportThunkRva;
+	const auto import = SKSE::GetIATAddr("d3d11.dll", "D3D11CreateDeviceAndSwapChain");
+	const auto text = module.segment(REL::Segment::textx);
+	if (!REL::Module::IsVR() || module.version() != REL::Version(1, 4, 15, 0) || !import || thunk < text.address() ||
+		text.size() < kImportJumpBytes || thunk - text.address() > text.size() - kImportJumpBytes ||
+		!Util::IsImportJumpThunk({ reinterpret_cast<const std::uint8_t*>(thunk), kImportJumpBytes }, thunk, import)) {
+		logger::error("[Upscaling] RenderDoc bridge rejected an unsupported runtime or D3D11 import thunk");
+		return false;
+	}
+	const auto onward = *reinterpret_cast<std::uintptr_t*>(import);
+	if (!onward || onward == reinterpret_cast<std::uintptr_t>(&hk_D3D11CreateDeviceAndSwapChainUpscaling)) {
+		logger::error("[Upscaling] RenderDoc bridge rejected an invalid onward target");
+		return false;
+	}
+	// A private call slot survives capture-library import refreshes and retains their wrapping.
+	ptrD3D11CreateDeviceAndSwapChainUpscaling = reinterpret_cast<decltype(ptrD3D11CreateDeviceAndSwapChainUpscaling)>(onward);
+	(void)SKSE::GetTrampoline().write_branch<6>(thunk, hk_D3D11CreateDeviceAndSwapChainUpscaling);
+	logger::info("[Upscaling] RenderDoc VR device-creation bridge installed");
+	return true;
+}
+
 void Upscaling::Load()
 {
 	if (REL::Module::IsVR()) {
@@ -22899,6 +22927,9 @@ void Upscaling::Load()
 		logger::warn("[Upscaling] Skipping D3D11 device hook because Open Composite has {}=true.", blocker.settingName);
 		return;
 	}
+	auto& renderDoc = globals::features::renderDoc;
+	if (renderDoc.HasVendorPassthrough() && renderDoc.HasSafeStateRestoration() && REL::Module::IsVR())
+		renderDoc.SetUpscalingCompatible(InstallRenderDocDeviceCreationBridge());
 	if (IsRenderDocUpscalingBlocked(true)) {
 		logger::warn(
 			"[Upscaling] Skipping D3D11 device hook because {}.",
@@ -22910,6 +22941,9 @@ void Upscaling::Load()
 		stl::write_vfunc<0x12, BSOpenVR_GetRenderTargetSize>(RE::VTABLE_BSOpenVR[0]);
 		stl::detour_thunk<RaceSexMenu_ChangeName>(REL::RelocationID(51540, 52415));
 	}
+
+	if (renderDoc.IsUpscalingCompatible())
+		return;
 
 	*(uintptr_t*)&ptrD3D11CreateDeviceAndSwapChainUpscaling = SKSE::PatchIAT(hk_D3D11CreateDeviceAndSwapChainUpscaling, "d3d11.dll", "D3D11CreateDeviceAndSwapChain");
 }
@@ -23698,7 +23732,7 @@ bool Upscaling::GetRuntimeFSR4Enabled() const
 
 bool Upscaling::SupportsPerformanceCostMeasurement() const
 {
-	return !IsOpenCompositeUpscalingBlocked(true) && !IsRenderDocUpscalingBlocked(true);
+	return !IsOpenCompositeUpscalingBlocked(true) && !globals::features::renderDoc.enableRenderDocCapture && !IsRenderDocDllLoaded(true);
 }
 
 bool Upscaling::IsPerformanceCostMeasurementEnabled() const
@@ -68004,7 +68038,7 @@ bool Upscaling::PostBackendDevice()
 // Module availability methods
 bool Upscaling::HasFrameGenModule() const
 {
-	if (IsRenderDocUpscalingBlocked())
+	if (globals::features::renderDoc.enableRenderDocCapture || IsRenderDocDllLoaded(false))
 		return false;
 
 	return fidelityFX.IsFrameGenerationRuntimeReady();

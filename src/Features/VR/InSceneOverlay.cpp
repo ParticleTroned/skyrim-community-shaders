@@ -710,6 +710,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 					(compositorCycleToken << 1u) |
 						static_cast<uint64_t>(cycleCooldownActive),
 					std::memory_order_release);
+				globals::features::renderDoc.BeginVRFrameCapture(compositorCycleToken, result == vr::VRCompositorError_None);
 			}
 			return result;
 		}
@@ -802,6 +803,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 			if (!nestedSubmit &&
 				VRRenderScaleFrameBoundaryPolicy::CanServiceCompletedPair(
 					g_vrRelatchPairCompletion, completedIdentity)) {
+				globals::features::renderDoc.CompleteVRFrameCapture(completedIdentity.compositorCycle);
 				g_vrSubmitPairBoundaryState = {};
 				g_vrRelatchPairCompletion = {};
 				globals::features::upscaling.ServiceVRRenderScaleRelatchAtFrameBoundary();

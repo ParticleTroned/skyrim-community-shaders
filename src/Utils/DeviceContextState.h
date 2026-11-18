@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ManualDeviceContextState.h"
 #include "ResourceName.h"
 #include <cstddef>
 #include <d3d11_1.h>
@@ -53,6 +54,7 @@ namespace Util
 	{
 		inline winrt::com_ptr<ID3D11DeviceContext> registeredStateContext;
 		inline bool contextStateIsolationAvailable = false;
+		inline bool useManualContextState = false;
 
 		inline bool IsContextStateAvailable(ID3D11DeviceContext* context)
 		{
@@ -66,58 +68,94 @@ namespace Util
 		}
 	}
 
-	/** Creates an isolated D3D11 state without changing the immediate context. */
-	inline bool CreateIsolatedDeviceContextState(ID3D11Device* device, ID3D11DeviceContext* context,
-		winrt::com_ptr<ID3D11DeviceContext1>& context1, winrt::com_ptr<ID3DDeviceContextState>& state, const char* name)
+	/** Holds native state or preallocated binding snapshots, including a prepared pass between scopes. */
+	struct IsolatedDeviceContextState
 	{
-		if (!device || !context || !detail::IsContextStateAvailable(context))
+		winrt::com_ptr<ID3DDeviceContextState> native;
+		std::unique_ptr<ManualDeviceContextState> bindings, previousBindings;
+		bool active = false;
+	};
+
+	/** Selects binding restoration before any isolated state is created. */
+	inline void UseManualDeviceContextState(bool enabled) noexcept
+	{
+		detail::useManualContextState = enabled;
+	}
+
+	/** Creates isolated state without changing the immediate context; failure retains prior resources. */
+	inline bool CreateIsolatedDeviceContextState(ID3D11Device* device, ID3D11DeviceContext* context,
+		winrt::com_ptr<ID3D11DeviceContext1>& context1, std::unique_ptr<IsolatedDeviceContextState>& state, const char* name)
+	{
+		if (!device || !context || (!detail::useManualContextState && !detail::IsContextStateAvailable(context)))
 			return false;
-		winrt::com_ptr<ID3D11Device1> device1;
 		winrt::com_ptr<ID3D11DeviceContext1> candidateContext;
-		winrt::com_ptr<ID3DDeviceContextState> candidateState;
-		if (FAILED(device->QueryInterface(__uuidof(ID3D11Device1), device1.put_void())) ||
-			FAILED(context->QueryInterface(__uuidof(ID3D11DeviceContext1), candidateContext.put_void())))
+		if (FAILED(context->QueryInterface(__uuidof(ID3D11DeviceContext1), candidateContext.put_void())))
 			return false;
-		const auto level = device->GetFeatureLevel();
-		const UINT flags = device->GetCreationFlags() & D3D11_CREATE_DEVICE_SINGLETHREADED;
-		if (FAILED(device1->CreateDeviceContextState(flags, &level, 1, D3D11_SDK_VERSION,
-				__uuidof(ID3D11Device), nullptr, candidateState.put())))
+		auto candidate = std::unique_ptr<IsolatedDeviceContextState>(new (std::nothrow) IsolatedDeviceContextState);
+		if (!candidate)
 			return false;
-		SetResourceName(candidateState.get(), "%s", name);
+		if (detail::useManualContextState) {
+			candidate->bindings.reset(new (std::nothrow) ManualDeviceContextState);
+			candidate->previousBindings.reset(new (std::nothrow) ManualDeviceContextState);
+			if (!candidate->bindings || !candidate->previousBindings)
+				return false;
+		} else {
+			winrt::com_ptr<ID3D11Device1> device1;
+			if (FAILED(device->QueryInterface(__uuidof(ID3D11Device1), device1.put_void())))
+				return false;
+			const auto level = device->GetFeatureLevel();
+			const UINT flags = device->GetCreationFlags() & D3D11_CREATE_DEVICE_SINGLETHREADED;
+			if (FAILED(device1->CreateDeviceContextState(flags, &level, 1, D3D11_SDK_VERSION,
+					__uuidof(ID3D11Device), nullptr, candidate->native.put())))
+				return false;
+			SetResourceName(candidate->native.get(), "%s", name);
+		}
 		context1 = std::move(candidateContext);
-		state = std::move(candidateState);
+		state = std::move(candidate);
 		return true;
 	}
 
-	/** Restores the complete prior pipeline after rendering into isolated state. */
+	/** Restores the complete prior pipeline and retains the isolated pass for its next scope. */
 	class ScopedDeviceContextState
 	{
 	public:
-		ScopedDeviceContextState(ID3D11DeviceContext1* a_context, ID3DDeviceContextState* isolatedState) : context(a_context)
+		ScopedDeviceContextState(ID3D11DeviceContext1* a_context, IsolatedDeviceContextState* isolatedState) : context(a_context), isolated(isolatedState)
 		{
-			if (!context || !isolatedState || !detail::IsContextStateAvailable(context))
+			if (!context || !isolated || isolated->active || (!isolated->bindings && !detail::IsContextStateAvailable(context)))
 				return;
 			if (captureDeviceContextState)
 				captureDeviceContextState(context, logicalState);
-			context->SwapDeviceContextState(isolatedState, previousState.put());
-			active = true;
+			if (isolated->bindings) {
+				isolated->previousBindings->Capture(context);
+				isolated->bindings->Apply(context);
+			} else {
+				context->SwapDeviceContextState(isolated->native.get(), previousState.put());
+			}
+			isolated->active = active = true;
 		}
 		ScopedDeviceContextState(const ScopedDeviceContextState&) = delete;
 		ScopedDeviceContextState& operator=(const ScopedDeviceContextState&) = delete;
 		~ScopedDeviceContextState() { Restore(); }
 		explicit operator bool() const noexcept { return active; }
-		/** Restores once; subsequent calls and destruction are harmless. */
+		/** Restores once, including on early return or exception. */
 		void Restore() noexcept
 		{
 			if (!active)
 				return;
-			active = false;
-			context->SwapDeviceContextState(previousState.get(), nullptr);
+			isolated->active = active = false;
+			if (isolated->bindings) {
+				isolated->bindings->Capture(context);
+				isolated->previousBindings->Apply(context);
+				isolated->previousBindings->Reset();
+			} else {
+				context->SwapDeviceContextState(previousState.get(), nullptr);
+			}
 			logicalState.Restore();
 		}
 
 	private:
 		ID3D11DeviceContext1* context = nullptr;
+		IsolatedDeviceContextState* isolated = nullptr;
 		winrt::com_ptr<ID3DDeviceContextState> previousState;
 		DeviceContextStateSnapshot logicalState;
 		bool active = false;

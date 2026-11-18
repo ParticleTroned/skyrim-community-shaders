@@ -5,6 +5,7 @@
 #include "Common/ColorHSV.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/LightingCommon.hlsli"
+#include "Common/PBRMath.hlsli"
 #include "Common/PerformanceCostReference.hlsli"
 #include "Common/Permutation.hlsli"
 #include "Common/Random.hlsli"
@@ -34,7 +35,7 @@ namespace SnowCover
 	static const float MinFoliageCoverage = 0.01;
 	static const float LegacySpecularScale = 12500.0;
 	static const float DisabledGlintDensity = 1.0;
-	static const float GlintEnableThreshold = 1.1;
+	static const float GlintEnableThreshold = PBR::Constants::GlintEnableThreshold;
 	static const float SkyVisibilityThreshold = 0.75;
 	static const float GrassBaseVisibility = 0.55;
 	static const float TreeBaseVisibility = 0.15;

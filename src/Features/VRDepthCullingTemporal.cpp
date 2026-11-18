@@ -669,11 +669,16 @@ namespace VRDepthCullingTemporal
 
 		struct DepthCullingRender
 		{
+			static void RenderNative(RE::BSImagespaceShader* a_shader, std::uint32_t a_param)
+			{
+				globals::features::reverseZ.RenderOcclusionBounds(a_shader, a_param, func.get());
+			}
+
 			static void thunk(RE::BSImagespaceShader* a_shader, std::uint32_t a_param)
 			{
 				g_handoff.Invalidate();
 				if (!g_cullingEnabled.load(std::memory_order_acquire) || g_mode.load(std::memory_order_acquire) != Mode::Balanced) {
-					func(a_shader, a_param);
+					RenderNative(a_shader, a_param);
 					return;
 				}
 				const auto batch = ReadBatch(a_shader);
@@ -682,7 +687,7 @@ namespace VRDepthCullingTemporal
 				const bool prepared = std::exchange(g_depthPrepared, false);
 				const bool depthCurrent = IsDepthPreparationCurrent();
 				const bool uploaded = a_shader && ReadCullerField<bool>(reinterpret_cast<const std::byte*>(a_shader), 0xC9);
-				func(a_shader, a_param);
+				RenderNative(a_shader, a_param);
 				if (prepared && uploaded && SubmissionPolicy::IsValid(batch) && ReadBatch(a_shader) == batch &&
 					IsBalancedRecoveryActive(cullingEpoch, policyEpoch) &&
 					g_producerPoseEpoch.load(std::memory_order_acquire) == cullingEpoch) {
@@ -703,6 +708,7 @@ namespace VRDepthCullingTemporal
 				const auto projection = std::exchange(g_pendingReadbackProjection, {});
 				g_depthPrepared = false;
 				g_handoff.Invalidate();
+				globals::features::reverseZ.PrepareOcclusionDepthRange();
 				func(a_scene);
 				if (!g_cullingEnabled.load(std::memory_order_acquire) || g_mode.load(std::memory_order_acquire) != Mode::Balanced)
 					return;

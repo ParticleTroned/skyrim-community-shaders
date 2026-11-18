@@ -56,6 +56,11 @@ struct ReverseZ : Feature
 	/** Releases a feature-owned view's retained identity before its owner recreates it. */
 	void UnregisterSceneDepthView(ID3D11DepthStencilView*);
 	void FixupMappedFrameBuffer(globals::FrameBuffer&);
+	/** Capture a conservative scene depth range including native VR viewport biases. */
+	void PrepareOcclusionDepthRange();
+	/** Invoke the non-null native renderer with matching occlusion depth and scoped restoration. */
+	void RenderOcclusionBounds(RE::BSImagespaceShader* a_shader, uint32_t a_param,
+		void (*a_render)(RE::BSImagespaceShader*, uint32_t));
 	/** Returns whether reversed camera normalization ran and needs uploading. */
 	bool FixupMappedFrameBufferVR(globals::FrameBufferVR&);
 	void ApplyReverseProjection(void*, const RE::NiCamera*);

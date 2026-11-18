@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -16,12 +17,15 @@
 #include <mutex>
 #include <new>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <shared_mutex>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include <winrt/base.h>
 #include <wrl/implements.h>
@@ -165,6 +169,26 @@ struct Renderer
 	} data;
 	auto& GetDepthStencilData() { return data; }
 };
+namespace RE::BSGraphics
+{
+	struct ViewData
+	{
+		struct Range
+		{
+			float x = 0, y = 1;
+		} viewDepthRange;
+	};
+}
+struct ShadowState
+{
+	std::array<RE::BSGraphics::ViewData, 2> eyes;
+	struct
+	{
+		D3D11_VIEWPORT viewPort{};
+		uint32_t rasterStateDepthBiasMode = 0;
+	} data;
+	auto& GetVRRuntimeData() { return data; }
+};
 namespace globals
 {
 	struct ShaderCache
@@ -186,6 +210,7 @@ namespace globals
 	namespace game
 	{
 		Renderer* renderer;
+		ShadowState* shadowState = nullptr;
 		bool isVR = false;
 	}
 	namespace d3d
@@ -207,6 +232,19 @@ namespace
 #include "reverse_z_state_comparison.h"
 #include "reverse_z_state_resources.h"
 #include "reverse_z_state_storage.h"
+	std::array nativeViewportBiases{ 0.0f, .000015f, 0.0f, 0.0f, 0.0f, 0.0f,
+		.000026f, .000015f, .000028f, .000017f, .000030f, .000019f };
+	unsigned nativeViewportBiasReads = 0, publishedViewportReads = 0;
+	std::span<const float> NativeViewportDepthBiases()
+	{
+		++nativeViewportBiasReads;
+		return nativeViewportBiases;
+	}
+	RE::BSGraphics::ViewData* PublishedViewData(uint32_t eye)
+	{
+		++publishedViewportReads;
+		return globals::game::shadowState ? &globals::game::shadowState->eyes.at(eye) : nullptr;
+	}
 #include "reverse_z_state_targets.h"
 #include "reverse_z_state_views.h"
 	void ReapplyNearPlaneShader(ID3D11DeviceContext*) {}
@@ -538,8 +576,11 @@ namespace
 					CreateSceneTargets(recreated, device);
 					globals::game::renderer = &recreated;
 					context->OMSetRenderTargets(0, nullptr, recreated.data.depthStencils[0].views[0]);
+					g_preparedOcclusionDepthRange = { .2f, .7f };
 					Require(reverse.PrepareDepthTargets() && reverse.generation == 2 && globals::cache.clears == clears,
 						"Warm recreation changed shader ownership or failed to advance the target generation");
+					Require(g_preparedOcclusionDepthRange.minDepth == 1 && g_preparedOcclusionDepthRange.maxDepth == 1,
+						"Target recreation retained a stale occlusion producer range");
 					bound = nullptr;
 					context->OMGetRenderTargets(0, nullptr, bound.put());
 					Require(bound.get() == recreated.data.depthStencils[0].views[0] &&
@@ -780,6 +821,495 @@ namespace
 		ID3D11DeviceContext_RSSetState::thunk(context, raster);
 	}
 
+	void TestNativeViewportBiasMapping(ID3D11DeviceContext* context)
+	{
+		ShadowState shadow;
+		const D3D11_VIEWPORT scene{ 0, 0, 8, 8, 0, .999998f };
+		shadow.data.viewPort = scene;
+		for (auto& eye : shadow.eyes)
+			eye.viewDepthRange = { scene.MinDepth, scene.MaxDepth };
+		globals::game::shadowState = &shadow;
+		const bool previousVR = globals::game::isVR;
+		for (bool vr : { false, true }) {
+			globals::game::isVR = vr;
+			for (bool target : { false, true }) {
+				g_reverseTargetBound = target;
+				for (bool projection : { false, true }) {
+					g_projectionReversed = projection;
+					for (bool nearMask : { false, true }) {
+						g_nearMaskBound = nearMask;
+						for (uint32_t mode = 0; mode < nativeViewportBiases.size(); ++mode) {
+							shadow.data.rasterStateDepthBiasMode = mode;
+							auto requested = scene;
+							requested.MaxDepth -= nativeViewportBiases[mode];
+							shadow.data.viewPort = requested;
+							const RejectHeapAllocations rejectAllocations;
+							ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &requested);
+							const auto expected = ShouldFlip() ? MirrorViewportDepth(vr && projection && !nearMask ? scene : requested) : requested;
+							D3D11_VIEWPORT actual{};
+							UINT count = 1;
+							context->RSGetViewports(&count, &actual);
+							Require(std::memcmp(&actual, &expected, sizeof(actual)) == 0, "Native bias correction escaped its depth domain or missed a mode");
+							ID3D11DeviceContext_RSGetViewports::thunk(context, &count, &actual);
+							Require(std::memcmp(&actual, &requested, sizeof(actual)) == 0, "Native correction changed logical viewport readback");
+							shadow.data.rasterStateDepthBiasMode = 0;
+							const auto reads = std::pair{ nativeViewportBiasReads, publishedViewportReads };
+							ReapplyMappedStates(context);
+							Require(reads == std::pair{ nativeViewportBiasReads, publishedViewportReads }, "Reapplication reread native viewport metadata");
+							context->RSGetViewports(&count, &actual);
+							Require(std::memcmp(&actual, &expected, sizeof(actual)) == 0, "Reapplication read stale native bias state");
+						}
+					}
+				}
+			}
+		}
+		globals::game::isVR = g_reverseTargetBound = g_projectionReversed = true;
+		g_nearMaskBound = false;
+		shadow.data.rasterStateDepthBiasMode = 6;
+		auto requested = scene;
+		requested.MaxDepth -= nativeViewportBiases[6];
+		shadow.data.viewPort = requested;
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &requested);
+		CaptureOcclusionDepthRange();
+		Require(g_preparedOcclusionDepthRange.minDepth == 1.0f - scene.MaxDepth,
+			"Occlusion producer capture ignored the corrected scene viewport");
+		const std::array multiple{ requested, requested };
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 2, multiple.data());
+		Require(!g_nativeViewportMaxDepth, "Multiple viewports inherited a single native correction");
+		std::array<D3D11_VIEWPORT, 2> actualMultiple;
+		UINT multipleCount = 2;
+		context->RSGetViewports(&multipleCount, actualMultiple.data());
+		for (const auto& actual : actualMultiple) {
+			const auto expected = MirrorViewportDepth(requested);
+			Require(std::memcmp(&actual, &expected, sizeof(actual)) == 0, "Native correction changed a custom viewport array");
+		}
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &requested);
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 0, nullptr);
+		Require(!g_nativeViewportMaxDepth && g_requestedViewportCount == 0, "Unbinding viewports retained a native correction");
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &requested);
+		ID3D11DeviceContext_ClearState::thunk(context);
+		Require(!g_nativeViewportMaxDepth, "ClearState retained a native viewport correction");
+		for (unsigned component = 0; component < 6; ++component) {
+			auto custom = requested;
+			switch (component) {
+			case 0:
+				custom.TopLeftX = 1;
+				break;
+			case 1:
+				custom.TopLeftY = 1;
+				break;
+			case 2:
+				custom.Width = 4;
+				break;
+			case 3:
+				custom.Height = 4;
+				break;
+			case 4:
+				custom.MinDepth = .1f;
+				break;
+			case 5:
+				custom.MaxDepth = .8f;
+				break;
+			}
+			nativeViewportBiasReads = publishedViewportReads = 0;
+			Require(!ResolveNativeViewportMaxDepth(custom), "Custom viewport matched the native bias contract");
+			Require(nativeViewportBiasReads == 0 && publishedViewportReads == 0, "Custom viewport queried native bias or camera data");
+		}
+		for (uint32_t mode : { uint32_t(nativeViewportBiases.size()), UINT32_MAX }) {
+			shadow.data.rasterStateDepthBiasMode = mode;
+			Require(!ResolveNativeViewportMaxDepth(requested), "Unknown native mode accessed its bias table");
+		}
+		shadow.data.rasterStateDepthBiasMode = 6;
+		const float savedBias = nativeViewportBiases[6];
+		for (float bias : { -1.0f, 0.0f, 1.0f, std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN() }) {
+			nativeViewportBiases[6] = bias;
+			Require(!ResolveNativeViewportMaxDepth(requested), "Invalid native bias was accepted");
+		}
+		nativeViewportBiases[6] = savedBias;
+		shadow.eyes[1].viewDepthRange.y = .8f;
+		Require(!ResolveNativeViewportMaxDepth(requested), "Mismatched stereo depth ranges were normalized");
+		for (const auto range : { RE::BSGraphics::ViewData::Range{ -1, 1 }, { 0, 2 }, { .8f, .2f }, { 0, savedBias },
+				 { 0, std::numeric_limits<float>::quiet_NaN() }, { 0, std::numeric_limits<float>::infinity() } }) {
+			for (auto& eye : shadow.eyes)
+				eye.viewDepthRange = range;
+			shadow.data.viewPort.MinDepth = range.x;
+			shadow.data.viewPort.MaxDepth = range.y - savedBias;
+			Require(!ResolveNativeViewportMaxDepth(shadow.data.viewPort), "Invalid or exhausted camera range was normalized");
+		}
+		globals::game::shadowState = nullptr;
+		Require(!ResolveNativeViewportMaxDepth(requested), "Missing native state was dereferenced");
+		globals::game::isVR = previousVR;
+		g_reverseTargetBound = g_projectionReversed = true;
+	}
+
+	void TestNativeViewportDomainTransitions(ID3D11DeviceContext* context)
+	{
+		ShadowState shadow;
+		const D3D11_VIEWPORT scene{ 0, 0, 8, 8, 0, .999998f };
+		for (auto& eye : shadow.eyes)
+			eye.viewDepthRange = { scene.MinDepth, scene.MaxDepth };
+		auto requested = scene;
+		requested.MaxDepth -= nativeViewportBiases[6];
+		shadow.data.viewPort = requested;
+		shadow.data.rasterStateDepthBiasMode = 6;
+		const bool previousVR = globals::game::isVR;
+		globals::game::isVR = true;
+		globals::game::shadowState = &shadow;
+		g_reverseTargetBound = g_projectionReversed = g_nearMaskBound = false;
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &requested);
+		// A cached viewport can enter several depth domains before the engine publishes another one.
+		for (const auto domain : { std::array{ true, false, false }, { true, true, false }, { true, true, true },
+				 std::array{ false, true, false }, { true, false, true }, { true, true, false } }) {
+			g_reverseTargetBound = domain[0];
+			g_projectionReversed = domain[1];
+			g_nearMaskBound = domain[2];
+			const RejectHeapAllocations rejectAllocations;
+			ReapplyMappedStates(context);
+			D3D11_VIEWPORT actual{};
+			UINT count = 1;
+			context->RSGetViewports(&count, &actual);
+			const auto expected = ShouldFlip() ? MirrorViewportDepth(domain[1] && !domain[2] ? scene : requested) : requested;
+			Require(std::memcmp(&actual, &expected, sizeof(actual)) == 0, "Native viewport correction did not follow a depth-domain transition");
+			CaptureOcclusionDepthRange();
+			Require(g_preparedOcclusionDepthRange.minDepth == (ShouldFlip() ? expected.MinDepth : 1.0f) &&
+						g_preparedOcclusionDepthRange.maxDepth == (ShouldFlip() ? expected.MaxDepth : 1.0f),
+				"Occlusion producer range diverged from the scene during a depth-domain transition");
+			ID3D11DeviceContext_RSGetViewports::thunk(context, &count, &actual);
+			Require(std::memcmp(&actual, &requested, sizeof(actual)) == 0, "Depth-domain transition changed logical viewport readback");
+		}
+		globals::game::shadowState = nullptr;
+		globals::game::isVR = previousVR;
+		ID3D11DeviceContext_ClearState::thunk(context);
+		g_reverseTargetBound = g_projectionReversed = true;
+	}
+
+	template <class SetDepth, class VisibleSamples>
+	void TestNativeViewportDepthOrdering(ID3D11DeviceContext* context, ID3D11DepthStencilView* view,
+		const D3D11_VIEWPORT& scene, SetDepth setDepth, VisibleSamples visibleSamples)
+	{
+		ShadowState shadow;
+		shadow.data.viewPort = scene;
+		for (auto& eye : shadow.eyes)
+			eye.viewDepthRange = { scene.MinDepth, scene.MaxDepth };
+		const bool previousVR = globals::game::isVR;
+		globals::game::isVR = true;
+		const auto range = MirrorViewportDepth(scene);
+		for (float depth : { .00003f, .0006f, .02f, .5f }) {
+			const float gap = std::max(8.0f * (std::nextafter(depth, 1.0f) - depth), depth * depth * .1f);
+			context->ClearDepthStencilView(view, D3D11_CLEAR_DEPTH, range.MinDepth + (range.MaxDepth - range.MinDepth) * depth, 0);
+			for (uint32_t mode = 0; mode < nativeViewportBiases.size(); ++mode) {
+				shadow.data.rasterStateDepthBiasMode = mode;
+				auto requested = scene;
+				requested.MaxDepth -= nativeViewportBiases[mode];
+				shadow.data.viewPort = requested;
+				setDepth(depth - gap);
+				if (depth < .001f && nativeViewportBiases[mode] > 0) {
+					globals::game::shadowState = nullptr;
+					ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &requested);
+					Require(visibleSamples() == 4, "Control did not reproduce distant hidden-surface bleed-through");
+				}
+				globals::game::shadowState = &shadow;
+				ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &requested);
+				Require(visibleSamples() == 0, "Native viewport bias pulled a hidden surface through its occluder");
+				setDepth(depth);
+				Require(visibleSamples() == 4, "Viewport correction lost coplanar surface layering");
+			}
+		}
+		globals::game::shadowState = nullptr;
+		globals::game::isVR = previousVR;
+	}
+
+	void TestOcclusionViewportRanges(ID3D11DeviceContext* context)
+	{
+		const D3D11_VIEWPORT bounds{ 0, 0, 2, 2, 0, 1 };
+		for (bool reversedTarget : { false, true }) {
+			for (bool reversedProjection : { false, true }) {
+				g_reverseTargetBound = reversedTarget;
+				g_projectionReversed = reversedProjection;
+				for (const auto interval : { std::array{ 0.0f, 0.999998f }, std::array{ .2f, .7f }, std::array{ 0.0f, 1.0f } }) {
+					const D3D11_VIEWPORT scene{ 0, 0, 8, 8, interval[0], interval[1] };
+					ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &scene);
+					CaptureOcclusionDepthRange();
+					ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &bounds);
+					const RejectHeapAllocations rejectAllocations;
+					const OcclusionViewportScope scope(context);
+					D3D11_VIEWPORT actual{};
+					UINT count = 1;
+					context->RSGetViewports(&count, &actual);
+					const auto expected = reversedTarget && reversedProjection ? MirrorViewportDepth(scene) : bounds;
+					Require(actual.MinDepth == expected.MinDepth && actual.MaxDepth == expected.MaxDepth,
+						"Occlusion mapping changed an inactive depth domain or ignored its source range");
+				}
+			}
+		}
+		g_reverseTargetBound = g_projectionReversed = true;
+		for (const auto interval : { std::array{ -1.0f, 1.0f }, std::array{ 0.0f, 2.0f }, std::array{ .8f, .2f },
+				 std::array{ std::numeric_limits<float>::quiet_NaN(), 1.0f } }) {
+			ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &bounds);
+			g_mappedViewports[0].MinDepth = interval[0];
+			g_mappedViewports[0].MaxDepth = interval[1];
+			CaptureOcclusionDepthRange();
+			Require(g_preparedOcclusionDepthRange.minDepth == 1 && g_preparedOcclusionDepthRange.maxDepth == 1,
+				"Invalid producer range did not select conservative visibility");
+		}
+	}
+
+	void TestOcclusionViewportBiases(ID3D11DeviceContext* context)
+	{
+		const auto& biases = nativeViewportBiases;
+		const D3D11_VIEWPORT scene{ 0, 0, 8, 8, 0, 0.999998f };
+		const D3D11_VIEWPORT bounds{ 0, 0, 2, 2, 0, 1 };
+		for (bool reversed : { false, true }) {
+			g_reverseTargetBound = g_projectionReversed = reversed;
+			ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &scene);
+			{
+				const RejectHeapAllocations rejectAllocations;
+				CaptureOcclusionDepthRange(biases);
+			}
+			ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &bounds);
+			const OcclusionViewportScope scope(context);
+			UINT count = 1;
+			D3D11_VIEWPORT actual{};
+			context->RSGetViewports(&count, &actual);
+			Require(actual.MinDepth == (reversed ? 1.0f - (scene.MaxDepth - .000030f) : 0.0f) && actual.MaxDepth == 1.0f,
+				"Occlusion viewport did not include native depth bias or changed standard rendering");
+		}
+		g_reverseTargetBound = g_projectionReversed = true;
+		for (const auto interval : { std::array{ -0.01f, scene.MaxDepth }, std::array{ 0.0f, 1.01f },
+				 std::array{ .8f, .2f }, std::array{ 0.0f, std::numeric_limits<float>::quiet_NaN() },
+				 std::array{ std::numeric_limits<float>::infinity(), scene.MaxDepth }, std::array{ 0.0f, 1.0f } }) {
+			ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &scene);
+			g_requestedViewports[0].MinDepth = interval[0];
+			g_requestedViewports[0].MaxDepth = interval[1];
+			CaptureOcclusionDepthRange(biases);
+			Require(g_preparedOcclusionDepthRange.minDepth == 1 && g_preparedOcclusionDepthRange.maxDepth == 1,
+				"Invalid or mismatched logical viewport did not retain visibility");
+		}
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &scene);
+		g_mappedViewports[0].MinDepth = .000028f;
+		CaptureOcclusionDepthRange(biases);
+		Require(g_preparedOcclusionDepthRange.minDepth == 1 && g_preparedOcclusionDepthRange.maxDepth == 1,
+			"Divergent mapped viewport did not retain visibility");
+		for (float bias : { -0.01f, 0.0f, .000026f }) {
+			ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &scene);
+			CaptureOcclusionDepthRange({ &bias, 1 });
+			Require(g_preparedOcclusionDepthRange.minDepth == 1.0f - (scene.MaxDepth - std::max(bias, 0.0f)),
+				"Signed viewport bias did not preserve conservative bounds");
+		}
+		for (float bias : { std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(),
+				 -std::numeric_limits<float>::infinity(), 1.01f, -1.01f, 1.0f }) {
+			ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &scene);
+			CaptureOcclusionDepthRange({ &bias, 1 });
+			Require(g_preparedOcclusionDepthRange.minDepth == 1 && g_preparedOcclusionDepthRange.maxDepth == 1,
+				"Invalid or exhausted viewport bias did not retain visibility");
+		}
+		const D3D11_VIEWPORT narrow{ 0, 0, 8, 8, .99999f, .999998f };
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &narrow);
+		CaptureOcclusionDepthRange(biases);
+		Require(g_preparedOcclusionDepthRange.minDepth == 1 && g_preparedOcclusionDepthRange.maxDepth == 1,
+			"Bias exhausted a partial viewport without retaining visibility");
+		for (const auto interval : { std::array{ 0.0f, scene.MaxDepth }, std::array{ .2f, .7f }, std::array{ 0.0f, 1.0f } }) {
+			const D3D11_VIEWPORT source{ 0, 0, 8, 8, interval[0], interval[1] };
+			ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &source);
+			CaptureOcclusionDepthRange(biases);
+			for (const float bias : biases) {
+				auto layer = source;
+				layer.MaxDepth -= bias;
+				const auto range = MirrorViewportDepth(layer);
+				for (const double clipDepth : { 0.0, .0008, .5, 1.0 }) {
+					const double boundDepth = g_preparedOcclusionDepthRange.minDepth * (1.0 - clipDepth) +
+					                          g_preparedOcclusionDepthRange.maxDepth * clipDepth;
+					const double layerDepth = range.MinDepth * (1.0 - clipDepth) + range.MaxDepth * clipDepth;
+					Require(boundDepth >= layerDepth, "Occlusion range excluded a native biased layer");
+				}
+			}
+		}
+	}
+
+	void TestOcclusionViewport(ID3D11Device* device, ID3D11DeviceContext* context)
+	{
+		g_reverseTargetBound = g_projectionReversed = true;
+		const D3D11_VIEWPORT scene{ 0, 0, 8, 8, 0, 0.999998f };
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &scene);
+		CaptureOcclusionDepthRange();
+		const auto sourceRange = g_preparedOcclusionDepthRange;
+		const D3D11_VIEWPORT bounds{ 0, 0, 2, 2, 0, 1 };
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &bounds);
+		auto verifyRange = [&](float minimum, float maximum) {
+			UINT count = 1;
+			D3D11_VIEWPORT actual{};
+			context->RSGetViewports(&count, &actual);
+			Require(count == 1 && actual.MinDepth == minimum && actual.MaxDepth == maximum &&
+						actual.Width == bounds.Width && actual.Height == bounds.Height,
+				"Occlusion viewport lost the source depth range or changed raster dimensions");
+			ID3D11DeviceContext_RSGetViewports::thunk(context, &count, &actual);
+			Require(std::memcmp(&actual, &bounds, sizeof(bounds)) == 0, "Occlusion mapping changed the logical viewport");
+		};
+		{
+			const OcclusionViewportScope scope(context);
+			verifyRange(sourceRange.minDepth, sourceRange.maxDepth);
+			Require(g_preparedOcclusionDepthRange.minDepth == 1 && g_preparedOcclusionDepthRange.maxDepth == 1,
+				"Occlusion submission did not consume its producer range");
+			ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &bounds);
+			verifyRange(sourceRange.minDepth, sourceRange.maxDepth);
+			ID3D11DeviceContext_ClearState::thunk(context);
+			Require(g_occlusionTesting, "ClearState ended an enclosing occlusion pass");
+			g_reverseTargetBound = true;
+			ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &bounds);
+			verifyRange(sourceRange.minDepth, sourceRange.maxDepth);
+			{
+				const OcclusionViewportScope nested(context);
+			}
+			verifyRange(sourceRange.minDepth, sourceRange.maxDepth);
+			g_reverseTargetBound = false;
+			ReapplyMappedStates(context);
+			verifyRange(0, 1);
+			g_reverseTargetBound = true;
+		}
+		verifyRange(0, 1);
+		{
+			const OcclusionViewportScope missingProducer(context);
+			verifyRange(1, 1);
+		}
+		try {
+			const OcclusionViewportScope scope(context);
+			throw std::runtime_error("Occlusion scope fixture");
+		} catch (const std::runtime_error& error) {
+			Require(std::string_view(error.what()) == "Occlusion scope fixture", "Unexpected occlusion scope failure");
+		}
+		Require(!g_occlusionTesting, "Occlusion scope survived an exceptional exit");
+		verifyRange(0, 1);
+
+		const char* shaderSource = R"(
+cbuffer TestDepth : register(b0) { float boundDepth; };
+float4 VS(uint i : SV_VertexID) : SV_Position {
+    float2 p = float2((i << 1) & 2, i & 2) * float2(2, -2) + float2(-1, 1);
+    return float4(p, boundDepth, 1);
+}
+float4 PS() : SV_Target { return 1; }
+)";
+		winrt::com_ptr<ID3DBlob> code, errors;
+		winrt::com_ptr<ID3D11VertexShader> vertex;
+		winrt::com_ptr<ID3D11PixelShader> pixel;
+		Require(SUCCEEDED(D3DCompile(shaderSource, std::strlen(shaderSource), nullptr, nullptr, nullptr,
+					"VS", "vs_5_0", 0, 0, code.put(), errors.put())),
+			"Occlusion vertex fixture did not compile");
+		Require(SUCCEEDED(device->CreateVertexShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, vertex.put())), "Occlusion vertex fixture failed");
+		Util::SetResourceName(vertex.get(), "ReverseZStateTest::Occlusion VS");
+		code = nullptr;
+		errors = nullptr;
+		Require(SUCCEEDED(D3DCompile(shaderSource, std::strlen(shaderSource), nullptr, nullptr, nullptr,
+					"PS", "ps_5_0", 0, 0, code.put(), errors.put())),
+			"Occlusion pixel fixture did not compile");
+		Require(SUCCEEDED(device->CreatePixelShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, pixel.put())), "Occlusion pixel fixture failed");
+		Util::SetResourceName(pixel.get(), "ReverseZStateTest::Occlusion PS");
+		D3D11_TEXTURE2D_DESC textureDesc{};
+		textureDesc.Width = textureDesc.Height = 2;
+		textureDesc.MipLevels = textureDesc.ArraySize = textureDesc.SampleDesc.Count = 1;
+		textureDesc.Format = DXGI_FORMAT_D32_FLOAT;
+		textureDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+		winrt::com_ptr<ID3D11Texture2D> texture;
+		winrt::com_ptr<ID3D11DepthStencilView> view;
+		Require(SUCCEEDED(device->CreateTexture2D(&textureDesc, nullptr, texture.put())), "Occlusion depth fixture failed");
+		Util::SetResourceName(texture.get(), "ReverseZStateTest::OcclusionDepth");
+		Require(SUCCEEDED(device->CreateDepthStencilView(texture.get(), nullptr, view.put())), "Occlusion depth view fixture failed");
+		Util::SetResourceName(view.get(), "ReverseZStateTest::OcclusionDepth DSV");
+		D3D11_DEPTH_STENCIL_DESC depthDesc{};
+		depthDesc.DepthEnable = TRUE;
+		depthDesc.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+		winrt::com_ptr<ID3D11DepthStencilState> depth;
+		Require(SUCCEEDED(device->CreateDepthStencilState(&depthDesc, depth.put())), "Occlusion state fixture failed");
+		Util::SetResourceName(depth.get(), "ReverseZStateTest::OcclusionDepthState");
+		D3D11_RASTERIZER_DESC rasterDesc{};
+		rasterDesc.FillMode = D3D11_FILL_SOLID;
+		rasterDesc.CullMode = D3D11_CULL_NONE;
+		rasterDesc.DepthClipEnable = TRUE;
+		rasterDesc.DepthBias = -1;
+		rasterDesc.SlopeScaledDepthBias = -0.65f;
+		rasterDesc.DepthBiasClamp = -100.0f;
+		winrt::com_ptr<ID3D11RasterizerState> raster;
+		Require(SUCCEEDED(device->CreateRasterizerState(&rasterDesc, raster.put())), "Occlusion raster fixture failed");
+		Util::SetResourceName(raster.get(), "ReverseZStateTest::OcclusionRasterizer");
+		winrt::com_ptr<ID3D11Query> query;
+		const D3D11_QUERY_DESC queryDesc{ D3D11_QUERY_OCCLUSION, 0 };
+		Require(SUCCEEDED(device->CreateQuery(&queryDesc, query.put())), "Occlusion query fixture failed");
+		Util::SetResourceName(query.get(), "ReverseZStateTest::OcclusionQuery");
+		winrt::com_ptr<ID3D11Buffer> input;
+		D3D11_BUFFER_DESC inputDesc{};
+		inputDesc.ByteWidth = 16;
+		inputDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+		Require(SUCCEEDED(device->CreateBuffer(&inputDesc, nullptr, input.put())), "Occlusion input fixture failed");
+		Util::SetResourceName(input.get(), "ReverseZStateTest::OcclusionInput");
+		auto setBoundDepth = [&](float depthValue) {
+			const std::array values{ depthValue, 0.0f, 0.0f, 0.0f };
+			context->UpdateSubresource(input.get(), 0, nullptr, values.data(), 0, 0);
+		};
+		setBoundDepth(0.000601f);
+		auto* inputBuffer = input.get();
+		context->VSSetConstantBuffers(0, 1, &inputBuffer);
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &scene);
+		CaptureOcclusionDepthRange();
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &bounds);
+		context->OMSetRenderTargets(0, nullptr, view.get());
+		ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, depth.get(), 0);
+		ID3D11DeviceContext_RSSetState::thunk(context, raster.get());
+		context->ClearDepthStencilView(view.get(), D3D11_CLEAR_DEPTH,
+			sourceRange.minDepth + (sourceRange.maxDepth - sourceRange.minDepth) * 0.0006f, 0);
+		context->VSSetShader(vertex.get(), nullptr, 0);
+		context->PSSetShader(pixel.get(), nullptr, 0);
+		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		auto visibleSamples = [&] {
+			context->Begin(query.get());
+			context->Draw(3, 0);
+			context->End(query.get());
+			UINT64 samples = 0;
+			HRESULT result;
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+			do {
+				result = context->GetData(query.get(), &samples, sizeof(samples), 0);
+			} while (result == S_FALSE && std::chrono::steady_clock::now() < deadline);
+			Require(result == S_OK, "Occlusion query readback failed or timed out");
+			return samples;
+		};
+		Require(visibleSamples() == 0, "Unmatched viewport did not reproduce thin-bound self-occlusion");
+		{
+			const OcclusionViewportScope scope(context);
+			Require(visibleSamples() == 4, "Aligned viewport still culled a thin visible bound");
+			setBoundDepth(0.000599f);
+			Require(visibleSamples() == 0, "Aligned viewport admitted a fully occluded bound");
+		}
+		context->ClearDepthStencilView(view.get(), D3D11_CLEAR_DEPTH,
+			sourceRange.minDepth + (sourceRange.maxDepth - sourceRange.minDepth) * 0.00085f, 0);
+		setBoundDepth(0.000825f);
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &scene);
+		CaptureOcclusionDepthRange();
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &bounds);
+		{
+			const OcclusionViewportScope scope(context);
+			Require(visibleSamples() == 0, "Unbiased bounds did not reproduce decal-layer occlusion");
+		}
+		const std::array biases{ 0.0f, .000026f, .000030f };
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &scene);
+		CaptureOcclusionDepthRange(biases);
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &bounds);
+		{
+			const OcclusionViewportScope scope(context);
+			Require(visibleSamples() == 4, "Biased visible layer was still culled");
+			setBoundDepth(0.00075f);
+			Require(visibleSamples() == 0, "Conservative viewport admitted a deeply occluded bound");
+		}
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 0, nullptr);
+		CaptureOcclusionDepthRange();
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &bounds);
+		{
+			const OcclusionViewportScope scope(context);
+			Require(visibleSamples() == 4, "Missing producer viewport did not retain visible bounds");
+		}
+		TestNativeViewportDepthOrdering(context, view.get(), scene, setBoundDepth, visibleSamples);
+		context->OMSetRenderTargets(0, nullptr, nullptr);
+		ID3D11DeviceContext_ClearState::thunk(context);
+	}
+
 	void TestIsolatedContextState(ID3D11Device* device, ID3D11DeviceContext* context,
 		ID3D11DepthStencilState* depth, ID3D11RasterizerState* raster)
 	{
@@ -806,8 +1336,20 @@ namespace
 		UpdateBoundDepthTarget(context, view.get());
 		ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, depth, 21);
 		ID3D11DeviceContext_RSSetState::thunk(context, raster);
-		const D3D11_VIEWPORT viewport{ 0, 0, 4, 4, .2f, .7f };
+		ShadowState shadow;
+		shadow.data.viewPort = { 0, 0, 4, 4, .2f, .7f };
+		for (auto& eye : shadow.eyes)
+			eye.viewDepthRange = { .2f, .7f };
+		shadow.data.rasterStateDepthBiasMode = 6;
+		const bool previousVR = globals::game::isVR;
+		globals::game::isVR = true;
+		globals::game::shadowState = &shadow;
+		auto viewport = shadow.data.viewPort;
+		viewport.MaxDepth -= nativeViewportBiases[6];
+		shadow.data.viewPort = viewport;
 		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &viewport);
+		CaptureOcclusionDepthRange();
+		auto sourceRange = g_preparedOcclusionDepthRange;
 		const auto mappedDepth = g_boundState;
 		const auto mappedRaster = g_boundRasterState;
 		auto verify = [&] {
@@ -824,6 +1366,9 @@ namespace
 				"Context restoration lost the logical viewport");
 			Require(g_reverseTargetBound && g_projectionReversed && !g_nearMaskBound,
 				"Context restoration lost the depth domain");
+			Require(g_nativeViewportMaxDepth == shadow.eyes[0].viewDepthRange.y, "Context restoration lost native viewport normalization");
+			Require(g_preparedOcclusionDepthRange.minDepth == sourceRange.minDepth && g_preparedOcclusionDepthRange.maxDepth == sourceRange.maxDepth,
+				"Context restoration lost the occlusion producer depth range");
 			const auto restoredForwards = stateForwards;
 			ReapplyMappedStates(context);
 			Require(stateForwards == restoredForwards, "Restored physical states were redundantly rebound");
@@ -844,6 +1389,16 @@ namespace
 			guard.Restore();
 		}
 		verify();
+		{
+			const OcclusionViewportScope occlusion(context);
+			sourceRange = {};
+			{
+				Util::ScopedDeviceContextState guard(context1.get(), isolated.get());
+				Require(!g_occlusionTesting, "Isolated context inherited an occlusion pass");
+			}
+			Require(g_occlusionTesting, "Context restoration lost the active occlusion pass");
+			verify();
+		}
 		for (int iteration = 0; iteration < 3; ++iteration) {
 			try {
 				Util::ScopedDeviceContextState guard(context1.get(), isolated.get());
@@ -884,10 +1439,14 @@ namespace
 		Require(SUCCEEDED(device->CreateDeferredContext(0, other.put())), "Observer other-context creation failed");
 		Util::SetResourceName(other.get(), "ReverseZStateTest::ObserverOtherContext");
 		Util::DeviceContextStateSnapshot unrelatedSnapshot;
+		const D3D11_VIEWPORT otherViewport{ 0, 0, 2, 2, 0, 1 };
+		ID3D11DeviceContext_RSSetViewports::thunk(other.get(), 1, &otherViewport);
 		CaptureReverseContextState(other.get(), unrelatedSnapshot);
 		Require(!unrelatedSnapshot, "Observer captured an unrelated context");
 		verify();
 		Util::captureDeviceContextState = nullptr;
+		globals::game::shadowState = nullptr;
+		globals::game::isVR = previousVR;
 		reverse.UnregisterSceneDepthView(view.get());
 		context->OMSetRenderTargets(0, nullptr, nullptr);
 	}
@@ -980,6 +1539,11 @@ int main()
 		ID3D11DeviceContext_RSGetState::thunk(context.get(), logicalRaster.put());
 		Require(logicalRaster.get() == requestedRaster.get(), "Rasterizer getter lost logical ownership");
 		TestRequestedStateMappingCache(device.get(), context.get(), requestedDepth.get(), requestedRaster.get());
+		TestNativeViewportBiasMapping(context.get());
+		TestNativeViewportDomainTransitions(context.get());
+		TestOcclusionViewportRanges(context.get());
+		TestOcclusionViewportBiases(context.get());
+		TestOcclusionViewport(device.get(), context.get());
 		TestIsolatedContextState(device.get(), context.get(), requestedDepth.get(), requestedRaster.get());
 
 		rasterDesc.DepthBias = std::numeric_limits<INT>::min();

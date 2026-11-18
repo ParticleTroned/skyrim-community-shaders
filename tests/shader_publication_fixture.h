@@ -16,6 +16,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -92,7 +93,9 @@ namespace RE
 	{
 		enum class Type
 		{
-			Water
+			Water,
+			Lighting,
+			Effect
 		};
 		struct
 		{
@@ -188,6 +191,18 @@ struct Device
 } testDevice;
 namespace Util
 {
+	enum class SpecializationFamily : uint8_t
+	{
+		Lighting,
+		Effect,
+		Composite
+	};
+	struct ShaderSpecializationRequest
+	{
+		SpecializationFamily family;
+		uint32_t descriptor;
+	};
+
 	template <class... Args>
 	void SetResourceName(Resource* shader, const char* format, Args... args)
 	{
@@ -273,6 +288,21 @@ struct ShaderCache
 	std::atomic_bool startupCompilationComplete{ false }, menuLoaded{ false }, backgroundCompilation{ false };
 	uint64_t GetGraphicsShaderRevision() const { return graphicsShaderRevision.load(); }
 	static constexpr uint32_t GetPixelSpecializationMask(RE::BSShader::Type) { return 0; }
+	enum class OptionalStage
+	{
+		Cache,
+		Source,
+		Device
+	};
+	bool TryAdmitOptionalShaderStage(OptionalStage)
+	{
+		assert(false && "Base shader publication must not request optional preparation");
+		return false;
+	}
+	void RememberShaderSpecialization(Util::ShaderSpecializationRequest) noexcept
+	{
+		assert(false && "Base shader publication must not queue specialization discovery");
+	}
 	std::unique_ptr<int> dependencyTracker;
 	std::mutex vertexShadersMutex, pixelShadersMutex;
 	std::array<std::unordered_map<uint32_t, std::unique_ptr<RE::BSGraphics::VertexShader>>, 1> vertexShaders;
@@ -288,7 +318,7 @@ struct ShaderCache
 	bool IsTaskStale(std::optional<uint64_t> a_taskGeneration) const;
 	bool IsTaskStale(std::optional<uint64_t> a_taskGeneration, RE::BSShader::Type a_type) const;
 	RE::BSGraphics::VertexShader* MakeAndAddVertexShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = {});
-	RE::BSGraphics::PixelShader* MakeAndAddPixelShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = {});
+	RE::BSGraphics::PixelShader* MakeAndAddPixelShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = {}, bool* = nullptr);
 };
 
 struct CompileDedupe

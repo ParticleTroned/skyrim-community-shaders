@@ -17,18 +17,21 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <format>
 #include <immintrin.h>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <ranges>
 #include <shared_mutex>
 #include <span>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 // C4324: CameraStateEntry embeds the alignas(16) ViewData.
 #pragma warning(disable: 4324)
@@ -117,10 +120,55 @@ namespace
 	D3D11_VIEWPORT g_requestedViewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
 	D3D11_VIEWPORT g_mappedViewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
 	UINT g_requestedViewportCount = 0;
+	std::optional<float> g_nativeViewportMaxDepth;
+	struct OcclusionDepthRange
+	{
+		// Missing scene depth must keep in-frustum bounds visible.
+		float minDepth = 1.0f, maxDepth = 1.0f;
+	};
+	OcclusionDepthRange g_preparedOcclusionDepthRange, g_activeOcclusionDepthRange;
+	bool g_occlusionTesting = false;
 
 	bool ShouldFlip()
 	{
 		return g_reverseTargetBound && (g_projectionReversed || g_nearMaskBound || g_renderingRejected.load(std::memory_order_relaxed));
+	}
+
+	std::span<const float> NativeViewportDepthBiases();
+	RE::BSGraphics::ViewData* PublishedViewData(uint32_t a_eye);
+
+	std::optional<float> ResolveNativeViewportMaxDepth(const D3D11_VIEWPORT& a_viewport)
+	{
+		if (!globals::game::isVR || !globals::game::shadowState)
+			return std::nullopt;
+		const auto& native = globals::game::shadowState->GetVRRuntimeData();
+		if (std::memcmp(&native.viewPort, &a_viewport, sizeof(a_viewport)) != 0)
+			return std::nullopt;
+		const auto biases = NativeViewportDepthBiases();
+		if (native.rasterStateDepthBiasMode >= biases.size())
+			return std::nullopt;
+		const float bias = biases[native.rasterStateDepthBiasMode];
+		if (!std::isfinite(bias) || bias <= 0.0f)
+			return std::nullopt;
+		const auto* left = PublishedViewData(0);
+		const auto* right = PublishedViewData(1);
+		if (!left || !right || left->viewDepthRange.x != right->viewDepthRange.x || left->viewDepthRange.y != right->viewDepthRange.y)
+			return std::nullopt;
+		const auto& range = left->viewDepthRange;
+		if (!std::isfinite(range.x) || !std::isfinite(range.y) ||
+			range.x < 0.0f || range.y > 1.0f || bias >= range.y - range.x ||
+			native.viewPort.MinDepth != range.x || native.viewPort.MaxDepth != range.y - bias)
+			return std::nullopt;
+		// Only undo the native viewport offset; the floating-point rasterizer bias preserves surface layering.
+		return range.y;
+	}
+
+	D3D11_VIEWPORT UnbiasedSceneViewport(const D3D11_VIEWPORT& a_viewport)
+	{
+		auto viewport = a_viewport;
+		if (g_nativeViewportMaxDepth && g_projectionReversed && !g_nearMaskBound)
+			viewport.MaxDepth = *g_nativeViewportMaxDepth;
+		return viewport;
 	}
 
 	D3D11_VIEWPORT MirrorViewportDepth(const D3D11_VIEWPORT& a_viewport)
@@ -129,6 +177,44 @@ namespace
 		mirrored.MinDepth = 1.0f - a_viewport.MaxDepth;
 		mirrored.MaxDepth = 1.0f - a_viewport.MinDepth;
 		return mirrored;
+	}
+
+	void CaptureOcclusionDepthRange(std::span<const float> a_viewportDepthBiases = {})
+	{
+		g_preparedOcclusionDepthRange = {};
+		if (!ShouldFlip() || g_requestedViewportCount != 1)
+			return;
+		auto requested = g_requestedViewports[0];
+		if (!std::isfinite(requested.MinDepth) || !std::isfinite(requested.MaxDepth) ||
+			requested.MinDepth < 0.0f || requested.MaxDepth > 1.0f || requested.MinDepth > requested.MaxDepth)
+			return;
+		requested = UnbiasedSceneViewport(requested);
+		const auto viewport = MirrorViewportDepth(requested);
+		if (viewport.MinDepth != g_mappedViewports[0].MinDepth || viewport.MaxDepth != g_mappedViewports[0].MaxDepth)
+			return;
+		float maximumBias = 0.0f;
+		for (const float bias : a_viewportDepthBiases) {
+			if (!std::isfinite(bias) || std::abs(bias) > 1.0f)
+				return;
+			maximumBias = std::max(maximumBias, bias);
+		}
+		// Native bias subtracts from standard MaxDepth before viewport reversal.
+		auto biasedViewport = requested;
+		biasedViewport.MaxDepth -= maximumBias;
+		if (biasedViewport.MaxDepth >= biasedViewport.MinDepth) {
+			const auto range = MirrorViewportDepth(biasedViewport);
+			g_preparedOcclusionDepthRange = { range.MinDepth, range.MaxDepth };
+		}
+	}
+
+	D3D11_VIEWPORT MapViewportDepth(const D3D11_VIEWPORT& a_viewport, bool a_flip)
+	{
+		auto mapped = a_flip ? MirrorViewportDepth(UnbiasedSceneViewport(a_viewport)) : a_viewport;
+		if (a_flip && g_occlusionTesting) {
+			mapped.MinDepth = g_activeOcclusionDepthRange.minDepth;
+			mapped.MaxDepth = g_activeOcclusionDepthRange.maxDepth;
+		}
+		return mapped;
 	}
 
 	DXGI_FORMAT ToFloatDepthFormat(DXGI_FORMAT a_format)
@@ -460,6 +546,7 @@ void ReverseZ::SetupResources() {}
 
 bool ReverseZ::PrepareDepthTargets()
 {
+	g_preparedOcclusionDepthRange = {};
 	LatchBootState();
 	if (!requestedThisBoot || activationRejectedThisBoot)
 		return true;
@@ -958,9 +1045,10 @@ namespace
 			D3D11_VIEWPORT requested[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
 			D3D11_VIEWPORT mapped[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
 			const bool flip = ShouldFlip();
+			g_nativeViewportMaxDepth = NumViewports == 1 ? ResolveNativeViewportMaxDepth(pViewports[0]) : std::nullopt;
 			for (UINT i = 0; i < NumViewports; ++i) {
 				requested[i] = pViewports[i];
-				mapped[i] = flip ? MirrorViewportDepth(requested[i]) : requested[i];
+				mapped[i] = MapViewportDepth(requested[i], flip);
 			}
 			std::memcpy(g_requestedViewports, requested, sizeof(D3D11_VIEWPORT) * NumViewports);
 			std::memcpy(g_mappedViewports, mapped, sizeof(D3D11_VIEWPORT) * NumViewports);
@@ -969,6 +1057,20 @@ namespace
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
+
+	void ReapplyMappedViewports(ID3D11DeviceContext* a_context, bool a_flip, bool a_reference = false)
+	{
+		if (g_requestedViewportCount == 0)
+			return;
+		bool changed = a_reference;
+		for (UINT i = 0; i < g_requestedViewportCount; ++i) {
+			const auto mapped = MapViewportDepth(g_requestedViewports[i], a_flip);
+			changed |= std::memcmp(&mapped, &g_mappedViewports[i], sizeof(mapped)) != 0;
+			g_mappedViewports[i] = mapped;
+		}
+		if (changed)
+			ID3D11DeviceContext_RSSetViewports::func(a_context, g_requestedViewportCount, g_mappedViewports);
+	}
 
 	void ReapplyMappedStates(ID3D11DeviceContext* This)
 	{
@@ -987,17 +1089,32 @@ namespace
 			g_boundRasterState = rasterState;
 			ID3D11DeviceContext_RSSetState::func(This, g_boundRasterState);
 		}
-		if (g_requestedViewportCount > 0) {
-			bool changed = reference;
-			for (UINT i = 0; i < g_requestedViewportCount; ++i) {
-				const auto mapped = flip ? MirrorViewportDepth(g_requestedViewports[i]) : g_requestedViewports[i];
-				changed |= std::memcmp(&mapped, &g_mappedViewports[i], sizeof(mapped)) != 0;
-				g_mappedViewports[i] = mapped;
-			}
-			if (changed)
-				ID3D11DeviceContext_RSSetViewports::func(This, g_requestedViewportCount, g_mappedViewports);
-		}
+		ReapplyMappedViewports(This, flip, reference);
 	}
+
+	struct OcclusionViewportScope
+	{
+		explicit OcclusionViewportScope(ID3D11DeviceContext* a_context) :
+			context(a_context), previous(g_occlusionTesting), previousRange(g_activeOcclusionDepthRange)
+		{
+			if (!previous)
+				g_activeOcclusionDepthRange = std::exchange(g_preparedOcclusionDepthRange, {});
+			g_occlusionTesting = true;
+			ReapplyMappedViewports(context, ShouldFlip());
+		}
+		OcclusionViewportScope(const OcclusionViewportScope&) = delete;
+		OcclusionViewportScope& operator=(const OcclusionViewportScope&) = delete;
+		~OcclusionViewportScope()
+		{
+			g_occlusionTesting = previous;
+			g_activeOcclusionDepthRange = previousRange;
+			ReapplyMappedViewports(context, ShouldFlip());
+		}
+
+		ID3D11DeviceContext* context;
+		bool previous;
+		OcclusionDepthRange previousRange;
+	};
 
 	void UpdateBoundDepthTarget(ID3D11DeviceContext* This, ID3D11DepthStencilView* pDepthStencilView)
 	{
@@ -1209,7 +1326,7 @@ namespace
 			ID3D11DeviceContext_VSSetShader::func(context, g_reverseTargetBound ? g_hiddenAreaMeshVS.get() : g_boundVertexShader, nullptr, 0);
 	}
 
-	void ResetTrackedContextState()
+	void ResetTrackedContextState(bool a_isolated = false)
 	{
 		g_requestedState = nullptr;
 		g_cachedReversedState = nullptr;
@@ -1219,10 +1336,17 @@ namespace
 		g_cachedReversedRasterState = nullptr;
 		g_boundRasterState = nullptr;
 		g_requestedViewportCount = 0;
+		g_nativeViewportMaxDepth.reset();
 		g_reverseTargetBound = false;
 		g_nearMaskBound = false;
 		g_lastClearedCubeFace = nullptr;
 		g_boundVertexShader = nullptr;
+		g_preparedOcclusionDepthRange = {};
+		// Clearing pipeline bindings cannot end an enclosing native occlusion pass.
+		if (a_isolated || !g_occlusionTesting) {
+			g_activeOcclusionDepthRange = {};
+			g_occlusionTesting = false;
+		}
 	}
 
 	struct ReverseContextStateSnapshot
@@ -1233,7 +1357,7 @@ namespace
 			std::copy_n(g_requestedViewports, viewportCount, requestedViewports.begin());
 			std::copy_n(g_mappedViewports, viewportCount, mappedViewports.begin());
 			// Isolated overlay states have no scene-depth ownership.
-			ResetTrackedContextState();
+			ResetTrackedContextState(true);
 		}
 
 		~ReverseContextStateSnapshot() noexcept
@@ -1248,6 +1372,7 @@ namespace
 			g_cachedReversedRasterState = cachedReversedRasterState;
 			g_boundRasterState = boundRasterState;
 			g_requestedViewportCount = viewportCount;
+			g_nativeViewportMaxDepth = nativeViewportMaxDepth;
 			std::copy_n(requestedViewports.begin(), viewportCount, g_requestedViewports);
 			std::copy_n(mappedViewports.begin(), viewportCount, g_mappedViewports);
 			g_reverseTargetBound = reverseTargetBound;
@@ -1255,6 +1380,9 @@ namespace
 			g_nearMaskBound = nearMaskBound;
 			g_lastClearedCubeFace = lastClearedCubeFace;
 			g_boundVertexShader = vertexShader.get();
+			g_preparedOcclusionDepthRange = preparedOcclusionDepthRange;
+			g_activeOcclusionDepthRange = activeOcclusionDepthRange;
+			g_occlusionTesting = occlusionTesting;
 			if (g_renderingRejected.load(std::memory_order_relaxed) && reverseTargetBound)
 				ReapplyMappedStates(context);
 		}
@@ -1268,12 +1396,16 @@ namespace
 		ID3D11RasterizerState* cachedReversedRasterState = g_cachedReversedRasterState;
 		ID3D11RasterizerState* boundRasterState = g_boundRasterState;
 		UINT viewportCount = g_requestedViewportCount;
+		std::optional<float> nativeViewportMaxDepth = g_nativeViewportMaxDepth;
 		std::array<D3D11_VIEWPORT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> requestedViewports{}, mappedViewports{};
 		bool reverseTargetBound = g_reverseTargetBound;
 		bool projectionReversed = g_projectionReversed;
 		bool nearMaskBound = g_nearMaskBound;
 		ID3D11RenderTargetView* lastClearedCubeFace = g_lastClearedCubeFace;
 		winrt::com_ptr<ID3D11VertexShader> vertexShader;
+		OcclusionDepthRange preparedOcclusionDepthRange = g_preparedOcclusionDepthRange;
+		OcclusionDepthRange activeOcclusionDepthRange = g_activeOcclusionDepthRange;
+		bool occlusionTesting = g_occlusionTesting;
 	};
 
 	void CaptureReverseContextState(ID3D11DeviceContext* context, Util::DeviceContextStateSnapshot& snapshot) noexcept
@@ -1316,6 +1448,7 @@ void ReverseZ::InstallRuntimeHooks()
 	g_boundRasterState = g_requestedRasterState.get();
 	g_requestedViewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
 	context->RSGetViewports(&g_requestedViewportCount, g_requestedViewports);
+	g_nativeViewportMaxDepth = g_requestedViewportCount == 1 ? ResolveNativeViewportMaxDepth(g_requestedViewports[0]) : std::nullopt;
 	std::copy_n(g_requestedViewports, g_requestedViewportCount, g_mappedViewports);
 	runtimeHooksInstalled = true;
 	Util::captureDeviceContextState = CaptureReverseContextState;
@@ -1338,6 +1471,34 @@ void ReverseZ::InstallRuntimeHooks()
 	}
 
 	logger::info("ReverseZ: installed depth-state, depth-clear and state read-back hooks");
+}
+
+namespace
+{
+	std::span<const float> NativeViewportDepthBiases()
+	{
+		static REL::Relocation<const float*> viewportDepthBiases{ REL::Offset(0x317EA28) };
+		return { viewportDepthBiases.get(), 12 };
+	}
+}
+
+void ReverseZ::PrepareOcclusionDepthRange()
+{
+	if (IsActive() && globals::game::isVR) {
+		// Bounds carry no material IDs, so cover all twelve native world viewport-bias modes.
+		CaptureOcclusionDepthRange(NativeViewportDepthBiases());
+	}
+}
+
+void ReverseZ::RenderOcclusionBounds(RE::BSImagespaceShader* a_shader, uint32_t a_param,
+	void (*a_render)(RE::BSImagespaceShader*, uint32_t))
+{
+	if (!IsActive() || !g_reversalActive.load(std::memory_order_acquire)) {
+		a_render(a_shader, a_param);
+		return;
+	}
+	const OcclusionViewportScope viewport(globals::d3d::context);
+	a_render(a_shader, a_param);
 }
 
 bool ReverseZ::PrepareNativeShaders()

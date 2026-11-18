@@ -1,5 +1,6 @@
 #ifndef __PBR_DEPENDENCY_HLSL__
 #define __PBR_DEPENDENCY_HLSL__
+#include "Common/FoliageSnow.hlsli"
 #include "Common/LightingCommon.hlsli"
 
 #include "Common/BRDF.hlsli"
@@ -176,7 +177,7 @@ namespace PBR
 				// invalidates any thickness assumption. Use only the current normal/light/view angles.
 				float foliageTransmission = saturate(-NdotL) * BRDF::Diffuse_Lambert();
 				foliageTransmission += GetFoliageTransmission(NdotL, VdotL);
-				lightingOutput.transmission += material.BaseColor * foliageTransmission * detailedLightColor * kD;
+				lightingOutput.transmission += Foliage::GetUncoveredColor(material) * foliageTransmission * detailedLightColor * kD;
 			}
 #	endif
 			[branch] if ((PBRFlags & Flags::Subsurface) != 0)
@@ -302,7 +303,7 @@ namespace PBR
 		// This is intentionally additive and AO-independent: it restores a small indirect
 		// ambient response for animated foliage after the AO adjustment.
 		[branch] if (SharedData::foliageLightingSettings.EnableFoliageAmbientBoost != 0)
-			lobeWeights.diffuse += material.BaseColor * SharedData::foliageLightingSettings.FoliageAmbientAmount;
+			lobeWeights.diffuse += Foliage::GetUncoveredColor(material) * SharedData::foliageLightingSettings.FoliageAmbientAmount;
 #endif
 		lobeWeights.specular *= specularAO;
 

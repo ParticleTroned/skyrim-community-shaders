@@ -24,12 +24,12 @@ namespace
 	constexpr float MainAO = 0.7f;
 	constexpr float AlternateAO = 0.4f;
 
-	ComPtr<ID3DBlob> CompilePixel(std::vector<D3D_SHADER_MACRO> defines, const char* entry)
+	ComPtr<ID3DBlob> CompilePixel(std::vector<D3D_SHADER_MACRO> defines, const char* entry, const wchar_t* file = L"tests/snow_cover_color.hlsl", const char* extraRoot = "features/Grass Lighting/Shaders")
 	{
-		PackageIncludes includes("package/Shaders", "features/Snow Cover/Shaders");
+		PackageIncludes includes("package/Shaders", "features/Snow Cover/Shaders", extraRoot);
 		defines.push_back({ nullptr, nullptr });
 		ComPtr<ID3DBlob> bytecode, errors;
-		const auto compiled = D3DCompileFromFile(L"tests/snow_cover_color.hlsl", defines.data(), &includes,
+		const auto compiled = D3DCompileFromFile(file, defines.data(), &includes,
 			entry, "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
 			0, bytecode.GetAddressOf(), errors.GetAddressOf());
 		if (errors)
@@ -225,6 +225,11 @@ namespace
 	}
 }
 
+namespace
+{
+#include "snow_cover_material_gpu.h"
+}
+
 int main()
 {
 	try {
@@ -259,6 +264,29 @@ int main()
 				}
 		std::cout << "Snow color: " << count << " production surface/foliage samples match native shading on WARP (SE/AE and VR, legacy/PBR sources and targets, LL controls, main/alternate fallback, retained tints/AO)\n";
 		std::cout << "Snow weather distance: positive, zero and negative accumulation passed on WARP (SE/AE and VR, optimized/reference)\n";
+		for (bool vr : { false, true })
+			for (bool animated : { false, true })
+				for (bool inactive : { false, true }) {
+					std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "TRUE_PBR", "1" }, { "DO_ALPHA_TEST", "1" }, { "DEFERRED", "1" } };
+					if (vr)
+						defines.push_back({ "VR", "1" });
+					if (animated)
+						defines.push_back({ "TREE_ANIM", "1" });
+					if (inactive) {
+						defines.push_back({ "SNOW_COVER", "1" });
+						defines.push_back({ "SNOW_COVER_INACTIVE", "1" });
+					}
+					CompilePixel(std::move(defines), "main", L"package/Shaders/Lighting.hlsl");
+				}
+		size_t materialCount = 0;
+		for (bool vr : { false, true })
+			for (bool animated : { false, true })
+				materialCount += CheckFoliageMaterial(device.Get(), context.Get(), vertex.Get(), vr, animated);
+		for (bool vr : { false, true })
+			materialCount += CheckFoliageMaterial(device.Get(), context.Get(), vertex.Get(), vr, false, true);
+		for (bool vr : { false, true })
+			materialCount += CheckFoliageMaterial(device.Get(), context.Get(), vertex.Get(), vr, true, false, true);
+		std::cout << "Foliage snow: " << materialCount << " material and final-lighting cases passed on WARP\n";
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';
 		return 1;

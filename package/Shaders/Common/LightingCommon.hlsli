@@ -78,6 +78,11 @@ struct MaterialProperties
 	float3 F0;
 	float3 SubsurfaceColor;
 	float Thickness;
+#	if defined(SNOW_COVER) && (defined(TREE_ANIM) || defined(PBR_GRASS))
+	// Zero-initialized materials retain their current foliage colour without snow.
+	float FoliageSnowCoverage;
+	float3 FoliageBaseColor;
+#	endif
 	float3 CoatColor;
 	float CoatStrength;
 	float CoatRoughness;

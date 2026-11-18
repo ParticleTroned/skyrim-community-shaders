@@ -10,6 +10,9 @@
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 #if defined(PSHADER)
+#	if defined(TRUE_PBR)
+#		include "Common/FoliageSnow.hlsli"
+#	endif
 #	include "SnowCover/SnowColor.hlsli"
 
 namespace SnowCover
@@ -139,8 +142,16 @@ namespace SnowCover
 		return distMult * saturate(mult + weatherMult) * smoothstep(SharedData::snowCoverSettings.minAngle, SharedData::snowCoverSettings.maxAngle, worldNormal.z);
 	}
 
-	void ApplySnowFoliageBase(inout float3 color, float3 worldNormal, float3 p, float env_mult, float mult, bool pbrMaterial, bool applyDiffuseControls = true)
+	struct FoliageSnowResult
 	{
+		// Final [0, 1] coverage after melt and cutoff; zero when no snow was applied.
+		float Coverage;
+		float3 SubstrateColor;
+	};
+
+	FoliageSnowResult ApplySnowFoliageBase(inout float3 color, float3 worldNormal, float3 p, float env_mult, float mult, bool pbrMaterial, bool applyDiffuseControls = true)
+	{
+		FoliageSnowResult result = (FoliageSnowResult)0;
 		[branch] if (mult > 0)
 			mult *= 1 - GetFireMelt(p);
 #	if defined(GRASS)
@@ -150,14 +161,17 @@ namespace SnowCover
 #	endif
 			ApplyFoliageColor(color, env_mult);
 		}
+		result.SubstrateColor = color;
 		if (mult < MinFoliageCoverage)
-			return;
+			return result;
+		result.Coverage = saturate(mult);
 		float2 uv = frac(SharedData::snowCoverSettings.UVScale * (p.xy + worldNormal.xy) / TextureWorldScale);
 		float3 snowSample = SnowAlbedo.Sample(SampColorSampler, uv).rgb;
 		float3 diffuse = SnowDiffuse(snowSample, false, pbrMaterial, true, applyDiffuseControls);
 		diffuse *= SharedData::snowCoverSettings.MainTint.rgb;
 
-		color = lerp(color, diffuse, mult);
+		color = lerp(color, diffuse, result.Coverage);
+		return result;
 	}
 
 #	if defined(BASIC_SNOW_COVER)
@@ -187,8 +201,13 @@ namespace SnowCover
 		}
 	}
 
-	void ApplyGrassSnow(inout float3 color, float3 normal, float3 relativeWorldPos, float2 uv, float3 viewPosition, float skyVisibility, bool complex, uint eyeIndex, Texture2D<float4> diffuseTexture, bool pbrMaterial = false, bool applyDiffuseControls = true)
+	FoliageSnowResult ApplyGrassSnow(inout float3 color, float3 normal, float3 relativeWorldPos, float2 uv, float3 viewPosition, float skyVisibility, bool complex, uint eyeIndex, Texture2D<float4> diffuseTexture, bool pbrMaterial = false, bool applyDiffuseControls = true)
 	{
+		if (!IsActive()) {
+			FoliageSnowResult result = (FoliageSnowResult)0;
+			result.SubstrateColor = color;
+			return result;
+		}
 		float3 snowPosition = relativeWorldPos + FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
 		float3 snowNormal = float3(uv, normal.z * (1 - FoliageNormalBias) + FoliageNormalBias);
 		float snowEnvironment;
@@ -206,7 +225,7 @@ namespace SnowCover
 			}
 		}
 		snowOcclusion *= saturate(relativeWorldPos.z - SharedData::GetWaterData(relativeWorldPos, eyeIndex).w);
-		ApplySnowFoliageBase(color, snowNormal, snowPosition, snowEnvironment, snowCoverage * snowOcclusion, pbrMaterial, applyDiffuseControls);
+		return ApplySnowFoliageBase(color, snowNormal, snowPosition, snowEnvironment, snowCoverage * snowOcclusion, pbrMaterial, applyDiffuseControls);
 	}
 #	endif
 
@@ -264,6 +283,16 @@ namespace SnowCover
 		float4 rmaos, tint;
 		float specular;
 		SampleSnowMaterial(alt, uv, albedo, worldNormal, rmaos, tint, specular);
+#			if defined(TREE_ANIM)
+		const bool foliage = true;
+#			elif defined(DO_ALPHA_TEST)
+		const bool foliage = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SnowFoliage) != 0;
+#			else
+		const bool foliage = false;
+#			endif
+		if (foliage)
+			Foliage::ApplySnowCoating(material, mult, material.BaseColor);
+		// Tint opacity reveals substrate colour without removing the physical coating.
 		material.BaseColor = lerp(material.BaseColor, SnowDiffuse(albedo, alt, true) * tint.rgb, mult * tint.a);
 		material.F0 = lerp(material.F0, rmaos.w * specular, mult);
 		material.Roughness = lerp(material.Roughness, clamp(rmaos.x, PBR::Constants::MinRoughness, PBR::Constants::MaxRoughness), mult);

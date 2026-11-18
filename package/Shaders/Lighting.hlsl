@@ -1924,6 +1924,9 @@ void ApplyWetnessDarkening(
 		if (wetDarkeningBlend > 0.0 && (wetnessDarkeningAmount != 0.0 || any(material.BaseColor < 0.0))) {
 			float3 wetDarkenedBaseColor = pow(abs(material.BaseColor), 1.0 + wetnessDarkeningAmount);
 			material.BaseColor = lerp(material.BaseColor, wetDarkenedBaseColor, wetDarkeningBlend);
+#		if defined(TRUE_PBR) && defined(SNOW_COVER) && defined(TREE_ANIM)
+			Foliage::DarkenSnowSubstrate(material, wetnessDarkeningAmount, wetDarkeningBlend);
+#		endif
 		}
 #		if !defined(SKIN) && !defined(HAIR)
 		[branch] if (shorePersistentDarkeningEnabled)
@@ -1935,6 +1938,9 @@ void ApplyWetnessDarkening(
 			if (shoreDarkeningBlend > 0.0 && (shoreDarkeningAmount != 0.0 || any(material.BaseColor < 0.0))) {
 				float3 shoreDarkenedBaseColor = pow(abs(material.BaseColor), 1.0 + shoreDarkeningAmount);
 				material.BaseColor = lerp(material.BaseColor, shoreDarkenedBaseColor, shoreDarkeningBlend);
+#			if defined(TRUE_PBR) && defined(SNOW_COVER) && defined(TREE_ANIM)
+				Foliage::DarkenSnowSubstrate(material, shoreDarkeningAmount, shoreDarkeningBlend);
+#			endif
 			}
 		}
 #		endif

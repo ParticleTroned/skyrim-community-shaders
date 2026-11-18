@@ -65,7 +65,7 @@ namespace GrassPBR
 		}
 		else if (SharedData::foliageLightingSettings.EnableGrassScattering != 0)
 		{
-			lightingOutput.transmission += material.BaseColor * softLightColor *
+			lightingOutput.transmission += Foliage::GetUncoveredColor(material) * softLightColor *
 			                               GetFoliageTransmission(dot(context.vertexNormal, L), VdotL) * BRDF::Diffuse_Lambert() * kD;
 		}
 	}
@@ -202,7 +202,8 @@ PS_OUTPUT RenderPBRGrass(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		else
 		float snowSkyVisibility = 1.0;
 #		endif
-		SnowCover::ApplyGrassSnow(material.BaseColor, normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, false, eyeIndex, TexBaseSampler, true);
+		SnowCover::FoliageSnowResult snow = SnowCover::ApplyGrassSnow(material.BaseColor, normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, false, eyeIndex, TexBaseSampler, true);
+		Foliage::ApplySnowCoating(material, snow.Coverage, snow.SubstrateColor);
 	}
 #	endif
 

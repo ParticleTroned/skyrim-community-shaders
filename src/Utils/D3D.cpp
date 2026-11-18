@@ -249,6 +249,27 @@ namespace Util
 		Resource->SetPrivateData(WKPDID_D3DDebugObjectNameT, static_cast<UINT>(len), buffer);
 	}
 
+	ShaderCompilerSnapshot CaptureShaderCompilerSnapshot()
+	{
+		ShaderCompilerSnapshot snapshot;
+		snapshot.developerMode = globals::state->IsDeveloperMode();
+		snapshot.isVR = REL::Module::IsVR();
+		snapshot.reverseZ = globals::features::reverseZ.IsActive();
+		snapshot.flags = snapshot.developerMode ? D3DCOMPILE_DEBUG : (D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3);
+		if (globals::state->enablePartialPrecision.load(std::memory_order_relaxed))
+			snapshot.flags |= D3DCOMPILE_PARTIAL_PRECISION;
+		if (globals::state->enableAvoidFlowControl.load(std::memory_order_relaxed))
+			snapshot.flags |= D3DCOMPILE_AVOID_FLOW_CONTROL;
+		if (globals::shaderCache->IsDiskCache())
+			snapshot.flags |= D3DCOMPILE_SKIP_VALIDATION;
+		for (const auto& [name, definition] : globals::state->GetShaderDefinesSnapshot()->defines)
+			snapshot.globalDefines.values.emplace_back(name, definition);
+		snapshot.digest = globals::shaderCache->CaptureStandaloneCompileStateDigest();
+		snapshot.graphicsRevision = globals::shaderCache->GetGraphicsShaderRevision();
+		snapshot.inputGeneration = globals::shaderCache->GetShaderPreparationInputGeneration();
+		return snapshot;
+	}
+
 	ID3D11DeviceChild* CompileShader(
 		const wchar_t* FilePath,
 		const std::vector<std::pair<const char*, const char*>>& Defines,
@@ -279,7 +300,7 @@ namespace Util
 		const char* Program,
 		HRESULT& a_result,
 		ShaderCompileTiming* a_timing,
-		bool a_optionalSpecialization)
+		bool a_optionalSpecialization, const ShaderCompilerSnapshot* a_snapshot, ShaderBytecodeContinuation* a_continuation)
 	{
 		a_result = E_INVALIDARG;
 		const auto queryQpc = []() noexcept {
@@ -304,7 +325,19 @@ namespace Util
 		a_result = E_FAIL;
 		if (!device || !globals::state || !globals::shaderCache)
 			return nullptr;
-		const bool developerMode = globals::state->IsDeveloperMode();
+		const auto snapshot = a_snapshot ? *a_snapshot : CaptureShaderCompilerSnapshot();
+		const bool developerMode = snapshot.developerMode;
+		const auto current = [&] {
+			return !a_optionalSpecialization || ((!snapshot.isCancelled || !snapshot.isCancelled()) &&
+													snapshot.graphicsRevision == globals::shaderCache->GetGraphicsShaderRevision() &&
+													snapshot.inputGeneration == globals::shaderCache->GetShaderPreparationInputGeneration());
+		};
+		const bool resuming = a_continuation && bool(a_continuation->blob);
+		if (!current() || (a_optionalSpecialization && !resuming && !globals::shaderCache->TryAdmitOptionalShaderStage(SIE::ShaderCache::OptionalStage::Cache))) {
+			if (a_timing)
+				a_timing->deferred = true;
+			return nullptr;
+		}
 
 		CustomInclude include(L"Data\\Shaders", FilePath);
 
@@ -320,17 +353,14 @@ namespace Util
 			}
 		}
 
-		if (REL::Module::IsVR())
+		if (snapshot.isVR)
 			macros.push_back({ "VR", "" });
 		if (developerMode) {
 			macros.push_back({ "D3DCOMPILE_SKIP_OPTIMIZATION", "" });
 			macros.push_back({ "D3DCOMPILE_DEBUG", "" });
 		}
-		const auto shaderDefines = globals::state->GetShaderDefinesSnapshot();
-		if (!shaderDefines->defines.empty()) {
-			for (const auto& [name, definition] : shaderDefines->defines)
-				macros.push_back({ name.c_str(), definition.c_str() });
-		}
+		const auto globalMacros = snapshot.globalDefines.View();
+		macros.insert(macros.end(), globalMacros.begin(), std::prev(globalMacros.end()));
 		if (!_stricmp(ProgramType, "ps_5_0"))
 			macros.push_back({ "PSHADER", "" });
 		else if (!_stricmp(ProgramType, "vs_5_0"))
@@ -348,24 +378,14 @@ namespace Util
 			return nullptr;
 		}
 
-		if (globals::features::reverseZ.IsActive() && std::ranges::none_of(macros, [](const auto& macro) { return std::strcmp(macro.Name, "REVERSE_Z") == 0; }))
+		if (snapshot.reverseZ && std::ranges::none_of(macros, [](const auto& macro) { return std::strcmp(macro.Name, "REVERSE_Z") == 0; }))
 			macros.push_back({ "REVERSE_Z", "1" });
 		// Add null terminating entry
 		macros.push_back({ "WINPC", "" });
 		macros.push_back({ "DX11", "" });
 		macros.push_back({ nullptr, nullptr });
 
-		// Compiler setup
-		uint32_t flags = !developerMode ? (D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3) : D3DCOMPILE_DEBUG;
-		if (globals::state->enablePartialPrecision.load(std::memory_order_relaxed))
-			flags |= D3DCOMPILE_PARTIAL_PRECISION;
-		if (globals::state->enableAvoidFlowControl.load(std::memory_order_relaxed))
-			flags |= D3DCOMPILE_AVOID_FLOW_CONTROL;
-		// Disk cache on = user is running shipped, known-good shaders — skip the fxc
-		// validation pass to trim compile time. Disk cache off = dev workflow, keep
-		// validation so malformed source produces a clean error instead of UB.
-		if (globals::shaderCache->IsDiskCache())
-			flags |= D3DCOMPILE_SKIP_VALIDATION;
+		const uint32_t flags = snapshot.flags;
 
 		const ShaderCompileFailureKey failureKey{
 			FilePath, ProgramType, Program, flags, ShaderDefines::Serialize(macros)
@@ -385,7 +405,7 @@ namespace Util
 		};
 
 		const auto deferOptionalCompile = [&] {
-			if (!a_optionalSpecialization || globals::shaderCache->CanCompileOptionalShaderSources())
+			if (!a_optionalSpecialization || (current() && globals::shaderCache->TryAdmitOptionalShaderStage(SIE::ShaderCache::OptionalStage::Source)))
 				return false;
 			if (a_timing)
 				a_timing->deferred = true;
@@ -496,16 +516,44 @@ namespace Util
 			return SUCCEEDED(a_result);
 		};
 
-		const bool cacheOnly = a_optionalSpecialization && !globals::shaderCache->CanCompileOptionalShaderSources();
-		const StandaloneShaderRequest request{ FilePath, macros, ProgramType, Program, flags, developerMode, cacheOnly };
-		if (!globals::shaderCache->CompileStandaloneShaderCached(request, compile, createShader)) {
-			if (a_timing && cacheOnly)
-				a_timing->deferred = true;
-			if (FAILED(hr))
-				logger::error("Failed to create shader object for {}:{} (HRESULT 0x{:08X})", str, Program, static_cast<uint32_t>(hr));
-			if (SUCCEEDED(a_result))
-				a_result = E_FAIL;
-			return nullptr;
+		const StandaloneShaderRequest request{ FilePath, macros, ProgramType, Program, flags, developerMode, false, snapshot.digest };
+		if (!a_optionalSpecialization) {
+			if (!globals::shaderCache->CompileStandaloneShaderCached(request, compile, createShader)) {
+				if (FAILED(hr))
+					logger::error("Failed to create shader object for {}:{} (HRESULT 0x{:08X})", str, Program, static_cast<uint32_t>(hr));
+				return nullptr;
+			}
+		} else {
+			ShaderBytecodeContinuation local;
+			auto& next = a_continuation ? *a_continuation : local;
+			for (unsigned attempt = 0; attempt < 2; ++attempt) {
+				if (!next.blob) {
+					auto acquisition = request;
+					acquisition.forceSource = next.retrySource;
+					bool compiledSource = false;
+					const auto compileSource = [&] { compiledSource = true; return compile(); };
+					if (!globals::shaderCache->CompileStandaloneShaderCached(acquisition, compileSource, [&](ID3DBlob* blob) { next.blob.copy_from(blob); return true; }))
+						return nullptr;
+					next.fromSource = compiledSource;
+				}
+				if (!current() || !globals::shaderCache->TryAdmitOptionalShaderStage(SIE::ShaderCache::OptionalStage::Device)) {
+					if (a_timing)
+						a_timing->deferred = true;
+					return nullptr;
+				}
+				if (createShader(next.blob.get())) {
+					next.blob = nullptr;
+					break;
+				}
+				next.blob = nullptr;
+				if (next.fromSource || hr == E_OUTOFMEMORY)
+					return nullptr;
+				// A rejected cached object gets one source retry, with fresh stage
+				// admission. A closed window retains that retry without a worker.
+				next.retrySource = true;
+			}
+			if (!regShader)
+				return nullptr;
 		}
 
 		nameCompiledShader(regShader.get());

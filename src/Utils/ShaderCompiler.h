@@ -1,12 +1,18 @@
 #pragma once
 
+#include "ContentHash.h"
+#include "OwnedShaderMacros.h"
+
 #include <cstdint>
 #include <d3d11.h>
 #include <d3dcommon.h>
 #include <filesystem>
+#include <functional>
+#include <optional>
 #include <span>
 #include <utility>
 #include <vector>
+#include <winrt/base.h>
 
 namespace Util
 {
@@ -20,6 +26,27 @@ namespace Util
 		uint32_t flags = 0;
 		bool developerMode = false;
 		bool cacheOnly = false;
+		std::optional<ContentHash::Hash128> compileStateDigest;
+		bool forceSource = false;
+	};
+
+	/** Immutable settings and ABI identity captured by the compiler's owner. */
+	struct ShaderCompilerSnapshot
+	{
+		bool developerMode = false, isVR = false, reverseZ = false;
+		uint32_t flags = 0;
+		OwnedShaderMacros globalDefines;
+		ContentHash::Hash128 digest;
+		uint64_t graphicsRevision = 0, inputGeneration = 0;
+		std::function<bool()> isCancelled;
+	};
+	ShaderCompilerSnapshot CaptureShaderCompilerSnapshot();
+
+	/** Retains a deferred creation stage and a single rejected-cache source retry. */
+	struct ShaderBytecodeContinuation
+	{
+		winrt::com_ptr<ID3DBlob> blob;
+		bool fromSource = false, retrySource = false;
 	};
 
 	/** @brief Optional QPC accumulator separating compiler and device creation cost. */
@@ -56,7 +83,9 @@ namespace Util
 		const char* Program,
 		HRESULT& a_result,
 		ShaderCompileTiming* a_timing = nullptr,
-		bool a_optionalSpecialization = false);
+		bool a_optionalSpecialization = false,
+		const ShaderCompilerSnapshot* a_snapshot = nullptr,
+		ShaderBytecodeContinuation* a_continuation = nullptr);
 
 	/** Permit standalone retries without retaining failures from pre-reset attempts. */
 	void ClearShaderCompileFailures();

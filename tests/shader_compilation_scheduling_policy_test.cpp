@@ -60,12 +60,37 @@ namespace
 	static_assert(CoversStartupCompilationCpuShare());
 	static_assert(CoversCooperativePrioritySelection());
 	static_assert(CoversWorkerPriorityLifecycle());
-	static_assert(CanCompileOptionalSources(false, false, false));
-	static_assert(!CanCompileOptionalSources(true, false, false));
-	static_assert(!CanCompileOptionalSources(false, true, false));
-	static_assert(!CanCompileOptionalSources(false, false, true));
-	static_assert(!CanCompileOptionalSources(false, true, true));
-	static_assert(!CanCompileOptionalSources(true, true, true));
+	constexpr bool CoversPreparationWindows()
+	{
+		for (const auto mode : { PreparationMode::StartupOnly, PreparationMode::Transitions, PreparationMode::Gameplay }) {
+			for (bool startup : { false, true }) {
+				for (bool ready : { false, true }) {
+					for (bool transition : { false, true }) {
+						const bool expected = startup || (ready && (mode == PreparationMode::Gameplay || (mode == PreparationMode::Transitions && transition)));
+						if (CanPrepareOptional(mode, startup, ready, transition) != expected)
+							return false;
+					}
+				}
+			}
+		}
+		return ValidatePreparationMode(-1) == PreparationMode::StartupOnly &&
+		       ValidatePreparationMode(3) == PreparationMode::StartupOnly &&
+		       ValidatePreparationMode(INT64_MAX) == PreparationMode::StartupOnly &&
+		       ValidatePreparationMode(1) == PreparationMode::Transitions &&
+		       ValidatePreparationMode(2) == PreparationMode::Gameplay;
+	}
+	static_assert(DispatchLimit(12, 8, false, 12) == 12);
+	static_assert(DispatchLimit(12, 8, true, 12) == 8);
+	static_assert(DispatchLimit(32, 32, false, 12) == 12);
+	static_assert(DispatchLimit(-1, 0, true, 12) == 1);
+	static_assert(DispatchLimit(12, 8, false, 0) == 0);
+	static_assert(CoversPreparationWindows());
+	static_assert(IsBlockingStartup(false, false, false));
+	static_assert(!IsBlockingStartup(true, false, false));
+	static_assert(!IsBlockingStartup(false, true, false));
+	static_assert(!IsBlockingStartup(false, false, true));
+	static_assert(!IsBlockingStartup(false, true, true));
+	static_assert(!IsBlockingStartup(true, true, true));
 }
 
 int main()

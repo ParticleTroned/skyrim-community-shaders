@@ -141,6 +141,9 @@ namespace
 		Require(allocations.load() == readyAllocations, "Resident polling must not allocate");
 		slot.Reset();
 		Require(liveShaders == 0, "Reset must release a published shader");
+		auto deferred = slot.BeginPreparation();
+		deferred->Defer();
+		Require(!slot.get() && slot.CanPrepare(), "Deferred queue admission must be retryable without a reset");
 		auto failed = slot.BeginPreparation();
 		failed->Complete(nullptr);
 		Require(!slot.get() && !slot.CanPrepare(), "Preparation failure must remain latched");

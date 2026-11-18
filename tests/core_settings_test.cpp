@@ -58,6 +58,21 @@ namespace
 		Util::Settings::OverlayCoreSettings(defaults, "General", { { "Resident Only Lighting Specializations", false } });
 		Check(!defaults["General"]["Resident Only Lighting Specializations"].get<bool>(), "Resident-only policy could not be disabled");
 
+		using Mode = ShaderCompilationSchedulingPolicy::PreparationMode;
+		for (bool legacy : { false, true }) {
+			Check(Util::ReadShaderPreparationMode({ { "Resident Only Lighting Specializations", legacy } }) == Mode::StartupOnly, "Legacy policy enabled runtime work");
+			for (int mode : { 0, 1, 2 }) {
+				Check(Util::ReadShaderPreparationMode({ { "Resident Only Lighting Specializations", legacy }, { "Optimised Shader Preparation", mode } }) == static_cast<Mode>(mode), "Explicit preparation mode lost to legacy setting");
+			}
+		}
+		for (const auto& bad : { json(nullptr), json(true), json("1"), json(1.0), json(-1), json(3), json(UINT64_MAX) }) {
+			Check(Util::ReadShaderPreparationMode({ { "Optimised Shader Preparation", bad } }) == Mode::StartupOnly, "Invalid mode enabled runtime work");
+			auto merged = Defaults();
+			merged["General"]["Optimised Shader Preparation"] = 2;
+			Util::Settings::OverlayCoreSettings(merged, "General", { { "Optimised Shader Preparation", bad }, { "Enable Async", false } });
+			Check(merged["General"]["Optimised Shader Preparation"] == 0 && !merged["General"]["Enable Async"].get<bool>(), "Invalid mode discarded conservative fallback or unrelated settings");
+		}
+
 		for (const auto* section : { "General", "Advanced", "Replace Original Shaders", "Disable at Boot" }) {
 			for (const auto& bad : { json(nullptr), json(true), json(9), json("invalid"), json::array() }) {
 				auto unchanged = Defaults();

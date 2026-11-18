@@ -2,6 +2,7 @@
 #include "Diagnostics/PerformanceCostExperiments.h"
 #include "Features/ReverseZ.h"
 #include "Features/UnifiedWater.h"
+#include "Utils/ShaderPreparationSettings.h"
 #if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
 #	include "Diagnostics/NvPerf.h"
 #endif
@@ -911,6 +912,7 @@ void State::Reset()
 	if (!globals::game::ui->GameIsPaused())
 		timer += RE::GetSecondsSinceLastFrame();
 
+	const auto preparationWindow = globals::shaderCache->GetShaderPreparationWindowGeneration();
 	// Cache menu open states once per frame to avoid repeated IsMenuOpen calls
 	// (each call constructs a BSFixedString, which is expensive at scale).
 	if (auto ui = globals::game::ui) {
@@ -934,6 +936,7 @@ void State::Reset()
 	CSX::Diagnostics::GpuCrash::Checkpoint("Frame::Reset");
 #endif
 	UpdateSaveLoadSafeMode();
+	globals::shaderCache->TickOptionalShaderPreparation(isLoadingMenuOpen, isMainMenuOpen, IsSaveLoadSafeModeActive(), preparationWindow);
 	LODBlendRingFix::GetInstance().Update();
 
 	globals::shaderCache->TickActiveShaderCapture(globals::menu && globals::menu->IsEnabled);
@@ -1567,8 +1570,9 @@ void State::SaveToJson(
 	advanced["Dump Shaders"] = shaderCache->IsDump();
 	advanced["Log Level"] = logLevel;
 	advanced["Shader Defines"] = GetShaderDefinesSnapshot()->authoredText;
-	advanced["Compiler Threads"] = shaderCache->compilationThreadCount;
-	advanced["Background Compiler Threads"] = shaderCache->backgroundCompilationThreadCount;
+	const auto threadLimits = shaderCache->GetCompilationThreadLimits();
+	advanced["Compiler Threads"] = threadLimits.first;
+	advanced["Background Compiler Threads"] = threadLimits.second;
 	advanced["Use FileWatcher"] = shaderCache->UseFileWatcher();
 	advanced["Frame Annotations"] = frameAnnotations;
 #ifdef TRACY_SUPPORT
@@ -1586,7 +1590,8 @@ void State::SaveToJson(
 	general["Enable Disk Cache"] = shaderCache->IsDiskCache();
 	general["Skip Unchanged Shaders"] = shaderCache->IsSkipUnchangedShaders();
 	general["Enable Async"] = shaderCache->IsAsync();
-	general["Resident Only Lighting Specializations"] = shaderCache->ResidentOnlyLightingSpecializations();
+	general["Optimised Shader Preparation"] = static_cast<int>(shaderCache->GetPreparationMode());
+	general.erase("Resident Only Lighting Specializations");
 
 	settings["General"] = general;
 
@@ -1669,10 +1674,12 @@ void State::LoadFromJson(
 		}
 		if (advanced.contains("Shader Defines") && advanced["Shader Defines"].is_string())
 			SetDefines(advanced["Shader Defines"]);
+		auto threadLimits = shaderCache->GetCompilationThreadLimits();
 		if (advanced.contains("Compiler Threads") && advanced["Compiler Threads"].is_number_integer())
-			shaderCache->compilationThreadCount = std::clamp(advanced["Compiler Threads"].get<int32_t>(), 1, maxCompilerThreads);
+			threadLimits.first = std::clamp(advanced["Compiler Threads"].get<int32_t>(), 1, maxCompilerThreads);
 		if (advanced.contains("Background Compiler Threads") && advanced["Background Compiler Threads"].is_number_integer())
-			shaderCache->backgroundCompilationThreadCount = std::clamp(advanced["Background Compiler Threads"].get<int32_t>(), 1, maxCompilerThreads);
+			threadLimits.second = std::clamp(advanced["Background Compiler Threads"].get<int32_t>(), 1, maxCompilerThreads);
+		shaderCache->SetCompilationThreadLimits(threadLimits.first, threadLimits.second);
 		if (advanced.contains("Use FileWatcher") && advanced["Use FileWatcher"].is_boolean())
 			shaderCache->SetFileWatcher(advanced["Use FileWatcher"]);
 		if (advanced.contains("Frame Annotations") && advanced["Frame Annotations"].is_boolean()) {
@@ -1710,8 +1717,7 @@ void State::LoadFromJson(
 			shaderCache->SetSkipUnchangedShaders(general["Skip Unchanged Shaders"]);
 		if (general.contains("Enable Async") && general["Enable Async"].is_boolean())
 			shaderCache->SetAsync(general["Enable Async"]);
-		if (general.contains("Resident Only Lighting Specializations") && general["Resident Only Lighting Specializations"].is_boolean())
-			shaderCache->SetResidentOnlyLightingSpecializations(general["Resident Only Lighting Specializations"]);
+		shaderCache->SetPreparationMode(Util::ReadShaderPreparationMode(general));
 	}
 
 	if (settings.contains("Replace Original Shaders") && settings["Replace Original Shaders"].is_object()) {

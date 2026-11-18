@@ -108,7 +108,6 @@ private:
 	static constexpr uint8_t kCompositeLinearLighting = 2u;
 	static constexpr size_t kCompositeSpecializationCount = kCompositeLuminanceRatio | kCompositeLinearLighting;
 	std::array<std::array<Util::AsyncShader<ID3D11ComputeShader>, kCompositeSpecializationCount>, 2> specializedComposites;
-	std::array<std::array<uint8_t, kCompositeSpecializationCount>, 2> compositeMissReports{};
 	uint64_t compositeRevision = 0;
 
 	/// Copies completed opaque depth without changing the active render targets.

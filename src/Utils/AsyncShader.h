@@ -22,10 +22,16 @@ namespace Util
 		public:
 			/** A reset abandons this result without waiting for its worker. */
 			bool IsCancelled() const { return cancelled.load(std::memory_order_acquire); }
-			/** Called once by the worker, including with null after failure. */
+			/** Completes once after preparation, including with null after failure. */
 			void Complete(winrt::com_ptr<ShaderT> result)
 			{
 				shader = std::move(result);
+				complete.store(true, std::memory_order_release);
+			}
+			/** Queue admission failed; allow a later window to retry this slot. */
+			void Defer()
+			{
+				deferred = true;
 				complete.store(true, std::memory_order_release);
 			}
 
@@ -33,6 +39,7 @@ namespace Util
 			friend class AsyncShader;
 			std::atomic_bool cancelled{ false }, complete{ false };
 			winrt::com_ptr<ShaderT> shader;
+			bool deferred = false;
 		};
 
 		/** Polls once; never waits, creates a device object, or requests compilation. */
@@ -40,14 +47,14 @@ namespace Util
 		{
 			if (pending && pending->complete.load(std::memory_order_acquire)) {
 				shader = std::move(pending->shader);
-				failed = !shader;
+				failed = !shader && !pending->deferred;
 				pending.reset();
 			}
 			return shader.get();
 		}
 
 		bool CanPrepare() const { return !shader && !pending && !failed; }
-		/** Reserve before enqueueing; queue failures must complete the ticket with null. */
+		/** Reserve before enqueueing; failed admission must defer the ticket. */
 		std::shared_ptr<Preparation> BeginPreparation()
 		{
 			if (!CanPrepare())

@@ -183,6 +183,12 @@ namespace SIE
 #include "shader_pbr_utility_flags.h"
 		std::vector<uint32_t> pixelRequests;
 		std::atomic_bool backgroundCompilation{ false };
+		struct OptionalPreparation
+		{
+			bool startupCounted = false;
+		};
+		std::unordered_map<uint64_t, std::shared_ptr<OptionalPreparation>> optionalPreparations;
+		std::atomic_uint32_t pendingCompositePreparations{ 0 };
 		struct
 		{
 			bool disabled = false;
@@ -716,7 +722,13 @@ namespace
 					cache.GetPixelShader(shader, demandedDescriptor, ShaderCache::PixelShaderLookup::Draw);
 					Require(!queue.availableTasks.find(demanded)->IsPrecompile());
 					Require(!cache.startupIncludeCache.disabled);
+					auto optional = std::make_shared<ShaderCache::OptionalPreparation>();
+					optional->startupCounted = true;
+					cache.optionalPreparations.emplace(1, optional);
+					cache.pendingCompositePreparations = 1;
 					Require(!cache.SetBackgroundCompilation(true));
+					Require(!optional->startupCounted && cache.pendingCompositePreparations == 0);
+					Require(cache.optionalPreparations.contains(1));
 					Require(cache.startupIncludeCache.disabled);
 					Require(queue.availableTasks.size() == 1 && queue.availableTasks.contains(demanded));
 					Require(queue.tasksInProgress.size() == 1 && queue.tasksInProgress.contains(running));

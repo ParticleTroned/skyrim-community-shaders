@@ -4710,6 +4710,55 @@ if(BUILD_CONTROLLER_TESTS)
         ShaderCompilationSchedulingPolicy
         tests/shader_compilation_scheduling_policy_test.cpp
     )
+    set(_optional_preparation_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/optional_preparation_test"
+    )
+    set(_optional_preparation_headers
+        "${_optional_preparation_dir}/optional_members.h"
+        "${_optional_preparation_dir}/optional_phase.h"
+        "${_optional_preparation_dir}/optional_scheduler.h"
+    )
+    add_custom_command(
+        OUTPUT ${_optional_preparation_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_optional_preparation_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_optional_shader_preparation.cmake"
+        DEPENDS
+            src/ShaderCache.h
+            src/ShaderCacheSpecializations.cpp
+            tests/extract_optional_shader_preparation.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_custom_target(
+        optional_shader_preparation_sources
+        DEPENDS ${_optional_preparation_headers}
+    )
+    add_controller_test(optional_shader_preparation_test OptionalShaderPreparation tests/optional_shader_preparation_test.cpp)
+    add_dependencies(
+        optional_shader_preparation_test
+        optional_shader_preparation_sources
+    )
+    target_include_directories(
+        optional_shader_preparation_test
+        PRIVATE "${_optional_preparation_dir}"
+    )
+    target_link_libraries(
+        optional_shader_preparation_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    if(MSVC)
+        target_compile_options(
+            optional_shader_preparation_test
+            PRIVATE /UNDEBUG
+        )
+    else()
+        target_compile_options(
+            optional_shader_preparation_test
+            PRIVATE -UNDEBUG
+        )
+    endif()
     add_controller_test(
         vr_depth_culling_cache_refresh_policy_test
         VRDepthCullingCacheRefreshPolicy

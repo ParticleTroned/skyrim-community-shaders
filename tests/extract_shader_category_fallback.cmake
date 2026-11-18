@@ -62,4 +62,12 @@ extract_between("${_pbr}" "void TruePBR::GenerateShaderPermutations("
     "struct ExtendedRendererState" "pbr_prewarm.h")
 
 extract_between("${_cache}" "bool ShaderCache::UsesRuntimeLightingSpecializationPolicy() const"
-    "void ShaderCache::RecordLightingSpecializationMiss(" "runtime_specialization_policy.h")
+    "void ShaderCache::PrewarmDeferredPixelShaders(" "runtime_specialization_policy.h")
+
+extract_between("${_cache}" "void ShaderCache::RequestPixelSpecialization("
+    "bool ShaderCache::QueueOptionalPixelShader(" "pixel_discovery.h")
+extract_between("${_pbr}" "namespace Permutations\n{"
+    "void TruePBR::GenerateShaderPermutations(" "pbr_startup_permutations.h")
+file(READ "${OUTPUT_DIRECTORY}/pbr_startup_permutations.h" _permutations)
+string(REPLACE "namespace Permutations" "namespace StartupPermutations" _permutations "${_permutations}")
+file(WRITE "${OUTPUT_DIRECTORY}/pbr_startup_permutations.h" "${_permutations}")

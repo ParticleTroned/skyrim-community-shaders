@@ -356,8 +356,9 @@ namespace Color
 #	if defined(LIGHTING)
 	float3 EmitColor(float3 color)
 	{
+		// CategoryGamma grades magnitudes; the signed gain is restored after grading.
 		if (ENABLE_LL_COLOR_ADJUSTMENTS)
-			color = CategoryGamma(color / max(emissiveMult, 1e-5), SharedData::linearLightingSettings.emitColorGamma);
+			color = CategoryGamma(color / max(abs(emissiveMult), 1e-5), SharedData::linearLightingSettings.emitColorGamma);
 
 		// The vanilla path does not require the Linear Lighting geometry buffer.
 		color = AdjustUtilityColor(color, SharedData::adaptiveBalanceSettings.appearance.emissiveSaturation,

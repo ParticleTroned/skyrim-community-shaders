@@ -1,4 +1,7 @@
-#if defined(FIRE_TEST) || defined(APPEARANCE_TEST)
+#if defined(EMISSIVE_TEST)
+#	define LIGHTING
+#endif
+#if defined(FIRE_TEST) || defined(APPEARANCE_TEST) || defined(EMISSIVE_TEST)
 #	define LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS
 #endif
 #include "Common/AdaptiveBalanceColor.hlsli"
@@ -24,7 +27,7 @@ cbuffer Samples : register(b0)
 RWTexture2D<float4> Result : register(u0);
 
 [numthreads(8, 1, 1)] void main(uint3 id : SV_DispatchThreadID) {
-#if defined(FIRE_TEST) || defined(POINT_LIGHT_SATURATION_TEST) || defined(APPEARANCE_TEST)
+#if defined(FIRE_TEST) || defined(POINT_LIGHT_SATURATION_TEST) || defined(APPEARANCE_TEST) || defined(EMISSIVE_TEST)
 	// FXC can sink a dynamic sample index into only one grading branch.
 	float3 color = colors[0].rgb;
 	[unroll] for (uint sample = 1; sample < 8; ++sample)
@@ -32,7 +35,9 @@ RWTexture2D<float4> Result : register(u0);
 #else
 	float3 color = colors[id.x].rgb;
 #endif
-#if defined(APPEARANCE_TEST)
+#if defined(EMISSIVE_TEST)
+	Result[id.xy] = float4(Color::EmitColor(color), 1.0);
+#elif defined(APPEARANCE_TEST)
 	float3 graded = color;
 	float3 original = color;
 	if (appearanceParameters.x == 0) {

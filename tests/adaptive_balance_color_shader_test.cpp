@@ -83,6 +83,7 @@ namespace
 		SceneLights,
 		ReflectionComposition,
 		Appearance,
+		Emissive,
 		Fire
 	};
 
@@ -92,7 +93,7 @@ namespace
 		ComPtr<ID3D11ShaderReflection> reflection;
 		ComPtr<ID3D11Texture2D> output, staging;
 		ComPtr<ID3D11UnorderedAccessView> uav;
-		std::unique_ptr<ConstantBuffer> feature, inputs, permutation, frame;
+		std::unique_ptr<ConstantBuffer> feature, inputs, permutation, frame, geometry;
 
 		Fixture(ID3D11Device* device, bool vr, ShaderMode mode = ShaderMode::Scene, const std::vector<const char*>& extraDefines = {}, uint32_t referenceFlags = 0)
 		{
@@ -106,6 +107,8 @@ namespace
 				defines.push_back({ "LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS", "1" });
 			if (mode == ShaderMode::Appearance)
 				defines.push_back({ "APPEARANCE_TEST", "1" });
+			if (mode == ShaderMode::Emissive)
+				defines.push_back({ "EMISSIVE_TEST", "1" });
 			if (mode == ShaderMode::Fire)
 				defines.push_back({ "FIRE_TEST", "1" });
 			for (const auto* define : extraDefines)
@@ -127,8 +130,12 @@ namespace
 			feature->SetMember("SharedData::adaptiveBalanceSettings", "pointLightCurve", 1.0f);
 			for (const auto* name : { "fireIntensity", "fireSaturation", "fireCurve" })
 				feature->SetMember("SharedData::adaptiveBalanceSettings", name, 1.0f);
-			if (mode == ShaderMode::Fire || mode == ShaderMode::Appearance || mode == ShaderMode::PointLights || mode == ShaderMode::ReflectionComposition)
+			if (mode == ShaderMode::Fire || mode == ShaderMode::Appearance || mode == ShaderMode::Emissive || mode == ShaderMode::PointLights || mode == ShaderMode::ReflectionComposition)
 				permutation = std::make_unique<ConstantBuffer>(device, reflection.Get(), "Permutation::PerShader");
+			if (mode == ShaderMode::Emissive) {
+				geometry = std::make_unique<ConstantBuffer>(device, reflection.Get(), "LLPerGeometry");
+				Require(geometry->slot == 8 && geometry->bytes.size() == 16, "Emissive geometry buffer layout changed");
+			}
 			if (mode == ShaderMode::ReflectionComposition)
 				frame = std::make_unique<ConstantBuffer>(device, reflection.Get(), "FrameBuffer::PerFrame");
 			if (lights || mode == ShaderMode::Appearance) {
@@ -269,6 +276,8 @@ namespace
 				permutation->Bind(context);
 			if (frame)
 				frame->Bind(context);
+			if (geometry)
+				geometry->Bind(context);
 			ID3D11UnorderedAccessView* target = uav.Get();
 			context->CSSetUnorderedAccessViews(0, 1, &target, nullptr);
 			context->CSSetShader(shader.Get(), nullptr, 0);
@@ -283,6 +292,76 @@ namespace
 			return result;
 		}
 	};
+
+	unsigned VerifyEmissive(ID3D11Device* device, ID3D11DeviceContext* context, bool vr)
+	{
+		Fixture fixture(device, vr, ShaderMode::Emissive);
+		constexpr float emissiveBrightness = 1.3f;
+		fixture.feature->SetMember("SharedData::linearLightingSettings", "emitColorMult", emissiveBrightness);
+		const auto draw = [&](float gain) {
+			auto colors = samples;
+			for (auto& pixel : colors)
+				for (size_t c = 0; c < 3; ++c)
+					pixel[c] *= gain;
+			fixture.inputs->SetVariable("colors", colors);
+			fixture.geometry->SetVariable("emissiveMult", gain);
+			return fixture.Dispatch(context);
+		};
+		unsigned checked = 0;
+		for (bool linear : { false, true }) {
+			fixture.feature->SetMember("SharedData::linearLightingSettings", "enableLinearLighting", uint32_t(linear));
+			for (uint32_t scene : { 0u, 1u, 2u }) {
+				fixture.permutation->SetVariable("Permutation::ExtraShaderDescriptor", scene);
+				for (bool grade : { false, true }) {
+					auto appearance = AdaptiveBalanceTest::NeutralAppearance();
+					appearance[70] = grade ? 0.5f : 1.0f;
+					appearance[71] = grade ? -0.5f : 0.0f;
+					fixture.feature->SetMember("SharedData::adaptiveBalanceSettings", "appearance", appearance);
+					for (float gamma : { 1.0f, 1.8f }) {
+						fixture.feature->SetMember("SharedData::linearLightingSettings", "emitColorGamma", gamma);
+						const auto reference = draw(1.0f);
+						if (linear && scene != 0 && !grade)
+							for (size_t i = 0; i < samples.size(); ++i)
+								for (size_t c = 0; c < 3; ++c)
+									Require(Close(reference[i][c], std::pow(std::abs(samples[i][c]), gamma) * emissiveBrightness), "Emissive gamma or brightness controls changed");
+						for (float magnitude : { 0.0f, 1e-8f, 1e-5f, 0.25f, 4.0f }) {
+							const auto positive = draw(magnitude);
+							const auto negative = draw(-magnitude);
+							for (size_t i = 0; i < samples.size(); ++i) {
+								for (size_t c = 0; c < 3; ++c) {
+									Require(std::isfinite(positive[i][c]) && std::isfinite(negative[i][c]), "Emissive animation produced a non-finite color");
+									if (magnitude > 0.0f)
+										Require(Close(negative[i][c] / magnitude, -positive[i][c] / magnitude), "Negative emissive gain changed the normalized color magnitude");
+									if (magnitude == 0.0f)
+										Require(positive[i][c] == 0.0f && negative[i][c] == 0.0f, "Zero emissive gain left visible energy");
+									if (scene == 0 || (!linear && !grade))
+										Require(Close(positive[i][c], samples[i][c] * magnitude), "Emissive normalization changed a bypassed draw");
+									if (linear && scene != 0 && magnitude >= 1e-5f)
+										Require(Close(positive[i][c] / magnitude, reference[i][c]), "Emissive animation changed the authored color response");
+									if (linear && scene != 0 && magnitude < 1e-5f)
+										Require(std::abs(positive[i][c]) <= std::abs(reference[i][c]) * magnitude + 1e-12f, "Near-zero emissive gain amplified its color");
+								}
+								checked += 2;
+							}
+						}
+					}
+				}
+			}
+		}
+		fixture.feature->SetMember("SharedData::linearLightingSettings", "enableLinearLighting", 0u);
+		const auto withoutBrightness = draw(-0.25f);
+		fixture.feature->SetMember("SharedData::linearLightingSettings", "enableAdaptiveBrightnessColorAdjustments", 1u);
+		const auto withGeometry = draw(-0.25f);
+		for (size_t i = 0; i < samples.size(); ++i) {
+			for (size_t c = 0; c < 3; ++c)
+				Require(Close(withGeometry[i][c], withoutBrightness[i][c] * emissiveBrightness), "Adaptive Balance emissive brightness requires Linear Lighting");
+			checked += 2;
+		}
+		fixture.geometry.reset();
+		const auto withoutGeometry = fixture.Dispatch(context);
+		Require(withGeometry == withoutGeometry, "Disabled Linear Lighting reads emissive geometry constants");
+		return checked;
+	}
 
 	void Verify(const Pixels& result, float contrast, float saturation)
 	{
@@ -1411,6 +1490,7 @@ int main(int argc, char** argv)
 		unsigned lightSamples = 0;
 		unsigned fireSamples = 0;
 		unsigned appearanceSamples = 0;
+		unsigned emissiveSamples = 0;
 		for (bool vr : { false, true }) {
 			std::cerr << "Creating " << (vr ? "VR" : "SE/AE") << " fixture\n";
 			Fixture fixture(device.Get(), vr);
@@ -1433,12 +1513,13 @@ int main(int argc, char** argv)
 			appearanceSamples += VerifyUtilityControls(device.Get(), context.Get(), vr, true);
 			appearanceSamples += VerifyEyeAppearance(device.Get(), context.Get(), vr);
 			appearanceSamples += VerifyAuroraAppearance(device.Get(), context.Get(), vr);
+			emissiveSamples += VerifyEmissive(device.Get(), context.Get(), vr);
 			fireSamples += VerifyFireModes(device.Get(), context.Get(), vr);
 			for (bool fade : { false, true })
 				VerifyBlend(device.Get(), context.Get(), vr, fade);
 		}
 		std::cout << "288 color samples, 384 HDR blend draws, and " << lightSamples
-				  << " light samples, " << fireSamples << " fire samples, and " << appearanceSamples << " appearance samples passed on WARP (SE/AE and VR).\n";
+				  << " light samples, " << fireSamples << " fire samples, " << appearanceSamples << " appearance samples, and " << emissiveSamples << " emissive samples passed on WARP (SE/AE and VR).\n";
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

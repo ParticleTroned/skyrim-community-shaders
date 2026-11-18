@@ -2899,6 +2899,37 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(PBRMaterialRegistry PROPERTIES TIMEOUT 30)
     add_controller_test(snow_cover_math_test SnowCoverMath tests/snow_cover_math_test.cpp)
+    set(_snow_pass_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/snow-pass-test"
+    )
+    set(_snow_pass_headers
+        "${_snow_pass_test_dir}/snow_flags_under_test.h"
+        "${_snow_pass_test_dir}/snow_mask_under_test.h"
+        "${_snow_pass_test_dir}/snow_pass_under_test.h"
+        "${_snow_pass_test_dir}/snow_equals_under_test.h"
+        "${_snow_pass_test_dir}/snow_lod_tree_under_test.h"
+        "${_snow_pass_test_dir}/snow_foliage_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_snow_pass_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_snow_pass_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_snow_pass.cmake"
+        DEPENDS
+            src/State.h
+            src/Features/SnowCover.cpp
+            tests/extract_snow_pass.cmake
+            src/Features/SnowCover/Environment.cpp
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(snow_cover_pass_test SnowCoverPass tests/snow_cover_pass_test.cpp)
+    target_sources(snow_cover_pass_test PRIVATE ${_snow_pass_headers})
+    target_include_directories(
+        snow_cover_pass_test
+        PRIVATE "${_snow_pass_test_dir}"
+    )
     add_controller_test(
         snow_cover_color_source_test SnowCoverColorSource
         tests/snow_cover_color_source_test.cpp

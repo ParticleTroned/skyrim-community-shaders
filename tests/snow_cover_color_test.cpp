@@ -245,6 +245,18 @@ int main()
 		for (bool vr : { false, true })
 			for (bool reference : { false, true })
 				CheckWeatherRange(device.Get(), context.Get(), vertex.Get(), vr, reference);
+		for (bool vr : { false, true })
+			for (bool pbr : { false, true })
+				for (bool lodBlending : { false, true }) {
+					std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "SNOW_COVER", "1" }, { "DO_ALPHA_TEST", "1" }, { "NO_LEGACY_SUBSURFACE", "1" }, { "DEFERRED", "1" } };
+					if (vr)
+						defines.push_back({ "VR", "1" });
+					if (pbr)
+						defines.push_back({ "TRUE_PBR", "1" });
+					if (lodBlending)
+						defines.push_back({ "LOD_BLENDING", "1" });
+					CompilePixel(std::move(defines), "ProductionLightingMain");
+				}
 		std::cout << "Snow color: " << count << " production surface/foliage samples match native shading on WARP (SE/AE and VR, legacy/PBR sources and targets, LL controls, main/alternate fallback, retained tints/AO)\n";
 		std::cout << "Snow weather distance: positive, zero and negative accumulation passed on WARP (SE/AE and VR, optimized/reference)\n";
 	} catch (const std::exception& error) {

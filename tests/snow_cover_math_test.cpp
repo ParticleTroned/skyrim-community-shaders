@@ -1,3 +1,4 @@
+#include "Features/SnowCover/Foliage.h"
 #include "Features/SnowCoverMath.h"
 #include "Utils/HeightMap.h"
 #include "Utils/StringUtils.h"
@@ -18,6 +19,21 @@ namespace
 
 int main()
 {
+	for (const auto* path : { "plants/shrub.nif", "landscape\\trees\\shrub.nif", "Meshes/PLANTS/shrub.nif" })
+		Require(SnowFoliage::IsVegetationModel(path));
+	for (const auto* path : { "", "plants.nif", "architecture/planter.nif", "armor/treesuit.nif", "landscape/notplants/shrub.nif" })
+		Require(!SnowFoliage::IsVegetationModel(path));
+	for (bool alphaTested : { false, true }) {
+		for (bool twoSided : { false, true }) {
+			// Matched plant cards survive the PBR conversion that clears soft lighting.
+			Require(SnowFoliage::IsFoliageCard(alphaTested, twoSided, false, true) == (alphaTested && twoSided));
+			Require(SnowFoliage::IsFoliageCard(alphaTested, twoSided, false, true, true) == alphaTested);
+			Require(SnowFoliage::IsFoliageCard(alphaTested, twoSided, true, true) == alphaTested);
+			Require(!SnowFoliage::IsFoliageCard(alphaTested, twoSided, false, false));
+		}
+	}
+	Require(SnowFoliage::IsFoliageCard(true, false, true, false));
+	Require(!SnowFoliage::IsFoliageCard(false, true, true, true));
 	using namespace SnowCoverMath;
 	Require(SeasonalAltitude(6, 6, 0, 20000, -20000) == -20000);
 	Require(SeasonalAltitude(0, 6, 0, 20000, -20000) == 20000);

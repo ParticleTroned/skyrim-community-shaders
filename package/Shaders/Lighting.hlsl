@@ -3452,9 +3452,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if !defined(TREE_ANIM)
 		bool snowBillboard = false;
 #		endif
-#		if defined(DO_ALPHA_TEST) && defined(LOD_BLENDING) && !defined(TREE_ANIM)  // should only match object lod trees (ultra trees), they have no special define
+#		if defined(DO_ALPHA_TEST) && !defined(TREE_ANIM)
 		float3 snowCardNormal = normalize(cross(ddx(input.WorldPosition.xyz), ddy(input.WorldPosition.xyz)));
-		if (snowActive && Lighting::HasSoftLighting()) {
+		if (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SnowFoliage) {
 			snowBillboard = abs(dot(snowCardNormal, vertexNormal)) < 0.5;
 			[branch] if (SharedData::snowCoverSettings.EnableExpensiveFoliage)
 			{
@@ -3462,7 +3462,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				TexColorSampler.GetDimensions(width, height);
 				float hasAlpha = 1 - TexColorSampler.SampleLevel(SampColorSampler, uv, 6).a;
 				if (snowBillboard || hasAlpha > 0.001)
-					snowOcclusion = 1 - TexColorSampler.Sample(SampColorSampler, uv - float2(0, 2.0 / max(height, 1u))).a;
+					snowOcclusion *= 1 - TexColorSampler.Sample(SampColorSampler, uv - float2(0, 2.0 / max(height, 1u))).a;
 			}
 		}
 #		endif
@@ -3511,7 +3511,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif
 			}
 #		endif
-#		if defined(DO_ALPHA_TEST) && defined(LOD_BLENDING) && !defined(TREE_ANIM)
+#		if defined(DO_ALPHA_TEST) && !defined(TREE_ANIM)
 			if (snowBillboard)
 				snowNormal = normalize(float3(snowCardNormal.xy, abs(snowCardNormal.z) + SnowCover::FoliageNormalBias));
 #		endif

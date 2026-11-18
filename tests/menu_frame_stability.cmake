@@ -4,6 +4,7 @@ set(_menu_frame_test_headers
     "${_menu_frame_test_dir}/menu_welcome_layout_under_test.h"
     "${_menu_frame_test_dir}/menu_welcome_admission_under_test.h"
     "${_menu_frame_test_dir}/menu_ui_scale_under_test.h"
+    "${_menu_frame_test_dir}/menu_present_failure_under_test.h"
     "${_menu_frame_test_dir}/menu_present_under_test.h"
     "${_menu_frame_test_dir}/menu_status_layout_under_test.h"
     "${_menu_frame_test_dir}/menu_status_overlap_under_test.h"

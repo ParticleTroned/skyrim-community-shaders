@@ -804,6 +804,9 @@ void FurShells::BeginPass(RE::BSShader* a_shader, RE::BSRenderPass* a_pass)
 		return;
 
 	auto* state = globals::state;
+	if (state->IsMainOrLoadingMenuOpen())
+		return;
+
 	StartAssetScan();
 	if ((state->permutationData.ExtraShaderDescriptor & ReflectionsFlag) != 0 || !IsFurTechnique(state->currentPixelDescriptor))
 		return;
@@ -840,6 +843,9 @@ void FurShells::BeginPass(RE::BSShader* a_shader, RE::BSRenderPass* a_pass)
 	data->skin = IsSkinTechnique(state->currentPixelDescriptor);
 	const ShellOverride values = data->overridden ? data->values : GetGlobalValues(data->skin);
 	if (!values.Enabled)
+		return;
+	// Check live menu state only for fur candidates, including the first loading frame.
+	if (state->IsMainOrLoadingMenuOpen(globals::game::ui))
 		return;
 
 	const float fade = std::clamp((values.FadeEnd - distance) / std::max(values.FadeEnd - values.FadeStart, 1.0f), 0.0f, 1.0f);
@@ -1096,6 +1102,9 @@ void FurShells::FillDynamics(PerPass& a_perPass, const RE::BSGeometry* a_geometr
 
 void FurShells::BeginOverlayPass(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, const FrameBody& a_body)
 {
+	if (globals::state->IsMainOrLoadingMenuOpen(globals::game::ui))
+		return;
+
 	const auto lookup = FindShell(a_pass);
 	if (!lookup.resolved || lookup.emptyOverlay || static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material)->materialAlpha <= 0.0f)
 		return;
@@ -1410,11 +1419,13 @@ bool FurShells::CopySceneDepth()
 void FurShells::OnBeforeBlendedDecals()
 {
 	auto* state = globals::state;
-	if (!state->inWorld || (state->permutationData.ExtraShaderDescriptor & ReflectionsFlag) != 0)
+	if (!state->inWorld || state->IsMainOrLoadingMenuOpen() || (state->permutationData.ExtraShaderDescriptor & ReflectionsFlag) != 0)
 		return;
 
 	deferralClosed = true;
 	if (deferredPasses.empty() || !settings.Enabled || !perPassCB || !noColorWrite)
+		return;
+	if (state->IsMainOrLoadingMenuOpen(globals::game::ui))
 		return;
 
 	CS_GPU_PASS("FurShells::DeferredShells");

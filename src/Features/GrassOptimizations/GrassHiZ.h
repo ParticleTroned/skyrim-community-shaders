@@ -13,11 +13,12 @@ public:
 	void SetupResources();
 	void Reset();
 	/** @brief Build optional occlusion only when its workload estimate admits the candidates. */
-	bool Build(ID3D11DeviceContext1* context, uint32_t frame, uint64_t candidateIndexWork);
+	bool Build(ID3D11DeviceContext1* context, uint32_t frame, uint64_t candidateIndexWork, bool finerDepth);
 	ID3D11ShaderResourceView* SRV() const { return pyramid.SRV(); }
 	uint32_t Width() const { return width; }
 	uint32_t Height() const { return height; }
 	uint32_t Mips() const { return mipCount; }
+	uint32_t BaseReduction() const { return builtReduction; }
 	std::array<float, 4> Scale() const { return scale; }
 	float DepthViewportSlack() const { return depthViewportSlack; }
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -49,7 +50,7 @@ public:
 #endif
 
 private:
-	void Allocate(uint32_t width, uint32_t height, uint32_t eyes);
+	void Allocate(uint32_t width, uint32_t height, uint32_t eyes, uint32_t maximumMips);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	bool RecordFailure(Failure reason);
 	void ObserveDepthState(const D3D11_DEPTH_STENCIL_DESC& state);
@@ -66,6 +67,7 @@ private:
 	winrt::com_ptr<ID3D11ShaderResourceView> depthView;
 	uint32_t width = 0, height = 0, mipCount = 0, builtFrame = UINT32_MAX;
 	uint32_t activeWidth = 0, activeHeight = 0;
+	uint32_t builtReduction = 0, failedReduction = 0;
 	std::array<float, 4> scale{};
 	float depthViewportSlack = 0;
 };

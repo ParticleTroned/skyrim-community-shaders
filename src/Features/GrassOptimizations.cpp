@@ -10,7 +10,8 @@ namespace GrassPolicy
 {
 	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Settings, Enabled, CrossCellBatching, FrustumCulling,
 		DensityReduction, MinPixelSize, FullDetailPixelSize, MinDensity, EnableMeshLOD, EnableMidLOD, EnableFarLOD,
-		MidLODPixelSize, FarLODPixelSize, MeshLODBandPixels, EnableOcclusionCulling, RefineHiZ, OcclusionBias,
+		MidLODPixelSize, FarLODPixelSize, MeshLODBandPixels, EnableOcclusionCulling, RefineHiZ,
+		ReuseHiZProofs, CostAwareHiZ, HiZEarlyVisibility, FineHiZDepth, OcclusionBias,
 		MeshCostBias, CostBiasStartDistance, InvisibleFadeCull, RenderDistanceOverride, EdgeFadeStart, SimpleShadingPixelSize, CollisionDistance,
 		FarLODOptimization, FarLODMinPixelSize, FarLODMinDensity, FarLODMaxDensity, FarLODCoverageBias, ProportionalDensityFade)
 }
@@ -245,6 +246,19 @@ void GrassOptimizations::DrawControls(bool advanced, std::string_view section)
 			if (next.EnableOcclusionCulling) {
 				changed |= Util::Widgets::Checkbox("Finer hidden-grass checks", &next.RefineHiZ);
 				Util::AddTooltip("Check smaller gaps around terrain and objects before drawing hidden grass. This can save performance in obstructed views, but the extra checks can cost performance in open areas. Requires Grass Hi-Z culling.", tooltipFlags);
+
+				if (next.RefineHiZ) {
+					changed |= Util::Widgets::Checkbox("Reuse confirmed hidden areas", &next.ReuseHiZProofs);
+					Util::AddTooltip("Avoid repeating finer checks in areas already confirmed to hide grass. This can reduce checking work in obstructed views, with a small extra cost. Requires Finer hidden-grass checks.", tooltipFlags);
+				}
+				changed |= Util::Widgets::Checkbox("Limit checks for cheaper grass", &next.CostAwareHiZ);
+				Util::AddTooltip("Spend less time checking small or simple distant grass. This can save checking work, but may draw more hidden grass. With simpler distant models, some scenes also skip preparing hidden-grass checks.", tooltipFlags);
+				if (next.RefineHiZ) {
+					changed |= Util::Widgets::Checkbox("Check likely gaps first", &next.HiZEarlyVisibility);
+					Util::AddTooltip("Check the middle of each finer test area first, then reuse that result. This may finish sooner around gaps, but can add a small cost when grass is fully hidden. Requires Finer hidden-grass checks.", tooltipFlags);
+				}
+				changed |= Util::Widgets::Checkbox("Higher-resolution hidden-grass checks", &next.FineHiZDepth);
+				Util::AddTooltip("Use more detail to find grass hidden near edges and small gaps. This can skip more hidden grass, but uses roughly four times the memory for these checks and adds processing work.", tooltipFlags);
 			}
 			if (advanced && next.EnableOcclusionCulling) {
 				changed |= Util::Widgets::SliderFloat("Grass occlusion tolerance", &next.OcclusionBias, 0.0f, 0.05f, "%.4f");

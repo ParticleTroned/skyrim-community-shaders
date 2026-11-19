@@ -27,6 +27,9 @@ void RunCullingShader(bool vr, bool reversed = false)
 	Require(weightLayout.StartOffset == 192 && weightLayout.Size == 16, "Drawable mesh costs changed the CPU parameter layout");
 	Require(strengthLayout.StartOffset == 172 && strengthLayout.Size == sizeof(float), "Collision strength changed the CPU culling layout");
 	Require(parameterLayout.Size == 256 && indexCountLayout.StartOffset == 176 && indexCountLayout.Size == 16, "Indirect index counts changed the CPU parameter layout");
+	D3D11_SHADER_VARIABLE_DESC hiZOptionsLayout{};
+	Check(parameterReflection->GetVariableByName("HiZOptions")->GetDesc(&hiZOptionsLayout));
+	Require(hiZOptionsLayout.StartOffset == 248 && hiZOptionsLayout.Size == 4, "Hi-Z options changed the CPU parameter layout");
 	D3D11_SHADER_VARIABLE_DESC farLayout{}, policyLayout{};
 	Check(parameterReflection->GetVariableByName("FarDensity")->GetDesc(&farLayout));
 	Check(parameterReflection->GetVariableByName("FarPolicyEnabled")->GetDesc(&policyLayout));
@@ -374,20 +377,23 @@ void RunCullingShader(bool vr, bool reversed = false)
 		levels[0].assign(eyes * 64, farDepth);
 		for (UINT y = 0; y < 7; ++y)
 			for (UINT x = 0; x < 8; ++x) levels[0][y * eyes * 8 + x] = nearDepth;
-		for (UINT mip = 1; mip < 3; ++mip) {
-			const UINT width = eyes * (8 >> mip), height = 8 >> mip;
-			levels[mip].resize(width * height);
-			for (UINT y = 0; y < height; ++y)
-				for (UINT x = 0; x < width; ++x) {
-					float value = nearDepth;
-					for (UINT dy = 0; dy < 2; ++dy)
-						for (UINT dx = 0; dx < 2; ++dx) {
-							const float sample = levels[mip - 1][(y * 2 + dy) * width * 2 + x * 2 + dx];
-							value = reversed ? std::min(value, sample) : std::max(value, sample);
-						}
-					levels[mip][y * width + x] = value;
-				}
-		}
+		const auto reduceDepth = [&]() {
+			for (UINT mip = 1; mip < 3; ++mip) {
+				const UINT width = eyes * (8 >> mip), height = 8 >> mip;
+				levels[mip].resize(width * height);
+				for (UINT y = 0; y < height; ++y)
+					for (UINT x = 0; x < width; ++x) {
+						float value = nearDepth;
+						for (UINT dy = 0; dy < 2; ++dy)
+							for (UINT dx = 0; dx < 2; ++dx) {
+								const float sample = levels[mip - 1][(y * 2 + dy) * width * 2 + x * 2 + dx];
+								value = reversed ? std::min(value, sample) : std::max(value, sample);
+							}
+						levels[mip][y * width + x] = value;
+					}
+			}
+		};
+		reduceDepth();
 		for (UINT mip = 0; mip < 3; ++mip)
 			initial[mip] = { levels[mip].data(), eyes * (8 >> mip) * 4, 0 };
 		ComPtr<ID3D11Texture2D> refinedDepth;
@@ -406,11 +412,37 @@ void RunCullingShader(bool vr, bool reversed = false)
 			"Finer depth checks did not reject the two hidden instances");
 		if (vr)
 			Require(coarse[12] == 3 && finer[12] == 3, "Refinement crossed the stereo depth boundary");
+		const auto ordinaryReads = read(counters.Get())[18];
+		const auto savedIndices = indexCounts;
+		indexCounts[0] = 75;
+		for (uint32_t options = 0; options < 8; ++options) {
+			params.SetVariable("HiZOptions", options);
+			auto optimized = dispatch(false, false, true, false);
+			Require(optimized[4] == finer[4] && (!vr || optimized[12] == finer[12]),
+				"Hi-Z shortcuts changed visibility with a complete read budget");
+			if (options == 1)
+				Require(read(counters.Get())[18] < ordinaryReads, "Coarse proofs did not avoid fine depth reads");
+		}
+		indexCounts = savedIndices;
+		params.SetVariable("QualityRadius", .0001f);
+		params.SetVariable("HiZOptions", 2u);
+		auto budgeted = dispatch(false, false, true, false);
+		Require(budgeted[4] > finer[4] && (!vr || budgeted[12] == 3), "Exhausted fine-read budget did not keep grass visible");
+		Require(read(counters.Get())[18] < ordinaryReads, "Cheap grass did not reduce the fine-read budget");
+		params.SetVariable("QualityRadius", .05f);
+		indexCounts[0] = 75;
 		// A clear texel inside the fine footprint must retain the overlapping instance.
 		levels[0][3 * eyes * 8 + 3] = farDepth;
-		context->UpdateSubresource(refinedDepth.Get(), 0, nullptr, levels[0].data(), eyes * 32, 0);
-		finer = dispatch(false, false, true, false);
-		Require(finer[4] > 1, "Refinement culled through a clear depth sample");
+		reduceDepth();
+		for (UINT mip = 0; mip < 3; ++mip)
+			context->UpdateSubresource(refinedDepth.Get(), mip, nullptr, levels[mip].data(), eyes * (8 >> mip) * 4, 0);
+		for (uint32_t options = 0; options < 8; ++options) {
+			params.SetVariable("HiZOptions", options);
+			finer = dispatch(false, false, true, false);
+			Require(finer[4] > 1 && (!vr || finer[12] == 3), "Hi-Z shortcuts culled through a clear depth sample");
+		}
+		indexCounts = savedIndices;
+		params.SetVariable("HiZOptions", 0u);
 		params.SetVariable("RefineHiZ", 0u);
 		params.SetVariable("ModelBound", std::array<float, 4>{ 0, 0, 0, .05f });
 		depthMipLevels = 1;

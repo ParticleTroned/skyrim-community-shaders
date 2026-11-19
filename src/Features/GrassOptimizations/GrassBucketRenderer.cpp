@@ -188,12 +188,13 @@ namespace
 		std::array<float, 2> projectionAsymptote{};
 		float alphaThreshold = 0;
 		uint32_t refineHiZ = 0;
-		std::array<uint32_t, 2> padding{};
+		uint32_t hiZOptions = 0, padding = 0;
 	};
 	static_assert(sizeof(Parameters) == 256 && offsetof(Parameters, projectionModes) == 156 && offsetof(Parameters, collisionStrength) == 172 &&
 				  offsetof(Parameters, indexCounts) == 176 && offsetof(Parameters, meshWeights) == 192 &&
 				  offsetof(Parameters, farDensity) == 208 && offsetof(Parameters, farPolicy) == 224 &&
-				  offsetof(Parameters, projectionAsymptote) == 232 && offsetof(Parameters, alphaThreshold) == 240 && offsetof(Parameters, refineHiZ) == 244);
+				  offsetof(Parameters, projectionAsymptote) == 232 && offsetof(Parameters, alphaThreshold) == 240 && offsetof(Parameters, refineHiZ) == 244 &&
+				  offsetof(Parameters, hiZOptions) == 248);
 	using LODLookup = std::tuple<std::string_view, uint64_t, uintptr_t, uint32_t>;
 	struct LODKey
 	{
@@ -2964,6 +2965,9 @@ bool GrassBucketRenderer::Impl::PrepareBucket(Bucket& bucket)
 		GrassPolicy::MeshWeight(meshes[1].indexCount), GrassPolicy::MeshWeight(meshes[2].indexCount), 1 };
 	params.collisionStrength = frameCollisionStrength;
 	params.refineHiZ = frameSettings.RefineHiZ;
+	params.hiZOptions = (frameSettings.ReuseHiZProofs ? GrassHiZPolicy::kReuseProofs : 0u) |
+	                    (frameSettings.CostAwareHiZ ? GrassHiZPolicy::kCostAware : 0u) |
+	                    (frameSettings.HiZEarlyVisibility ? GrassHiZPolicy::kEarlyVisibility : 0u);
 	params.alphaThreshold = bucket.plan.params.alphaThreshold;
 	params.farPolicy = frameSettings.FarLODOptimization && meshes[2].farLOD;
 	params.proportionalFade = frameSettings.ProportionalDensityFade;
@@ -3003,7 +3007,7 @@ void GrassBucketRenderer::Impl::UploadCulling()
 			cullingBuckets.push_back(&bucket);
 			const auto& params = plan.params;
 			candidateIndexWork = GrassHiZPolicy::AddCandidateIndexWork(candidateIndexWork,
-				params.instances, params.eyes, *std::max_element(params.indexCounts.begin(), params.indexCounts.end()));
+				params.instances, params.eyes, GrassHiZPolicy::CandidateMeshIndices(params.indexCounts, params.midEnabled != 0, params.farEnabled != 0, frameSettings.CostAwareHiZ));
 		}
 	const auto slots = uint32_t(cullingBuckets.size());
 	if (!slots)
@@ -3017,7 +3021,7 @@ void GrassBucketRenderer::Impl::UploadCulling()
 	if (diagnostics.load(std::memory_order_relaxed))
 		++cullingUploadMaps;
 #endif
-	const bool useHiZ = frameSettings.EnableOcclusionCulling && hiZ.Build(context.get(), frame, candidateIndexWork);
+	const bool useHiZ = frameSettings.EnableOcclusionCulling && hiZ.Build(context.get(), frame, candidateIndexWork, frameSettings.FineHiZDepth);
 	const uint32_t pages = (slots + kSlotsPerPage - 1) / kSlotsPerPage;
 	while (frameConstants.size() < pages)
 		frameConstants.push_back(std::make_unique<Buffer>(ConstantBufferDesc(kSlotsPerPage * kFrameSlotBytes), nullptr, "GrassOptimizations::FrameConstants"));
@@ -3596,6 +3600,10 @@ void GrassBucketRenderer::Impl::PublishTelemetry()
 	snapshot.combinedCulling = frameCombinedCulling;
 	snapshot.alphaRejection = frameAlphaRejection;
 	snapshot.refineHiZ = frameSettings.RefineHiZ;
+	snapshot.reuseHiZProofs = frameSettings.ReuseHiZProofs;
+	snapshot.costAwareHiZ = frameSettings.CostAwareHiZ;
+	snapshot.hiZEarlyVisibility = frameSettings.HiZEarlyVisibility;
+	snapshot.fineHiZDepth = frameSettings.FineHiZDepth;
 	snapshot.scratchBufferBytes = bytes(table) + bytes(disabled) + bytes(cullInputs) + bytes(dispatchParameters);
 	for (const auto& buffer : frameConstants)
 		snapshot.scratchBufferBytes += bytes(buffer);
@@ -3629,6 +3637,7 @@ void GrassBucketRenderer::Impl::PublishTelemetry()
 	snapshot.hiZWidth = hiZ.Width();
 	snapshot.hiZHeight = hiZ.Height();
 	snapshot.hiZMips = hiZ.Mips();
+	snapshot.hiZBaseReduction = hiZ.BaseReduction();
 	telemetry.Publish(snapshot);
 	telemetryFailed.store(false, std::memory_order_relaxed);
 }
@@ -3692,6 +3701,7 @@ json GrassBucketRenderer::GetDiagnostics() const
 		telemetry = { { "frame", s.frame }, { "publishedSteadyMilliseconds", s.publishedSteadyMilliseconds },
 			{ "ageMilliseconds", uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()) - s.publishedSteadyMilliseconds },
 			{ "combinedCulling", s.combinedCulling }, { "alphaRejection", s.alphaRejection }, { "refineHiZ", s.refineHiZ },
+			{ "reuseHiZProofs", s.reuseHiZProofs }, { "costAwareHiZ", s.costAwareHiZ }, { "hiZEarlyVisibility", s.hiZEarlyVisibility }, { "fineHiZDepth", s.fineHiZDepth },
 			{ "enabled", s.enabled }, { "hiZRequested", s.hiZRequested }, { "meshLODRequested", s.meshLODRequested },
 			{ "cullingPrepared", s.cullingPrepared }, { "identities", s.identities }, { "residentSources", s.residentSources },
 			{ "residentGroups", s.residentGroups }, { "residentInstances", s.residentInstances },
@@ -3700,7 +3710,7 @@ json GrassBucketRenderer::GetDiagnostics() const
 			{ "dormantRecordBytes", s.dormantRecordBytes }, { "recordPoolBytes", s.recordPoolBytes }, { "cullingBufferBytes", s.cullingBufferBytes },
 			{ "scratchBufferBytes", s.scratchBufferBytes }, { "diagnosticBufferBytes", s.diagnosticBufferBytes },
 			{ "lodReferencedBufferBytes", s.lodReferencedBufferBytes },
-			{ "hiZWidth", s.hiZWidth }, { "hiZHeight", s.hiZHeight }, { "hiZMips", s.hiZMips },
+			{ "hiZWidth", s.hiZWidth }, { "hiZHeight", s.hiZHeight }, { "hiZMips", s.hiZMips }, { "hiZBaseReduction", s.hiZBaseReduction },
 			{ "viewportCount", s.viewportCount },
 			{ "viewportWidth", s.viewportCount == 1 ? json(s.viewportWidth) : json(nullptr) },
 			{ "viewportHeight", s.viewportCount == 1 ? json(s.viewportHeight) : json(nullptr) },

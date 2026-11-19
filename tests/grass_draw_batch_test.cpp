@@ -240,7 +240,8 @@ int main()
 		GrassPolicy::Settings settings;
 		require(settings.Valid());
 		require(settings.Enabled && settings.CrossCellBatching && settings.FrustumCulling &&
-				settings.DensityReduction && !settings.EnableOcclusionCulling && !settings.RefineHiZ && !settings.EnableMeshLOD);
+				settings.DensityReduction && !settings.EnableOcclusionCulling && !settings.RefineHiZ && !settings.EnableMeshLOD &&
+				!settings.ReuseHiZProofs && !settings.CostAwareHiZ && !settings.HiZEarlyVisibility && !settings.FineHiZDepth);
 		require(settings.CollisionDistance == 4096.0f);
 		for (float distance : { 0.0f, GrassPolicy::kMaxCollisionDistance }) {
 			settings.CollisionDistance = distance;

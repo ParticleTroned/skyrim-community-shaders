@@ -91,7 +91,84 @@ bool ProjectBounds(float3 center, float radius, uint eye, out float2 lo, out flo
 	return GrassProjectSphere(GrassGeometry(WorldViewProj)[Eye(eye)], center, radius, lo, hi, nearDepth);
 }
 
-bool Hidden(float2 lo, float2 hi, float nearest, uint eye, out uint reason, out uint cells)
+static const uint HiZReuseProofs = 1, HiZCostAware = 2, HiZEarlyVisibility = 4;
+static const uint HiZMaximumFineReads = 25;
+
+bool DepthOccludes(float nearest, float depth, uint eye)
+{
+	float margin = GrassOcclusionMargin(GrassParameter(ProjectionAsymptote)[eye], (GrassParameter(ProjectionModes) >> (eye * 2)) & 3,
+		nearest, depth, GrassParameter(DepthBias), GrassParameter(DepthUVScale).z);
+	return isfinite(depth) && DepthOrder::IsBehindWithBias(nearest, depth, margin);
+}
+
+bool CoarseCellProven(int2 finePixel, int2 coarseFirst, int2 coarseLast, uint proofs)
+{
+	int2 parent = finePixel >> 2;
+	int2 relative = parent - coarseFirst;
+	uint bit = uint(relative.y * (coarseLast.x - coarseFirst.x + 1) + relative.x);
+	return all(parent >= coarseFirst) && all(parent <= coarseLast) && bit < 9 && (proofs & (1u << min(bit, 8u))) != 0;
+}
+
+uint FineReadBudget(uint tier, float pixels)
+{
+	if (!(GrassParameter(HiZOptions) & HiZCostAware) || !isfinite(pixels))
+		return HiZMaximumFineReads;
+	// A small mesh covering few pixels offers less work to recover through extra checks.
+	float radius = clamp(pixels, 0, 10);
+	uint triangles = min(GrassParameter(IndexCounts)[tier] / 3, HiZMaximumFineReads);
+	return clamp(triangles + uint(ceil(radius * radius * .25)), 4u, HiZMaximumFineReads);
+}
+
+bool RefineHidden(float2 uvLo, float2 uvHi, float nearest, uint eye, uint mip,
+	int2 coarseFirst, int2 coarseLast, uint proofs, uint budget, inout uint cells)
+{
+	// Keep resource indices valid for inactive lanes in a divergent wave.
+	uint fineMip = mip - min(mip, 2u);
+	uint width, height, levels;
+	DepthPyramid.GetDimensions(fineMip, width, height, levels);
+	int eyeFirst = int(eye * (width / GrassParameter(EyeCount)));
+	int eyeLast = eyeFirst + int(width / GrassParameter(EyeCount)) - 1;
+	int2 first = clamp(int2(floor(uvLo * float2(width, height))), int2(eyeFirst, 0), int2(eyeLast, height - 1));
+	int2 last = clamp(int2(floor(uvHi * float2(width, height))), int2(eyeFirst, 0), int2(eyeLast, height - 1));
+	uint fineCells = uint(last.x - first.x + 1) * uint(last.y - first.y + 1);
+	if (fineCells > HiZMaximumFineReads)
+		return false;
+	Count(20);
+	uint reads = 0, projectionEye = Eye(eye);
+	bool reuseProofs = (GrassParameter(HiZOptions) & HiZReuseProofs) != 0;
+	bool earlyVisibility = (GrassParameter(HiZOptions) & HiZEarlyVisibility) != 0;
+	int2 witness = (first + last) >> 1;
+	[branch] if (earlyVisibility)
+	{
+		bool proven = false;
+		[branch] if (reuseProofs)
+			proven = CoarseCellProven(witness, coarseFirst, coarseLast, proofs);
+		if (!proven) {
+			++cells;
+			++reads;
+			if (!DepthOccludes(nearest, DepthPyramid.Load(int3(witness, fineMip)), projectionEye))
+				return false;
+		}
+	}
+	[loop] for (int y = first.y; y <= last.y; ++y)
+		[loop] for (int x = first.x; x <= last.x; ++x)
+	{
+		int2 pixel = int2(x, y);
+		if (earlyVisibility && all(pixel == witness))
+			continue;
+		[branch] if (reuseProofs) if (CoarseCellProven(pixel, coarseFirst, coarseLast, proofs)) continue;
+		if (reads >= budget)
+			return false;
+		++cells;
+		++reads;
+		if (!DepthOccludes(nearest, DepthPyramid.Load(int3(pixel, fineMip)), projectionEye))
+			return false;
+	}
+	Count(21);
+	return true;
+}
+
+bool Hidden(float2 lo, float2 hi, float nearest, uint eye, uint tier, float projectedPixels, out uint reason, out uint cells)
 {
 	reason = 0;
 	cells = 0;
@@ -123,47 +200,26 @@ bool Hidden(float2 lo, float2 hi, float nearest, uint eye, out uint reason, out 
 		return false;
 	}
 	float farthest = DepthOrder::Near();
+	uint proofs = 0;
+	uint projectionEye = Eye(eye);
+	bool reuseProofs = GrassParameter(RefineHiZ) && (GrassParameter(HiZOptions) & HiZReuseProofs) && mip >= 2;
+	bool validDepth = true;
 	[loop] for (int y = first.y; y <= last.y; ++y)
 		[loop] for (int x = first.x; x <= last.x; ++x)
-			farthest = DepthOrder::Farthest(farthest, DepthPyramid.Load(int3(x, y, mip)));
-	if (!isfinite(farthest)) {
+	{
+		float depth = DepthPyramid.Load(int3(x, y, mip));
+		farthest = DepthOrder::Farthest(farthest, depth);
+		validDepth = validDepth && isfinite(depth);
+		[branch] if (reuseProofs) if (DepthOccludes(nearest, depth, projectionEye))
+			proofs |= 1u << uint((y - first.y) * (last.x - first.x + 1) + x - first.x);
+	}
+	if (!validDepth || !isfinite(farthest)) {
 		reason = 15;
 		return false;
 	}
-	uint projectionEye = Eye(eye);
-	float margin = GrassOcclusionMargin(GrassParameter(ProjectionAsymptote)[projectionEye], (GrassParameter(ProjectionModes) >> (projectionEye * 2)) & 3,
-		nearest, farthest, GrassParameter(DepthBias), GrassParameter(DepthUVScale).z);
-	bool hidden = DepthOrder::IsBehindWithBias(nearest, farthest, margin);
+	bool hidden = DepthOccludes(nearest, farthest, projectionEye);
 	[branch] if (!hidden && GrassParameter(RefineHiZ) && mip >= 2)
-	{
-		// Keep resource indices valid for inactive lanes in a divergent wave.
-		uint fineMip = mip - min(mip, 2u);
-		uint fineWidth, fineHeight, fineLevels;
-		DepthPyramid.GetDimensions(fineMip, fineWidth, fineHeight, fineLevels);
-		int eyeFirst = int(eye * (fineWidth / GrassParameter(EyeCount)));
-		int eyeLast = eyeFirst + int(fineWidth / GrassParameter(EyeCount)) - 1;
-		int2 fineFirst = clamp(int2(floor(uvLo * float2(fineWidth, fineHeight))), int2(eyeFirst, 0), int2(eyeLast, fineHeight - 1));
-		int2 fineLast = clamp(int2(floor(uvHi * float2(fineWidth, fineHeight))), int2(eyeFirst, 0), int2(eyeLast, fineHeight - 1));
-		uint fineCells = uint(fineLast.x - fineFirst.x + 1) * uint(fineLast.y - fineFirst.y + 1);
-		if (fineCells <= 25) {
-			Count(20);
-			hidden = true;
-			[loop] for (int y = fineFirst.y; y <= fineLast.y && hidden; ++y)
-				[loop] for (int x = fineFirst.x; x <= fineLast.x; ++x)
-			{
-				float depth = DepthPyramid.Load(int3(x, y, fineMip));
-				++cells;
-				float fineMargin = GrassOcclusionMargin(GrassParameter(ProjectionAsymptote)[projectionEye], (GrassParameter(ProjectionModes) >> (projectionEye * 2)) & 3,
-					nearest, depth, GrassParameter(DepthBias), GrassParameter(DepthUVScale).z);
-				if (!isfinite(depth) || !DepthOrder::IsBehindWithBias(nearest, depth, fineMargin)) {
-					hidden = false;
-					break;
-				}
-			}
-			if (hidden)
-				Count(21);
-		}
-	}
+		hidden = RefineHidden(uvLo, uvHi, nearest, eye, mip, first, last, proofs, FineReadBudget(tier, projectedPixels), cells);
 	if (!hidden && abs(farthest - DepthOrder::Far()) <= 1e-6)
 		reason = 16;
 	else if (!hidden)
@@ -316,7 +372,7 @@ uint CullInstance(uint index, uint commonSlice, out uint sourceRecord, out uint 
 				float nearest;
 				if (ProjectBounds(center, radius, eye, lo, hi, nearest)) {
 					uint reason, cells;
-					bool hidden = Hidden(lo, hi, nearest, eye, reason, cells);
+					bool hidden = Hidden(lo, hi, nearest, eye, tier, pixels, reason, cells);
 					CountN(18, cells);
 					if (reason)
 						Count(reason);

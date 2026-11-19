@@ -61,6 +61,8 @@ void GrassHiZ::Reset()
 	pyramid.Reset();
 	allocationRetention = {};
 	builtFrame = UINT32_MAX;
+	builtReduction = 0;
+	failedReduction = 0;
 	sourceIdentity = nullptr;
 	depthViewIdentity = nullptr;
 	depthView = nullptr;
@@ -115,16 +117,16 @@ GrassHiZ::FailureObservation GrassHiZ::ObservedFailures() const
 #else
 #	define GRASS_HIZ_FAIL(reason) return false
 #endif
-void GrassHiZ::Allocate(uint32_t nextWidth, uint32_t nextHeight, uint32_t eyes)
+void GrassHiZ::Allocate(uint32_t nextWidth, uint32_t nextHeight, uint32_t eyes, uint32_t maximumMips)
 {
-	pyramid.Allocate(nextWidth, nextHeight, eyes, GrassHiZPolicy::kMaximumMips);
+	pyramid.Allocate(nextWidth, nextHeight, eyes, maximumMips);
 	width = nextWidth;
 	height = nextHeight;
 	mipCount = pyramid.Mips();
 	builtFrame = UINT32_MAX;
 }
 
-bool GrassHiZ::Build(ID3D11DeviceContext1* context, uint32_t frame, uint64_t candidateIndexWork)
+bool GrassHiZ::Build(ID3D11DeviceContext1* context, uint32_t frame, uint64_t candidateIndexWork, bool finerDepth)
 {
 	auto& depth = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 	auto source = reinterpret_cast<ID3D11ShaderResourceView*>(depth.depthSRV);
@@ -215,46 +217,56 @@ bool GrassHiZ::Build(ID3D11DeviceContext1* context, uint32_t frame, uint64_t can
 	const UINT currentWidth = UINT(viewport.Width), currentHeight = UINT(viewport.Height);
 	if (currentWidth % eyes || currentWidth != viewport.Width || currentHeight != viewport.Height)
 		GRASS_HIZ_FAIL(Extent);
-	if (pyramid.SRV() && builtFrame == frame && sourceIdentity == sourceResource && activeWidth == currentWidth && activeHeight == currentHeight) {
+	const auto reduction = GrassHiZPolicy::BaseReduction(finerDepth);
+	const auto maximumMips = GrassHiZPolicy::MaximumMips(finerDepth);
+	if (failedReduction == reduction)
+		GRASS_HIZ_FAIL(Resources);
+	failedReduction = 0;
+	if (pyramid.SRV() && builtFrame == frame && sourceIdentity == sourceResource && activeWidth == currentWidth && activeHeight == currentHeight && builtReduction == reduction) {
 		depthViewportSlack = std::max(depthViewportSlack, 1.0f - viewport.MaxDepth + 4 * std::numeric_limits<float>::epsilon());
 		return true;
 	}
-	const auto required = DepthPyramidPolicy::ActiveExtent(currentWidth, currentHeight, eyes, GrassHiZPolicy::kBaseReduction);
+	const auto required = DepthPyramidPolicy::ActiveExtent(currentWidth, currentHeight, eyes, reduction);
 	if (!required)
 		GRASS_HIZ_FAIL(Extent);
-	const DepthPyramidPolicy::Extent retained = sourceIdentity == sourceResource ? DepthPyramidPolicy::Extent{ width, height } : DepthPyramidPolicy::Extent{};
+	const DepthPyramidPolicy::Extent retained = sourceIdentity == sourceResource && builtReduction == reduction ? DepthPyramidPolicy::Extent{ width, height } : DepthPyramidPolicy::Extent{};
 	const auto next = allocationRetention.Observe(retained, *required, frame, GrassPolicy::kCullResultTrimFrames);
 	if (next.width > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION || next.height > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION)
 		GRASS_HIZ_FAIL(Extent);
-	if (!GrassHiZPolicy::ShouldBuild(candidateIndexWork, next, eyes))
+	if (!GrassHiZPolicy::ShouldBuild(candidateIndexWork, next, eyes, maximumMips))
 		return false;
-	if (width != next.width || height != next.height || !pyramid.Allocated()) {
+	if (width != next.width || height != next.height || mipCount != DepthPyramidPolicy::MipCount(next, eyes, maximumMips) || !pyramid.Allocated()) {
 		try {
-			Allocate(next.width, next.height, eyes);
+			Allocate(next.width, next.height, eyes, maximumMips);
 		} catch (const std::exception& error) {
-			if (!pyramid.Allocated() || width < required->width || height < required->height)
-				throw;
+			if (!pyramid.Allocated() || width < required->width || height < required->height) {
+				// Retry only after a depth-detail change or resource reset, avoiding repeated allocation stalls.
+				failedReduction = reduction;
+				logger::warn("Grass Hi-Z allocation failed; drawing without occlusion until depth detail changes or resources reset: {}", error.what());
+				GRASS_HIZ_FAIL(Resources);
+			}
 			// Invalid content can track the new source while allocation retention delays the next resize.
 			builtFrame = UINT32_MAX;
 			sourceIdentity = sourceResource;
 			logger::warn("Grass Hi-Z resize failed; retained sufficient allocation: {}", error.what());
 		}
 	}
-	if (!GrassHiZPolicy::ShouldBuild(candidateIndexWork, { width, height }, eyes))
+	if (!GrassHiZPolicy::ShouldBuild(candidateIndexWork, { width, height }, eyes, mipCount))
 		return false;
 #if defined(DEVBENCH_BRIDGE_ENABLED) || defined(TRACY_SUPPORT)
 	CS_GPU_PASS("GrassOptimizations::BuildHiZ");
 #endif
 	OutputState restoreOutputs(context);
-	if (!pyramid.Build(context, source, desc.Width, desc.Height, currentWidth, currentHeight, eyes, GrassHiZPolicy::kBaseReduction, globals::game::isVR && globals::features::reverseZ.IsActive()))
+	if (!pyramid.Build(context, source, desc.Width, desc.Height, currentWidth, currentHeight, eyes, reduction, globals::game::isVR && globals::features::reverseZ.IsActive()))
 		GRASS_HIZ_FAIL(Resources);
 
-	scale = { float(currentWidth) / (width * GrassHiZPolicy::kBaseReduction), float(currentHeight) / (height * GrassHiZPolicy::kBaseReduction), 0, 0 };
+	scale = { float(currentWidth) / (width * reduction), float(currentHeight) / (height * reduction), 0, 0 };
 	depthViewportSlack = 1.0f - viewport.MaxDepth + 4 * std::numeric_limits<float>::epsilon();
 	sourceIdentity = sourceResource;
 	activeWidth = currentWidth;
 	activeHeight = currentHeight;
 	builtFrame = frame;
+	builtReduction = reduction;
 	return true;
 }
 #undef GRASS_HIZ_FAIL

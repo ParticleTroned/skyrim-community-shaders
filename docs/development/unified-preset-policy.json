@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.11.16.1",
+    "packageVersion": "d2026.11.19.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "741BB4C23593FA8719DF8C9AA94BF8D7E6D37AC3FD9D76E9845BAB1445884C13"
+        "sha256": "3712A856A1D25CA546BA8068583BE8482258ADBBB52B3F1BBEF22EA56552B9C8"
     },
     "runtimeSettingsContract": {
         "revision": 34,
-        "sourceTreeSha256": "61F9951481D45696B112F1FE93E0B7C29CAEEDB4C661CC5F5F624C469FF65299",
+        "sourceTreeSha256": "8C07E890812A9D36F50A8E955672063D5E4CD5CCC2AF6B1F24FED94D016ABD6A",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -773,6 +773,8 @@
     ],
     "validation": {
         "stalePaths": [
+            ["General", "Optimised Shader Preparation"],
+            ["General", "Resident Only Lighting Specializations"],
             ["VR", "DepthCullingPerformanceMode"],
             ["VR", "MinOccludeeBoxExtent"],
             ["CS Utility"],
@@ -801,6 +803,7 @@
             ["Volumetric Lighting", "GodrayShaftIntensity"]
         ],
         "requiredValues": [
+            { "path": ["Grass Optimizations", "RefineHiZ"], "value": false },
             { "path": ["Upscaling", "antiLag2Enabled"], "value": false },
             { "path": ["Light Limit Fix", "SkipRedundantLightAttach"], "value": true },
             { "path": ["Grass Optimizations", "FarLODOptimization"], "value": false },

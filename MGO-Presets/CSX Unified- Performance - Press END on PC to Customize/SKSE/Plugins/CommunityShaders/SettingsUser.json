@@ -78,7 +78,7 @@
   "Preset Compatibility": {
     "contractVersion": 1,
     "presetId": "csx-unified-performance",
-    "presetVersion": "d2026.11.16.1",
+    "presetVersion": "d2026.11.19.1",
     "target": {
       "runtime": "VR",
       "minimumVersion": "3.21",
@@ -86,7 +86,7 @@
     },
     "settingsContract": {
       "revision": 34,
-      "sourceTreeSha256": "61F9951481D45696B112F1FE93E0B7C29CAEEDB4C661CC5F5F624C469FF65299"
+      "sourceTreeSha256": "8C07E890812A9D36F50A8E955672063D5E4CD5CCC2AF6B1F24FED94D016ABD6A"
     }
   },
   "Upscaling": {
@@ -2409,6 +2409,7 @@
     "EnableMeshLOD": false,
     "EnableMidLOD": true,
     "EnableOcclusionCulling": false,
+    "RefineHiZ": false,
     "Enabled": true,
     "FarLODCoverageBias": 1.0,
     "FarLODMaxDensity": 0.20000000298023224,

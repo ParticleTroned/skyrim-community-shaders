@@ -2395,6 +2395,7 @@
     "EnableMeshLOD": false,
     "EnableMidLOD": true,
     "EnableOcclusionCulling": false,
+    "RefineHiZ": false,
     "Enabled": true,
     "FarLODCoverageBias": 1.0,
     "FarLODMaxDensity": 0.20000000298023224,

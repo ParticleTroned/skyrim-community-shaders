@@ -1963,7 +1963,7 @@
     "Preset Compatibility": {
         "contractVersion": 1,
         "presetId": "csx-nvidia-quality",
-        "presetVersion": "d2026.11.16.1",
+        "presetVersion": "d2026.11.19.1",
         "target": {
             "runtime": "VR",
             "minimumVersion": "3.21",
@@ -1971,7 +1971,7 @@
         },
         "settingsContract": {
             "revision": 34,
-            "sourceTreeSha256": "5B1D2966F87C62D884BCCD80F80379C1059075D821C5792E295205EB65974CC4"
+            "sourceTreeSha256": "8C07E890812A9D36F50A8E955672063D5E4CD5CCC2AF6B1F24FED94D016ABD6A"
         }
     },
     "Grass Optimizations": {
@@ -1984,6 +1984,7 @@
         "EnableMeshLOD": false,
         "EnableMidLOD": true,
         "EnableOcclusionCulling": false,
+        "RefineHiZ": false,
         "Enabled": true,
         "FarLODCoverageBias": 1.0,
         "FarLODMaxDensity": 0.20000000298023224,

@@ -19,3 +19,7 @@ add_controller_test(
 )
 target_sources(vr_depth_culling_map_lifecycle_test PRIVATE "${_map_lifecycle_test_header}")
 target_include_directories(vr_depth_culling_map_lifecycle_test PRIVATE "${_map_lifecycle_test_dir}")
+target_link_libraries(
+    vr_depth_culling_map_lifecycle_test
+    PRIVATE unordered_dense::unordered_dense xxHash::xxhash
+)

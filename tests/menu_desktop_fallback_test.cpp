@@ -160,7 +160,9 @@ struct ShaderCache
 struct RenderDoc
 {
 	bool available = true;
+	bool upscalingCompatible = false;
 	bool IsAvailable() const { return available; }
+	bool IsUpscalingCompatible() const { return upscalingCompatible; }
 	static RenderDoc* GetSingleton()
 	{
 		static RenderDoc renderdoc;
@@ -352,6 +354,7 @@ void CheckStatusBounds()
 		bool hideErrors;
 		bool renderDoc;
 		bool visible;
+		bool upscalingCompatible = false;
 	};
 	constexpr StatusCase cases[] = {
 		{ true, 0, false, true, true },
@@ -361,12 +364,20 @@ void CheckStatusBounds()
 		{ false, 1, true, false, false },
 		{ false, 0, false, false, false },
 		{ false, 1, false, false, true },
+		{ true, 0, false, true, true, true },
+		{ false, 0, false, true, true, true },
 	};
 	for (const auto& condition : cases) {
 		globals::cache.compiling = condition.compiling;
 		globals::cache.failed = condition.failed;
 		globals::cache.hide = condition.hideErrors;
-		RenderDoc::GetSingleton()->available = condition.renderDoc;
+		auto* renderDoc = RenderDoc::GetSingleton();
+		renderDoc->available = condition.renderDoc;
+		renderDoc->upscalingCompatible = condition.upscalingCompatible;
+		const auto warning = renderDoc->GetOverlayWarningMessage();
+		Require((warning.find("VR upscaling capture is enabled") != std::string::npos) == condition.upscalingCompatible &&
+					(warning.find("compatible VR upscaling path is unavailable") != std::string::npos) != condition.upscalingCompatible,
+			"RenderDoc warning does not reflect upscaling compatibility");
 		float narrowHeight = 0, wideHeight = 0;
 		for (float width : { 1024.0f, 640.0f, 96.0f, 1920.0f, 1024.0f }) {
 			io.DisplaySize = { width, 1024 };

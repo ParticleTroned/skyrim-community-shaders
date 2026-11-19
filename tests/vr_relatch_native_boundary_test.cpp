@@ -87,6 +87,21 @@ namespace globals
 				++calls;
 			}
 		} upscaling;
+		struct RenderDoc
+		{
+			uint32_t completions = 0;
+			void CompleteVRFrameCapture(uint64_t cycle)
+			{
+				if (nativeDepth != 0 || returnedEyes < 2 || upscaling.activeNeuralBoundary != 0 ||
+					upscaling.calls != 0 || !g_vrSubmitPairBoundaryState.active ||
+					g_vrRelatchPairCompletion.completedEyeMask != 0x3u ||
+					g_vrRelatchPairCompletion.ambiguousCompletion ||
+					cycle != g_vrSubmitPairBoundaryState.compositorCycle ||
+					cycle != (g_openVRSubmitCycleState.load() >> 1u))
+					throw std::runtime_error("Capture completion must follow the completed outer pair before relatch service");
+				++completions;
+			}
+		} renderDoc;
 	}
 }
 
@@ -206,6 +221,7 @@ namespace
 			g_vrSubmitPairBoundaryState = {};
 			g_vrRelatchPairCompletion = {};
 			globals::features::upscaling = {};
+			globals::features::renderDoc = {};
 			g_neuralSubmitPairBoundaryToken = 700;
 			globals::state->frameCount = 100;
 			g_openVRSubmitCycleState = 20;
@@ -217,6 +233,8 @@ namespace
 			                      sample == Scenario::DeepNestedThenComplete || sample == Scenario::NestedThrowThenComplete;
 			Require(globals::features::upscaling.calls == (complete ? 1u : 0u),
 				"Native callback service did not match the exact completed, unchanged outer stereo owner");
+			Require(globals::features::renderDoc.completions == (complete ? 1u : 0u),
+				"Capture completion did not match the exact completed, unchanged outer stereo owner");
 			Require(!g_vrSubmitPairBoundaryState.active && g_vrRelatchPairCompletion.identity.token == 0 && nativeDepth == 0,
 				"Native submit failed to restore the previous boundary state");
 			const auto& nr = globals::features::upscaling;
@@ -233,6 +251,7 @@ namespace
 		g_vrSubmitPairBoundaryState = {};
 		g_vrRelatchPairCompletion = {};
 		globals::features::upscaling = {};
+		globals::features::renderDoc = {};
 		g_neuralSubmitPairBoundaryToken = 700;
 		bool caught = false;
 		try {
@@ -241,6 +260,7 @@ namespace
 			caught = true;
 		}
 		Require(caught && nativeDepth == 0 && globals::features::upscaling.calls == 0 &&
+					globals::features::renderDoc.completions == 0 &&
 					!g_vrSubmitPairBoundaryState.active && g_vrSubmitPairBoundaryState.token == 0 &&
 					g_vrRelatchPairCompletion.identity.token == 0 && g_vrRelatchPairCompletion.completedEyeMask == 0,
 			"A throwing native call leaked its boundary ownership");
@@ -256,12 +276,14 @@ namespace
 		g_vrSubmitPairBoundaryState = {};
 		g_vrRelatchPairCompletion = {};
 		globals::features::upscaling = {};
+		globals::features::renderDoc = {};
 		globals::features::upscaling.neuralEnabled = false;
 		g_neuralSubmitPairBoundaryToken = 700;
 		returnedEyes = 0;
 		BSOpenVR_Submit::thunk(&nativeInstance, &texture);
 		const auto& nr = globals::features::upscaling;
-		Require(nr.calls == 1 && nr.neuralBegins == 0 && nr.neuralEnds == 0 &&
+		Require(nr.calls == 1 && globals::features::renderDoc.completions == 1 &&
+					nr.neuralBegins == 0 && nr.neuralEnds == 0 &&
 					g_neuralSubmitPairBoundaryToken == 700,
 			"Disabled NR changed native pair service or created NR boundary work");
 	}

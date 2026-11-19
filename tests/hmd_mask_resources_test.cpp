@@ -116,7 +116,8 @@ namespace
 
 	struct UnrelatedShader
 	{
-		void Reset() {}
+		unsigned resets = 0;
+		void Reset() { ++resets; }
 	};
 	struct UnrelatedFeature
 	{
@@ -189,7 +190,7 @@ struct Upscaling
 	UnrelatedShader depthRefractionUpscalePS, underwaterMaskUpscalePS;
 	UnrelatedShader underwaterMaskUpscaleDynamicDepthNoStencilPS, underwaterMaskUpscaleRawDepthNoStencilPS;
 	UnrelatedShader cameraMotionVectorsPS, upscaleVS, foveatedPeripheryCS;
-	UnrelatedShader foveatedCenterBlendCS, foveatedSpatialCompositeCS, peripheryTAACS;
+	UnrelatedShader foveatedCenterBlendCS, foveatedCenterBlendUnormCS, foveatedSpatialCompositeCS, peripheryTAACS;
 	UnrelatedShader submitStageStretchCS, vrDesktopMirrorBlitPS, vrMenuLayerCompositePS, copyDepthToSharedBufferPS;
 	winrt::com_ptr<ID3D11RenderTargetView> vrDesktopMirrorBlitRTV;
 	winrt::com_ptr<ID3D11Texture2D> vrDesktopMirrorBlitTarget;
@@ -251,6 +252,8 @@ int main()
 				"Ordinary save recovery must not create missing resources");
 			upscaling.reuseOrdinarySaveResources = false;
 			upscaling.SetupResources();
+			Require(upscaling.foveatedCenterBlendCS.resets == 1 && upscaling.foveatedCenterBlendUnormCS.resets == 1,
+				"Device setup must invalidate both foveated center output formats");
 
 			failCompile = true;
 			for (unsigned request = 0; request < 20; ++request)
@@ -267,6 +270,8 @@ int main()
 				"Compiler recovery alone must not bypass the failure latch");
 
 			upscaling.ClearShaderCache();
+			Require(upscaling.foveatedCenterBlendCS.resets == 2 && upscaling.foveatedCenterBlendUnormCS.resets == 2,
+				"Shader invalidation must reset both foveated center output formats");
 			Require(upscaling.EnsureHMDMaskClearResources() && compileCalls == 2 && bufferCalls == 1,
 				"Shader invalidation must permit compilation and buffer creation");
 			auto* buffer = upscaling.vrClearHMDMaskCB.get();

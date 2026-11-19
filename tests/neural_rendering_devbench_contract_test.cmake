@@ -732,10 +732,10 @@ foreach(_final_ldr_float_contract IN ITEMS
     [[args.colorOutput = GetSubmitNeuralFloatEvaluationOutput(eye, directCommit)]]
     [[CommitSubmitNeuralFloatOutput( eye, directCommit, finalizedArgs[eye].computeSubrect)]]
     [[DispatchFoveatedBlendPass( submitNeuralFloatColorOut[eye]->srv.get()]]
-    [[uint32_t finalLdrColorMode = 1u]]
-    [[switch (targetUavDescs[0].Format)]]
-    [[case DXGI_FORMAT_R8G8B8A8_UNORM:]]
-    [[finalLdrColorMode = 2u]]
+    [[if (!GetFoveatedCenterBlendCS(targetUavDescs[0].Format)) return false;]]
+    [[const uint32_t finalLdrColorMode = UpscalingComposite::GetOutputType(targetUavDescs[0].Format) == UpscalingComposite::OutputType::Unorm ? 2u : 1u]]
+    [[constexpr UINT requiredUavFormatSupport = D3D11_FORMAT_SUPPORT2_UAV_TYPED_LOAD | D3D11_FORMAT_SUPPORT2_UAV_TYPED_STORE]]
+    [[if (FAILED(formatSupportResult) || (formatSupport.OutFormatSupport2 & requiredUavFormatSupport) != requiredUavFormatSupport) { return false; }]]
     [[characterSelections[eye].mask.Get(), finalLdrColorMode, sharedFullResolutionFovMask && !FoveatedCommon::IsActiveCoverage(foveatedRectCache.centerScale), characterSelections[eye].mask ? &characterSelections[eye].maskSupport : nullptr, characterSelections[eye].providerBlending)]]
 )
     string(FIND

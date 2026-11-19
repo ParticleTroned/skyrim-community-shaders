@@ -1,5 +1,6 @@
 #include "Features/VRDepthCullingSubmissionPolicy.h"
 #include "Features/VRDepthCullingTemporal.h"
+#include "Features/VRDepthCullingVisibilityHistory.h"
 
 #include <array>
 #include <atomic>
@@ -88,7 +89,25 @@ namespace REL
 		unsigned version() const { return runtimeVersion; }
 	};
 	template <class T>
-	using Relocation = std::conditional_t<std::is_function_v<T>, T*, T>;
+	struct Relocation
+	{
+		using Value = std::conditional_t<std::is_function_v<T>, T*, T>;
+		Value value{};
+		Relocation() = default;
+		Relocation(Value a_value) : value(a_value) {}
+		Relocation& operator=(Value a_value)
+		{
+			value = a_value;
+			return *this;
+		}
+		Value get() const { return value; }
+		decltype(auto) operator*() const { return *value; }
+		template <class... Args>
+		decltype(auto) operator()(Args&&... a_args) const
+		{
+			return value(std::forward<Args>(a_args)...);
+		}
+	};
 	inline bool depthAvailable = true;
 	const bool* Offset(std::uintptr_t) { return &depthAvailable; }
 }
@@ -116,6 +135,28 @@ namespace globals
 		bool isVR = true;
 		RE::UI* ui = nullptr;
 	}
+	namespace features
+	{
+		struct ReverseZ
+		{
+			unsigned boundsRenders = 0, depthPreparations = 0;
+			bool renderingBounds = false, depthPreparedForNative = false;
+			void RenderOcclusionBounds(RE::BSImagespaceShader* a_shader, std::uint32_t a_param,
+				void (*a_render)(RE::BSImagespaceShader*, std::uint32_t))
+			{
+				Require(a_render && !renderingBounds, "Reverse-Z routing lost the native render callback");
+				++boundsRenders;
+				renderingBounds = true;
+				a_render(a_shader, a_param);
+				renderingBounds = false;
+			}
+			void PrepareOcclusionDepthRange()
+			{
+				++depthPreparations;
+				depthPreparedForNative = true;
+			}
+		} reverseZ;
+	}
 }
 
 namespace VRDepthCullingTemporal
@@ -126,6 +167,7 @@ namespace VRDepthCullingTemporal
 		using SubmissionPolicy::Reason;
 		SubmissionPolicy::Handoff g_handoff;
 		SubmissionPolicy::ReadbackProjection g_pendingReadbackProjection;
+		VRDepthCullingTemporalPolicy::NativeVisibilityHistory g_visibilityHistory;
 		struct DepthEvidence
 		{
 			Reason reason = Reason::MissingDepth;
@@ -143,12 +185,18 @@ namespace VRDepthCullingTemporal
 		std::atomic<Mode> g_mode{ Mode::Balanced };
 		std::atomic_uint64_t g_cullingEpoch{ 1 }, g_policyEpoch{ 2 }, g_producerPoseEpoch{ 0 };
 		unsigned nativeRenders = 0, nativeReadbacks = 0, nativeDownscales = 0, validRecoveries = 0;
+		unsigned retentionCalls = 0, retentionOrder = 0, recoveryOrder = 0, operationOrder = 0;
+		std::uint32_t batchSelector = 0, lastRenderParam = 0;
+		RE::BSImagespaceShader* lastRenderShader = nullptr;
+		SubmissionPolicy::Batch retainedBatch;
+		SubmissionPolicy::Handoff::Consumed retainedSubmission;
+		SubmissionPolicy::ReadbackProjection retainedProjection;
 		std::function<void()> duringRender, duringReadback, duringDownscale, duringEvidence;
 		std::byte* nativeCuller = nullptr;
 		bool nativeLayoutSupported = true;
 		std::byte** ResolveNativeMapCuller() { return nativeLayoutSupported ? &nativeCuller : nullptr; }
 
-		SubmissionPolicy::Batch ReadBatch(void* a_shader) { return { reinterpret_cast<std::uintptr_t>(a_shader), 1, 2, 1, 0 }; }
+		SubmissionPolicy::Batch ReadBatch(void* a_shader) { return { reinterpret_cast<std::uintptr_t>(a_shader), 1, 2, 1, batchSelector }; }
 		bool IsDepthPreparationCurrent() { return true; }
 		SubmissionPolicy::ReadbackProjection CaptureReadbackProjection(std::uint64_t a_cullingEpoch, std::uint64_t a_policyEpoch)
 		{
@@ -165,11 +213,23 @@ namespace VRDepthCullingTemporal
 		void RecoverHighRiskObjects(const SubmissionPolicy::Batch& a_batch, const SubmissionPolicy::Handoff::Consumed& a_consumed,
 			const SubmissionPolicy::ReadbackProjection&)
 		{
+			recoveryOrder = ++operationOrder;
 			const auto epoch = g_cullingEpoch.load();
 			if (g_producerPoseEpoch.load() == epoch &&
 				SubmissionPolicy::Match(a_consumed.stamp, a_batch, a_consumed.sequence, epoch, g_policyEpoch.load()) == Reason::None &&
 				SubmissionPolicy::CanRecover(g_producerDepth.reason))
 				++validRecoveries;
+		}
+		// History math has its own policy fixture; this spy checks readback ownership and ordering.
+		void RetainNativeVisibility(const SubmissionPolicy::Batch& a_batch, const SubmissionPolicy::Handoff::Consumed& a_consumed,
+			const SubmissionPolicy::ReadbackProjection& a_projection)
+		{
+			Require(nativeReadbacks > 0, "Visibility retention ran before native readback");
+			++retentionCalls;
+			retentionOrder = ++operationOrder;
+			retainedBatch = a_batch;
+			retainedSubmission = a_consumed;
+			retainedProjection = a_projection;
 		}
 	}
 }
@@ -211,10 +271,20 @@ namespace
 		g_mode.store(a_mode);
 		g_cullingEpoch.store(1);
 		g_policyEpoch.store(2);
+		globals::features::reverseZ = {};
 		nativeCuller = nullptr;
 		nativeRenders = nativeReadbacks = nativeDownscales = validRecoveries = 0;
+		retentionCalls = retentionOrder = recoveryOrder = operationOrder = 0;
+		batchSelector = lastRenderParam = 0;
+		lastRenderShader = nullptr;
+		retainedBatch = {};
+		retainedSubmission = {};
+		retainedProjection = {};
 		duringRender = duringReadback = duringDownscale = duringEvidence = {};
-		DepthCullingRender::func = [](RE::BSImagespaceShader*, std::uint32_t) {
+		DepthCullingRender::func = [](RE::BSImagespaceShader* a_shader, std::uint32_t a_param) {
+			Require(globals::features::reverseZ.renderingBounds, "Native bounds render bypassed Reverse-Z routing");
+			lastRenderShader = a_shader;
+			lastRenderParam = a_param;
 			++nativeRenders;
 			if (duringRender)
 				duringRender();
@@ -225,10 +295,76 @@ namespace
 				duringReadback();
 		};
 		DepthCullingDownscale::func = [](RE::BSSceneGraph*) {
+			Require(globals::features::reverseZ.depthPreparedForNative, "Native downscale preceded depth-range preparation");
+			globals::features::reverseZ.depthPreparedForNative = false;
 			++nativeDownscales;
 			if (duringDownscale)
 				duringDownscale();
 		};
+	}
+
+	void SeedVisibilityHistory()
+	{
+		using namespace VRDepthCullingTemporalPolicy;
+		Require(g_visibilityHistory.Prepare(), "Visibility history allocation failed");
+		const NativeVisibilityHistory::Domain domain{ 1, 2, 3, 4, { 5, 0 }, 6, 7, 8, Depth::Convention::Reversed, 100, 100 };
+		OBBTransform bound{};
+		bound.entry[0][0] = bound.entry[1][1] = bound.entry[2][2] = bound.entry[3][3] = 1;
+		const std::array bounds{ bound };
+		const std::array<std::uint32_t, 1> visible{ 1 };
+		g_visibilityHistory.Observe(domain, 1, bounds, visible);
+		Require(g_visibilityHistory.Size() == 1, "Visibility-history clear test began empty");
+	}
+
+	void TestVisibilityLifecycle()
+	{
+		Reset(Mode::Balanced);
+		SeedVisibilityHistory();
+		InvalidateDepthGeneration();
+		Require(g_visibilityHistory.Size() == 0, "Depth invalidation retained visibility history");
+		for (const auto mode : { Mode::Legacy, Mode::Balanced }) {
+			Reset(mode);
+			SeedVisibilityHistory();
+			g_cullingEnabled.store(mode == Mode::Legacy);
+			auto shader = Shader();
+			DepthCullingReadback::thunk(&shader);
+			Require(g_visibilityHistory.Size() == 0 && retentionCalls == 0 && nativeReadbacks == 1,
+				"Inactive recovery retained history or skipped native readback");
+		}
+		Reset(Mode::Balanced);
+		SeedVisibilityHistory();
+		auto shader = Shader();
+		WarmProducer();
+		DepthCullingRender::thunk(&shader, 37);
+		duringReadback = [] { batchSelector = 1; };
+		DepthCullingReadback::thunk(&shader);
+		Require(g_visibilityHistory.Size() == 0 && retentionCalls == 0 && validRecoveries == 0,
+			"Replaced readback batch reused visibility history");
+		Reset(Mode::Balanced);
+		WarmProducer();
+		DepthCullingRender::thunk(&shader, 37);
+		DepthCullingReadback::thunk(&shader);
+		Require(retentionCalls == 1 && retentionOrder < recoveryOrder &&
+					SubmissionPolicy::Match(retainedSubmission.stamp, retainedBatch, retainedSubmission.sequence,
+						g_cullingEpoch.load(), g_policyEpoch.load()) == Reason::None &&
+					SubmissionPolicy::Matches(retainedProjection, 1, g_cullingEpoch.load(), g_policyEpoch.load()),
+			"Visibility retention lost the current native handoff or ran after recovery");
+	}
+
+	void TestReverseZRouting()
+	{
+		for (const auto mode : { Mode::Legacy, Mode::Balanced }) {
+			Reset(mode);
+			auto shader = Shader();
+			DepthCullingRender::thunk(&shader, 37);
+			Require(nativeRenders == 1 && globals::features::reverseZ.boundsRenders == 1 &&
+						lastRenderShader == &shader && lastRenderParam == 37 && !globals::features::reverseZ.renderingBounds,
+				"Reverse-Z wrapper changed the native bounds callback or its arguments");
+			DepthCullingDownscale::thunk(nullptr);
+			Require(nativeDownscales == 1 && globals::features::reverseZ.depthPreparations == 1 &&
+						!globals::features::reverseZ.depthPreparedForNative,
+				"Depth-range preparation did not wrap exactly one native downscale");
+		}
 	}
 
 	void TestImmediateRepair(Mode a_mode)
@@ -354,6 +490,8 @@ int main()
 	TestEpochBoundaries();
 	TestPreparationBoundaries(false);
 	TestPreparationBoundaries(true);
+	TestVisibilityLifecycle();
+	TestReverseZRouting();
 	TestRegistrationAndUnrelatedEvents();
-	std::puts("Passed 6 map-close and culling epoch integration cases");
+	std::puts("Passed 8 map-close, culling epoch, history and depth-routing integration cases");
 }

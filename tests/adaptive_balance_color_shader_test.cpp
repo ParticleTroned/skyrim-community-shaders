@@ -307,6 +307,17 @@ namespace
 			fixture.geometry->SetVariable("emissiveMult", gain);
 			return fixture.Dispatch(context);
 		};
+		const auto nonlinearExpected = [](Pixel color, float gain, float saturation, float gammaOffset) {
+			const float exponent = std::clamp(1.0f + gammaOffset, 0.01f, 4.0f);
+			for (size_t c = 0; c < 3; ++c) {
+				const float input = color[c] * gain;
+				color[c] = std::copysign(std::pow(std::abs(input), exponent), input);
+			}
+			const float grey = color[0] * 0.2125f + color[1] * 0.7154f + color[2] * 0.0721f;
+			for (size_t c = 0; c < 3; ++c)
+				color[c] = std::max(grey + (color[c] - grey) * saturation, 0.0f);
+			return color;
+		};
 		unsigned checked = 0;
 		for (bool linear : { false, true }) {
 			fixture.feature->SetMember("SharedData::linearLightingSettings", "enableLinearLighting", uint32_t(linear));
@@ -328,9 +339,19 @@ namespace
 							const auto positive = draw(magnitude);
 							const auto negative = draw(-magnitude);
 							for (size_t i = 0; i < samples.size(); ++i) {
+								if (!linear && scene != 0 && grade) {
+									// Without LL normalization, saturation clamps the already signed graded input.
+									const auto expectedPositive = nonlinearExpected(samples[i], magnitude, appearance[70], appearance[71]);
+									const auto expectedNegative = nonlinearExpected(samples[i], -magnitude, appearance[70], appearance[71]);
+									const float scale = magnitude > 0.0f ? magnitude : 1.0f;
+									for (size_t c = 0; c < 3; ++c)
+										Require(Close(positive[i][c] / scale, expectedPositive[c] / scale) &&
+													Close(negative[i][c] / scale, expectedNegative[c] / scale),
+											"Nonlinear emissive gain changed signed gamma or nonnegative saturation");
+								}
 								for (size_t c = 0; c < 3; ++c) {
 									Require(std::isfinite(positive[i][c]) && std::isfinite(negative[i][c]), "Emissive animation produced a non-finite color");
-									if (magnitude > 0.0f)
+									if (magnitude > 0.0f && (linear || scene == 0 || !grade))
 										Require(Close(negative[i][c] / magnitude, -positive[i][c] / magnitude), "Negative emissive gain changed the normalized color magnitude");
 									if (magnitude == 0.0f)
 										Require(positive[i][c] == 0.0f && negative[i][c] == 0.0f, "Zero emissive gain left visible energy");

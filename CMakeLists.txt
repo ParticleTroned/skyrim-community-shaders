@@ -148,6 +148,22 @@ option(
 option(TRACY_SUPPORT "Enable support for tracy profiler" OFF)
 option(NVPERF_SUPPORT "Build developer-only NVIDIA D3D11 hardware counters" OFF)
 option(
+    CSX_NVIDIA_BINDING_WORKAROUND
+    "Build the pinned minimal NVIDIA binding workaround test"
+    OFF
+)
+if(CSX_NVIDIA_BINDING_WORKAROUND)
+    if(NOT ENABLE_SKYRIM_VR OR ENABLE_SKYRIM_SE OR ENABLE_SKYRIM_AE)
+        message(FATAL_ERROR "CSX_NVIDIA_BINDING_WORKAROUND requires VR-only")
+    endif()
+    if(NOT DEVBENCH_BRIDGE)
+        message(
+            FATAL_ERROR
+            "CSX_NVIDIA_BINDING_WORKAROUND requires DEVBENCH_BRIDGE=ON"
+        )
+    endif()
+endif()
+option(
     CSX_GPU_CRASH_LOGGING
     "Enable GPU crash diagnostics at startup in developer builds"
     OFF
@@ -285,7 +301,8 @@ add_custom_target(
         "TRACY_SUPPORT=${TRACY_SUPPORT}" --build-option
         "NVPERF_SUPPORT=${NVPERF_SUPPORT}" --build-option
         "CSX_GPU_CRASH_LOGGING=${CSX_GPU_CRASH_LOGGING}" --build-option
-        "ENABLE_SKYRIM_AE=${ENABLE_SKYRIM_AE}" --build-option
+        "CSX_NVIDIA_BINDING_WORKAROUND=${CSX_NVIDIA_BINDING_WORKAROUND}"
+        --build-option "ENABLE_SKYRIM_AE=${ENABLE_SKYRIM_AE}" --build-option
         "ENABLE_SKYRIM_SE=${ENABLE_SKYRIM_SE}" --build-option
         "ENABLE_SKYRIM_VR=${ENABLE_SKYRIM_VR}" --build-option
         "MSVC_RUNTIME=${CMAKE_MSVC_RUNTIME_LIBRARY}"
@@ -428,6 +445,53 @@ target_link_libraries(
 if(DEVBENCH_BRIDGE)
     target_link_libraries(${PROJECT_NAME} PRIVATE DevBench::API advapi32)
     target_compile_definitions(${PROJECT_NAME} PRIVATE DEVBENCH_BRIDGE_ENABLED)
+endif()
+if(CSX_NVIDIA_BINDING_WORKAROUND)
+    target_compile_definitions(
+        ${PROJECT_NAME}
+        PRIVATE CSX_NVIDIA_BINDING_WORKAROUND
+    )
+    enable_testing()
+    add_executable(
+        nvidia_binding_workaround_test
+        EXCLUDE_FROM_ALL
+        tests/nvidia_binding_workaround_test.cpp
+        src/Utils/CryptoHash.cpp
+    )
+    target_include_directories(
+        nvidia_binding_workaround_test
+        PRIVATE src ${DETOURS_INCLUDE_DIRS}
+    )
+    target_compile_features(nvidia_binding_workaround_test PRIVATE cxx_std_23)
+    target_compile_definitions(
+        nvidia_binding_workaround_test
+        PRIVATE CSX_NVIDIA_BINDING_WORKAROUND NOMINMAX
+    )
+    target_link_libraries(
+        nvidia_binding_workaround_test
+        PRIVATE
+            spdlog::spdlog
+            Microsoft::CppWinRT
+            ${DETOURS_LIBRARY}
+            bcrypt
+            d3d11
+            dxgi
+    )
+    add_test(
+        NAME NvidiaBindingWorkaround
+        COMMAND nvidia_binding_workaround_test
+    )
+    add_library(
+        nvidia_binding_workaround_disabled
+        OBJECT
+        EXCLUDE_FROM_ALL
+        src/Utils/NvidiaBindingWorkaround.cpp
+    )
+    target_include_directories(nvidia_binding_workaround_disabled PRIVATE src)
+    target_compile_features(
+        nvidia_binding_workaround_disabled
+        PRIVATE cxx_std_23
+    )
 endif()
 if(CSX_GPU_CRASH_LOGGING)
     set_property(

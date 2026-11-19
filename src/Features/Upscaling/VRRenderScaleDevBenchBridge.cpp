@@ -24,6 +24,7 @@
 #	include "Globals.h"
 #	include "ShaderCache.h"
 #	include "State.h"
+#	include "Utils/NvidiaBindingWorkaround.h"
 #	include "Utils/D3DContextProtection.h"
 #	include "Utils/RendererContextAccess.h"
 #	include "Utils/VRLoadingMenuClear.h"
@@ -6917,6 +6918,7 @@ namespace
 	json RenderScaleActions()
 	{
 		return json::array({ "status",
+			"nvidia_binding_workaround",
 			"nr_readiness",
 			"nr_crop_diagnostics",
 			"nr_status",
@@ -9118,6 +9120,20 @@ namespace
 	json BuildRenderScaleResult(const json& a_args)
 	{
 		const std::string action = a_args.value("action", std::string("status"));
+		if (a_args.contains("bindingRefresh") && action != "nvidia_binding_workaround")
+			return json{ { "error", "bindingRefresh requires nvidia_binding_workaround" } };
+		if (action == "nvidia_binding_workaround") {
+			for (const auto& [name, value] : a_args.items())
+				if (name != "action" && name != "expectedBuildId" && name != "bindingRefresh")
+					return json{ { "error", "unexpected nvidia_binding_workaround argument" } };
+			if (a_args.contains("bindingRefresh") && !a_args.at("bindingRefresh").is_boolean())
+				return json{ { "error", "bindingRefresh must be a boolean" } };
+			bool accepted = true;
+			if (a_args.contains("bindingRefresh"))
+				accepted = Util::NvidiaBindingWorkaround::Select(a_args.at("bindingRefresh").get<bool>());
+			const auto status = Util::NvidiaBindingWorkaround::Status();
+			return json{ { "action", action }, { "accepted", accepted }, { "workaround", { { "compiled", status.compiled }, { "installed", status.installed }, { "enabled", status.enabled }, { "refresh", status.refresh }, { "locked", status.locked }, { "reason", status.reason }, { "candidates", status.candidates }, { "applied", status.applied }, { "rejected", status.rejected }, { "skipped", status.skipped }, { "lastSkipped", status.lastSkipped }, { "recordsLimited", status.recordsLimited }, { "loggingFailures", status.loggingFailures }, { "installationError", status.installationError }, { "gpuExecutionVerified", false } } } };
+		}
 		if (action == "nr_readiness") {
 			if (a_args.size() != 1)
 				return json{ { "ok", false }, { "error", "nr_readiness accepts only action" } };
@@ -12499,7 +12515,35 @@ namespace VRRenderScaleDevBenchBridge
 			}
 			descriptor["inputSchema"]["properties"]["action"]["enum"] = RenderScaleActions();
 			descriptor["inputSchema"]["allOf"] = neuralDescriptor.at("inputSchema").at("allOf");
+			descriptor["description"] = descriptor["description"].get<std::string>() +
+			                            " nvidia_binding_workaround reports the separately compiled minimal NVIDIA VR workaround for exact verified 616.92, 621.01, 621.14 and 621.24 binaries on device 2F58. Optional bindingRefresh boolean selects refresh (default) or matched control after hook installation and before the first eligible replacement locks selection. One native growth hook refreshes an initialized stale second path after verified 44.25-to-69 MiB replacement; normal retirement remains enabled. Unsupported drivers/adapters and failed guards refuse intervention. Reports counters, the first terminal failure, installationError (Win32), and propagated loggingFailures (which do not disable refresh); one info record with a cumulative session count is emitted for every verified refresh; skipped calls are silent and recordsLimited remains false. Unsupported binaries install no hook and incur no per-frame workaround work. Applied verifies CPU state only, not GPU execution or mapping.";
+			descriptor["inputSchema"]["properties"]["bindingRefresh"] = { { "type", "boolean" } };
+			descriptor["inputSchema"]["allOf"].push_back({ { "if", { { "properties", { { "action", { { "const", "nvidia_binding_workaround" } } } } }, { "required", { "action" } } } },
+				{ "then", { { "propertyNames", { { "enum", { "action", "expectedBuildId", "bindingRefresh" } } } } } } });
+			descriptor["inputSchema"]["allOf"].push_back({ { "if", { { "required", { "bindingRefresh" } } } },
+				{ "then", { { "required", { "action" } }, { "properties", { { "action", { { "const", "nvidia_binding_workaround" } } } } } } } });
 			descriptor["outputSchema"] = neuralDescriptor.at("outputSchema");
+			descriptor["outputSchema"]["properties"]["accepted"] = { { "type", "boolean" } };
+			descriptor["outputSchema"]["properties"]["workaround"] = {
+				{ "type", "object" },
+				{ "properties", {
+									{ "compiled", { { "type", "boolean" } } },
+									{ "installed", { { "type", "boolean" } } },
+									{ "enabled", { { "type", "boolean" } } },
+									{ "refresh", { { "type", "boolean" } } },
+									{ "locked", { { "type", "boolean" } } },
+									{ "reason", { { "type", "string" } } },
+									{ "candidates", { { "type", "integer" }, { "minimum", 0 } } },
+									{ "applied", { { "type", "integer" }, { "minimum", 0 } } },
+									{ "rejected", { { "type", "integer" }, { "minimum", 0 } } },
+									{ "skipped", { { "type", "integer" }, { "minimum", 0 } } },
+									{ "lastSkipped", { { "type", "string" } } },
+									{ "recordsLimited", { { "type", "boolean" } } },
+									{ "loggingFailures", { { "type", "integer" }, { "minimum", 0 } } },
+									{ "installationError", { { "type", "integer" } } },
+									{ "gpuExecutionVerified", { { "const", false } } },
+								} },
+			};
 			return descriptor.dump();
 		}();
 		devBench->RegisterTool(

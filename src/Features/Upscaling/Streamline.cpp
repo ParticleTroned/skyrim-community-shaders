@@ -3,6 +3,7 @@
 #include "NvidiaProject.h"
 #include "StreamlineConstants.h"
 #include "Utils/GraphicsCameraState.h"
+#include "Utils/NvidiaBindingWorkaround.h"
 
 #include <algorithm>
 #include <array>
@@ -1549,6 +1550,7 @@ void Streamline::Shutdown()
 		state == LifecycleState::ShutdownQuarantined)
 		return;
 
+	Util::NvidiaBindingWorkaround::Disable("streamline_shutdown");
 	lifecycleState.store(LifecycleState::ShuttingDown, std::memory_order_release);
 	const auto reflexShutdown = reflexBackend.Shutdown();
 	if (reflexShutdown != NVAPI_OK)
@@ -1866,6 +1868,9 @@ bool Streamline::PostDevice()
 
 	InvalidateDLSSOptionsCache();
 	BindNativeReflex(boundDeviceIdentity);
+	// Device binding precedes publication of the renderer globals.
+	if (featureDLSS && globals::game::isVR)
+		Util::NvidiaBindingWorkaround::Initialize(boundDeviceIdentity);
 	featureCheckComplete = true;
 	return true;
 }

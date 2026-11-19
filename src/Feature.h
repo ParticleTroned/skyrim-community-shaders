@@ -242,6 +242,8 @@ public:
 	 */
 	virtual void RegisterWeatherVariables() {}
 	virtual void NormalizeWeatherSettings(json&) {}
+	/** Keeps new weather overrides sparse when unset values form a neutral adjustment layer. */
+	virtual bool UsesNeutralWeatherAdjustments() const { return false; }
 
 	/**
 	 * @brief Returns constraints this feature imposes on other features' settings

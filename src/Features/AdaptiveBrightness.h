@@ -54,8 +54,9 @@ struct AdaptiveBrightness : Feature
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Balances scene lighting, atmosphere and bloom by location and exterior time of day.",
+			"Balances scene lighting, atmosphere and bloom by weather, location and exterior time of day.",
 			{ "Separate exterior day and night balance profiles",
+				"Blended per-weather lighting, colour, bloom and water adjustments",
 				"Separate interior, dungeon, and dwelling profiles",
 				"Hierarchical worldspace, region, city, location, and cell profiles with COC codes",
 				"Unified global and per-profile Lighting, Color, Bloom, Water, and wind adjustment layers",
@@ -139,6 +140,8 @@ struct AdaptiveBrightness : Feature
 
 		static ProfileSettings AdjustmentDefaults();
 		static ProfileSettings GlobalDefaults();
+		/** Neutral weather layer with detailed lighting adjustments available. */
+		static ProfileSettings WeatherDefaults();
 	};
 
 	struct LocationOverride
@@ -186,6 +189,9 @@ struct AdaptiveBrightness : Feature
 		std::array<ProfileSettings, kProfileCount> profiles{};
 		std::vector<LocationOverride> locationOverrides;
 	} settings;
+
+	// Weather transitions own this neutral adjustment layer independently of saved base profiles.
+	ProfileSettings weatherProfile = ProfileSettings::WeatherDefaults();
 
 	struct alignas(16) PerFrameData
 	{
@@ -348,6 +354,9 @@ struct AdaptiveBrightness : Feature
 	virtual const char* GetPerformanceCostMeasurementWaitText() const override { return "Waiting for a gameplay cell"; }
 
 	virtual void LoadSettings(json& o_json) override;
+	/** Registers exterior adjustment values with the weather editor and weather automation API. */
+	void RegisterWeatherVariables() override;
+	bool UsesNeutralWeatherAdjustments() const override { return true; }
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
 	virtual void SetupResources() override;
@@ -382,6 +391,9 @@ struct AdaptiveBrightness : Feature
 		const ProfileSettings* to = nullptr;
 		float factor = 0.0f;
 	};
+
+	/** Returns the weather adjustment layer only for an exterior scene with active weather. */
+	const ProfileSettings* GetActiveWeatherProfile() const;
 
 	LinearLighting::Settings GetNeutralLinearLightingSettings() const;
 	LinearLighting::Settings ApplyProfile(const LinearLighting::Settings& a_base, const ProfileSettings& a_profile) const;

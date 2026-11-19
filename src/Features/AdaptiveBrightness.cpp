@@ -4,6 +4,7 @@
 #include "Menu/SettingsSearch.h"
 
 #include "Api/MainThreadDispatchPolicy.h"
+#include "CSEditor/EditorWindow.h"
 #include "Diagnostics/PerformanceCostExperiments.h"
 #include "Globals.h"
 #include "InverseSquareLighting.h"
@@ -21,6 +22,8 @@
 #include "Utils/StringUtils.h"
 #include "Utils/UI.h"
 #include "WeatherColorAdjustment.h"
+#include "WeatherManager.h"
+#include "WeatherVariableRegistry.h"
 #include "WetternessLightingPolicy.h"
 
 #include "RE/B/BGSLocation.h"
@@ -143,6 +146,13 @@ AdaptiveBrightness::ProfileSettings AdaptiveBrightness::ProfileSettings::GlobalD
 	profile.waterWind.overrideEnabled = true;
 	profile.waterWind.calmWaveMultiplier = 0.65f;
 	profile.waterWind.strongWindWaveMultiplier = 1.35f;
+	return profile;
+}
+
+AdaptiveBrightness::ProfileSettings AdaptiveBrightness::ProfileSettings::WeatherDefaults()
+{
+	auto profile = AdjustmentDefaults();
+	profile.advanced = true;
 	return profile;
 }
 
@@ -776,17 +786,21 @@ namespace
 		const T& a_globalBase,
 		const AdaptiveBrightness::ActiveProfileBlend& a_activeProfiles,
 		const std::vector<const AdaptiveBrightness::LocationOverride*>& a_locationLayers,
-		ApplyLayer&& a_applyLayer)
+		ApplyLayer&& a_applyLayer,
+		const AdaptiveBrightness::ProfileSettings* a_weatherLayer = nullptr)
 	{
+		const auto applyWeather = [&](const T& a_base) {
+			return a_weatherLayer ? a_applyLayer(a_base, *a_weatherLayer) : a_base;
+		};
 		if (!a_activeProfiles.from)
-			return { .from = a_globalBase };
+			return { .from = applyWeather(a_globalBase) };
 
 		const auto composeBranch = [&](const AdaptiveBrightness::ProfileSettings& a_profile) {
-			return ApplyLocationLayers(
+			return applyWeather(ApplyLocationLayers(
 				a_globalBase,
 				a_applyLayer(a_globalBase, a_profile),
 				a_locationLayers,
-				a_applyLayer);
+				a_applyLayer));
 		};
 		auto from = composeBranch(*a_activeProfiles.from);
 		if (!a_activeProfiles.to || a_activeProfiles.from == a_activeProfiles.to)
@@ -1640,6 +1654,7 @@ void AdaptiveBrightness::DrawSettings()
 	MenuUI::SettingsPage page("AdaptiveBrightness", {
 														{ "global", "Global", "Start with shared lighting, colour, bloom, water and depth of field.", "Shared appearance and depth of field", true, true, "Build the shared look" },
 														{ "profiles", "Profiles", "Refine the shared look for time and location types.", "Time and location profiles", true, true, nullptr },
+														{ "weather", "Weather", "Refine the outdoor look for individual weathers.", "Blended weather adjustments", true, true, nullptr },
 														{ "locations", "Locations", "Add precise changes for individual places.", "Exact places and cells", true, true, "Refine local changes" },
 														{ "presets", "Presets", "Save or load complete appearances and location collections.", "Complete looks and collections", true, true, nullptr },
 													});
@@ -1685,6 +1700,16 @@ void AdaptiveBrightness::DrawSettings()
 			DrawProfile(kProfileOrder[selected], settings.enabled);
 		else
 			DrawCurrentContextProfileControls(kContextProfileOrder[selected - profileCount], true, settings.enabled);
+	}
+
+	if (page.Is("weather")) {
+		ImGui::TextWrapped("Tune lighting, colour, bloom and water for each weather in the weather editor. These adjustments blend with weather transitions and apply after the active time and location profiles. Unset values are neutral; interiors keep their own profiles.");
+		auto* sky = globals::game::sky;
+		const auto disabled = Util::DisableGuard(!sky || !sky->currentWeather);
+		if (ImGui::Button("Edit Current Weather"))
+			EditorWindow::GetSingleton()->OpenWeatherFeatureSetting(sky->currentWeather, GetShortName(), "brightness");
+		if (!sky || !sky->currentWeather)
+			ImGui::TextDisabled("Load an outdoor scene to select its weather.");
 	}
 
 	if (page.Is("locations")) {
@@ -1812,6 +1837,7 @@ void AdaptiveBrightness::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 void AdaptiveBrightness::LoadSettings(json& o_json)
 {
 	settings = MigrateLegacyProfileSettings(o_json);
+	weatherProfile = ProfileSettings::WeatherDefaults();
 	NormalizeBaseSettings(settings);
 	globalPresetStatus.clear();
 	if (globalPresetName.empty())
@@ -1844,6 +1870,7 @@ void AdaptiveBrightness::SaveSettings(json& o_json)
 void AdaptiveBrightness::RestoreDefaultSettings()
 {
 	settings = {};
+	weatherProfile = ProfileSettings::WeatherDefaults();
 	NormalizeBaseSettings(settings);
 	globalPresetName = kDefaultGlobalPresetName;
 	globalPresetStatus.clear();
@@ -1857,6 +1884,83 @@ void AdaptiveBrightness::RestoreDefaultSettings()
 	InvalidateProfileTabSync();
 	MarkLocationOverrideLookupDirty();
 	ResetWaterWindSmoothing();
+}
+
+void AdaptiveBrightness::RegisterWeatherVariables()
+{
+	weatherProfile = ProfileSettings::WeatherDefaults();
+	auto* registry = WeatherVariables::GlobalWeatherRegistry::GetSingleton()->GetOrCreateFeatureRegistry(GetShortName());
+	const auto registerFloat = [&](const char* name, const char* label, float& value, float minimum, float maximum) {
+		registry->RegisterVariable(std::make_shared<WeatherVariables::FloatVariable>(
+			name, label, "Exterior weather adjustment applied after time and location profiles; unset values are neutral.",
+			&value, value, minimum, maximum));
+	};
+	registerFloat("brightness", "Scene Brightness", weatherProfile.brightness, kBrightnessMin, kBrightnessMax);
+	registerFloat("contrast", "Contrast", weatherProfile.contrast, kContrastMin, kContrastMax);
+	registerFloat("saturation", "Saturation", weatherProfile.saturation, 0.0f, kSaturationMax);
+	registerFloat("skyBrightnessMult", "Sky Brightness", weatherProfile.skyBrightnessMult, 0.0f, kGlobalSkyBrightnessMax);
+	registerFloat("skySaturation", "Sky Saturation", weatherProfile.skySaturation, 0.0f, kSkySaturationMax);
+	registerFloat("cloudBrightnessMult", "Cloud Brightness", weatherProfile.cloudBrightnessMult, 0.0f, kGlobalSkyBrightnessMax);
+	registerFloat("cloudSaturation", "Cloud Saturation", weatherProfile.cloudSaturation, 0.0f, kSkySaturationMax);
+	registerFloat("fogIntensity", "Vanilla Fog Intensity", weatherProfile.fogIntensity, 0.0f, kGlobalLightingMultiplierMax);
+	registerFloat("sunGlareIntensity", "Sun Glare Intensity", weatherProfile.sunGlareIntensity, 0.0f, kGlobalLightingMultiplierMax);
+	registerFloat("effectBrightness", "Effect Brightness", weatherProfile.effectBrightness, 0.0f, kGlobalSkyBrightnessMax);
+	registerFloat("skyStaticBrightness", "Sky Static Brightness", weatherProfile.skyStaticBrightness, 0.0f, kGlobalSkyBrightnessMax);
+	registerFloat("skyStaticTransparency", "Sky Static Transparency", weatherProfile.skyStaticTransparency, 0.0f, 1.0f);
+	registerFloat("directionalLightMult", "Directional Light", weatherProfile.directionalLightMult, 0.0f, kGlobalLightingMultiplierMax);
+	registerFloat("pointLightMult", "Point Lights", weatherProfile.pointLightMult, 0.0f, kGlobalLightingMultiplierMax);
+	registerFloat("pointLightSaturation", "Point Light Saturation", weatherProfile.pointLightSaturation, 0.0f, kSaturationMax);
+	registerFloat("pointLightCurve", "Point Light Colour Curve", weatherProfile.pointLightCurve, kPointLightCurveMin, kPointLightCurveMax);
+	registerFloat("fireIntensity", "Fire Intensity", weatherProfile.fireIntensity, 0.0f, kGlobalLightingMultiplierMax);
+	registerFloat("fireSaturation", "Fire Saturation", weatherProfile.fireSaturation, 0.0f, kSaturationMax);
+	registerFloat("fireCurve", "Fire Brightness Curve", weatherProfile.fireCurve, kFireCurveMin, kFireCurveMax);
+	registerFloat("linearPointLightMult", "Linear Point Lights", weatherProfile.linearPointLightMult, 0.0f, kGlobalLightingMultiplierMax);
+	registerFloat("spotlightMult", "Spotlights", weatherProfile.spotlightMult, 0.0f, kGlobalLightingMultiplierMax);
+	registerFloat("linearSpotlightMult", "Linear Spotlights", weatherProfile.linearSpotlightMult, 0.0f, kGlobalLightingMultiplierMax);
+	registerFloat("omnidirectionalBulbMult", "Omnidirectional Bulbs", weatherProfile.omnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax);
+	registerFloat("linearOmnidirectionalBulbMult", "Linear Omnidirectional Bulbs", weatherProfile.linearOmnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax);
+	registerFloat("ambientMult", "Ambient", weatherProfile.ambientMult, 0.0f, kGlobalLightingMultiplierMax);
+	registerFloat("emitColorMult", "Emissive", weatherProfile.emitColorMult, 0.0f, kGlobalLightingMultiplierMax);
+	registerFloat("glowmapMult", "Glowmaps", weatherProfile.glowmapMult, 0.0f, kGlobalLightingMultiplierMax);
+	registerFloat("effectLightingMult", "Effects", weatherProfile.effectLightingMult, 0.0f, kGlobalLightingMultiplierMax);
+	registerFloat("skyGammaOffset", "Sky Gamma Offset", weatherProfile.skyGammaOffset, kGammaOffsetMin, kGammaOffsetMax);
+	registerFloat("cloudGammaOffset", "Cloud Gamma Offset", weatherProfile.cloudGammaOffset, kGammaOffsetMin, kGammaOffsetMax);
+	registerFloat("fogGammaOffset", "Fog Gamma Offset", weatherProfile.fogGammaOffset, kGammaOffsetMin, kGammaOffsetMax);
+	registerFloat("fogAlphaGammaOffset", "Fog Transparency Gamma Offset", weatherProfile.fogAlphaGammaOffset, kGammaOffsetMin, kGammaOffsetMax);
+	registerFloat("waterGammaOffset", "Water Gamma Offset", weatherProfile.waterGammaOffset, kGammaOffsetMin, kGammaOffsetMax);
+	registerFloat("vlGammaOffset", "Volumetric Lighting Gamma Offset", weatherProfile.vlGammaOffset, kGammaOffsetMin, kGammaOffsetMax);
+	for (const auto& field : AdaptiveBalanceAppearance::kScalars) {
+		const auto name = std::string("appearance.") + field.name;
+		registerFloat(name.c_str(), field.label, weatherProfile.appearance.*field.member, field.minimum, field.maximum);
+	}
+	for (const auto& field : AdaptiveBalanceAppearance::kTints) {
+		const auto name = std::string("appearance.") + field.name;
+		auto& value = weatherProfile.appearance.*field.member;
+		registry->RegisterVariable(std::make_shared<WeatherVariables::Float3Variable>(
+			name, field.label, "Exterior weather colour adjustment; white is neutral.", &value, value, 0.0f, field.maximum));
+	}
+	registerFloat("bloom.EnhancementIntensity", "Bloom Enhancement", weatherProfile.bloom.EnhancementIntensity, 0.0f, Bloom::kEnhancementIntensityMax);
+	registerFloat("bloom.HaloRadius", "Bloom Halo Radius", weatherProfile.bloom.HaloRadius, 0.0f, Bloom::kHaloRadiusMax);
+	registerFloat("bloom.HaloSpread", "Bloom Halo Spread", weatherProfile.bloom.HaloSpread, 0.0f, 1.0f);
+	registerFloat("bloom.BloomSaturation", "Bloom Saturation", weatherProfile.bloom.BloomSaturation, 0.0f, Bloom::kBloomSaturationMax);
+	registerFloat("bloom.CompressionThreshold", "Bloom Compression Threshold", weatherProfile.bloom.CompressionThreshold, 0.0f, Bloom::kCompressionCeilingMax);
+	registerFloat("bloom.CompressionCeiling", "Bloom Compression Ceiling", weatherProfile.bloom.CompressionCeiling, 0.0f, Bloom::kCompressionCeilingMax);
+	registry->RegisterVariable(std::make_shared<WeatherVariables::Float3Variable>(
+		"bloom.BloomTint", "Bloom Tint", "Relative to the neutral bloom tint; unset preserves the active profiles.",
+		&weatherProfile.bloom.BloomTint, weatherProfile.bloom.BloomTint, 0.0f, 1.0f));
+	registerFloat("water.WaterBrightness", "Water Brightness", weatherProfile.water.WaterBrightness, WaterAppearance::kWaterBrightnessMin, WaterAppearance::kWaterBrightnessMax);
+	registerFloat("water.GlobalReflectionAmount", "Water Reflection Amount", weatherProfile.water.GlobalReflectionAmount, WaterAppearance::kWaterAmountMin, WaterAppearance::kWaterAmountMax);
+	registerFloat("water.RefractionAmount", "Water Refraction Amount", weatherProfile.water.RefractionAmount, WaterAppearance::kWaterAmountMin, WaterAppearance::kWaterAmountMax);
+	registerFloat("water.SunSpecularMultiplier", "Water Sun Specular", weatherProfile.water.SunSpecularMultiplier, WaterAppearance::kWaterAmountMin, WaterAppearance::kWaterSunSpecularMax);
+	registerFloat("water.WaveAmplitude", "Water Wave Amplitude", weatherProfile.water.WaveAmplitude, WaterAppearance::kWaterAmountMin, WaterAppearance::kWaterAmountMax);
+	registerFloat("water.FresnelMin", "Water Fresnel Minimum", weatherProfile.water.FresnelMin, WaterAppearance::kWaterFresnelMin, WaterAppearance::kWaterFresnelMax);
+	registerFloat("water.FresnelMax", "Water Fresnel Maximum", weatherProfile.water.FresnelMax, WaterAppearance::kWaterFresnelMin, WaterAppearance::kWaterFresnelMax);
+	registerFloat("water.Muddiness", "Water Muddiness", weatherProfile.water.Muddiness, WaterAppearance::kWaterAmountMin, WaterAppearance::kWaterAmountMax);
+	registerFloat("water.CausticsStrength", "Water Caustics Strength", weatherProfile.water.CausticsStrength, WaterAppearance::kWaterAmountMin, WaterAppearance::kWaterAmountMax);
+	registerFloat("water.CausticsTiling", "Water Caustics Tiling", weatherProfile.water.CausticsTiling, WaterAppearance::kCausticsTilingMin, WaterAppearance::kCausticsTilingMax);
+	registerFloat("water.CausticsSpeed", "Water Caustics Speed", weatherProfile.water.CausticsSpeed, WaterAppearance::kWaterAmountMin, WaterAppearance::kCausticsSpeedMax);
+	registerFloat("water.CausticsDispersion", "Water Caustics Colour Dispersion", weatherProfile.water.CausticsDispersion, WaterAppearance::kWaterAmountMin, WaterAppearance::kWaterAmountMax);
+	registerFloat("water.ParallaxStrength", "Water Parallax Strength", weatherProfile.water.ParallaxStrength, WaterAppearance::kWaterAmountMin, WaterAppearance::kWaterAmountMax);
 }
 
 void AdaptiveBrightness::SetupResources()
@@ -3906,7 +4010,8 @@ AdaptiveBrightness::EffectiveLinearLightingSettings AdaptiveBrightness::GetEffec
 			layeredBase,
 			activeProfiles,
 			locationLayers,
-			[this](const auto& a_base, const auto& a_layer) { return ApplyProfile(a_base, a_layer); });
+			[this](const auto& a_base, const auto& a_layer) { return ApplyProfile(a_base, a_layer); },
+			GetActiveWeatherProfile());
 		effectiveSettings = branches.to ?
 		                        LerpSettings(branches.from, *branches.to, branches.factor) :
 		                        branches.from;
@@ -3935,7 +4040,8 @@ SharedLightingSettings AdaptiveBrightness::GetEffectiveSharedLightingSettings() 
 			layeredBase,
 			activeProfiles,
 			locationLayers,
-			[this](const auto& a_base, const auto& a_layer) { return ApplyProfile(a_base, a_layer); });
+			[this](const auto& a_base, const auto& a_layer) { return ApplyProfile(a_base, a_layer); },
+			GetActiveWeatherProfile());
 		effectiveSettings = branches.to ?
 		                        LerpSettings(branches.from, *branches.to, branches.factor) :
 		                        branches.from;
@@ -3957,7 +4063,8 @@ Bloom::Settings AdaptiveBrightness::GetEffectiveBloomSettings() const
 		globalBloom,
 		activeProfiles,
 		locationLayers,
-		[this](const auto& a_base, const auto& a_layer) { return ApplyProfile(a_base, a_layer); });
+		[this](const auto& a_base, const auto& a_layer) { return ApplyProfile(a_base, a_layer); },
+		GetActiveWeatherProfile());
 	const auto effectiveProfile = branches.to ?
 	                                  Bloom::LerpProfiles(branches.from, *branches.to, branches.factor) :
 	                                  branches.from;
@@ -4000,7 +4107,8 @@ WaterAppearance::Settings AdaptiveBrightness::GetEffectiveWaterAppearanceSetting
 				.appearance = ApplyProfile(a_base.appearance, a_layer),
 				.wind = ApplyProfile(a_base.wind, a_layer),
 			};
-		});
+		},
+		GetActiveWeatherProfile());
 	auto effectiveProfile = applyWind(branches.from.appearance, branches.from.wind);
 	if (branches.to) {
 		const auto toProfile = applyWind(branches.to->appearance, branches.to->wind);
@@ -4153,6 +4261,16 @@ void AdaptiveBrightness::UpdateVanillaPointLightData(
 
 	ID3D11Buffer* buffer = vanillaPointLightCB->CB();
 	globals::d3d::context->PSSetConstantBuffers(a_bufferRegister, 1, &buffer);
+}
+
+const AdaptiveBrightness::ProfileSettings* AdaptiveBrightness::GetActiveWeatherProfile() const
+{
+	if (!WeatherManager::GetSingleton()->HasActiveVariablesForFeature(kFeatureShortName))
+		return nullptr;
+	const auto* sky = globals::game::sky;
+	return !LocationContext::Get().inInterior && sky && sky->mode.get() == RE::Sky::Mode::kFull && sky->currentWeather ?
+	           &weatherProfile :
+	           nullptr;
 }
 
 AdaptiveBrightness::ActiveProfileBlend AdaptiveBrightness::GetActiveProfileBlend() const

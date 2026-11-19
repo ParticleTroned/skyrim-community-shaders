@@ -139,6 +139,33 @@ The system now automatically:
 -   Handles default values and missing data
 -   Shows weather-controlled status in feature settings UI
 
+### Composing Weather Adjustment Layers
+
+Features with existing time or location profiles can register a separate,
+neutral adjustment layer instead of replacing the saved base settings.
+Adaptive Balance (`AdaptiveBrightness`) uses this approach for exterior
+lighting, colour, bloom and water appearance: resolve the time and location
+profiles first, then apply the weather layer. Interiors bypass that layer.
+Keep its fallback neutral when loading or resetting base settings, so a
+weather transition never becomes a saved global adjustment. Override
+`UsesNeutralWeatherAdjustments()` to start editor overrides empty; only edited
+values then take weather ownership. Check active ownership before composing
+the extra layer. Compose each time branch before final wind scaling and
+clamping, so weather adjustments do not inherit an already saturated wave
+amplitude.
+
+The editor and `communityshaders.weather_api` discover these variables from
+the same registry. Dotted names such as `appearance.fogTint` and
+`water.WaterBrightness` are literal keys in the per-weather feature object,
+not nested JSON paths. Weather files remain independent of full appearance
+presets. Rendering quality and global depth-of-field settings are not weather
+adjustments.
+
+`Float3Variable` accepts optional per-component bounds. The weather editor
+supports HDR input for bounded colours above one and clamps edited values to
+those limits. The weather API reports the same limits and rejects overrides
+outside them.
+
 ### Custom Variable Types
 
 Create custom weather variable types for complex data:

@@ -180,6 +180,7 @@ namespace
 		Reset();
 		for (unsigned i = 0; i < 10000; ++i) manager->UpdateFeatures();
 		Check(evaluations == 1 && queries == 1 && RE::Sky::lookups == 0 && featureValue == 20.0f);
+		Check(manager->HasActiveVariablesForFeature(std::string_view("TestSuffix", 4)) && !manager->HasActiveVariablesForFeature("Unknown"));
 		for (auto frame : { 1U, UINT32_MAX, 0U }) {
 			globals::state->frameCount = frame;
 			const auto before = evaluations;
@@ -194,6 +195,7 @@ namespace
 		RE::Sky::singleton = nullptr;
 		manager->UpdateFeatures();
 		Check(evaluations == 6 && featureValue == 10.0f);
+		Check(!manager->HasActiveVariablesForFeature("Test"));
 		RE::Sky::singleton = &sky;
 		manager->UpdateFeatures();
 		Check(evaluations == 7 && featureValue == 20.0f && RE::Sky::lookups != 0);
@@ -254,8 +256,10 @@ namespace
 		Check(featureValue == 37.0f && evaluations == 3);
 		manager->SetFeaturePaused("Test", true);
 		Check(featureValue == 33.0f);
+		Check(!manager->HasActiveVariablesForFeature("Test"));
 		manager->SetFeaturePaused("Test", false);
 		Check(featureValue == 37.0f);
+		Check(manager->HasActiveVariablesForFeature("Test"));
 		manager->UpdateFeatures();
 		const auto before = evaluations;
 		manager->ClearCache();

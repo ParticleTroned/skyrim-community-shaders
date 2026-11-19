@@ -450,6 +450,10 @@ namespace
 				a_output.hasNumericRange = 1;
 				a_output.minimumValue = floatVariable->GetMin();
 				a_output.maximumValue = floatVariable->GetMax();
+			} else if (auto* colorVariable = dynamic_cast<WeatherVariables::Float3Variable*>(variable.get()); colorVariable && colorVariable->HasRange()) {
+				a_output.hasNumericRange = 1;
+				a_output.minimumValue = colorVariable->GetMin();
+				a_output.maximumValue = colorVariable->GetMax();
 			}
 			return Status::kSuccess;
 		}

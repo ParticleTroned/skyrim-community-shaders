@@ -1,7 +1,10 @@
 #pragma once
 
+#include "Utils/Finite.h"
+
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <set>
@@ -269,8 +272,10 @@ namespace WeatherVariables
 	class Float3Variable : public WeatherVariable<float3>
 	{
 	public:
+		/** Registers RGB values with optional inclusive per-component limits. */
 		Float3Variable(const std::string& name, const std::string& displayName, const std::string& tooltip,
-			float3* valuePtr, float3 defaultValue) :
+			float3* valuePtr, float3 defaultValue,
+			float minValue = std::numeric_limits<float>::lowest(), float maxValue = std::numeric_limits<float>::max()) :
 			WeatherVariable<float3>(name, displayName, tooltip, valuePtr, defaultValue,
 				[](const float3& from, const float3& to, float factor) {
 					return float3{
@@ -278,19 +283,33 @@ namespace WeatherVariables
 						std::lerp(from.y, to.y, factor),
 						std::lerp(from.z, to.z, factor)
 					};
-				})
+				}),
+			minValue(minValue), maxValue(maxValue)
 		{
 		}
 
+		/** Per-component limits shared by editor input and override validation. */
+		float GetMin() const { return minValue; }
+		float GetMax() const { return maxValue; }
+		bool HasRange() const { return minValue != std::numeric_limits<float>::lowest() || maxValue != std::numeric_limits<float>::max(); }
+
 		bool IsValidJsonValue(const json& value) const override
 		{
-			if (!WeatherVariable<float3>::IsValidJsonValue(value))
+			if (!value.is_array() || value.size() != 3)
 				return false;
-			const auto decoded = value.get<float3>();
-			return std::isfinite(decoded.x) &&
-			       std::isfinite(decoded.y) &&
-			       std::isfinite(decoded.z);
+			for (const auto& component : value) {
+				if (!component.is_number())
+					return false;
+				const double decoded = component.get<double>();
+				if (!Util::IsFinite(decoded) || decoded < minValue || decoded > maxValue)
+					return false;
+			}
+			return true;
 		}
+
+	private:
+		float minValue;
+		float maxValue;
 	};
 
 	class Float4Variable : public WeatherVariable<float4>

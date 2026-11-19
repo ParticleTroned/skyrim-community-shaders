@@ -152,6 +152,7 @@ namespace CSX::WeatherAPI
 		const char* tooltip = nullptr;
 		ValueKind valueKind = ValueKind::kUnknown;
 		std::uint32_t activeOverride = 0;
+		/** Inclusive bounds for a scalar, or for each component of a colour. */
 		std::uint32_t hasNumericRange = 0;
 		double minimumValue = 0.0;
 		double maximumValue = 0.0;

@@ -79,6 +79,8 @@ def extract(root, output):
         function(source, "float AdaptiveBrightness::GetEffectiveVolumetricClarity()"),
         function(source, "VolumetricLightingTuning::Profile AdaptiveBrightness::GetEffectiveGodrayProfile("),
         function(source, "float AdaptiveBrightness::GetEffectiveMoonReflectionStrength()"),
+        function(source, "void AdaptiveBrightness::RegisterWeatherVariables()"),
+        function(source, "const AdaptiveBrightness::ProfileSettings* AdaptiveBrightness::GetActiveWeatherProfile()"),
         between(source, "LinearLighting::Settings AdaptiveBrightness::GetNeutralLinearLightingSettings()", "void AdaptiveBrightness::UpdateVanillaPointLightData("),
         between(bloom, "\tconstexpr float kEnhancementIntensityMax", "\tvoid DrawTooltip("),
         function(bloom, "\tvoid SanitizeProfileWithDefaults("),

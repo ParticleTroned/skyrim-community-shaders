@@ -11,6 +11,7 @@
 #include "FeatureIssues.h"
 #include "Features/SeasonalWeather.h"
 #include "State.h"
+#include "Utils/Finite.h"
 #include "Utils/UI.h"
 #include "WeatherManager.h"
 #include "WeatherVariableRegistry.h"
@@ -1867,7 +1868,7 @@ void WeatherWidget::DrawFeatureSettings()
 				} else {
 					// Enable overrides - mark as enabled
 					featureJson["__enabled"] = true;
-					// If no settings exist yet, copy current global values as starting point
+					// Replacement features start from globals; neutral adjustment layers stay sparse.
 					bool hasActualSettings = false;
 					for (auto it = featureJson.begin(); it != featureJson.end(); ++it) {
 						if (it.key() != "__enabled") {
@@ -1875,7 +1876,7 @@ void WeatherWidget::DrawFeatureSettings()
 							break;
 						}
 					}
-					if (!hasActualSettings) {
+					if (!hasActualSettings && !feature->UsesNeutralWeatherAdjustments()) {
 						const auto& variables = featureRegistry->GetVariables();
 						for (const auto& var : variables) {
 							json tempJson;
@@ -1998,16 +1999,20 @@ void WeatherWidget::DrawFeatureSettings()
 								ImGui::EndPopup();
 							}
 
-						} else if (dynamic_cast<WeatherVariables::Float3Variable*>(var.get())) {
+						} else if (auto* colorVar = dynamic_cast<WeatherVariables::Float3Variable*>(var.get())) {
 							// Handle float3 (color) variables
 							float3 value = currentValue.get<float3>();
 							float colorArray[3] = { value.x, value.y, value.z };
 
-							const bool valueChanged =
-								ImGui::ColorEdit3(varDisplayName.c_str(), colorArray);
+							const auto flags = colorVar->HasRange() && colorVar->GetMax() > 1.0f ?
+							                       ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR :
+							                       ImGuiColorEditFlags_None;
+							const bool valueChanged = ImGui::ColorEdit3(varDisplayName.c_str(), colorArray, flags);
 							if (ImGui::IsItemActivated())
 								EditorWindow::GetSingleton()->PushUndoState(this);
 							if (valueChanged) {
+								for (auto& component : colorArray)
+									component = Util::ClampFinite(component, colorVar->GetMin(), colorVar->GetMax(), std::clamp(1.0f, colorVar->GetMin(), colorVar->GetMax()));
 								featureJson[varName] = json{ colorArray[0], colorArray[1], colorArray[2] };
 								modified = true;
 							}

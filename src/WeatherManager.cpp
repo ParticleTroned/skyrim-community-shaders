@@ -332,6 +332,12 @@ bool WeatherManager::IsVariableOverrideActive(
 	       featureIt->second.contains(variableName);
 }
 
+bool WeatherManager::HasActiveVariablesForFeature(std::string_view featureName) const
+{
+	const auto featureIt = activeWeatherVariables.find(featureName);
+	return featureIt != activeWeatherVariables.end() && !featureIt->second.empty();
+}
+
 std::set<std::string> WeatherManager::GetActiveVariablesForFeature(
 	const std::string& featureName) const
 {

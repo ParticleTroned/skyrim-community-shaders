@@ -6,6 +6,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 
 using json = nlohmann::json;
 
@@ -62,6 +63,8 @@ public:
 	bool IsVariableOverrideActive(
 		const std::string& featureName,
 		const std::string& variableName) const;
+	/** Queries weather ownership without copying variable names or allocating a feature key. */
+	bool HasActiveVariablesForFeature(std::string_view featureName) const;
 	std::set<std::string> GetActiveVariablesForFeature(
 		const std::string& featureName) const;
 	void SetFeaturePaused(
@@ -89,7 +92,7 @@ private:
 
 	// Track last known weather state to detect changes
 	CurrentWeathers lastKnownWeather;
-	std::map<std::string, std::set<std::string>> activeWeatherVariables;
+	std::map<std::string, std::set<std::string>, std::less<>> activeWeatherVariables;
 	bool evaluationInvalidated = false;
 	struct UpdateInputs
 	{

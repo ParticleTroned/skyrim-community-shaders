@@ -4,6 +4,17 @@
 
 struct WaterAppearance
 {
+	static constexpr float kWaterBrightnessMin = 0.0f;
+	static constexpr float kWaterBrightnessMax = 2.0f;
+	static constexpr float kWaterAmountMin = 0.0f;
+	static constexpr float kWaterAmountMax = 2.0f;
+	static constexpr float kWaterSunSpecularMax = 5.0f;
+	static constexpr float kWaterFresnelMin = 0.0f;
+	static constexpr float kWaterFresnelMax = 1.0f;
+	static constexpr float kCausticsTilingMin = 0.25f;
+	static constexpr float kCausticsTilingMax = 4.0f;
+	static constexpr float kCausticsSpeedMax = 3.0f;
+
 	struct Profile
 	{
 		static constexpr float kIdentityScale = 1.0f;

@@ -365,12 +365,12 @@ namespace CSX::Api::WeatherDevBenchBridge
 			return;
 		}
 		const char* descriptor = R"({
-			"description":"Reply and event strings replace invalid UTF-8 with U+FFFD; request validation remains strict. Versioned CSX weather selection, lock, registered-variable, and per-weather feature override API. Forced weather refreshes cached cloud passes and sky models. Mutations require preflight then execute with identical arguments and the returned token.",
+			"description":"Reply and event strings replace invalid UTF-8 with U+FFFD; request validation remains strict. Versioned CSX weather selection, lock, registered-variable, and per-weather feature override API. AdaptiveBrightness exposes a neutral exterior adjustment layer for lighting, colour, bloom and water, composed after location layers within each time branch, before wind scaling and final blending; interiors ignore it. Use variables to discover names, values and inclusive scalar or colour-component bounds. Colour values require exactly three finite numeric components within those bounds. Mutations require preflight then execute with identical arguments and the returned token. Forced weather refreshes cached cloud passes and sky models.",
 			"inputSchema":{"type":"object","required":["contractMajor","clientId","commandId","action"],"properties":{
 				"contractMajor":{"type":"integer","const":1},"clientId":{"type":"string","minLength":1,"maxLength":128},
 				"commandId":{"type":"string","minLength":1,"maxLength":128},"expectedBuildId":{"type":"string"},
 				"action":{"type":"string","enum":["registry","snapshot","weathers","features","variables","override","preflight","execute"]},
-				"featureName":{"type":"string"},"weatherKey":{"type":"string"},
+				"featureName":{"type":"string","description":"Registered feature short name; AdaptiveBrightness provides exterior weather adjustments. Dotted variable names are literal keys in the override value object."},"weatherKey":{"type":"string"},
 				"mutation":{"type":"object","required":["action","expectedStateRevision"],"properties":{
 					"action":{"type":"string","description":"preview_weather forces an immediate weather change and refreshes cloud passes and sky models; it is blocked while weather is locked.","enum":["set_weather","preview_weather","reset_weather","lock_weather","unlock_weather","set_feature_paused","reload_overrides","set_feature_override","remove_feature_override"]},
 					"expectedStateRevision":{"type":"integer","minimum":0},"weatherKey":{"type":"string"},"featureName":{"type":"string"},

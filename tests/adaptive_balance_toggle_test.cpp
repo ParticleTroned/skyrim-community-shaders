@@ -16,6 +16,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -28,9 +29,22 @@ struct float3
 {
 	float x, y, z;
 };
+struct float4
+{
+	float x, y, z, w;
+};
 inline void to_json(json& output, const float3& value) { output = { value.x, value.y, value.z }; }
 inline void from_json(const json& input, float3& value) { value = { input.at(0).get<float>(), input.at(1).get<float>(), input.at(2).get<float>() }; }
+inline void to_json(json& output, const float4& value) { output = { value.x, value.y, value.z, value.w }; }
+inline void from_json(const json& input, float4& value) { value = { input.at(0).get<float>(), input.at(1).get<float>(), input.at(2).get<float>(), input.at(3).get<float>() }; }
+namespace logger
+{
+	template <class... Args>
+	void debug(const char*, Args&&...)
+	{}
+}
 #include "Features/Bloom.h"
+#include "WeatherVariableRegistry.h"
 #undef NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT
 #define NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(...)
 #define STATIC_ASSERT_ALIGNAS_16(Type) static_assert(alignof(Type) == 16)
@@ -177,9 +191,21 @@ namespace Util::Units
 	float WindRawToNormalized(uint8_t raw) { return static_cast<float>(raw) / 255.0f; }
 }
 
+struct WeatherManager
+{
+	static inline bool active = false;
+	static WeatherManager* GetSingleton()
+	{
+		static WeatherManager manager;
+		return &manager;
+	}
+	bool HasActiveVariablesForFeature(std::string_view) const { return active; }
+};
+
 struct AdaptiveBrightness
 {
 #include "adaptive_balance_members.h"
+	static constexpr std::string_view kFeatureShortName = "AdaptiveBrightness";
 	bool loaded = true;
 	ActiveProfileBlend testProfileBlend;
 	std::vector<const LocationOverride*> testLocationLayers;
@@ -187,6 +213,8 @@ struct AdaptiveBrightness
 	bool throwProfileResolution = false;
 
 	bool IsRuntimeAvailable() const;
+	std::string GetShortName() const { return "AdaptiveBrightness"; }
+	void RegisterWeatherVariables();
 	bool IsRuntimeEnabled() const;
 	float GetEffectiveVolumetricClarity() const;
 	VolumetricLightingTuning::Profile GetEffectiveGodrayProfile(bool) const;
@@ -1517,8 +1545,156 @@ void CheckEditableBloomPresets()
 	std::cout << "Editable bloom slots, reset isolation, bypass retention and atomic API validation passed\n";
 }
 
+void CheckPerWeatherProfiles()
+{
+	AdaptiveBrightness balance;
+	balance.RegisterWeatherVariables();
+	auto* registry = WeatherVariables::GlobalWeatherRegistry::GetSingleton()->GetFeatureRegistry(balance.GetShortName());
+	assert(registry && balance.weatherProfile.advanced);
+	json defaults;
+	registry->SaveAllToJson(defaults);
+	std::set<std::string> names;
+	for (const auto& variable : registry->GetVariables()) {
+		assert(names.insert(variable->GetName()).second);
+		assert(variable->IsValidJsonValue(defaults.at(variable->GetName())));
+		if (const auto* scalar = dynamic_cast<WeatherVariables::FloatVariable*>(variable.get())) {
+			assert(!scalar->IsValidJsonValue(scalar->GetMin() - 0.1f));
+			assert(!scalar->IsValidJsonValue(scalar->GetMax() + 0.1f));
+			assert(!scalar->IsValidJsonValue("invalid"));
+			assert(!scalar->IsValidJsonValue(std::numeric_limits<float>::quiet_NaN()));
+		} else if (const auto* color = dynamic_cast<WeatherVariables::Float3Variable*>(variable.get())) {
+			assert(color->HasRange());
+			assert(color->IsValidJsonValue(json::array({ color->GetMax(), 0.0f, 1.0f })));
+			assert(!color->IsValidJsonValue(json::array({ color->GetMax() + 0.1f, 0.0f, 1.0f })));
+			assert(!color->IsValidJsonValue(json::array({ -0.1f, 0.0f, 1.0f })));
+			for (const auto& invalid : std::vector<json>{ json::object(), json::array({ 1.0f, 1.0f }),
+					 json::array({ 1.0f, 1.0f, 1.0f, 1.0f }), json::array({ 1.0f, false, 1.0f }),
+					 json::array({ 1.0f, "bad", 1.0f }), json::array({ 1.0f, nullptr, 1.0f }),
+					 json::array({ 1.0f, std::numeric_limits<double>::infinity(), 1.0f }),
+					 json::array({ 1.0f, std::numeric_limits<double>::quiet_NaN(), 1.0f }) })
+				assert(!color->IsValidJsonValue(invalid));
+		}
+	}
+	const json overrides{
+		{ "skyBrightnessMult", 1.5f }, { "ambientMult", 0.6f }, { "saturation", 0.8f },
+		{ "pointLightMult", 1.4f }, { "fireIntensity", 1.25f }, { "emitColorMult", 0.5f }, { "skyGammaOffset", 0.2f },
+		{ "appearance.fogBrightness", 0.7f }, { "appearance.fogTint", { 0.5f, 0.8f, 1.0f } },
+		{ "bloom.EnhancementIntensity", 1.0f }, { "water.WaterBrightness", 0.6f }, { "water.WaveAmplitude", 1.5f }
+	};
+	for (const auto& [name, value] : overrides.items()) {
+		const auto variable = std::ranges::find_if(registry->GetVariables(), [&](const auto& v) { return v->GetName() == name; });
+		assert(variable != registry->GetVariables().end() && (*variable)->IsValidJsonValue(value));
+	}
+	RE::Weather weather;
+	auto* sky = globals::game::sky;
+	auto* originalWeather = sky->currentWeather;
+	sky->currentWeather = &weather;
+	LocationContext::context.inInterior = false;
+	assert(!balance.GetActiveWeatherProfile());
+	WeatherManager::active = true;
+	auto& global = balance.settings.globalProfile;
+	global.advanced = true;
+	global.skyBrightnessMult = 0.8f;
+	global.emitColorMult = 1.2f;
+	global.waterWind.enabled = false;
+	global.bloom.EnhancementIntensity = 0.4f;
+	AdaptiveBrightness::ProfileSettings day, night;
+	day.brightness = 0.9f;
+	night.brightness = 1.1f;
+	AdaptiveBrightness::LocationOverride location;
+	location.profile.advanced = true;
+	location.profile.skyBrightnessMult = 0.9f;
+	balance.testProfileBlend = { &day, &night, 0.4f };
+	balance.testLocationLayers = { &location };
+	for (bool layered : { false, true }) {
+		location.layered = layered;
+		registry->SetAllToDefaults();
+		const auto base = balance.GetEffectiveSharedLightingSettings();
+		const auto linear = balance.GetEffectiveLinearLightingSettings({}, false);
+		const auto water = balance.GetEffectiveWaterAppearanceSettings();
+		const auto bloom = balance.GetEffectiveBloomSettings();
+		for (float factor : { 0.0f, 0.25f, 0.5f, 1.0f }) {
+			registry->LerpAllVariables(json{}, overrides, factor);
+			const auto actual = balance.GetEffectiveSharedLightingSettings();
+			assert(Close(actual.skyBrightness, base.skyBrightness * std::lerp(1.0f, 1.5f, factor)));
+			assert(Close(actual.ambientMult, base.ambientMult * std::lerp(1.0f, 0.6f, factor)));
+			assert(Close(actual.pointLightMult, base.pointLightMult * std::lerp(1.0f, 1.4f, factor)));
+			assert(Close(actual.fireIntensity, base.fireIntensity * std::lerp(1.0f, 1.25f, factor)));
+			assert(Close(actual.saturation, base.saturation * std::lerp(1.0f, 0.8f, factor)));
+			assert(Close(actual.appearance.fogBrightness, std::lerp(1.0f, 0.7f, factor)));
+			assert(Close(actual.appearance.fogTint.x, std::lerp(1.0f, 0.5f, factor)));
+			const auto actualLinear = balance.GetEffectiveLinearLightingSettings({}, false);
+			assert(Close(actualLinear.settings.emitColorMult, linear.settings.emitColorMult * std::lerp(1.0f, 0.5f, factor)));
+			assert(Close(actualLinear.settings.skyGamma, linear.settings.skyGamma + 0.2f * factor));
+			const auto actualBloom = balance.GetEffectiveBloomSettings();
+			const float bloomAmount = global.bloom.EnhancementIntensity + factor;
+			assert(Close(actualBloom.EnhancementIntensity, std::max(1.0f, bloomAmount)));
+			assert(Close(actualBloom.BlendWeight, std::min(1.0f, bloomAmount)));
+			assert(Close(balance.GetEffectiveWaterAppearanceSettings().WaterBrightness, water.WaterBrightness * std::lerp(1.0f, 0.6f, factor)));
+			assert(Close(balance.GetEffectiveWaterAppearanceSettings().WaveAmplitude, water.WaveAmplitude * std::lerp(1.0f, 1.5f, factor)));
+		}
+		LocationContext::context.inInterior = true;
+		assert(!balance.GetActiveWeatherProfile());
+		assert(Close(balance.GetEffectiveSharedLightingSettings().skyBrightness, base.skyBrightness));
+		assert(Close(balance.GetEffectiveLinearLightingSettings({}, false).settings.skyGamma, linear.settings.skyGamma));
+		assert(Close(balance.GetEffectiveWaterAppearanceSettings().WaterBrightness, water.WaterBrightness));
+		assert(Close(balance.GetEffectiveBloomSettings().EnhancementIntensity, bloom.EnhancementIntensity));
+		LocationContext::context.inInterior = false;
+		sky->currentWeather = nullptr;
+		assert(!balance.GetActiveWeatherProfile());
+		assert(Close(balance.GetEffectiveSharedLightingSettings().skyBrightness, base.skyBrightness));
+		sky->currentWeather = &weather;
+		balance.SetEnabled(false);
+		assert(balance.GetEffectiveSharedLightingSettings().skyBrightness == 1.0f);
+		assert(!balance.GetEffectiveBloomSettings().Enabled);
+		assert(!balance.GetEffectiveLinearLightingSettings({}, false).hasColorAdjustments);
+		assert(!balance.GetEffectiveWaterAppearanceSettings().Enabled);
+		balance.SetEnabled(true);
+		registry->BeginTransition(overrides, names);
+		registry->LerpAllVariables(overrides, json{}, 0.5f);
+		assert(Close(balance.weatherProfile.skyBrightnessMult, 1.25f));
+		assert(Close(balance.weatherProfile.water.WaveAmplitude, 1.25f));
+		registry->LerpAllVariables(overrides, json{}, 1.0f);
+		registry->EndTransition();
+		json restored;
+		registry->SaveAllToJson(restored);
+		assert(restored == defaults);
+		assert(Close(balance.GetEffectiveSharedLightingSettings().skyBrightness, base.skyBrightness));
+		assert(global.skyBrightnessMult == 0.8f && location.profile.skyBrightnessMult == 0.9f);
+	}
+	sky->currentWeather = originalWeather;
+	WeatherManager::active = false;
+	registry->ClearVariables();
+	std::cout << "Per-weather registration, bounds, neutral fallback, transitions, profile composition and bypass checks passed\n";
+}
+
+void CheckWeatherWindClamping()
+{
+	AdaptiveBrightness balance;
+	RE::Weather weather;
+	auto* sky = globals::game::sky;
+	auto* originalWeather = sky->currentWeather;
+	sky->currentWeather = &weather;
+	WeatherManager::active = true;
+	LocationContext::context.inInterior = false;
+	balance.settings.globalProfile.water.WaveAmplitude = 2.0f;
+	balance.settings.globalProfile.waterWind = { true, true, 1.0f, 1.0f };
+	balance.weatherProfile.water.WaveAmplitude = 0.5f;
+	AdaptiveBrightness::ProfileSettings day, night;
+	day.waterWind = { true, true, 1.5f, 1.5f };
+	night.waterWind = { true, true, 2.0f, 2.0f };
+	balance.testProfileBlend = { &day, &night, 0.5f };
+	assert(Close(balance.GetEffectiveWaterAppearanceSettings().WaveAmplitude, 1.75f));
+	WeatherManager::active = false;
+	assert(!balance.GetActiveWeatherProfile());
+	assert(Close(balance.GetEffectiveWaterAppearanceSettings().WaveAmplitude, 2.0f));
+	sky->currentWeather = originalWeather;
+}
+
 int main()
 {
+	CheckPerWeatherProfiles();
+	CheckWeatherWindClamping();
 	CheckEditableBloomPresets();
 	CheckVanillaPointLightRequirements();
 	CheckVolumetricClarity();

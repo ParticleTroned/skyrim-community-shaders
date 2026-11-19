@@ -8,16 +8,16 @@
 
 namespace
 {
-	constexpr float kWaterBrightnessMin = 0.0f;
-	constexpr float kWaterBrightnessMax = 2.0f;
-	constexpr float kWaterAmountMin = 0.0f;
-	constexpr float kWaterAmountMax = 2.0f;
-	constexpr float kWaterSunSpecularMax = 5.0f;
-	constexpr float kWaterFresnelMin = 0.0f;
-	constexpr float kWaterFresnelMax = 1.0f;
-	constexpr float kCausticsTilingMin = 0.25f;
-	constexpr float kCausticsTilingMax = 4.0f;
-	constexpr float kCausticsSpeedMax = 3.0f;
+	constexpr float kWaterBrightnessMin = WaterAppearance::kWaterBrightnessMin;
+	constexpr float kWaterBrightnessMax = WaterAppearance::kWaterBrightnessMax;
+	constexpr float kWaterAmountMin = WaterAppearance::kWaterAmountMin;
+	constexpr float kWaterAmountMax = WaterAppearance::kWaterAmountMax;
+	constexpr float kWaterSunSpecularMax = WaterAppearance::kWaterSunSpecularMax;
+	constexpr float kWaterFresnelMin = WaterAppearance::kWaterFresnelMin;
+	constexpr float kWaterFresnelMax = WaterAppearance::kWaterFresnelMax;
+	constexpr float kCausticsTilingMin = WaterAppearance::kCausticsTilingMin;
+	constexpr float kCausticsTilingMax = WaterAppearance::kCausticsTilingMax;
+	constexpr float kCausticsSpeedMax = WaterAppearance::kCausticsSpeedMax;
 
 	void DrawTooltip(const char* a_text)
 	{

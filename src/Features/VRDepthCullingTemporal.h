@@ -57,6 +57,10 @@ namespace VRDepthCullingTemporal
 		std::uint64_t submissionValidationCalls = 0;
 		std::uint64_t depthEvidenceValidationCalls = 0;
 		std::uint64_t maximumPromotedPerReadback = 0;
+		bool visibilityHistoryAvailable = false;
+		std::uint32_t visibilityHistoryEntries = 0;
+		std::uint64_t visibilityHistoryRetained = 0, visibilityHistoryCapacityMisses = 0;
+		std::uint32_t lastVisibilityHistoryRetained = 0;
 		std::uint64_t envelopeMisses = 0;
 		std::uint64_t recoveryAttempts = 0;
 		std::uint64_t objectsInspected = 0;

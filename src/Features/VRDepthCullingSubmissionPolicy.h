@@ -4,6 +4,7 @@
 #include "VRDepthCullingTemporalPolicy.h"
 
 #include <array>
+#include <bitset>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -135,14 +136,38 @@ namespace VRDepthCullingSubmissionPolicy
 		       a_reason == Reason::ProjectionChanged || a_reason == Reason::SceneChanged || a_reason == Reason::CameraCut;
 	}
 
+	/** Validate the native registration and destination before any visibility promotion. */
+	inline bool CanApplyResults(const Handoff::Consumed& a_consumed, const Batch& a_batch,
+		std::uint64_t a_cullingEpoch, std::uint64_t a_policyEpoch, std::span<std::uint32_t> a_results)
+	{
+		return Match(a_consumed.stamp, a_batch, a_consumed.sequence, a_cullingEpoch, a_policyEpoch) == Reason::None &&
+		       a_results.size() == a_batch.count && reinterpret_cast<std::uintptr_t>(a_results.data()) == a_batch.results;
+	}
+
+	/** Apply native-positive grace independently of the speculative recovery budget. */
+	inline std::uint32_t ApplyRetention(const Handoff::Consumed& a_consumed, const Batch& a_batch,
+		std::uint64_t a_cullingEpoch, std::uint64_t a_policyEpoch, std::span<std::uint32_t> a_results,
+		const std::bitset<VRDepthCullingTemporalPolicy::kMaximumObjects>& a_retained)
+	{
+		if (!CanApplyResults(a_consumed, a_batch, a_cullingEpoch, a_policyEpoch, a_results))
+			return 0;
+		std::uint32_t promoted = 0;
+		for (std::size_t index = 0; index < a_results.size(); ++index) {
+			if (a_results[index] == 0 && a_retained.test(index)) {
+				a_results[index] = 1;
+				++promoted;
+			}
+		}
+		return promoted;
+	}
+
 	/** Apply at most the shared budget to ranked candidates in this consumed registration. */
 	inline std::uint32_t ApplyRecovery(Reason a_reason, const Handoff::Consumed& a_consumed, const Batch& a_batch,
 		std::uint64_t a_cullingEpoch, std::uint64_t a_policyEpoch, std::span<std::uint32_t> a_results,
 		const VRDepthCullingTemporalPolicy::CandidateSet<VRDepthCullingTemporalPolicy::kBalancedPromotionBudget>& a_candidates)
 	{
 		if (!CanRecover(a_reason) ||
-			Match(a_consumed.stamp, a_batch, a_consumed.sequence, a_cullingEpoch, a_policyEpoch) != Reason::None ||
-			a_results.size() != a_batch.count || reinterpret_cast<std::uintptr_t>(a_results.data()) != a_batch.results)
+			!CanApplyResults(a_consumed, a_batch, a_cullingEpoch, a_policyEpoch, a_results))
 			return 0;
 		for (std::size_t index = 0; index < a_candidates.Size(); ++index)
 			if (a_candidates[index].index >= a_results.size())

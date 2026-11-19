@@ -6,6 +6,7 @@
 #include "Utils/D3D.h"
 #include "VRDepthCullingSubmissionPolicy.h"
 #include "VRDepthCullingTemporalPolicy.h"
+#include "VRDepthCullingVisibilityHistory.h"
 
 #include "RE/M/MapMenu.h"
 #include "RE/M/MenuOpenCloseEvent.h"
@@ -82,6 +83,7 @@ namespace VRDepthCullingTemporal
 		DepthEvidence g_preparedDepth{}, g_producerDepth{};
 		DepthResourceCache g_depthResources{};
 		SubmissionPolicy::Handoff g_handoff{};
+		NativeVisibilityHistory g_visibilityHistory{};
 		SubmissionPolicy::ReadbackProjection g_pendingReadbackProjection{};
 		bool g_depthPrepared = false;
 		std::atomic_bool g_installed{ false };
@@ -115,6 +117,9 @@ namespace VRDepthCullingTemporal
 		std::atomic_uint32_t g_lastObjectCount{ 0 };
 		std::atomic_uint32_t g_lastEligibleCount{ 0 };
 		std::atomic_uint32_t g_lastPromotedCount{ 0 };
+		std::atomic_bool g_visibilityHistoryAvailable{ false };
+		std::atomic_uint64_t g_visibilityHistoryRetained{ 0 }, g_visibilityHistoryCapacityMisses{ 0 };
+		std::atomic_uint32_t g_visibilityHistoryEntries{ 0 }, g_lastVisibilityHistoryRetained{ 0 };
 
 		void ClearLastRecoveryStatus()
 		{
@@ -303,6 +308,30 @@ namespace VRDepthCullingTemporal
 			return projection;
 		}
 
+		SubmissionPolicy::Scene CaptureScene()
+		{
+			const auto* tes = globals::game::tes;
+			if (!tes)
+				return {};
+			return { reinterpret_cast<std::uintptr_t>(tes->interiorCell),
+				tes->interiorCell ? 0 : reinterpret_cast<std::uintptr_t>(tes->GetRuntimeData2().worldSpace) };
+		}
+
+		bool CaptureActiveDepthExtent(std::uint32_t a_sourceWidth, std::uint32_t a_sourceHeight, float& a_width, float& a_height)
+		{
+			auto* graphics = globals::game::graphicsState;
+			if (!graphics)
+				return false;
+			const auto& dynamic = graphics->GetRuntimeData();
+			const float widthRatio = dynamic.dynamicResolutionLock ? 1 : dynamic.dynamicResolutionWidthRatio;
+			const float heightRatio = dynamic.dynamicResolutionLock ? 1 : dynamic.dynamicResolutionHeightRatio;
+			if (!std::isfinite(widthRatio) || !std::isfinite(heightRatio) || widthRatio <= 0 || widthRatio > 1 || heightRatio <= 0 || heightRatio > 1)
+				return false;
+			a_width = a_sourceWidth * widthRatio;
+			a_height = a_sourceHeight * heightRatio;
+			return SubmissionPolicy::IsSupportedStereoLayout(a_sourceWidth, a_sourceHeight, a_width, a_height);
+		}
+
 		void CaptureDepthEvidence(DepthEvidence& a_evidence)
 		{
 			a_evidence = {};
@@ -351,24 +380,11 @@ namespace VRDepthCullingTemporal
 			evidence.reducedTarget = reinterpret_cast<std::uintptr_t>(reduced);
 			evidence.sourceWidth = cache.sourceDesc.Width;
 			evidence.sourceHeight = cache.sourceDesc.Height;
-			const auto& dynamic = graphics->GetRuntimeData();
-			const float widthRatio = dynamic.dynamicResolutionLock ? 1 : dynamic.dynamicResolutionWidthRatio;
-			const float heightRatio = dynamic.dynamicResolutionLock ? 1 : dynamic.dynamicResolutionHeightRatio;
-			if (!std::isfinite(widthRatio) || !std::isfinite(heightRatio) || widthRatio <= 0 || widthRatio > 1 || heightRatio <= 0 || heightRatio > 1) {
+			if (!CaptureActiveDepthExtent(evidence.sourceWidth, evidence.sourceHeight, evidence.activeWidth, evidence.activeHeight)) {
 				evidence.reason = Reason::LayoutChanged;
 				return;
 			}
-			evidence.activeWidth = evidence.sourceWidth * widthRatio;
-			evidence.activeHeight = evidence.sourceHeight * heightRatio;
-			if (!SubmissionPolicy::IsSupportedStereoLayout(evidence.sourceWidth, evidence.sourceHeight, evidence.activeWidth, evidence.activeHeight)) {
-				evidence.reason = Reason::LayoutChanged;
-				return;
-			}
-			const auto* tes = globals::game::tes;
-			if (tes) {
-				evidence.scene.interiorCell = reinterpret_cast<std::uintptr_t>(tes->interiorCell);
-				evidence.scene.worldSpace = tes->interiorCell ? 0 : reinterpret_cast<std::uintptr_t>(tes->GetRuntimeData2().worldSpace);
-			}
+			evidence.scene = CaptureScene();
 			if (!SubmissionPolicy::IsValid(evidence.scene)) {
 				evidence.reason = Reason::InvalidView;
 				return;
@@ -476,7 +492,7 @@ namespace VRDepthCullingTemporal
 #endif
 				return;
 			}
-			// Keeping native results requires no submission or depth revalidation.
+			// Native-positive grace is separate; coherent poses need no speculative discovery.
 			if (IsViewCoherent(true, motion.rotationCosine, motion.translationSquared)) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				coherentEarlyExit = true;
@@ -629,6 +645,67 @@ namespace VRDepthCullingTemporal
 #endif
 		}
 
+		void ClearVisibilityHistory()
+		{
+			g_visibilityHistory.Clear();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			g_visibilityHistoryEntries.store(0, std::memory_order_relaxed);
+			g_lastVisibilityHistoryRetained.store(0, std::memory_order_relaxed);
+#endif
+		}
+
+		void RetainNativeVisibility(const SubmissionPolicy::Batch& a_batch, const SubmissionPolicy::Handoff::Consumed& a_consumed,
+			const SubmissionPolicy::ReadbackProjection& a_projection)
+		{
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			CS_PROFILE_CPU_SCOPE("VR::DepthCullingHistory");
+			const VRDepthCullingTelemetryPolicy::WriterScope telemetryWriter(g_telemetryGate);
+#endif
+			auto* camera = RE::Main::WorldRootCamera();
+			const auto& depth = g_producerDepth;
+			const auto cullingEpoch = a_projection.cullingEpoch;
+			const auto policyEpoch = a_projection.policyEpoch;
+			float activeWidth = 0, activeHeight = 0;
+			const auto valid = IsBalancedRecoveryActive(cullingEpoch, policyEpoch) && globals::state && camera &&
+			                   SubmissionPolicy::Match(a_consumed.stamp, a_batch, a_consumed.sequence, cullingEpoch, policyEpoch) == Reason::None &&
+			                   depth.reason == Reason::None && depth.camera == reinterpret_cast<std::uintptr_t>(camera) &&
+			                   depth.scene == CaptureScene() && depth.convention == globals::features::reverseZ.GetConvention() &&
+			                   depth.resourceGeneration == globals::state->GetRenderTargetResourcePublicationGeneration() &&
+			                   depth.resourceGeneration == globals::state->GetCompletedRenderTargetResourcePublicationGeneration() &&
+			                   CaptureActiveDepthExtent(depth.sourceWidth, depth.sourceHeight, activeWidth, activeHeight) &&
+			                   activeWidth == depth.activeWidth && activeHeight == depth.activeHeight &&
+			                   SubmissionPolicy::Matches(a_projection, depth.camera, cullingEpoch, policyEpoch);
+			if (!valid) {
+				ClearVisibilityHistory();
+				return;
+			}
+			MotionDelta motion{};
+			if (!TryCalculateMotionDelta(camera->world, motion) || SubmissionPolicy::IsCameraCut(motion.rotationCosine, motion.translationSquared) ||
+				!SubmissionPolicy::SameProjection(depth.readbackFrusta[0], a_projection.frusta[0]) ||
+				!SubmissionPolicy::SameProjection(depth.readbackFrusta[1], a_projection.frusta[1])) {
+				ClearVisibilityHistory();
+				return;
+			}
+			const NativeVisibilityHistory::Domain domain{ a_batch.culler, depth.camera, depth.sourceView, depth.reducedTarget,
+				depth.scene, depth.resourceGeneration, cullingEpoch, policyEpoch, depth.convention, depth.activeWidth, depth.activeHeight };
+			auto results = std::span{ reinterpret_cast<std::uint32_t*>(a_batch.results), a_batch.count };
+			const auto retained = g_visibilityHistory.Observe(domain, a_consumed.sequence,
+				{ reinterpret_cast<const OBBTransform*>(a_batch.transforms), a_batch.count }, results);
+			if (!IsBalancedRecoveryActive(cullingEpoch, policyEpoch) || ReadBatch(reinterpret_cast<void*>(a_batch.culler)) != a_batch) {
+				ClearVisibilityHistory();
+				return;
+			}
+			[[maybe_unused]] const auto promoted = SubmissionPolicy::ApplyRetention(a_consumed, a_batch, cullingEpoch, policyEpoch, results, retained.indices);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			g_visibilityHistoryEntries.store(static_cast<std::uint32_t>(g_visibilityHistory.Size()), std::memory_order_relaxed);
+			if (telemetryWriter.IsActive()) {
+				g_visibilityHistoryRetained.fetch_add(promoted, std::memory_order_relaxed);
+				g_visibilityHistoryCapacityMisses.fetch_add(retained.capacityMisses, std::memory_order_relaxed);
+				g_lastVisibilityHistoryRetained.store(promoted, std::memory_order_relaxed);
+			}
+#endif
+		}
+
 		struct DepthCullingReadback
 		{
 			static void ReadNative(void* a_culler)
@@ -645,6 +722,7 @@ namespace VRDepthCullingTemporal
 				const auto consumed = g_handoff.Consume();
 				g_depthPrepared = false;
 				if (!g_cullingEnabled.load(std::memory_order_acquire) || g_mode.load(std::memory_order_acquire) != Mode::Balanced) {
+					ClearVisibilityHistory();
 					ReadNative(a_culler);
 					return;
 				}
@@ -653,14 +731,16 @@ namespace VRDepthCullingTemporal
 				const auto projection = CaptureReadbackProjection(cullingEpoch, policyEpoch);
 				const auto batch = ReadBatch(a_culler);
 				ReadNative(a_culler);
-				if (ReadBatch(a_culler) == batch)
+				if (ReadBatch(a_culler) == batch) {
+					RetainNativeVisibility(batch, consumed, projection);
 					RecoverHighRiskObjects(batch, consumed, projection);
+				} else {
+					ClearVisibilityHistory();
 #ifdef DEVBENCH_BRIDGE_ENABLED
-				else {
 					const VRDepthCullingTelemetryPolicy::WriterScope telemetryWriter(g_telemetryGate);
 					RecordSubmission(telemetryWriter, Reason::BatchMismatch, consumed.stamp);
-				}
 #endif
+				}
 				if (IsBalancedRecoveryActive(cullingEpoch, policyEpoch))
 					g_pendingReadbackProjection = projection;
 			}
@@ -774,6 +854,12 @@ namespace VRDepthCullingTemporal
 			return;
 		}
 
+		const bool historyAvailable = g_visibilityHistory.Prepare();
+		if (!historyAvailable)
+			logger::warn("VR: native visibility history allocation failed; ranked recovery remains available");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		g_visibilityHistoryAvailable.store(historyAvailable, std::memory_order_release);
+#endif
 		stl::write_thunk_call<DepthCullingReadback>(readbackCallsite);
 		// Frame annotations may already wrap this call; preserve that current target in the thunk chain.
 		stl::write_thunk_call<DepthCullingRender>(renderCallsite);
@@ -786,6 +872,7 @@ namespace VRDepthCullingTemporal
 
 	void InvalidateDepthGeneration()
 	{
+		ClearVisibilityHistory();
 		g_handoff.Invalidate();
 		g_pendingReadbackProjection = {};
 		g_preparedDepth = {};
@@ -874,6 +961,11 @@ namespace VRDepthCullingTemporal
 			.submissionValidationCalls = g_submissionValidationCalls.load(std::memory_order_relaxed),
 			.depthEvidenceValidationCalls = g_depthEvidenceValidationCalls.load(std::memory_order_relaxed),
 			.maximumPromotedPerReadback = g_maximumPromotedPerReadback.load(std::memory_order_relaxed),
+			.visibilityHistoryAvailable = g_visibilityHistoryAvailable.load(std::memory_order_acquire),
+			.visibilityHistoryEntries = recoveryActive ? g_visibilityHistoryEntries.load(std::memory_order_relaxed) : 0,
+			.visibilityHistoryRetained = g_visibilityHistoryRetained.load(std::memory_order_relaxed),
+			.visibilityHistoryCapacityMisses = g_visibilityHistoryCapacityMisses.load(std::memory_order_relaxed),
+			.lastVisibilityHistoryRetained = recoveryActive ? g_lastVisibilityHistoryRetained.load(std::memory_order_relaxed) : 0,
 			.envelopeMisses = g_envelopeMisses.load(std::memory_order_relaxed),
 			.recoveryAttempts = g_recoveryAttempts.load(std::memory_order_relaxed),
 			.objectsInspected = g_objectsInspected.load(std::memory_order_relaxed),
@@ -923,6 +1015,9 @@ namespace VRDepthCullingTemporal
 		g_submissionValidationCalls.store(0, std::memory_order_relaxed);
 		g_depthEvidenceValidationCalls.store(0, std::memory_order_relaxed);
 		g_maximumPromotedPerReadback.store(0, std::memory_order_relaxed);
+		g_visibilityHistoryRetained.store(0, std::memory_order_relaxed);
+		g_visibilityHistoryCapacityMisses.store(0, std::memory_order_relaxed);
+		g_lastVisibilityHistoryRetained.store(0, std::memory_order_relaxed);
 		g_envelopeMisses.store(0, std::memory_order_relaxed);
 		g_recoveryAttempts.store(0, std::memory_order_relaxed);
 		g_objectsInspected.store(0, std::memory_order_relaxed);

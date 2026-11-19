@@ -1,6 +1,8 @@
 #include "Features/VRDepthCullingSubmissionPolicy.h"
 #include "Features/VRDepthCullingTemporal.h"
 #include "Features/VRDepthCullingTemporalPolicy.h"
+#include "Features/VRDepthCullingVisibilityHistory.h"
+#include <cstdlib>
 #include <iostream>
 #include <random>
 #include <vector>
@@ -12,8 +14,189 @@
 
 namespace
 {
+	thread_local bool rejectAllocations = false;
+	struct RejectAllocations
+	{
+		RejectAllocations() { rejectAllocations = true; }
+		~RejectAllocations() { rejectAllocations = false; }
+	};
+}
+
+void* operator new(std::size_t size)
+{
+	if (!rejectAllocations)
+		if (auto* allocation = std::malloc(size ? size : 1))
+			return allocation;
+	throw std::bad_alloc{};
+}
+void operator delete(void* allocation) noexcept { std::free(allocation); }
+void operator delete(void* allocation, std::size_t) noexcept { std::free(allocation); }
+
+namespace
+{
 	using namespace VRDepthCullingTemporalPolicy;
 	using VRDepthCullingTemporal::Mode;
+
+	NativeVisibilityHistory::Domain HistoryDomain()
+	{
+		return { 1, 2, 3, 4, { 5, 0 }, 6, 7, 8, Depth::Convention::Reversed, 4936, 2740 };
+	}
+
+	OBBTransform HistoryBound(unsigned index)
+	{
+		OBBTransform bound{};
+		bound.entry[0][0] = bound.entry[1][1] = bound.entry[2][2] = bound.entry[3][3] = 1;
+		bound.entry[0][3] = static_cast<float>(index + 1);
+		return bound;
+	}
+
+	bool CoversNativeVisibilityGrace()
+	{
+		NativeVisibilityHistory history;
+		if (!history.Prepare())
+			return false;
+		const auto domain = HistoryDomain();
+		const std::array bounds{ HistoryBound(0), HistoryBound(1), HistoryBound(2) };
+		const std::array<std::uint32_t, 3> visible{ 9, 0, 0 }, occluded{};
+		if (history.Observe(domain, 1, bounds, visible).indices.any() || history.Size() != 1)
+			return false;
+		const RejectAllocations noAllocations;
+		for (std::uint64_t age = 1; age <= NativeVisibilityHistory::kGraceReadbacks; ++age) {
+			const auto retained = history.Observe(domain, age + 1, bounds, occluded);
+			if (retained.indices.count() != 1 || !retained.indices[0] || retained.capacityMisses)
+				return false;
+		}
+		const auto expired = history.Observe(domain, NativeVisibilityHistory::kGraceReadbacks + 2, bounds, occluded);
+		// CPU promotions never become observations, so repeated retention cannot renew native visibility.
+		return expired.indices.none() && history.Size() == 0 && visible[0] == 9;
+	}
+
+	bool CoversHistoryIdentityAndLifetime()
+	{
+		NativeVisibilityHistory history;
+		if (!history.Prepare())
+			return false;
+		auto domain = HistoryDomain();
+		std::array bounds{ HistoryBound(0), HistoryBound(1), HistoryBound(2) };
+		const std::array<std::uint32_t, 3> visible{ 1, 0, 0 }, occluded{};
+		history.Observe(domain, 1, bounds, visible);
+		std::swap(bounds[0], bounds[2]);
+		if (const auto retained = history.Observe(domain, 2, bounds, occluded); retained.indices.count() != 1 || !retained.indices[2])
+			return false;
+		if (history.Observe(domain, 4, bounds, occluded).indices.any())
+			return false;
+		for (unsigned field = 0; field < 12; ++field) {
+			const auto original = HistoryDomain();
+			history.Observe(original, 1, bounds, visible);
+			auto changed = original;
+			switch (field) {
+			case 0:
+				++changed.culler;
+				break;
+			case 1:
+				++changed.camera;
+				break;
+			case 2:
+				++changed.sourceView;
+				break;
+			case 3:
+				++changed.reducedTarget;
+				break;
+			case 4:
+				++changed.scene.interiorCell;
+				break;
+			case 5:
+				changed.scene = { 0, 50 };
+				break;
+			case 6:
+				++changed.resourceGeneration;
+				break;
+			case 7:
+				++changed.cullingEpoch;
+				break;
+			case 8:
+				changed.policyEpoch += 2;
+				break;
+			case 9:
+				changed.convention = Depth::Convention::Standard;
+				break;
+			case 10:
+				++changed.activeWidth;
+				break;
+			case 11:
+				++changed.activeHeight;
+				break;
+			}
+			if (history.Observe(changed, 2, bounds, occluded).indices.any())
+				return false;
+		}
+		for (unsigned field = 0; field < 16; ++field) {
+			history.Observe(domain, 1, bounds, visible);
+			auto changed = bounds;
+			changed[0].entry[field / 4][field % 4] += 0.25f;
+			if (history.Observe(domain, 2, changed, occluded).indices.any())
+				return false;
+		}
+		history.Observe(domain, UINT64_MAX - 1, bounds, visible);
+		return history.Observe(domain, UINT64_MAX, bounds, occluded).indices[0] &&
+		       history.Observe(domain, 0, bounds, occluded).indices[0];
+	}
+
+	bool CoversHistoryCapacityAndInvalidData()
+	{
+		NativeVisibilityHistory history;
+		{
+			const RejectAllocations noAllocations;
+			if (history.Prepare())
+				return false;
+		}
+		if (!history.Prepare())
+			return false;
+		auto domain = HistoryDomain();
+		std::vector<OBBTransform> bounds(kMaximumObjects);
+		std::vector<std::uint32_t> native(kMaximumObjects, 1);
+		for (unsigned i = 0; i < bounds.size(); ++i) bounds[i] = HistoryBound(i);
+		const RejectAllocations noAllocations;
+		if (history.Observe(domain, 1, bounds, native).capacityMisses || history.Size() != kMaximumObjects)
+			return false;
+		for (auto& bound : bounds) bound.entry[0][3] += static_cast<float>(kMaximumObjects);
+		if (history.Observe(domain, 2, bounds, native).capacityMisses || history.Size() != kMaximumObjects)
+			return false;
+		std::fill(native.begin(), native.end(), 0);
+		if (history.Observe(domain, 3, bounds, native).indices.count() != kMaximumObjects)
+			return false;
+		if (history.Observe(domain, 4, bounds, std::span{ native }.first(10)).indices.any() || history.Size())
+			return false;
+		native[0] = 1;
+		for (unsigned field = 0; field < 16; ++field) {
+			auto invalid = HistoryBound(0);
+			invalid.entry[field / 4][field % 4] = std::numeric_limits<float>::quiet_NaN();
+			if (history.Observe(domain, field + 1, { &invalid, 1 }, { native.data(), 1 }).indices.any() || history.Size())
+				return false;
+		}
+		domain.policyEpoch |= 1;
+		return history.Observe(domain, 20, bounds, native).indices.none() && !history.Size();
+	}
+
+	bool CoversGuardedRetention()
+	{
+		using namespace VRDepthCullingSubmissionPolicy;
+		std::array<std::uint32_t, 5> results{ 0xDEADBEEF, 0, 9, 0, 0xDEADBEEF };
+		const auto original = results;
+		const Batch batch{ 1, 2, reinterpret_cast<std::uintptr_t>(&results[1]), 3, 0 };
+		Handoff handoff;
+		handoff.Publish({ batch, 0, 4, 6, 10, true });
+		const auto consumed = handoff.Consume();
+		std::bitset<kMaximumObjects> retained;
+		retained.set();
+		if (ApplyRetention(consumed, batch, 5, 6, { &results[1], 3 }, retained) ||
+			ApplyRetention(consumed, batch, 4, 8, { &results[1], 3 }, retained) ||
+			ApplyRetention(consumed, batch, 4, 6, { &results[2], 3 }, retained) ||
+			ApplyRetention(consumed, batch, 4, 6, { &results[1], 2 }, retained) || results != original)
+			return false;
+		return ApplyRetention(consumed, batch, 4, 6, { &results[1], 3 }, retained) == 2 &&
+		       results == std::array<std::uint32_t, 5>{ 0xDEADBEEF, 1, 9, 1, 0xDEADBEEF };
+	}
 
 	bool CoversTemporalValidityBoundary()
 	{
@@ -446,11 +629,16 @@ namespace
 	}
 
 	static_assert(CoversMutuallyExclusiveModes());
+	static_assert(kBalancedPromotionBudget == 64);
 }
 
 int main()
 {
 	const bool passed = CoversTemporalValidityBoundary() &&
+	                    CoversNativeVisibilityGrace() &&
+	                    CoversHistoryIdentityAndLifetime() &&
+	                    CoversHistoryCapacityAndInvalidData() &&
+	                    CoversGuardedRetention() &&
 	                    CoversOBBBoundingSphere() &&
 	                    CoversMotionExpansion() &&
 	                    CoversLazyExpansion() &&

@@ -5,6 +5,7 @@ set(_menu_frame_test_headers
     "${_menu_frame_test_dir}/menu_welcome_admission_under_test.h"
     "${_menu_frame_test_dir}/menu_ui_scale_under_test.h"
     "${_menu_frame_test_dir}/menu_present_under_test.h"
+    "${_menu_frame_test_dir}/menu_present_failure_under_test.h"
     "${_menu_frame_test_dir}/menu_status_layout_under_test.h"
     "${_menu_frame_test_dir}/menu_status_overlap_under_test.h"
     "${_menu_frame_test_dir}/menu_recovery_under_test.h"
@@ -21,6 +22,15 @@ set(_menu_frame_test_headers
     "${_menu_frame_test_dir}/menu_water_status_stack_under_test.h"
     "${_menu_frame_test_dir}/menu_shader_status_stack_under_test.h"
     "${_menu_frame_test_dir}/menu_desktop_status_under_test.h"
+    "${_menu_frame_test_dir}/menu_font_size_under_test.h"
+    "${_menu_frame_test_dir}/menu_font_constants_under_test.h"
+    "${_menu_frame_test_dir}/menu_canvas_constants_under_test.h"
+    "${_menu_frame_test_dir}/menu_canvas_size_under_test.h"
+    "${_menu_frame_test_dir}/menu_overlay_display_under_test.h"
+    "${_menu_frame_test_dir}/menu_frame_initialization_under_test.h"
+    "${_menu_frame_test_dir}/menu_shader_failures_under_test.h"
+    "${_menu_frame_test_dir}/menu_shader_status_under_test.h"
+    "${_menu_frame_test_dir}/menu_renderdoc_warning_under_test.h"
 )
 add_custom_command(
     OUTPUT ${_menu_frame_test_headers}
@@ -30,6 +40,10 @@ add_custom_command(
         "${PROJECT_SOURCE_DIR}/tests/extract_menu_frame_stability.cmake"
     DEPENDS
         src/Menu/ThemeManager.cpp
+        src/Menu/ThemeManager.h
+        src/Features/VR.cpp
+        src/Features/VR.h
+        src/Features/RenderDoc.cpp
         src/Menu/HomePageRenderer.cpp
         src/Utils/UI.h
         src/Hooks.cpp
@@ -48,11 +62,13 @@ target_link_libraries(menu_frame_stability_test PRIVATE imgui::imgui)
 add_controller_test(menu_present_test MenuPresent tests/menu_present_test.cpp)
 add_controller_test(menu_layout_recovery_test MenuLayoutRecovery tests/menu_layout_recovery_test.cpp)
 add_controller_test(menu_session_stability_test MenuSessionStability tests/menu_session_stability_test.cpp)
+add_controller_test(menu_desktop_fallback_test MenuDesktopFallback tests/menu_desktop_fallback_test.cpp)
+target_link_libraries(menu_desktop_fallback_test PRIVATE imgui::imgui fmt::fmt)
 target_link_libraries(menu_layout_recovery_test PRIVATE imgui::imgui)
 foreach(
     _menu_frame_test_target
     IN
-    ITEMS menu_frame_stability_test menu_present_test menu_layout_recovery_test menu_session_stability_test
+    ITEMS menu_frame_stability_test menu_present_test menu_layout_recovery_test menu_session_stability_test menu_desktop_fallback_test
 )
     add_dependencies(${_menu_frame_test_target} menu_frame_test_sources)
     target_include_directories(

@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <ctime>
 #include <filesystem>
 #include <format>
@@ -18,6 +19,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include <dxgi.h>
 #include <imgui_impl_dx11.h>
 #include <imgui_internal.h>
 
@@ -869,29 +871,27 @@ float ThemeManager::ResolveFontSize(const Menu& menu)
 			return std::clamp(configured, Constants::MIN_FONT_SIZE, Constants::MAX_FONT_SIZE);
 	}
 
-	// Compute dynamic size from screen resolution
-	float dynamicSize;
-	if (globals::game::isVR) {
-		uint32_t canvasW = 0;
-		uint32_t canvasH = 0;
-		if (globals::features::vr.GetMenuCanvasSize(canvasW, canvasH)) {
-			// The HMD canvas can be intentionally taller than the logical menu layout to
-			// improve in-headset framing. Keep font sizing tied to the base menu aspect
-			// so typography does not become vertically oversized in HMD mode.
-			const float logicalMenuHeight = std::min(
-				static_cast<float>(canvasH),
-				static_cast<float>(canvasW) * VR::Config::kHMDMenuAspect);
-			dynamicSize = logicalMenuHeight * Constants::DEFAULT_FONT_RATIO;
-		} else if (globals::state && globals::state->screenSize.y > 0) {
-			dynamicSize = globals::state->screenSize.y * Constants::DEFAULT_FONT_RATIO;
-		} else {
-			dynamicSize = Constants::DEFAULT_FONT_SIZE;
-		}
-	} else if (globals::state && globals::state->screenSize.y > 0) {
-		dynamicSize = Util::kBaselineFontSize * (globals::state->screenSize.y / Constants::DEFAULT_SCREEN_HEIGHT);
+	float dynamicSize = Util::kBaselineFontSize;
+	uint32_t canvasW = 0;
+	uint32_t canvasH = 0;
+	if (globals::game::isVR && globals::features::vr.GetMenuCanvasSize(canvasW, canvasH)) {
+		// The backing texture is taller than the logical HMD menu layout.
+		const float logicalMenuHeight = std::min(
+			static_cast<float>(canvasH),
+			static_cast<float>(canvasW) * VR::Config::kHMDMenuAspect);
+		dynamicSize = logicalMenuHeight * Constants::DEFAULT_FONT_RATIO;
 	} else {
-		logger::warn("ThemeManager::ResolveFontSize() - Falling back to the desktop baseline due to missing screen height.");
-		dynamicSize = Util::kBaselineFontSize;
+		float desktopHeight = 0.0f;
+		if (globals::game::isVR) {
+			// VR eye dimensions can differ from the desktop window even without an HMD.
+			DXGI_SWAP_CHAIN_DESC desc{};
+			if (globals::d3d::swapChain && SUCCEEDED(globals::d3d::swapChain->GetDesc(&desc)))
+				desktopHeight = static_cast<float>(desc.BufferDesc.Height);
+		} else if (globals::state) {
+			desktopHeight = globals::state->screenSize.y;
+		}
+		if (std::isfinite(desktopHeight) && desktopHeight > 0.0f)
+			dynamicSize = Util::kBaselineFontSize * (desktopHeight / Constants::DEFAULT_SCREEN_HEIGHT);
 	}
 	return std::clamp(dynamicSize, Constants::MIN_FONT_SIZE, Constants::MAX_FONT_SIZE);
 }

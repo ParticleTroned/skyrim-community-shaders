@@ -737,9 +737,9 @@ void OverlayRenderer::InitializeImGuiFrame(Menu& menu, bool acceptsInput)
 	// ImGui_ImplWin32_NewFrame() restores DisplaySize from the desktop window.
 	// Re-apply the active VR overlay canvas so input and rendering stay 1:1 with the menu texture.
 	const bool usingVROverlayCanvas = ApplyVROverlayDisplaySize();
-	if (globals::d3d::swapChain) {
-		DXGI_SWAP_CHAIN_DESC desc{};
-		globals::d3d::swapChain->GetDesc(&desc);
+	DXGI_SWAP_CHAIN_DESC desc{};
+	if (globals::d3d::swapChain && SUCCEEDED(globals::d3d::swapChain->GetDesc(&desc)) &&
+		desc.BufferDesc.Width > 0 && desc.BufferDesc.Height > 0) {
 		if (usingVROverlayCanvas) {
 			// The desktop mirror uses an aspect-correct presentation of the VR canvas,
 			// anchored to the desktop origin. Mirror mouse input through the same transform.
@@ -782,58 +782,70 @@ void OverlayRenderer::InitializeImGuiFrame(Menu& menu, bool acceptsInput)
 void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const char*(std::vector<InputCombo>)>& keyIdToString)
 {
 	auto shaderCache = globals::shaderCache;
-	auto failed = shaderCache->GetCurrentFailedCount();
-	auto hide = shaderCache->IsHideErrors();
-
-	const float scale = Util::GetUIScale();
-	float pos = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
-	const bool isVR = REL::Module::IsVR();
-	if (isVR) {
-		pos = GetDefaultVRLeftAnchorX(GetDefaultVRSettingsWindowSize(false).x);
-	}
-
-	const uint64_t totalShaders = shaderCache->GetTotalTasks();
-	const uint64_t completedShaders = shaderCache->GetCompletedTasks();
-	const uint64_t failedTasks = shaderCache->GetFailedTasks();
-	const uint64_t processedShaders = std::min(completedShaders + failedTasks, totalShaders);
-	const uint64_t diskCacheHits = std::min(shaderCache->GetDiskHitTasks(), completedShaders);
-	const bool hasSourceCompilation = shaderCache->GetSourceCompileTasks() != 0 || failedTasks != 0;
-
-	auto state = globals::state;
-	auto* menu = Menu::GetSingleton();
-	auto& themeSettings = menu->GetTheme();
+	const auto failed = shaderCache->GetCurrentFailedCount();
+	const bool showFailures = failed != 0 && !shaderCache->IsHideErrors();
+	const bool isCompiling = shaderCache->IsCompiling();
 	auto* renderDoc = RenderDoc::GetSingleton();
-	bool renderDocAvailable = renderDoc->IsAvailable();
-	const auto renderDocInformation = renderDoc->GetOverlayWarningMessage();
-	const bool backgroundCompilation = shaderCache->backgroundCompilation.load(std::memory_order_relaxed);
+	const bool renderDocAvailable = renderDoc->IsAvailable();
+	if (!isCompiling && !showFailures && !renderDocAvailable)
+		return;
 
-	const char* progressAction = "Preparing Shaders";
-	if (hasSourceCompilation) {
-		progressAction = diskCacheHits == 0 ? "Compiling Shaders" : "Loading / Compiling Shaders";
-	} else if (processedShaders != 0) {
-		progressAction = "Loading Shader Cache";
-	}
-	auto progressTitle = fmt::format("{}{}: {}",
-		backgroundCompilation ? "Background " : "",
-		progressAction,
-		shaderCache->GetShaderStatsString(!state->IsDeveloperMode()).c_str());
-	auto percent = totalShaders > 0 ? static_cast<float>(processedShaders) / static_cast<float>(totalShaders) : 0.0f;
-	auto progressOverlay = fmt::format("{}/{} ({:2.1f}%)", processedShaders, totalShaders, 100 * percent);
+	const auto* viewport = ImGui::GetMainViewport();
+	if (!viewport || !std::isfinite(viewport->WorkPos.x) || !std::isfinite(viewport->WorkPos.y) ||
+		!std::isfinite(viewport->WorkSize.x) || !std::isfinite(viewport->WorkSize.y) ||
+		viewport->WorkSize.x <= 0.0f || viewport->WorkSize.y <= 0.0f)
+		return;
 
-	if (shaderCache->IsCompiling()) {
+	float offset = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * Util::GetUIScale();
+	uint32_t canvasW = 0;
+	uint32_t canvasH = 0;
+	if (globals::features::vr.GetMenuCanvasSize(canvasW, canvasH))
+		offset = GetDefaultVRLeftAnchorX(GetDefaultVRSettingsWindowSize(false).x) - viewport->WorkPos.x;
+	const auto& style = ImGui::GetStyle();
+	const ImVec2 position(
+		viewport->WorkPos.x + std::clamp(offset, 0.0f, std::max(0.0f, viewport->WorkSize.x - style.WindowMinSize.x)),
+		viewport->WorkPos.y + std::clamp(offset, 0.0f, std::max(0.0f, viewport->WorkSize.y - style.WindowMinSize.y)));
+	const float maximumWidth = std::max(1.0f, viewport->WorkPos.x + viewport->WorkSize.x - position.x - style.DisplaySafeAreaPadding.x);
+	ImGui::SetNextWindowPos(position);
+	ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), ImVec2(maximumWidth, FLT_MAX));
+	const bool contentsVisible = ImGui::Begin("ShaderCompilationInfo", nullptr, kShaderStatusWindowFlags);
+	const auto endWindow = SKSE::stl::scope_exit([] { ImGui::End(); });
+	if (!contentsVisible)
+		return;
+	ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + std::max(1.0f, maximumWidth - ImGui::GetStyle().WindowPadding.x * 2.0f));
+	const auto restoreWrap = SKSE::stl::scope_exit([] { ImGui::PopTextWrapPos(); });
+
+	auto* menu = Menu::GetSingleton();
+	const auto& themeSettings = menu->GetTheme();
+	if (isCompiling) {
+		auto state = globals::state;
+		const uint64_t totalShaders = shaderCache->GetTotalTasks();
+		const uint64_t completedShaders = shaderCache->GetCompletedTasks();
+		const uint64_t failedTasks = shaderCache->GetFailedTasks();
+		const uint64_t processedShaders = std::min(completedShaders + failedTasks, totalShaders);
+		const uint64_t diskCacheHits = std::min(shaderCache->GetDiskHitTasks(), completedShaders);
+		const bool hasSourceCompilation = shaderCache->GetSourceCompileTasks() != 0 || failedTasks != 0;
+		const bool backgroundCompilation = shaderCache->backgroundCompilation.load(std::memory_order_relaxed);
+		const char* progressAction = "Preparing Shaders";
+		if (hasSourceCompilation) {
+			progressAction = diskCacheHits == 0 ? "Compiling Shaders" : "Loading / Compiling Shaders";
+		} else if (processedShaders != 0) {
+			progressAction = "Loading Shader Cache";
+		}
+		const auto progressTitle = fmt::format("{}{}: {}",
+			backgroundCompilation ? "Background " : "",
+			progressAction,
+			shaderCache->GetShaderStatsString(!state->IsDeveloperMode()).c_str());
+		const auto percent = totalShaders > 0 ? static_cast<float>(processedShaders) / static_cast<float>(totalShaders) : 0.0f;
+		const auto progressOverlay = fmt::format("{}/{} ({:2.1f}%)", processedShaders, totalShaders, 100 * percent);
 		const auto rollback = shaderCache->GetRollbackFlags();
 		const bool hasFeatureSetRevertPending = rollback.featureSetRevertPending;
 		const bool hasFeatureSetChanges = rollback.featureSetChanged;
 		const bool isDiskCacheHeld = rollback.diskCacheHeld;
 		const size_t loadFailureCount = FeatureIssues::CountLoadFailures();
 
-		ImGui::SetNextWindowPos(ImVec2(pos, pos));
-		if (!ImGui::Begin("ShaderCompilationInfo", nullptr, kShaderStatusWindowFlags)) {
-			ImGui::End();
-			return;
-		}
 		ImGui::TextUnformatted(progressTitle.c_str());
-		ImGui::ProgressBar(percent, ImVec2(0.0f, 0.0f), progressOverlay.c_str());
+		ImGui::ProgressBar(percent, ImVec2(-FLT_MIN, 0.0f), progressOverlay.c_str());
 		if (hasFeatureSetRevertPending) {
 			ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s",
 				"Previous cache restored.\n"
@@ -891,41 +903,12 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 			ImGui::TextUnformatted("Background mode compiles shaders as they are requested.");
 			ImGui::TextUnformatted("WARNING: Uncompiled shaders will have visual errors or cause stuttering when loading.");
 		}
-		if (failed && !hide) {
-			DrawShaderCompilationFailures(failed, themeSettings);
-		}
-
-		if (renderDocAvailable)
-			ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s", renderDocInformation.c_str());
-
-		ImGui::End();
-		return;
 	}
 
-	if (failed) {
-		if (!hide) {
-			ImGui::SetNextWindowPos(ImVec2(pos, pos));
-			if (!ImGui::Begin("ShaderCompilationInfo", nullptr, kShaderStatusWindowFlags)) {
-				ImGui::End();
-				return;
-			}
-
-			DrawShaderCompilationFailures(failed, themeSettings);
-
-			if (renderDocAvailable)
-				ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s", renderDocInformation.c_str());
-
-			ImGui::End();
-		}
-	} else if (renderDocAvailable) {
-		ImGui::SetNextWindowPos(ImVec2(pos, pos));
-		if (!ImGui::Begin("ShaderCompilationInfo", nullptr, kShaderStatusWindowFlags)) {
-			ImGui::End();
-			return;
-		}
-		ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s", renderDocInformation.c_str());
-		ImGui::End();
-	}
+	if (showFailures)
+		DrawShaderCompilationFailures(failed, themeSettings);
+	if (renderDocAvailable)
+		ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s", renderDoc->GetOverlayWarningMessage().c_str());
 }
 
 void OverlayRenderer::RenderFeatureOverlays(const std::vector<OverlayFeature*>& overlays)

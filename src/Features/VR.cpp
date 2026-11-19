@@ -3347,8 +3347,10 @@ bool VR::GetMenuCanvasSize(uint32_t& a_width, uint32_t& a_height) const
 {
 	a_width = 0;
 	a_height = 0;
+	if (!globals::game::isVR || !IsOpenVRCompatible())
+		return false;
 	const auto attachMode = GetEffectiveMenuAttachMode();
-	if (!globals::game::isVR || attachMode == Settings::OverlayAttachMode::None)
+	if (attachMode == Settings::OverlayAttachMode::None)
 		return false;
 
 	const bool controllerCanvas = attachMode == Settings::OverlayAttachMode::ControllerOnly;

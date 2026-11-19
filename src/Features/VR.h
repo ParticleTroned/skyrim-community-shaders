@@ -519,6 +519,7 @@ public:
 
 	void EnsureOverlayInitialized();
 	void DestroyOverlay();
+	/** @brief Resolves the active VR canvas, clearing dimensions for desktop fallback. */
 	bool GetMenuCanvasSize(uint32_t& a_width, uint32_t& a_height) const;
 	void RecreateOverlayTexturesIfNeeded(bool needsControllerTexture = true);
 	void SubmitOverlayFrame();

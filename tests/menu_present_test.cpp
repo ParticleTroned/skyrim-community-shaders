@@ -199,12 +199,18 @@ void TracyD3D11Collect(int)
 }
 void LogFrameIntervalSpikeIfNeeded(uint64_t, uint64_t, uint64_t, uint64_t, HRESULT) { ++effects; }
 
+struct PresentFailureLogger
+{
+#include "menu_present_failure_under_test.h"
+};
+
 struct IDXGISwapChain_Present
 {
 	static void LogFirstPresentFailure(HRESULT result)
 	{
 		++presentFailures;
 		loggedFailure = result;
+		PresentFailureLogger::LogFirstPresentFailure(result);
 	}
 
 #include "menu_present_under_test.h"

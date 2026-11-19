@@ -8,6 +8,7 @@
 #include <bit>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 
@@ -19,6 +20,14 @@ namespace
 	using ComPtr = Microsoft::WRL::ComPtr<T>;
 	using Pixel = std::array<float, 4>;
 	using Samples = std::array<Pixel, 3072>;
+
+	struct SurfaceCase
+	{
+		const char* name;
+		float wetness, rain, filmRain, puddles, shore, waterHeight;
+		bool preserve = true, drops = false, enabled = true;
+		float filmPercent = 70;
+	};
 
 	void Require(bool value, const char* message)
 	{
@@ -70,12 +79,20 @@ namespace
 		ComPtr<ID3D11ShaderReflection> reflection;
 		ComPtr<ID3D11Buffer> output, staging;
 		ComPtr<ID3D11UnorderedAccessView> uav;
+		ComPtr<ID3D11Texture2D> precipitation;
+		ComPtr<ID3D11ShaderResourceView> precipitationView;
+		ComPtr<ID3D11SamplerState> precipitationSampler;
+		UINT precipitationSlot = 0, samplerSlot = 0;
 		std::unique_ptr<ConstantBuffer> feature, inputs;
 
-		Fixture(ID3D11Device* device, bool vr, bool pbr, const char* entry = "main", bool reference = false, const char* material = nullptr)
+		Fixture(ID3D11Device* device, bool vr, bool pbr, const char* entry = "main", bool reference = false, const char* material = nullptr,
+			const std::filesystem::path& sourceRoot = ".")
 		{
-			PackageIncludes includes("package/Shaders", "features/Wetterness/Shaders");
+			const bool surfaceChannels = std::strcmp(entry, "CheckSurfaceChannels") == 0;
+			PackageIncludes includes(sourceRoot / "package/Shaders", sourceRoot / "features/Wetterness/Shaders", sourceRoot / "features/Skylighting/Shaders");
 			std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "WETTERNESS", "1" } };
+			if (surfaceChannels)
+				defines.push_back({ "SKYLIGHTING", "1" });
 			if (reference)
 				defines.push_back({ "WETTERNESS_REFERENCE", "1" });
 			if (vr)
@@ -98,9 +115,9 @@ namespace
 			Check(device->CreateComputeShader(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), nullptr, shader.GetAddressOf()));
 			Util::SetResourceName(shader.Get(), "WetternessTest::CS");
 			Check(D3DReflect(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
-			if (std::strcmp(entry, "main") == 0 || std::strcmp(entry, "CheckRainFilmSurface") == 0) {
+			if (std::strcmp(entry, "main") == 0 || std::strcmp(entry, "CheckRainFilmSurface") == 0 || surfaceChannels) {
 				feature = std::make_unique<ConstantBuffer>(device, reflection.Get(), "SharedData::FeatureData");
-				if (std::strcmp(entry, "main") == 0)
+				if (std::strcmp(entry, "main") == 0 || surfaceChannels)
 					inputs = std::make_unique<ConstantBuffer>(device, reflection.Get(), "TestInputs");
 				auto* wetnessType = reflection->GetConstantBufferByName("SharedData::FeatureData")->GetVariableByName("SharedData::wetternessSettings")->GetType();
 				D3D11_SHADER_TYPE_DESC night{};
@@ -121,6 +138,29 @@ namespace
 			desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 			Check(device->CreateBuffer(&desc, nullptr, staging.GetAddressOf()));
 			Util::SetResourceName(staging.Get(), "WetternessTest::Readback");
+			if (surfaceChannels) {
+				D3D11_TEXTURE2D_DESC texture{};
+				texture.Width = texture.Height = texture.MipLevels = texture.ArraySize = texture.SampleDesc.Count = 1;
+				texture.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+				texture.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+				Check(device->CreateTexture2D(&texture, nullptr, precipitation.GetAddressOf()));
+				Util::SetResourceName(precipitation.Get(), "WetternessTest::Precipitation");
+				Check(device->CreateShaderResourceView(precipitation.Get(), nullptr, precipitationView.GetAddressOf()));
+				Util::SetResourceName(precipitationView.Get(), "WetternessTest::Precipitation SRV");
+				D3D11_SAMPLER_DESC sampler{};
+				sampler.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+				sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+				sampler.ComparisonFunc = D3D11_COMPARISON_NEVER;
+				sampler.MaxAnisotropy = 1;
+				sampler.MaxLOD = D3D11_FLOAT32_MAX;
+				Check(device->CreateSamplerState(&sampler, precipitationSampler.GetAddressOf()));
+				Util::SetResourceName(precipitationSampler.Get(), "WetternessTest::Precipitation Sampler");
+				D3D11_SHADER_INPUT_BIND_DESC binding{};
+				Check(reflection->GetResourceBindingDescByName("Wetterness::TexPrecipOcclusion", &binding));
+				precipitationSlot = binding.BindPoint;
+				Check(reflection->GetResourceBindingDescByName("SampColorSampler", &binding));
+				samplerSlot = binding.BindPoint;
+			}
 		}
 
 		Samples Run(ID3D11DeviceContext* context, float night, float luminance, float lightScale, unsigned mode)
@@ -139,6 +179,12 @@ namespace
 
 		Samples RunSurface(ID3D11DeviceContext* context, bool preserve, float percent, float reduction = 2.5f,
 			float wetness = 1.0f, float rain = 1.0f, float puddles = 0.0f, float shore = 0.0f)
+		{
+			SetSurface(preserve, percent, reduction, wetness, rain, puddles, shore);
+			return Dispatch(context);
+		}
+
+		void SetSurface(bool preserve, float percent, float reduction, float wetness, float rain, float puddles, float shore)
 		{
 			auto set = [&](const char* name, auto value) { feature->SetMember("SharedData::wetternessSettings", name, value); };
 			set("EnableWetnessEffects", 1u);
@@ -163,10 +209,42 @@ namespace
 			set("PostRainPuddleWaterStrength", 2.5f);
 			set("MaxShoreWetness", shore);
 			set("ShoreRange", 2000);
-			return Dispatch(context);
 		}
 
-		Samples Dispatch(ID3D11DeviceContext* context)
+		Samples RunChannels(ID3D11DeviceContext* context, const SurfaceCase& sample, float rainDarkening, float shoreDarkening, bool blocked)
+		{
+			SetSurface(sample.preserve, sample.filmPercent, 2.5f, sample.wetness, sample.rain, sample.puddles, sample.shore);
+			auto set = [&](const char* name, auto value) { feature->SetMember("SharedData::wetternessSettings", name, value); };
+			set("EnableWetnessEffects", unsigned(sample.enabled));
+			set("WetDarkeningStrength", rainDarkening);
+			set("ShorePersistentDarkeningStrength", shoreDarkening);
+			set("StoneDryingMultiplier", 3.0f);
+			set("DirtDryingMultiplier", 24.0f);
+			set("GrassDryingMultiplier", 12.0f);
+			set("PackedPostRainControl", (sample.preserve ? 1u << 30 : 0u) | (unsigned(sample.filmRain * 1023) << 20));
+			set("PackedRainReflectionControl", (1u << 30) | (1u << 31));
+			std::array<float, 16> projection{};
+			projection[11] = 0.5f;
+			projection[15] = 1.0f;
+			set("OcclusionViewProj", projection);
+			set("EnableRaindropFx", unsigned(sample.drops));
+			set("RaindropFxRange", 1000.0f);
+			set("EnableRipples", 1u);
+			set("RaindropChance", 1.0f);
+			set("RaindropGridSizeRcp", 0.05f);
+			set("RaindropIntervalRcp", 1.0f);
+			set("RippleLifetimeRcp", 1.0f);
+			set("RippleRadius", 0.6f);
+			set("RippleBreadth", 0.4f);
+			set("RippleStrength", 2.0f);
+			set("Time", 5.25f);
+			inputs->SetVariable("surfaceWaterHeight", sample.waterHeight);
+			const Pixel depth{ blocked ? 0.25f : 0.75f, 0, 0, 0 };
+			context->UpdateSubresource(precipitation.Get(), 0, nullptr, depth.data(), sizeof(Pixel), 0);
+			return Dispatch(context, 8);
+		}
+
+		Samples Dispatch(ID3D11DeviceContext* context, UINT groups = 16)
 		{
 			context->ClearState();
 			if (feature) {
@@ -174,10 +252,16 @@ namespace
 				if (inputs)
 					inputs->Bind(context);
 			}
+			if (precipitationView) {
+				ID3D11ShaderResourceView* view = precipitationView.Get();
+				ID3D11SamplerState* sampler = precipitationSampler.Get();
+				context->CSSetShaderResources(precipitationSlot, 1, &view);
+				context->CSSetSamplers(samplerSlot, 1, &sampler);
+			}
 			ID3D11UnorderedAccessView* target = uav.Get();
 			context->CSSetUnorderedAccessViews(0, 1, &target, nullptr);
 			context->CSSetShader(shader.Get(), nullptr, 0);
-			context->Dispatch(16, 1, 1);
+			context->Dispatch(groups, 1, 1);
 			context->ClearState();
 			context->CopyResource(staging.Get(), output.Get());
 			D3D11_MAPPED_SUBRESOURCE mapped{};
@@ -188,6 +272,100 @@ namespace
 			return samples;
 		}
 	};
+
+	void CheckSurfaceChannels(ID3D11Device* device, ID3D11DeviceContext* context, bool vr, bool pbr,
+		const char* material, const std::filesystem::path& baselineRoot)
+	{
+		Fixture fixture(device, vr, pbr, "CheckSurfaceChannels", false, material);
+		std::unique_ptr<Fixture> baseline;
+		if (!baselineRoot.empty())
+			baseline = std::make_unique<Fixture>(device, vr, pbr, "CheckSurfaceChannels", false, material, baselineRoot);
+		const std::array cases{
+			SurfaceCase{ "rain", 1, 1, 1, 0, 0, 0, false },
+			SurfaceCase{ "weak rain", 0.6f, 0.03f, 0, 0, 0, 0, true, true },
+			SurfaceCase{ "drying", 0.6f, 0, 0, 0, 0, 0 },
+			SurfaceCase{ "drying puddles", 0.6f, 0, 0, 0.45f, 0, 0 },
+			SurfaceCase{ "wet shore", 1, 1, 1, 0, 1, 98 },
+			SurfaceCase{ "dry shore", 0, 0, 0, 0, 1, 98, true, false, false },
+			SurfaceCase{ "underwater", 1, 1, 1, 1, 1, 101 },
+			SurfaceCase{ "dry", 0, 0, 0, 0, 0, 0 },
+			SurfaceCase{ "zero film", 1, 1, 1, 0, 0, 0, false, false, true, 0 }
+		};
+		const std::array<std::array<float, 3>, 4> colors{ { { 0.6f, 0.6f, 0.6f }, { 0.45f, 0.15f, 0.07f }, { 0.1f, 0.45f, 0.08f }, { 0.72f, 0.62f, 0.42f } } };
+		bool rainDarkened = false, shoreDarkened = false, openRainBeads = false, puddleExposureChanged = false;
+		float maximumError = 0;
+		for (const auto& sample : cases) {
+			Samples exposed{};
+			for (bool blocked : { false, true }) {
+				Samples neutral{};
+				for (unsigned channel = 0; channel < 3; ++channel) {
+					const float rainDarkening = channel == 1 ? 1.0f : 0.0f;
+					const float shoreDarkening = channel == 2 ? 1.0f : 0.0f;
+					const auto actual = fixture.RunChannels(context, sample, rainDarkening, shoreDarkening, blocked);
+					if (channel == 0)
+						neutral = actual;
+					Samples reference{};
+					if (baseline)
+						reference = baseline->RunChannels(context, sample, rainDarkening, shoreDarkening, blocked);
+					for (size_t i = 0; i < actual.size(); ++i) {
+						for (size_t c = 0; c < 4; ++c) {
+							Require(std::isfinite(actual[i][c]), "Surface channel produced nonfinite output");
+							if (baseline) {
+								maximumError = std::max(maximumError, std::abs(actual[i][c] - reference[i][c]));
+								if (!std::isfinite(reference[i][c]) || !Close(actual[i][c], reference[i][c])) {
+									std::cerr << "Surface baseline mismatch: case=" << sample.name << " VR=" << vr << " PBR=" << pbr
+											  << " material=" << (material ? material : "surface") << " blocked=" << blocked << " channel=" << channel
+											  << " output=" << i << ':' << c << " actual=" << actual[i][c] << " baseline=" << reference[i][c] << '\n';
+									throw std::runtime_error("Surface changed against the independently compiled source baseline");
+								}
+							}
+							if (i % 6 == 0 && c < 3) {
+								const float original = colors[(i / 6) % colors.size()][c];
+								if (channel == 0)
+									Require(Close(actual[i][c], original), "Zero darkening controls changed base color");
+								else if (actual[i][c] < original - 1e-5f) {
+									rainDarkened |= channel == 1;
+									shoreDarkened |= channel == 2;
+								}
+							} else {
+								Require(Close(actual[i][c], neutral[i][c]), "Darkening controls changed another wetness channel");
+							}
+							if (i < actual.size() / 2)
+								Require(actual[i][c] == actual[i + actual.size() / 2][c], "Wetness surface differs between matching eye inputs");
+						}
+					}
+				}
+				if (!blocked)
+					exposed = neutral;
+				for (size_t i = 0; i < 512; ++i) {
+					if (sample.drops) {
+						if (blocked)
+							Require(neutral[i * 6 + 3][3] == 0, "Occluded weak-rain beads reached the surface");
+						else
+							openRainBeads |= neutral[i * 6 + 3][3] > 0;
+					}
+					if (blocked && sample.puddles > 0)
+						puddleExposureChanged |= neutral[i * 6 + 1][2] != exposed[i * 6 + 1][2];
+				}
+			}
+		}
+		Require(rainDarkened && (material || shoreDarkened), "Darkening comparison did not exercise active controls");
+		Require(openRainBeads, "Weak-rain fixture did not produce exposed beads");
+		if (!material)
+			Require(puddleExposureChanged, "Puddle fixture did not exercise precipitation masking");
+		std::cout << "PASS: wetness surface channels VR=" << vr << " PBR=" << pbr << " material=" << (material ? material : "surface")
+				  << " sourceBaseline=" << bool(baseline) << " maximumError=" << maximumError << '\n';
+	}
+
+	void CheckSurfaceChannelMatrix(ID3D11Device* device, ID3D11DeviceContext* context, const std::filesystem::path& baselineRoot)
+	{
+		for (bool vr : { false, true }) {
+			for (bool pbr : { false, true })
+				CheckSurfaceChannels(device, context, vr, pbr, nullptr, baselineRoot);
+			for (const char* material : { "SKIN", "HAIR" })
+				CheckSurfaceChannels(device, context, vr, false, material, baselineRoot);
+		}
+	}
 
 	void CheckDistribution(ID3D11Device* device, ID3D11DeviceContext* context)
 	{
@@ -454,14 +632,34 @@ namespace
 	}
 }
 
-int main()
+int main(int argc, char** argv)
 {
 	try {
+		std::filesystem::path baselineRoot;
+		bool surfaceChannelsOnly = false;
+		for (int i = 1; i < argc; ++i) {
+			if (std::strcmp(argv[i], "--baseline-root") == 0 && i + 1 < argc && baselineRoot.empty()) {
+				baselineRoot = argv[++i];
+				Require(!baselineRoot.empty(), "Baseline source root must not be empty");
+			} else if (std::strcmp(argv[i], "--surface-channels-only") == 0 && !surfaceChannelsOnly)
+				surfaceChannelsOnly = true;
+			else
+				throw std::runtime_error("Usage: wetterness_highlights_test [--baseline-root <source-root>] [--surface-channels-only]");
+		}
+		if (!baselineRoot.empty()) {
+			Require(std::filesystem::is_regular_file(baselineRoot / "package/Shaders/Lighting.hlsl") &&
+						std::filesystem::is_regular_file(baselineRoot / "features/Wetterness/Shaders/Wetterness/Wetterness.hlsli") &&
+						std::filesystem::is_regular_file(baselineRoot / "features/Skylighting/Shaders/Skylighting/Skylighting.hlsli"),
+				"Baseline root must contain its complete package/Shaders and feature include trees");
+		}
 		CheckNightPolicy();
 		ComPtr<ID3D11Device> device;
 		ComPtr<ID3D11DeviceContext> context;
 		Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION,
 			device.GetAddressOf(), nullptr, context.GetAddressOf()));
+		CheckSurfaceChannelMatrix(device.Get(), context.Get(), baselineRoot);
+		if (surfaceChannelsOnly)
+			return 0;
 		CheckDistribution(device.Get(), context.Get());
 		CheckPuddleSlopes(device.Get(), context.Get());
 		for (bool vr : { false, true }) {

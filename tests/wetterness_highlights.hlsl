@@ -2,14 +2,54 @@
 #include "Lighting.hlsl"
 #undef main
 
-cbuffer TestInputs : register(b12)
+cbuffer TestInputs : register(b13)
 {
 	float directionalLuminance;
 	float lightScale;
+	float surfaceWaterHeight;
 };
 RWStructuredBuffer<float4> Results : register(u0);
 
-[numthreads(64, 1, 1)] void CheckRainFilmReflectivity(uint3 id : SV_DispatchThreadID) {
+#if defined(SKYLIGHTING)
+[numthreads(64, 1, 1)] void CheckSurfaceChannels(uint3 id : SV_DispatchThreadID) {
+	const float3 colors[4] = { float3(0.6, 0.6, 0.6), float3(0.45, 0.15, 0.07), float3(0.1, 0.45, 0.08), float3(0.72, 0.62, 0.42) };
+	const float roughnesses[4] = { 0.2, 0.55, 0.8, 0.95 };
+	uint surface = id.x % 256;
+	float3 baseColor = colors[surface % 4];
+	float roughness = roughnesses[surface % 4];
+	float3 normal = surface % 8 < 4 ? float3(0, 0, 1) : normalize(float3(1, 0, 1));
+	float3 view = normalize(float3(1, 0, 1));
+	PS_INPUT input = (PS_INPUT)0;
+	input.WorldPosition = float4(float(surface % 32) * 7.3, float(surface / 32) * 11.7, 100, 1);
+	input.ModelPosition = input.WorldPosition.xyz;
+	// Partial shelter keeps weak-rain bead occlusion active below the wet-film rain threshold.
+	sh2 sky = Skylighting::UNIT_SH * 0.6;
+	uint eyeIndex = 0;
+#	if defined(VR)
+	eyeIndex = id.x / 256;
+#	endif
+	WetnessSurfaceState wet = CreateWetnessSurfaceState(input, normal, normal, float3(0, 0, 500), view,
+		surfaceWaterHeight, true, eyeIndex,
+#	if !defined(SKIN) && !defined(HAIR)
+		baseColor, roughness,
+#	endif
+		1.0, true, sky);
+	MaterialProperties material = (MaterialProperties)0;
+	material.BaseColor = baseColor;
+	float porosity = 0.7;
+	ApplyWetnessDarkening(material, porosity, float3(0, 0, 500), 0, wet.enabled != 0,
+		wet.shoreDarkeningMask, wet.surfaceDarkeningMask, wet.rainDarkeningAbsorption, wet.shoreDarkeningAbsorption);
+	Results[id.x * 6] = float4(material.BaseColor, porosity);
+	Results[id.x * 6 + 1] = float4(wet.lightingStrength, wet.roughnessSpecular, wet.glossinessSpecular, wet.rainFilmWeight);
+	Results[id.x * 6 + 2] = float4(wet.normal, wet.enabled);
+	Results[id.x * 6 + 3] = float4(wet.filmHighlightReduction, wet.highlightReflectanceScale, wet.directSpecularScale, wet.raindropRippleMask);
+	Results[id.x * 6 + 4] = float4(wet.rainCubemapSuppression, wet.puddleSkyReflectionScale, wet.terrainIndirectNormalStability, wet.shoreDarkeningMask);
+	Results[id.x * 6 + 5] = float4(wet.surfaceDarkeningMask, wet.postRainBlend, wet.postRainOverridePhase, wet.postRainPuddleReflectionOverrideScale);
+}
+#endif
+
+[numthreads(64, 1, 1)] void CheckRainFilmReflectivity(uint3 id : SV_DispatchThreadID)
+{
 	float strength = float(id.x % 32) / 31.0;
 	float roughness = lerp(0.18, 0.4, float(id.x / 32) / 31.0);
 	float3 normal = float3(0, 0, 1);
@@ -28,8 +68,7 @@ RWStructuredBuffer<float4> Results : register(u0);
 	Results[id.x * 3 + 2] = float4(weights.specular, roughness);
 }
 
-	[numthreads(64, 1, 1)] void CheckRainFilmHighlights(uint3 id : SV_DispatchThreadID)
-{
+[numthreads(64, 1, 1)] void CheckRainFilmHighlights(uint3 id : SV_DispatchThreadID) {
 	float viewZ = lerp(0.02, 1.0, float(id.x % 32) / 31.0);
 	float3 view = float3(sqrt(1.0 - viewZ * viewZ), 0, viewZ);
 	float3 normal = float3(0, 0, 1);
@@ -66,7 +105,8 @@ RWStructuredBuffer<float4> Results : register(u0);
 	Results[id.x * 3 + 2] = float4(dot(abs(attenuated.specular - corrected.specular * 0.125), 1.0.xxx), compressed.x, compressed.y, compressed.z);
 }
 
-[numthreads(64, 1, 1)] void CheckRainFilmSurface(uint3 id : SV_DispatchThreadID) {
+[numthreads(64, 1, 1)] void CheckRainFilmSurface(uint3 id : SV_DispatchThreadID)
+{
 	uint surface = id.x / 32;
 	float viewZ = lerp(0.02, 1.0, float(id.x % 32) / 31.0);
 	float3 normal = surface % 2 == 0 ? float3(0, 0, 1) : normalize(float3(1, 0, 1));
@@ -79,14 +119,18 @@ RWStructuredBuffer<float4> Results : register(u0);
 #if !defined(SKIN) && !defined(HAIR)
 		float3(0.4, 0.35, 0.3), materialRoughness,
 #endif
-		1.0, true);
+		1.0, true
+#if defined(SKYLIGHTING)
+		,
+		Skylighting::UNIT_SH
+#endif
+	);
 	Results[id.x * 3] = float4(wet.roughnessSpecular, wet.lightingStrength, wet.surfaceDarkeningMask, wet.rainFilmWeight);
 	Results[id.x * 3 + 1] = float4(wet.filmHighlightReduction, wet.glossinessSpecular, wet.highlightReflectanceScale, wet.puddleSkyReflectionScale);
 	Results[id.x * 3 + 2] = float4(wet.normal, wet.rainCubemapSuppression);
 }
 
-	[numthreads(64, 1, 1)] void CheckPuddleSlopes(uint3 id : SV_DispatchThreadID)
-{
+[numthreads(64, 1, 1)] void CheckPuddleSlopes(uint3 id : SV_DispatchThreadID) {
 	float angle = float(id.x) * (90.0 / 1023.0);
 	float3 meshNormal = float3(sin(radians(angle)), 0, cos(radians(angle)));
 	Results[id.x * 3] = float4(Wetterness::GetFlatSurfacePuddleMask(meshNormal), angle,
@@ -99,7 +143,8 @@ RWStructuredBuffer<float4> Results : register(u0);
 	Results[id.x * 3 + 2] = float4(Wetterness::GetGeometricPuddleMask(-cross(positionDx, positionDy)), 0, 0, 0);
 }
 
-[numthreads(64, 1, 1)] void main(uint3 id : SV_DispatchThreadID) {
+[numthreads(64, 1, 1)] void main(uint3 id : SV_DispatchThreadID)
+{
 	const float roughnesses[8] = { 0.005, 0.03, 0.05, 0.10, 0.18, 0.35, 0.70, 1.0 };
 	const float roughness = roughnesses[id.x % 8];
 	const float viewZ = lerp(0.02, 1.0, float((id.x / 8) % 8) / 7.0);
@@ -139,8 +184,7 @@ RWStructuredBuffer<float4> Results : register(u0);
 		state.pointLightHighlightReduction, state.params.lightColorScale, isPointLight ? 1.0 : 0.0);
 }
 
-	[numthreads(64, 1, 1)] void CheckDistribution(uint3 id : SV_DispatchThreadID)
-{
+[numthreads(64, 1, 1)] void CheckDistribution(uint3 id : SV_DispatchThreadID) {
 	const float roughness = lerp(0.005, 1.0, float(id.x % 32) / 31.0);
 	const uint angle = id.x / 32;
 	const float NdotH = angle < 16 ? 1.0 - float(angle) * exp2(-24.0) : float(31 - angle) / 16.0;

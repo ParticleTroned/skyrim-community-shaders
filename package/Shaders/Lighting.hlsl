@@ -1354,37 +1354,41 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 		vegetationFactor = smoothstep(0.06, 0.30, surfaceBaseColor.g - max(surfaceBaseColor.r, surfaceBaseColor.b));
 		stoneFactor = saturate((0.62 - surfaceRoughness) * 2.4) * (1.0 - vegetationFactor);
 		dirtFactor = saturate(1.0 - vegetationFactor - stoneFactor);
-		float surfaceBrightness = dot(surfaceBaseColor, float3(0.299, 0.587, 0.114));
-		float surfaceMaxChannel = max(surfaceBaseColor.r, max(surfaceBaseColor.g, surfaceBaseColor.b));
-		float surfaceMinChannel = min(surfaceBaseColor.r, min(surfaceBaseColor.g, surfaceBaseColor.b));
-		float surfaceChroma = surfaceMaxChannel - surfaceMinChannel;
-		float surfaceWarmth = saturate(surfaceBaseColor.r - surfaceBaseColor.b + 0.20 * surfaceBaseColor.g);
-		float grassDarkeningFactor = vegetationFactor;
-		float remainingDarkeningSurface = saturate(1.0 - grassDarkeningFactor);
-		float sandDarkeningFactor =
-			smoothstep(0.42, 0.78, surfaceBrightness) *
-			smoothstep(0.02, 0.18, surfaceWarmth) *
-			(1.0 - smoothstep(0.14, 0.32, surfaceChroma)) *
-			saturate(surfaceRoughness * 1.15) *
-			remainingDarkeningSurface;
-		remainingDarkeningSurface = saturate(remainingDarkeningSurface - sandDarkeningFactor);
-		float woodDarkeningFactor =
-			smoothstep(0.06, 0.24, surfaceWarmth) *
-			smoothstep(0.08, 0.28, surfaceChroma) *
-			(1.0 - smoothstep(0.58, 0.86, surfaceBrightness)) *
-			saturate(1.0 - surfaceBaseColor.g * 0.75) *
-			remainingDarkeningSurface;
-		remainingDarkeningSurface = saturate(remainingDarkeningSurface - woodDarkeningFactor);
-		float stoneDarkeningFactor = saturate(stoneFactor) * remainingDarkeningSurface;
-		remainingDarkeningSurface = saturate(remainingDarkeningSurface - stoneDarkeningFactor);
-		float dirtDarkeningFactor = remainingDarkeningSurface;
-		rainDarkeningAbsorption = saturate(
-			stoneDarkeningFactor * 0.45 +
-			woodDarkeningFactor * 0.62 +
-			grassDarkeningFactor * 0.78 +
-			sandDarkeningFactor * 0.90 +
-			dirtDarkeningFactor);
-		shoreDarkeningAbsorption = rainDarkeningAbsorption;
+		// Absorption classification only contributes to the two darkening channels.
+		[branch] if (CS_WETNESS_SETTINGS.WetDarkeningStrength != 0.0 || CS_WETNESS_SETTINGS.ShorePersistentDarkeningStrength != 0.0)
+		{
+			float surfaceBrightness = dot(surfaceBaseColor, float3(0.299, 0.587, 0.114));
+			float surfaceMaxChannel = max(surfaceBaseColor.r, max(surfaceBaseColor.g, surfaceBaseColor.b));
+			float surfaceMinChannel = min(surfaceBaseColor.r, min(surfaceBaseColor.g, surfaceBaseColor.b));
+			float surfaceChroma = surfaceMaxChannel - surfaceMinChannel;
+			float surfaceWarmth = saturate(surfaceBaseColor.r - surfaceBaseColor.b + 0.20 * surfaceBaseColor.g);
+			float grassDarkeningFactor = vegetationFactor;
+			float remainingDarkeningSurface = saturate(1.0 - grassDarkeningFactor);
+			float sandDarkeningFactor =
+				smoothstep(0.42, 0.78, surfaceBrightness) *
+				smoothstep(0.02, 0.18, surfaceWarmth) *
+				(1.0 - smoothstep(0.14, 0.32, surfaceChroma)) *
+				saturate(surfaceRoughness * 1.15) *
+				remainingDarkeningSurface;
+			remainingDarkeningSurface = saturate(remainingDarkeningSurface - sandDarkeningFactor);
+			float woodDarkeningFactor =
+				smoothstep(0.06, 0.24, surfaceWarmth) *
+				smoothstep(0.08, 0.28, surfaceChroma) *
+				(1.0 - smoothstep(0.58, 0.86, surfaceBrightness)) *
+				saturate(1.0 - surfaceBaseColor.g * 0.75) *
+				remainingDarkeningSurface;
+			remainingDarkeningSurface = saturate(remainingDarkeningSurface - woodDarkeningFactor);
+			float stoneDarkeningFactor = saturate(stoneFactor) * remainingDarkeningSurface;
+			remainingDarkeningSurface = saturate(remainingDarkeningSurface - stoneDarkeningFactor);
+			float dirtDarkeningFactor = remainingDarkeningSurface;
+			rainDarkeningAbsorption = saturate(
+				stoneDarkeningFactor * 0.45 +
+				woodDarkeningFactor * 0.62 +
+				grassDarkeningFactor * 0.78 +
+				sandDarkeningFactor * 0.90 +
+				dirtDarkeningFactor);
+			shoreDarkeningAbsorption = rainDarkeningAbsorption;
+		}
 #		endif
 #		if defined(SKYLIGHTING)
 		float wetnessOcclusion = 0.0;
@@ -1441,46 +1445,50 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 		float rainDropDistance = dot(viewPosition, viewPosition);
 		float distanceFadeout = saturate((1.0 - saturate(rainDropDistance / maxRainDropDistance)) * 3.0);
 		float localRainOcclusion = 1.0;
-		const float puddleOcclusionPhase = saturate(max(inRainBlend, postRainBlend));
-		float roofLikeMask = smoothstep(0.35, 0.92, 1.0 - saturate(openSkyVisibility));
+		float puddleRainExposure = 1.0;
 		const bool raindropFxActive =
 			rainSurfaceUpness > 0.05 &&
 			CS_WETNESS_SETTINGS.Raining > 0.0f &&
 			(CS_WETNESS_SETTINGS.EnableRaindropFx != 0) &&
 			openSkyVisibility > 0.5 &&
 			(rainDropDistance < maxRainDropDistance);
-		const bool raindropOcclusionNeeded = raindropFxActive && vrWetternessDynamicDetailEnabled && inRainBlend > 0.0;
-		const bool shelterOcclusionNeeded = puddleOcclusionPhase * roofLikeMask > 1e-3;
-		if ((raindropOcclusionNeeded || shelterOcclusionNeeded) && hasOcclusionViewProj) {
-			float4 precipOcclusionTexCoord = mul(CS_WETNESS_SETTINGS.OcclusionViewProj, float4(input.WorldPosition.xyz, 1));
-			precipOcclusionTexCoord.y = -precipOcclusionTexCoord.y;
-			float2 precipOcclusionUV = precipOcclusionTexCoord.xy * 0.5 + 0.5;
-			float2 clampedPrecipOcclusionUV = saturate(precipOcclusionUV);
-			float2 occlusionOutsideDelta = abs(precipOcclusionUV - clampedPrecipOcclusionUV);
-			float occlusionDomainBlend = saturate(1.0 - max(occlusionOutsideDelta.x, occlusionOutsideDelta.y) * 8.0);
-			float precipOcclusionZ = CS_TEX_PRECIP_OCCLUSION.SampleLevel(SampColorSampler, clampedPrecipOcclusionUV, 0).x;
-			float2 occlusionUvMargin = min(clampedPrecipOcclusionUV, 1.0 - clampedPrecipOcclusionUV);
-			float occlusionEdgeFade = saturate(min(occlusionUvMargin.x, occlusionUvMargin.y) * 16.0);
-			float occlusionValidity = occlusionDomainBlend * occlusionEdgeFade;
-			float occlusionPass = (precipOcclusionTexCoord.z < precipOcclusionZ + 0.05) ? 1.0 : 0.0;
-			localRainOcclusion = lerp(1.0, occlusionPass, occlusionValidity);
-		}
-		// Keep strict occlusion for raindrop spawning, but make puddle/wet-film exposure
-		// effectively ignore local precipitation masking on open ground. This avoids the
-		// impression that wet highlights are attached to the player while still preserving
-		// shelter behavior in clearly roof-like low-sky areas.
-		float puddleOcclusionSoft = lerp(0.72, 1.0, localRainOcclusion);
-		float puddleOcclusion = lerp(puddleOcclusionSoft, localRainOcclusion, roofLikeMask);
-		float puddleOcclusionInfluence = roofLikeMask * roofLikeMask;
-		float puddleRainExposure = lerp(1.0, puddleOcclusion, puddleOcclusionPhase * puddleOcclusionInfluence);
-		[branch] if (inRainBlend > 0.0)
+		const bool surfaceRainExposureNeeded = CS_WETNESS_SETTINGS.PuddleWetness != 0.0 ||
+		                                       (!preserveWetnessHighlights && wetFilmInRainBlend != 0.0);
+		// Drying film without puddles does not consume precipitation exposure; rain beads still do.
+		[branch] if (surfaceRainExposureNeeded || (raindropFxActive && vrWetternessDynamicDetailEnabled))
 		{
-			// Open-sky bypass for puddles: use up-facing slope + ambient sky visibility,
-			// independent of direct sun intensity, so cloudy weather still qualifies.
-			float openSkyUpness = smoothstep(0.55, 0.96, rainSurfaceUpness);
-			float openSkyAmbient = smoothstep(0.35, 0.75, saturate(openSkyVisibility));
-			float openSkyMask = openSkyUpness * openSkyAmbient;
-			puddleRainExposure = lerp(puddleRainExposure, 1.0, openSkyMask);
+			const float puddleOcclusionPhase = saturate(max(inRainBlend, postRainBlend));
+			float roofLikeMask = smoothstep(0.35, 0.92, 1.0 - saturate(openSkyVisibility));
+			const bool raindropOcclusionNeeded = raindropFxActive && vrWetternessDynamicDetailEnabled && inRainBlend > 0.0;
+			const bool shelterOcclusionNeeded = puddleOcclusionPhase * roofLikeMask > 1e-3;
+			if ((raindropOcclusionNeeded || shelterOcclusionNeeded) && hasOcclusionViewProj) {
+				float4 precipOcclusionTexCoord = mul(CS_WETNESS_SETTINGS.OcclusionViewProj, float4(input.WorldPosition.xyz, 1));
+				precipOcclusionTexCoord.y = -precipOcclusionTexCoord.y;
+				float2 precipOcclusionUV = precipOcclusionTexCoord.xy * 0.5 + 0.5;
+				float2 clampedPrecipOcclusionUV = saturate(precipOcclusionUV);
+				float2 occlusionOutsideDelta = abs(precipOcclusionUV - clampedPrecipOcclusionUV);
+				float occlusionDomainBlend = saturate(1.0 - max(occlusionOutsideDelta.x, occlusionOutsideDelta.y) * 8.0);
+				float precipOcclusionZ = CS_TEX_PRECIP_OCCLUSION.SampleLevel(SampColorSampler, clampedPrecipOcclusionUV, 0).x;
+				float2 occlusionUvMargin = min(clampedPrecipOcclusionUV, 1.0 - clampedPrecipOcclusionUV);
+				float occlusionEdgeFade = saturate(min(occlusionUvMargin.x, occlusionUvMargin.y) * 16.0);
+				float occlusionValidity = occlusionDomainBlend * occlusionEdgeFade;
+				float occlusionPass = (precipOcclusionTexCoord.z < precipOcclusionZ + 0.05) ? 1.0 : 0.0;
+				localRainOcclusion = lerp(1.0, occlusionPass, occlusionValidity);
+			}
+			// Rain beads use strict occlusion; broad surface wetness softens it on open ground.
+			float puddleOcclusionSoft = lerp(0.72, 1.0, localRainOcclusion);
+			float puddleOcclusion = lerp(puddleOcclusionSoft, localRainOcclusion, roofLikeMask);
+			float puddleOcclusionInfluence = roofLikeMask * roofLikeMask;
+			puddleRainExposure = lerp(1.0, puddleOcclusion, puddleOcclusionPhase * puddleOcclusionInfluence);
+			[branch] if (inRainBlend > 0.0)
+			{
+				// Open-sky bypass for puddles: use up-facing slope + ambient sky visibility,
+				// independent of direct sun intensity, so cloudy weather still qualifies.
+				float openSkyUpness = smoothstep(0.55, 0.96, rainSurfaceUpness);
+				float openSkyAmbient = smoothstep(0.35, 0.75, saturate(openSkyVisibility));
+				float openSkyMask = openSkyUpness * openSkyAmbient;
+				puddleRainExposure = lerp(puddleRainExposure, 1.0, openSkyMask);
+			}
 		}
 		if (raindropFxActive && vrWetternessDynamicDetailEnabled && CanEvaluateSurfaceRainDrops(input)) {
 			float raindropFade = localRainOcclusion * distanceFadeout * vrWetternessDynamicDetailWeight;
@@ -1642,9 +1650,7 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 		// but kept separate from standing-water puddles.
 		float wetFilmFloorScale = max(0.0, CS_WETNESS_SETTINGS.WetFilmSpecularFloorScale);
 		float wetFilmSpecular = rainContactVisible;
-#		if !defined(SKIN) && !defined(HAIR)
-		[branch] if (!preserveWetnessHighlights)
-#		endif
+		[branch] if (rainContactVisible != 0.0 && !preserveWetnessHighlights)
 		{
 			float wetFilmFloorResponse = lerp(0.50, 1.45, saturate(wetFilmFloorScale * (1.0 / 3.0)));
 			float wetFilmBalanceResponse = lerp(1.0, 1.25, inRainFilmSpecularBoostFromBalance * wetFilmInRainBlend);

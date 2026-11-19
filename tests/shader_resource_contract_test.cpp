@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -240,7 +241,7 @@ namespace
 	template <class T>
 	using ComPtr = Microsoft::WRL::ComPtr<T>;
 
-	ComPtr<ID3D11ShaderReflection> Reflect(const wchar_t* path, const char* profile, std::vector<D3D_SHADER_MACRO> defines)
+	ComPtr<ID3DBlob> Compile(const wchar_t* path, const char* profile, std::vector<D3D_SHADER_MACRO> defines)
 	{
 		PackageIncludes includes("package/Shaders", "features/Upscaling/Shaders");
 		defines.push_back({ nullptr, nullptr });
@@ -250,9 +251,65 @@ namespace
 		if (errors)
 			std::cerr << static_cast<const char*>(errors->GetBufferPointer());
 		Check(result);
+		return code;
+	}
+
+	ComPtr<ID3D11ShaderReflection> Reflect(const wchar_t* path, const char* profile, std::vector<D3D_SHADER_MACRO> defines)
+	{
+		auto code = Compile(path, profile, std::move(defines));
 		ComPtr<ID3D11ShaderReflection> reflection;
 		Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(&reflection)));
 		return reflection;
+	}
+
+	void TestEffectStageEquivalence()
+	{
+		const std::array vertexIgnored{ "INDEXED_TEXTURE", "ADDBLEND", "MULTBLEND", "PARTICLES", "BLOOD", "MULTBLEND_DECAL", "MSN_SPU_SKINNED" };
+		const std::array pixelIgnored{ "STRIP_PARTICLES", "BINORMAL_TANGENT", "SKY_OBJECT", "MSN_SPU_SKINNED" };
+		for (bool vertex : { false, true }) {
+			for (bool vr : { false, true }) {
+				for (unsigned material = 0; material < 4; ++material) {
+					for (unsigned output = 0; output < (vertex ? 1u : 3u); ++output) {
+						std::vector<D3D_SHADER_MACRO> defines{ { vertex ? "VSHADER" : "PSHADER", "1" }, { "TEXCOORD", "1" }, { "TEXTURE", "1" }, { "VC", "1" } };
+						if (vr)
+							defines.push_back({ "VR", "1" });
+						if (output != 0)
+							defines.push_back({ "DEFERRED", "1" });
+						if (output == 2)
+							defines.push_back({ "CHARACTER_CATEGORY", "1" });
+						if (material != 0)
+							defines.push_back({ "NORMALS", "1" });
+						if (material == 1) {
+							defines.push_back({ "FALLOFF", "1" });
+							defines.push_back({ "SOFT", "1" });
+						} else if (material == 2) {
+							defines.push_back({ "MEMBRANE", "1" });
+							defines.push_back({ "SKINNED", "1" });
+							defines.push_back({ "MOTIONVECTORS_NORMALS", "1" });
+						} else if (material == 3) {
+							defines.push_back({ "PROJECTED_UV", "1" });
+						}
+						const auto profile = vertex ? "vs_5_0" : "ps_5_0";
+						auto base = Compile(L"package/Shaders/Effect.hlsl", profile, defines);
+						const auto compare = [&](const char* macro) {
+							auto otherDefines = defines;
+							otherDefines.push_back({ macro, "1" });
+							auto other = Compile(L"package/Shaders/Effect.hlsl", profile, std::move(otherDefines));
+							if (base->GetBufferSize() != other->GetBufferSize() ||
+								std::memcmp(base->GetBufferPointer(), other->GetBufferPointer(), base->GetBufferSize()) != 0)
+								throw std::runtime_error(std::string("Effect stage key changes compiled bytecode: ") + profile + "/" + macro);
+						};
+						if (vertex) {
+							for (const auto macro : vertexIgnored)
+								compare(macro);
+						} else {
+							for (const auto macro : pixelIgnored)
+								compare(macro);
+						}
+					}
+				}
+			}
+		}
 	}
 
 	void TestPreviousOutputBinding()
@@ -486,6 +543,7 @@ int main(int argc, char** argv)
 		BindingFixture::TestBindings();
 		TestPreviousOutputBinding();
 		TestEffectPixels(argc > 1 ? argv[1] : nullptr);
+		TestEffectStageEquivalence();
 		for (bool vr : { false, true }) {
 			for (unsigned grayscale = 0; grayscale < 4; ++grayscale) {
 				for (bool deferred : { false, true }) {

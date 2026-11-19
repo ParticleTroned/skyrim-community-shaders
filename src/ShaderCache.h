@@ -1003,6 +1003,27 @@ namespace SIE
 			Deferred = 1 << 27
 		};
 
+		/** Compile keys omit flags that cannot affect the selected Effect stage. */
+		static constexpr uint32_t EffectVertexIgnoredFlags =
+			static_cast<uint32_t>(EffectShaderFlags::GrayscaleToColor) |
+			static_cast<uint32_t>(EffectShaderFlags::GrayscaleToAlpha) |
+			static_cast<uint32_t>(EffectShaderFlags::IgnoreTexAlpha) |
+			static_cast<uint32_t>(EffectShaderFlags::IndexedTexture) |
+			static_cast<uint32_t>(EffectShaderFlags::AddBlend) |
+			static_cast<uint32_t>(EffectShaderFlags::MultBlend) |
+			static_cast<uint32_t>(EffectShaderFlags::Particles) |
+			static_cast<uint32_t>(EffectShaderFlags::Blood) |
+			static_cast<uint32_t>(EffectShaderFlags::MultBlendDecal) |
+			static_cast<uint32_t>(EffectShaderFlags::MsnSpuSkinned);
+		static constexpr uint32_t EffectPixelIgnoredFlags =
+			static_cast<uint32_t>(EffectShaderFlags::GrayscaleToColor) |
+			static_cast<uint32_t>(EffectShaderFlags::GrayscaleToAlpha) |
+			static_cast<uint32_t>(EffectShaderFlags::IgnoreTexAlpha) |
+			static_cast<uint32_t>(EffectShaderFlags::StripParticles) |
+			static_cast<uint32_t>(EffectShaderFlags::BinormalTangent) |
+			static_cast<uint32_t>(EffectShaderFlags::SkyObject) |
+			static_cast<uint32_t>(EffectShaderFlags::MsnSpuSkinned);
+
 		enum class UtilityShaderFlags : uint64_t
 		{
 			Vc = 1 << 0,

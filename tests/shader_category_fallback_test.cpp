@@ -1022,6 +1022,48 @@ void TestEffectResourceDescriptors()
 	}
 }
 
+void TestEffectStageDescriptors()
+{
+	using Cache = SIE::ShaderCache;
+	using Flags = Cache::EffectShaderFlags;
+	constexpr uint32_t vertexOnly = static_cast<uint32_t>(Flags::StripParticles) |
+	                                static_cast<uint32_t>(Flags::BinormalTangent) |
+	                                static_cast<uint32_t>(Flags::SkyObject);
+	constexpr uint32_t pixelOnly = static_cast<uint32_t>(Flags::IndexedTexture) |
+	                               static_cast<uint32_t>(Flags::AddBlend) |
+	                               static_cast<uint32_t>(Flags::MultBlend) |
+	                               static_cast<uint32_t>(Flags::Particles) |
+	                               static_cast<uint32_t>(Flags::Blood) |
+	                               static_cast<uint32_t>(Flags::MultBlendDecal);
+	constexpr uint32_t unused = static_cast<uint32_t>(Flags::MsnSpuSkinned);
+	constexpr uint32_t shared = static_cast<uint32_t>(Flags::TexCoord) |
+	                            static_cast<uint32_t>(Flags::Texture) |
+	                            static_cast<uint32_t>(Flags::Normals) |
+	                            static_cast<uint32_t>(Flags::Skinned) |
+	                            static_cast<uint32_t>(Flags::Membrane) |
+	                            static_cast<uint32_t>(Flags::MotionVectorsNormals);
+	for (uint32_t bit = 1; bit != 0; bit <<= 1) {
+		if (!(bit & (vertexOnly | pixelOnly | unused)))
+			continue;
+		for (bool deferredPass : { false, true }) {
+			for (bool a_forceDeferred : { false, true }) {
+				Fixture f;
+				f.deferred.deferredPass = deferredPass;
+				auto* deferred = globals::deferred;
+				const auto requested = shared | bit;
+				uint32_t a_vertexDescriptor = requested, a_pixelDescriptor = requested;
+				switch (RE::BSShader::Type::Effect) {
+#include "effect_lookup.h"
+				}
+				const auto output = (deferredPass || a_forceDeferred) ? static_cast<uint32_t>(Flags::Deferred) : 0u;
+				Require(a_vertexDescriptor == (shared | (bit & vertexOnly)));
+				Require(a_pixelDescriptor == (shared | (bit & pixelOnly) | output));
+				Require(Util::ShaderDescriptor::UploadedPixelDescriptor(requested, a_pixelDescriptor, 0u) == (bit & (vertexOnly | unused)));
+			}
+		}
+	}
+}
+
 void TestWaterRuntimeDescriptor()
 {
 	constexpr auto wading = static_cast<uint32_t>(SIE::ShaderCache::WaterShaderFlags::Wading);
@@ -1059,6 +1101,7 @@ int main()
 			TestWaterRuntimeDescriptor();
 			TestStartupLightingDescriptors();
 			TestEffectResourceDescriptors();
+			TestEffectStageDescriptors();
 			DetailPrewarmFixture::Test();
 			TestPBRPrewarming();
 			TestSeamPrewarming();

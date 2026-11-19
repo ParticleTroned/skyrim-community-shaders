@@ -2212,11 +2212,9 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 			break;
 		case RE::BSShader::Type::Effect:
 			{
-				auto flags = ~((uint32_t)SIE::ShaderCache::EffectShaderFlags::GrayscaleToColor |
-							   (uint32_t)SIE::ShaderCache::EffectShaderFlags::GrayscaleToAlpha |
-							   (uint32_t)SIE::ShaderCache::EffectShaderFlags::IgnoreTexAlpha);
-				a_vertexDescriptor &= flags;
-				a_pixelDescriptor &= flags;
+				// Native setup and the permutation buffer retain the original material flags.
+				a_vertexDescriptor &= ~SIE::ShaderCache::EffectVertexIgnoredFlags;
+				a_pixelDescriptor &= ~SIE::ShaderCache::EffectPixelIgnoredFlags;
 
 				if (deferred->deferredPass || a_forceDeferred)
 					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::EffectShaderFlags::Deferred;

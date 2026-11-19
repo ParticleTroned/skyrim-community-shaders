@@ -1125,6 +1125,79 @@ class ShaderCachePackagingTests(unittest.TestCase):
         )
 
 
+class EffectStageWorkloadTests(unittest.TestCase):
+    def read_policy_with_enum_change(self, before: str, after: str) -> dict:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            (source / "src").mkdir()
+            header = (REPO / "src/ShaderCache.h").read_text(encoding="utf-8")
+            self.assertEqual(header.count(before), 1)
+            (source / "src/ShaderCache.h").write_text(header.replace(before, after), encoding="utf-8")
+            shutil.copyfile(REPO / "src/ShaderCache.cpp", source / "src/ShaderCache.cpp")
+            return BUILDER.effect_stage_descriptor_policy(source)
+
+    def test_policy_rejects_unsupported_or_ambiguous_declarations(self) -> None:
+        declaration = "SkyObject = 1 << 24"
+        cases = (
+            (declaration + " | 1 << 25", "unsupported Effect descriptor declaration"),
+            ("SkyObject = 1 << 24 + 1", "unsupported Effect descriptor declaration"),
+            ("SkyObject = 1 << -1", "unsupported Effect descriptor declaration"),
+            ("SkyObject = 1 << 32", "outside uint32_t"),
+            ("SkyObject = 1 << " + "9" * 5000, "outside uint32_t"),
+            (declaration + ", SkyObject = 1 << 28", "duplicate Effect descriptor name or bit"),
+            ("SkyObject = 1 << 25", "duplicate Effect descriptor name or bit"),
+            (declaration + ",", "unsupported Effect descriptor declaration"),
+        )
+        for replacement, message in cases:
+            with self.subTest(replacement=replacement[:80]), self.assertRaisesRegex(SystemExit, message):
+                self.read_policy_with_enum_change(declaration, replacement)
+
+    def test_policy_accepts_whitespace_trailing_comma_and_bounded_shift(self) -> None:
+        expected = BUILDER.effect_stage_descriptor_policy(REPO)
+        self.assertEqual(self.read_policy_with_enum_change(
+            "Deferred = 1 << 27", "Deferred  =  1  <<  27,\n"), expected)
+        moved = self.read_policy_with_enum_change("SkyObject = 1 << 24", "SkyObject = 1 << 31")
+        self.assertEqual(moved["VSHADER"], expected["VSHADER"])
+        self.assertEqual(moved["PSHADER"], (
+            (expected["PSHADER"][0] & ~(1 << 24)) | (1 << 31), expected["PSHADER"][1]))
+
+    def test_stage_keys_share_only_irrelevant_flags(self) -> None:
+        cases = {
+            "VSHADER": ("Vertex", 1 << 24, "SKY_OBJECT", 1 << 10, "ADDBLEND"),
+            "PSHADER": ("Pixel", 1 << 10, "ADDBLEND", 1 << 24, "SKY_OBJECT"),
+        }
+        for stage, (label, retained, retained_macro, ignored, ignored_macro) in cases.items():
+            with self.subTest(stage=stage):
+                base = (1 << 6) | retained
+                config = {"shaders": [{"file": "Effect.hlsl", "configs": {stage: {"entries": [
+                    {"entry": f"Effect:{label}:{base:X}", "defines": ["TEXTURE", retained_macro]},
+                    {"entry": f"Effect:{label}:{base | ignored:X}", "defines": ["TEXTURE", retained_macro, ignored_macro]},
+                    {"entry": f"Effect:{label}:40", "defines": ["TEXTURE"]},
+                ]}}}]}
+                BUILDER.normalize_effect_stage_variants(config, REPO)
+                entries = config["shaders"][0]["configs"][stage]["entries"]
+                self.assertEqual(len(entries), 2)
+                self.assertEqual(entries[0], {"entry": f"Effect:{label}:{base:X}", "defines": ["TEXTURE", retained_macro]})
+                unchanged = copy.deepcopy(config)
+                BUILDER.normalize_effect_stage_variants(config, REPO)
+                self.assertEqual(config, unchanged)
+
+    def test_conflicting_macros_fail_closed(self) -> None:
+        config = {"shaders": [{"file": "Effect.hlsl", "configs": {"PSHADER": {"entries": [
+            {"entry": "Effect:Pixel:40", "defines": ["TEXTURE", "DEFERRED"]},
+            {"entry": "Effect:Pixel:1000040", "defines": ["TEXTURE", "SKY_OBJECT"]},
+        ]}}}]}
+        with self.assertRaisesRegex(SystemExit, "conflicting Effect Pixel variant"):
+            BUILDER.normalize_effect_stage_variants(config, REPO)
+
+    def test_material_flags_cannot_escape_entry_scope(self) -> None:
+        config = {"shaders": [{"file": "Effect.hlsl", "configs": {"PSHADER": {
+            "common_defines": ["SKY_OBJECT"], "entries": [],
+        }}}]}
+        with self.assertRaisesRegex(SystemExit, "must be scoped"):
+            BUILDER.normalize_effect_stage_variants(config, REPO)
+
+
 class LightingDetailMapWorkloadTests(unittest.TestCase):
     def test_detail_maps_pairs_only_runtime_eligible_pixels(self) -> None:
         flag, excluded, techniques = BUILDER.lighting_detail_map_policy(REPO)

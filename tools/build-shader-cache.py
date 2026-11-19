@@ -1930,6 +1930,96 @@ def append_lighting_detail_map_variants(
     return delta
 
 
+def effect_stage_descriptor_policy(source_root: Path) -> dict[str, tuple[int, frozenset[str]]]:
+    """Read ignored bits and their macros from the runtime's Effect policy."""
+    header = (source_root / "src/ShaderCache.h").read_text(encoding="utf-8")
+    source = (source_root / "src/ShaderCache.cpp").read_text(encoding="utf-8")
+    enum = re.search(r"enum class EffectShaderFlags\s*\{(.*?)\n\t\t\};", header, re.DOTALL)
+    emitter = re.search(r"static void GetEffectShaderDefines\(.*?\n\t\t\}", source, re.DOTALL)
+    if enum is None or emitter is None:
+        raise SystemExit("cannot locate runtime Effect descriptor policy")
+    flags: dict[str, int] = {}
+    used_bits: set[int] = set()
+    declarations = enum[1].strip().split(",")
+    if declarations[-1].strip() == "":
+        declarations.pop()
+    if not declarations:
+        raise SystemExit("empty runtime Effect descriptor enum")
+    for declaration in declarations:
+        flag = re.fullmatch(r"\s*([A-Za-z_]\w*)\s*=\s*1\s*<<\s*([0-9]+)\s*", declaration)
+        if flag is None:
+            raise SystemExit(f"unsupported Effect descriptor declaration: {declaration.strip()}")
+        name, shift = flag.groups()
+        if len(shift) > 2 or int(shift) >= 32:
+            raise SystemExit(f"Effect descriptor bit is outside uint32_t: {name}")
+        bit = int(shift)
+        if name in flags or bit in used_bits:
+            raise SystemExit(f"duplicate Effect descriptor name or bit: {name}")
+        flags[name] = 1 << bit
+        used_bits.add(bit)
+    macros = dict(re.findall(
+        r"if \(descriptor & static_cast<uint32_t>\(ShaderCache::EffectShaderFlags::(\w+)\)\)\s*\{"
+        r'\s*defines\[lastIndex\+\+\] = \{ "(\w+)", nullptr \};', emitter[0],
+    ))
+    policy = {}
+    for stage, name in (("VSHADER", "Vertex"), ("PSHADER", "Pixel")):
+        mask = re.search(rf"Effect{name}IgnoredFlags\s*=([^;]+);", header)
+        if mask is None:
+            raise SystemExit(f"missing Effect {name} normalization mask")
+        terms = re.sub(r"\s+", "", mask[1]).split("|")
+        bits = 0
+        ignored = set()
+        for term in terms:
+            flag = re.fullmatch(r"static_cast<uint32_t>\(EffectShaderFlags::(\w+)\)", term)
+            if flag is None or flag[1] not in flags or flag[1] not in macros or flags[flag[1]] >= 1 << 32:
+                raise SystemExit(f"unsupported Effect {name} normalization term: {term}")
+            bits |= flags[flag[1]]
+            ignored.add(macros[flag[1]])
+        policy[stage] = bits, frozenset(ignored)
+    return policy
+
+
+def normalize_effect_stage_variants(config: dict[str, Any], source_root: Path) -> None:
+    """Share Effect stage keys using the same masks as startup and draw lookup."""
+    policy = effect_stage_descriptor_policy(source_root)
+    for shader in config["shaders"]:
+        if shader["file"] != "Effect.hlsl":
+            continue
+        for stage_name, (mask, ignored) in policy.items():
+            stage = shader["configs"].get(stage_name)
+            if stage is None:
+                continue
+            shared = [*config.get("common_defines", []),
+                      *config.get(f"common_{stage_name.lower()}_defines", []),
+                      *config.get("file_common_defines", {}).get("Effect.hlsl", {}).get(stage_name, []),
+                      *stage.get("common_defines", [])]
+            if ignored & define_names(shared):
+                raise SystemExit(f"Effect material flags must be scoped to a {stage_name} entry")
+            label = "Vertex" if stage_name == "VSHADER" else "Pixel"
+            entries: dict[str, dict[str, Any]] = {}
+            identities = {}
+            for entry in stage["entries"]:
+                match = re.fullmatch(rf"Effect:{label}:([0-9A-F]{{1,8}})", entry["entry"])
+                if match is None:
+                    raise SystemExit(f"invalid Effect {label} entry: {entry['entry']}")
+                values = entry.get("defines", [])
+                if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+                    raise SystemExit(f"Effect entry macros must be a flat list: {entry['entry']}")
+                key = f"Effect:{label}:{int(match[1], 16) & ~mask:X}"
+                defines = [value for value in values if normalized_define_name(value) not in ignored]
+                identity = compile_task_defines([(
+                    "Effect.hlsl", stage_name, key,
+                    [value if "=" in value else value + "=" for value in defines],
+                )])
+                if key in entries:
+                    if identities[key] != identity:
+                        raise SystemExit(f"conflicting Effect {label} variant: {key}")
+                    continue
+                identities[key] = identity
+                entries[key] = {**entry, "entry": key, "defines": defines}
+            stage["entries"] = list(entries.values())
+
+
 def normalize_water_pixel_variants(config: dict[str, Any]) -> None:
     """Share runtime wading pixel variants while retaining vertex coordinates."""
     wading = 1 << 6
@@ -1995,6 +2085,7 @@ def filter_profile_defines(
     )
     append_declared_shader_variants(config, SHARED_SHADER_VARIANTS)
     normalize_water_pixel_variants(config)
+    normalize_effect_stage_variants(config, source_root)
     category_count = append_character_category_variants(config, source_root)
     print(f"shader config: added {category_count} deferred character category variants")
     lighting_delta = append_lighting_detail_map_variants(config, source_root, feature_states)

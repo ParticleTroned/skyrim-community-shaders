@@ -48,6 +48,14 @@ All helper filenames retain the runtime's `.cso` suffix, including pixel and
 vertex helpers; validators use the recorded profile to check their DXBC stage.
 Do not relabel these files or substitute the engine descriptor-key scheme.
 
+Effect stage normalization uses `ShaderCache::EffectVertexIgnoredFlags` and
+`EffectPixelIgnoredFlags` for both startup and draw lookups. The cache builder
+reads those masks and their macro mapping from the runtime source, removing
+irrelevant flags before deduplicating captured entries. It rejects aliases
+whose remaining compiler inputs disagree. Keep native material setup and
+uploaded runtime descriptors intact when changing compile-key masks, and
+verify identical stage bytecode, including signatures and bindings.
+
 Both bundled profiles target the default Reverse-Z renderer. Engine shaders
 use the feature factory's empty `REVERSE_Z` value, except Utility shaders,
 which use `REVERSE_Z=1`. Standalone helpers also use `REVERSE_Z=1`; the VR

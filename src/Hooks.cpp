@@ -780,7 +780,6 @@ struct BSShader_LoadShaders
 				shaderCache->PrewarmDeferredPixelShaders(*shader, pixelShaderDescriptor, categories, true);
 			}
 		}
-		shaderCache->PrewarmDiscoveredPixelShaders(*shader);
 		BSShaderHooks::hk_LoadShaders((REX::BSShader*)shader, stream);
 	};
 	static inline REL::Relocation<decltype(thunk)> func;
@@ -846,17 +845,11 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	// Only check against non-shader bits
 	const uint32_t runtimePixelBits = shader->shaderType.get() == RE::BSShader::Type::Water ?
 	                                      static_cast<uint32_t>(SIE::ShaderCache::WaterShaderFlags::Wading) :
-	                                  shader->shaderType.get() == RE::BSShader::Type::Lighting ?
-	                                      static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::BaseObjectIsSnow) |
-	                                          static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ShadowDir) |
-	                                          static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::AmbientSpecular) :
 	                                      0u;
 	state->permutationData.PixelShaderDescriptor = Util::ShaderDescriptor::UploadedPixelDescriptor(
 		state->permutationData.PixelShaderDescriptor, state->modifiedPixelDescriptor, runtimePixelBits);
 
 	state->techniqueShaderSelection = {};
-	++state->techniqueShaderSequence;
-	state->techniqueShaderRevision = shaderCache->GetGraphicsShaderRevision();
 	bool shaderFound = func(shader, vertexDescriptor, pixelDescriptor, skipPixelShader);
 	if (phaseDiagActive) {
 		const uint64_t phaseEndTicks = ReadFrameDiagCounterTicks();
@@ -893,7 +886,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 					logger::error("ReverseZ: Water technique rejected; VS={:X} available={} PS={:X} available={} skipped={} UW-ready={} VS-defines=[{}] PS-defines=[{}]. Check shader compile/create errors; restart after correcting shader inputs",
 						state->modifiedVertexDescriptor, vertexShader != nullptr, state->modifiedPixelDescriptor,
 						pixelShader != nullptr, skipPixelShader, globals::features::unifiedWater.loaded && !globals::features::unifiedWater.RequiresVanillaWaterShaders(),
-						shaderCache->GetDefinesString(*shader, state->modifiedVertexDescriptor, SIE::ShaderClass::Vertex),
+						shaderCache->GetDefinesString(*shader, state->modifiedVertexDescriptor),
 						shaderCache->GetDefinesString(*shader, state->modifiedPixelDescriptor));
 			}
 		} else {
@@ -904,10 +897,6 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 			*globals::game::currentPixelShader = pixelShader;
 			globals::d3d::context->PSSetShader(pixelShader ? reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader) : nullptr, NULL, NULL);
 			state->selectedCustomPixelShaderType = pixelShader ? shader->shaderType.get() : RE::BSShader::Type::None;
-			state->techniqueShaderSelection.vertex = vertexShader;
-			state->techniqueShaderSelection.vertexDescriptor = state->modifiedVertexDescriptor;
-			state->techniqueShaderSelection.pixel = pixelShader;
-			state->techniqueShaderSelection.pixelDescriptor = state->modifiedPixelDescriptor;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (globals::features::upscaling.IsNeuralRenderingEnabled())
 				NeuralRendering::Color::ExposureCapture::Instance().ObservePixelShaderSelection(

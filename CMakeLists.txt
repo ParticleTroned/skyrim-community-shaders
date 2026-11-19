@@ -4746,12 +4746,9 @@ if(BUILD_CONTROLLER_TESTS)
         "${CMAKE_CURRENT_BINARY_DIR}/generated/shader-block-formatting"
     )
     set(_shader_block_test_headers
-        "${_shader_block_test_dir}/shader_block_lookup_contract.h"
-        "${_shader_block_test_dir}/shader_block_lighting_constants.h"
         "${_shader_block_test_dir}/shader_block_vertex_under_test.h"
-        "${_shader_block_test_dir}/shader_block_pixel_under_test.h"
-        "${_shader_block_test_dir}/shader_block_compute_under_test.h"
-        "${_shader_block_test_dir}/runtime_specialization_policy.h"
+        "${_shader_block_test_dir}/shader_block_pixel_compute_under_test.h"
+        "${_shader_block_test_dir}/shader_block_lookup_contract.h"
     )
     add_custom_command(
         OUTPUT ${_shader_block_test_headers}
@@ -4845,55 +4842,6 @@ if(BUILD_CONTROLLER_TESTS)
         ShaderCompilationSchedulingPolicy
         tests/shader_compilation_scheduling_policy_test.cpp
     )
-    set(_optional_preparation_dir
-        "${CMAKE_CURRENT_BINARY_DIR}/optional_preparation_test"
-    )
-    set(_optional_preparation_headers
-        "${_optional_preparation_dir}/optional_members.h"
-        "${_optional_preparation_dir}/optional_phase.h"
-        "${_optional_preparation_dir}/optional_scheduler.h"
-    )
-    add_custom_command(
-        OUTPUT ${_optional_preparation_headers}
-        COMMAND
-            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
-            "-DOUTPUT_DIRECTORY=${_optional_preparation_dir}" -P
-            "${PROJECT_SOURCE_DIR}/tests/extract_optional_shader_preparation.cmake"
-        DEPENDS
-            src/ShaderCache.h
-            src/ShaderCacheSpecializations.cpp
-            tests/extract_optional_shader_preparation.cmake
-            tests/extract_source_region.cmake
-        VERBATIM
-    )
-    add_custom_target(
-        optional_shader_preparation_sources
-        DEPENDS ${_optional_preparation_headers}
-    )
-    add_controller_test(optional_shader_preparation_test OptionalShaderPreparation tests/optional_shader_preparation_test.cpp)
-    add_dependencies(
-        optional_shader_preparation_test
-        optional_shader_preparation_sources
-    )
-    target_include_directories(
-        optional_shader_preparation_test
-        PRIVATE "${_optional_preparation_dir}"
-    )
-    target_link_libraries(
-        optional_shader_preparation_test
-        PRIVATE nlohmann_json::nlohmann_json
-    )
-    if(MSVC)
-        target_compile_options(
-            optional_shader_preparation_test
-            PRIVATE /UNDEBUG
-        )
-    else()
-        target_compile_options(
-            optional_shader_preparation_test
-            PRIVATE -UNDEBUG
-        )
-    endif()
     add_controller_test(
         vr_depth_culling_cache_refresh_policy_test
         VRDepthCullingCacheRefreshPolicy
@@ -4913,48 +4861,6 @@ if(BUILD_CONTROLLER_TESTS)
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_composite.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/shader_include.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/standalone_shader_cache.cmake")
-    add_controller_test(shader_specialization_requests_test ShaderSpecializationRequests tests/shader_specialization_requests_test.cpp)
-    set(_specialization_test_dir
-        "${CMAKE_CURRENT_BINARY_DIR}/generated/specialization-persistence"
-    )
-    set(_specialization_test_header
-        "${_specialization_test_dir}/discovery_history_under_test.h"
-    )
-    add_custom_command(
-        OUTPUT "${_specialization_test_header}"
-        COMMAND
-            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
-            "-DOUTPUT_DIRECTORY=${_specialization_test_dir}" -P
-            "${PROJECT_SOURCE_DIR}/tests/extract_shader_specialization_persistence.cmake"
-        DEPENDS
-            src/ShaderCacheSpecializations.cpp
-            tests/extract_shader_specialization_persistence.cmake
-            tests/extract_source_region.cmake
-        VERBATIM
-    )
-    add_controller_test(shader_specialization_persistence_test ShaderSpecializationPersistence tests/shader_specialization_persistence_test.cpp)
-    target_sources(
-        shader_specialization_persistence_test
-        PRIVATE "${_specialization_test_header}"
-    )
-    target_include_directories(
-        shader_specialization_persistence_test
-        PRIVATE "${_specialization_test_dir}"
-    )
-    foreach(
-        _target
-        IN
-        ITEMS
-            shader_specialization_requests_test
-            shader_specialization_persistence_test
-    )
-        target_link_libraries(${_target} PRIVATE nlohmann_json::nlohmann_json)
-        if(MSVC)
-            target_compile_options(${_target} PRIVATE /UNDEBUG /utf-8)
-        else()
-            target_compile_options(${_target} PRIVATE -UNDEBUG)
-        endif()
-    endforeach()
     add_controller_test(
         vr_depth_culling_enable_policy_test
         VRDepthCullingEnablePolicy

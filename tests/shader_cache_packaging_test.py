@@ -1125,7 +1125,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
         )
 
 
-class LightingSpecializationWorkloadTests(unittest.TestCase):
+class LightingDetailMapWorkloadTests(unittest.TestCase):
     def test_detail_maps_pairs_only_runtime_eligible_pixels(self) -> None:
         flag, excluded, techniques = BUILDER.lighting_detail_map_policy(REPO)
         self.assertEqual(flag, 1 << 14)
@@ -1143,23 +1143,22 @@ class LightingSpecializationWorkloadTests(unittest.TestCase):
                                              "defines": ["VC", "DEFERRED"] if value & 0x10 else ["VC"]}
                                             for value in sorted(descriptors)]},
                 }}]}
-                BUILDER.append_lighting_specialization_variants(config, REPO, {"DetailMaps": enabled})
+                BUILDER.append_lighting_detail_map_variants(config, REPO, {"DetailMaps": enabled})
                 stages = config["shaders"][0]["configs"]
                 self.assertEqual(stages["VSHADER"]["entries"], [vertex])
                 entries = {int(entry["entry"].rsplit(":", 1)[1], 16): entry["defines"] for entry in stages["PSHADER"]["entries"]}
                 eligible = {value for value in descriptors if not value & excluded and (value >> 24) & 0x3F in techniques}
-                eligible |= {value | 0x20000 for value in tuple(eligible) if value & 0x10}
                 self.assertEqual({value & ~flag for value in entries if value & flag}, eligible if enabled else set())
                 for value, defines in entries.items():
                     self.assertEqual("DETAIL_MAPS" in defines, bool(value & flag))
                     if value & flag:
                         self.assertEqual([name for name in defines if name != "DETAIL_MAPS"], entries[value & ~flag])
-                self.assertEqual(BUILDER.append_lighting_specialization_variants(config, REPO, {"DetailMaps": enabled}), 0)
+                self.assertEqual(BUILDER.append_lighting_detail_map_variants(config, REPO, {"DetailMaps": enabled}), 0)
 
     def test_detail_maps_rejects_macro_mismatch_and_policy_drift(self) -> None:
         for key, defines in (("4001", []), ("1", ["DETAIL_MAPS"])):
             with self.subTest(key=key), self.assertRaisesRegex(SystemExit, "flag/macros disagree"):
-                BUILDER.append_lighting_specialization_variants({"shaders": [{"file": "Lighting.hlsl", "configs": {
+                BUILDER.append_lighting_detail_map_variants({"shaders": [{"file": "Lighting.hlsl", "configs": {
                     "PSHADER": {"entries": [{"entry": "Lighting:Pixel:" + key, "defines": defines}]},
                 }}]}, REPO, {"DetailMaps": True})
         with tempfile.TemporaryDirectory() as temporary:
@@ -1183,186 +1182,6 @@ class LightingSpecializationWorkloadTests(unittest.TestCase):
         entries[0]["defines"] = ["HAIR"]
         with self.assertRaisesRegex(SystemExit, "conflicts with"):
             BUILDER.append_declared_shader_variants(config, BUILDER.SHARED_SHADER_VARIANTS)
-
-    def test_weather_combinations_preserve_category_layouts_and_vertices(self) -> None:
-        vertex = {"entry": "Lighting:Vertex:200001", "defines": ["VC", "SHADOW_DIR"]}
-        config = {"shaders": [{"file": "Lighting.hlsl", "configs": {
-            "VSHADER": {"entries": [vertex.copy()]},
-            "PSHADER": {"common_defines": ["WETTERNESS", "SNOW_COVER", "LIGHT_LIMIT_FIX"], "entries": [
-                {"entry": "Lighting:Pixel:280011", "defines": [
-                    "VC", "DEFERRED", "DRY_WEATHER", "SNOW_COVER_INACTIVE",
-                ]},
-            ]},
-        }}]}
-        BUILDER.append_character_category_variants(config, REPO)
-        states = {"Wetterness": True, "SnowCover": True, "LightLimitFix": True}
-        self.assertEqual(BUILDER.append_lighting_specialization_variants(config, REPO, states), 30)
-        stages = config["shaders"][0]["configs"]
-        self.assertEqual(stages["VSHADER"]["entries"], [vertex])
-        entries = {entry["entry"]: entry["defines"] for entry in stages["PSHADER"]["entries"]}
-        self.assertEqual(set(entries), {
-            f"Lighting:Pixel:{0x11 | category | weather | deferred:X}"
-            for category in (0, 0x20) for weather in (0, 0x200000, 0x80000, 0x280000)
-            for deferred in (0, 0x2000, 0x20000, 0x22000)
-        })
-        for key, defines in entries.items():
-            descriptor = int(key.rsplit(":", 1)[1], 16)
-            self.assertEqual("DRY_WEATHER" in defines, bool(descriptor & 0x200000))
-            self.assertEqual("SNOW_COVER_INACTIVE" in defines, bool(descriptor & 0x80000))
-            self.assertEqual("CHARACTER_CATEGORY" in defines, bool(descriptor & 0x20))
-            self.assertEqual("LLF_NO_CONTACT_SHADOWS" in defines, bool(descriptor & 0x2000))
-            self.assertEqual("NO_LEGACY_SUBSURFACE" in defines, bool(descriptor & 0x20000))
-            identity = BUILDER.pixel_entry_define_identity("Lighting.hlsl", key, defines)
-            self.assertEqual(identity[("Lighting", f"{descriptor:X}.pso")].count("11:DRY_WEATHER0:"), bool(descriptor & 0x200000))
-        self.assertEqual(BUILDER.append_lighting_specialization_variants(config, REPO, states), 0)
-
-    def test_requires_each_loaded_feature_and_its_macro(self) -> None:
-        for wet in (False, True):
-            for snow in (False, True):
-                for macros in ([], ["WETTERNESS"], ["SNOW_COVER"], ["WETTERNESS", "SNOW_COVER"]):
-                    with self.subTest(wet=wet, snow=snow, macros=macros):
-                        config = {"common_defines": [macros], "shaders": [{
-                            "file": "Lighting.hlsl", "configs": {"PSHADER": {"entries": [
-                                {"entry": "Lighting:Pixel:1", "defines": ["VC"]},
-                            ]}},
-                        }]}
-                        BUILDER.append_lighting_specialization_variants(config, REPO, {"Wetterness": wet, "SnowCover": snow})
-                        expected = {1}
-                        if wet and "WETTERNESS" in macros:
-                            expected |= {value | 0x200000 for value in tuple(expected)}
-                        if snow and "SNOW_COVER" in macros:
-                            expected |= {value | 0x80000 for value in tuple(expected)}
-                        self.assertEqual({entry["entry"] for entry in config["shaders"][0]["configs"]["PSHADER"]["entries"]},
-                                         {f"Lighting:Pixel:{value:X}" for value in expected})
-
-    def test_rejects_mismatched_conflicting_and_shared_specializations(self) -> None:
-        for entries in (
-            [{"entry": "Lighting:Pixel:200001", "defines": ["VC"]}],
-            [{"entry": "Lighting:Pixel:1", "defines": ["VC", "SNOW_COVER_INACTIVE"]}],
-            [{"entry": "Lighting:Pixel:1", "defines": ["VC"]},
-             {"entry": "Lighting:Pixel:280001", "defines": ["TEXTURE", "DRY_WEATHER", "SNOW_COVER_INACTIVE"]}],
-        ):
-            with self.subTest(entries=entries), self.assertRaises(SystemExit):
-                BUILDER.append_lighting_specialization_variants({"shaders": [{
-                    "file": "Lighting.hlsl", "configs": {"PSHADER": {
-                        "common_defines": ["WETTERNESS", "SNOW_COVER"], "entries": entries,
-                    }},
-                }]}, REPO, {"Wetterness": True, "SnowCover": True})
-        for macro in ("DRY_WEATHER", "SNOW_COVER_INACTIVE", "LLF_NO_CONTACT_SHADOWS", "NO_LEGACY_SUBSURFACE"):
-            with self.subTest(macro=macro), self.assertRaises(SystemExit):
-                BUILDER.append_lighting_specialization_variants({"common_pshader_defines": [[macro]], "shaders": [{
-                    "file": "Lighting.hlsl", "configs": {"PSHADER": {"entries": []}},
-                }]}, REPO, {})
-
-    def test_deferred_specializations_require_their_render_path(self) -> None:
-        for deferred, loaded, has_macro in ((False, True, True), (True, False, True), (True, True, False), (True, True, True)):
-            with self.subTest(deferred=deferred, loaded=loaded, has_macro=has_macro):
-                config = {"shaders": [{"file": "Lighting.hlsl", "configs": {"PSHADER": {
-                    "common_defines": ["LIGHT_LIMIT_FIX"] if has_macro else [],
-                    "entries": [{"entry": "Lighting:Pixel:11" if deferred else "Lighting:Pixel:1",
-                                 "defines": ["VC", "DEFERRED"] if deferred else ["VC"]}],
-                }}}]}
-                BUILDER.append_lighting_specialization_variants(config, REPO, {"LightLimitFix": loaded})
-                entries = config["shaders"][0]["configs"]["PSHADER"]["entries"]
-                self.assertEqual(len(entries), 1 if not deferred else 4 if loaded and has_macro else 2)
-                for entry in entries:
-                    defines = entry["defines"]
-                    if "NO_LEGACY_SUBSURFACE" in defines:
-                        self.assertTrue(deferred)
-                    if "LLF_NO_CONTACT_SHADOWS" in defines:
-                        self.assertTrue(deferred and loaded and has_macro)
-
-
-class EffectLightingWorkloadTests(unittest.TestCase):
-    def test_specialization_retains_general_and_category_layouts(self) -> None:
-        macro = "AMBIENT_WORLD_EFFECT_LIGHTING"
-        for ibl, cubemaps in ((False, False), (False, True), (True, False), (True, True)):
-            with self.subTest(ibl=ibl, cubemaps=cubemaps):
-                config = {"shaders": [{"file": "Effect.hlsl", "configs": {
-                    "VSHADER": {"entries": [{"entry": "Effect:Vertex:1", "defines": ["VC"]}]},
-                    "PSHADER": {"common_defines": ["IBL", "DYNAMIC_CUBEMAPS"], "entries": [
-                        {"entry": "Effect:Pixel:18000001", "defines": ["VC", "DEFERRED", macro]},
-                    ]},
-                }}]}
-                BUILDER.append_character_category_variants(config, REPO)
-                states = {"AdaptiveBrightness": True, "ImageBasedLighting": ibl, "DynamicCubemaps": cubemaps}
-                BUILDER.append_effect_lighting_variants(config, REPO, states)
-                stages = config["shaders"][0]["configs"]
-                self.assertEqual(stages["VSHADER"]["entries"], [{"entry": "Effect:Vertex:1", "defines": ["VC"]}])
-                entries = {entry["entry"]: entry["defines"] for entry in stages["PSHADER"]["entries"]}
-                expected = {"Effect:Pixel:8000001", "Effect:Pixel:8000201"}
-                if ibl and cubemaps:
-                    expected.update({"Effect:Pixel:18000001", "Effect:Pixel:18000201"})
-                self.assertEqual(set(entries), expected)
-                for key, defines in entries.items():
-                    self.assertEqual(macro in defines, key.startswith("Effect:Pixel:18"))
-                    self.assertEqual("CHARACTER_CATEGORY" in defines, key.endswith("201"))
-                self.assertEqual(BUILDER.append_effect_lighting_variants(config, REPO, states), 0)
-
-    def test_rejects_mismatched_or_conflicting_specializations(self) -> None:
-        states = {"AdaptiveBrightness": True, "ImageBasedLighting": True, "DynamicCubemaps": True}
-        for entries in (
-            [{"entry": "Effect:Pixel:10000001", "defines": ["VC"]}],
-            [{"entry": "Effect:Pixel:1", "defines": ["AMBIENT_WORLD_EFFECT_LIGHTING"]}],
-            [{"entry": "Effect:Pixel:1", "defines": ["VC"]},
-             {"entry": "Effect:Pixel:10000001", "defines": ["TEXTURE", "AMBIENT_WORLD_EFFECT_LIGHTING"]}],
-        ):
-            with self.subTest(entries=entries), self.assertRaises(SystemExit):
-                BUILDER.append_effect_lighting_variants(
-                    {"shaders": [{"file": "Effect.hlsl", "configs": {"PSHADER": {"entries": entries}}}]}, REPO, states)
-
-    def test_unavailable_effect_dependencies_do_not_add_variants(self) -> None:
-        for adaptive, macros in ((False, ["IBL", "DYNAMIC_CUBEMAPS"]), (True, ["IBL"]), (True, [])):
-            config = {"shaders": [{"file": "Effect.hlsl", "configs": {"PSHADER": {
-                "common_defines": [macros], "entries": [{"entry": "Effect:Pixel:1", "defines": ["VC"]}],
-            }}}]}
-            states = {"AdaptiveBrightness": adaptive, "ImageBasedLighting": True, "DynamicCubemaps": True}
-            self.assertEqual(BUILDER.append_effect_lighting_variants(config, REPO, states), 0)
-            self.assertEqual(len(config["shaders"][0]["configs"]["PSHADER"]["entries"]), 1)
-
-
-class DeferredCompositeWorkloadTests(unittest.TestCase):
-    def test_specializations_preserve_runtime_and_feature_dependencies(self) -> None:
-        for runtime in ("SE", "VR"):
-            for linear in (False, True):
-                for ibl in (False, True):
-                    for cubemaps in (False, True):
-                        with self.subTest(runtime=runtime, linear=linear, ibl=ibl, cubemaps=cubemaps):
-                            features = {
-                                "LinearLighting": linear,
-                                "ImageBasedLighting": ibl,
-                                "DynamicCubemaps": cubemaps,
-                                "ScreenSpaceGI": True,
-                                "Skylighting": True,
-                            }
-                            requests = [
-                                request for request in BUILDER.standalone_shader_cache.release_requests(runtime, features)
-                                if request["source"] == "DeferredCompositeCS.hlsl"
-                            ]
-                            variants = set()
-                            for request in requests:
-                                macros = dict(request["defines"])
-                                interior = "INTERIOR" in macros
-                                self.assertEqual(request["profile"], "cs_5_0")
-                                self.assertIn("COMPUTESHADER", macros)
-                                self.assertEqual("VR" in macros, runtime == "VR")
-                                self.assertEqual("FRAMEBUFFER" in macros, runtime == "VR")
-                                self.assertEqual("SKYLIGHTING" in macros, not interior)
-                                self.assertEqual("IBL" in macros, ibl)
-                                self.assertEqual("DYNAMIC_CUBEMAPS" in macros, cubemaps)
-                                variants.add((
-                                    interior, "SSGI_AO_ONLY" in macros,
-                                    "COMPOSITE_LINEAR_LIGHTING" in macros, "IBL_LUMINANCE_RATIO" in macros,
-                                ))
-                            expected = {
-                                (interior, ao_only, use_linear, use_ratio)
-                                for interior in (False, True) for ao_only in (False, True)
-                                for use_linear in (False, True) if not use_linear or linear
-                                for use_ratio in (False, True) if not use_ratio or (ibl and cubemaps)
-                            }
-                            self.assertEqual(variants, expected)
-                            self.assertEqual(len(requests), len(expected), "Composite cache requests must not duplicate variants")
-
 
 if __name__ == "__main__":
     unittest.main()

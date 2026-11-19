@@ -210,8 +210,6 @@ namespace
 				{ "repairRequired", Util::ShaderCachePack::RequiresInstallationRepair(issue) },
 			};
 		}
-		snapshotJson["compilation"]["residentOnlyLightingSpecializations"] = globals::shaderCache && globals::shaderCache->ResidentOnlyLightingSpecializations();
-		snapshotJson["compilation"]["specializationPreparation"] = globals::shaderCache ? globals::shaderCache->GetSpecializationPreparationStatus() : json(nullptr);
 		snapshotJson["compilation"]["contentDedupeTasks"] = globals::shaderCache ? globals::shaderCache->GetContentDedupeTasks() : 0;
 		snapshotJson["compilation"]["activeReuseTasks"] = globals::shaderCache ? globals::shaderCache->GetActiveReuseTasks() : 0;
 		snapshotJson["compilation"]["previousReuseTasks"] = globals::shaderCache ? globals::shaderCache->GetPreviousReuseTasks() : 0;
@@ -257,7 +255,7 @@ namespace
 		const auto action = a_args.value("action", std::string{});
 		const bool knownAction = action == "registry" || action == "snapshot" || action == "features" ||
 		                         action == "preflight" || action == "execute" || action == "backgroundCompile" ||
-		                         action == "exportTrace" || action == "specializationPolicy";
+		                         action == "exportTrace";
 		if (!knownAction)
 			return Foundation().MakeError(a_args, "unknown_action", "action is not supported", "validation", false, "action");
 		if (action == "registry") {
@@ -273,7 +271,7 @@ namespace
 				{ "backgroundCompileMainThreadAffine", false },
 				{ "exportTraceMainThreadAffine", false },
 				{ "preflightTokenLifetimeMs", 30000 },
-				{ "actions", json::array({ "registry", "snapshot", "features", "preflight", "execute", "backgroundCompile", "exportTrace", "specializationPolicy" }) },
+				{ "actions", json::array({ "registry", "snapshot", "features", "preflight", "execute", "backgroundCompile", "exportTrace" }) },
 				{ "statusCodes", json::array({
 									 "success",
 									 "invalid_argument",
@@ -387,11 +385,6 @@ namespace
 			};
 			return response;
 		}
-		if (action == "specializationPolicy" && a_args.contains("residentOnly") && !a_args["residentOnly"].is_boolean())
-			return Foundation().MakeError(a_args, "invalid_argument", "residentOnly must be boolean", "validation", false, "residentOnly");
-		if (action == "specializationPolicy" && a_args.contains("preparationMode") &&
-			(!a_args["preparationMode"].is_number_integer() || a_args["preparationMode"] < 0 || a_args["preparationMode"] > 2))
-			return Foundation().MakeError(a_args, "invalid_argument", "preparationMode must be integer 0, 1 or 2", "validation", false, "preparationMode");
 		if (action == "preflight" || action == "execute") {
 			// Validate the JSON contract before entering the game-thread dispatch.
 			// The request is rebuilt in the task so its borrowed string pointers are local.
@@ -408,21 +401,6 @@ namespace
 			const auto* api = CSX::Api::GetShaderService001();
 			if (!api)
 				return json{ { "error", "shader API unavailable" } };
-			if (action == "specializationPolicy") {
-				auto* cache = globals::shaderCache;
-				if (!cache)
-					return json{ { "error", "shader cache unavailable" } };
-				const auto previous = cache->GetPreparationMode();
-				if (a_args.contains("preparationMode"))
-					cache->SetPreparationMode(ShaderCompilationSchedulingPolicy::ValidatePreparationMode(a_args["preparationMode"].get<int>()));
-				else if (a_args.contains("residentOnly"))
-					cache->SetResidentOnlyLightingSpecializations(a_args["residentOnly"].get<bool>());
-				return json{ { "residentOnly", cache->ResidentOnlyLightingSpecializations() },
-					{ "preparation", cache->GetSpecializationPreparationStatus() },
-					{ "changed", previous != cache->GetPreparationMode() },
-					{ "preparationMode", static_cast<int>(cache->GetPreparationMode()) },
-					{ "scope", "optional_shader_preparation" }, { "queuedWorkRetained", true } };
-			}
 			if (action == "snapshot")
 				return ReadSnapshot(*api);
 			if (action == "features") {
@@ -543,7 +521,7 @@ namespace CSX::Api::ShaderDevBenchBridge
 			return;
 		}
 		const char* descriptor = R"({
-			"description":"Reply and event strings replace invalid UTF-8 with U+FFFD; request validation remains strict. Versioned CSX shader, feature, compilation, and cache lifecycle API. specializationPolicy reads or sets preparationMode (integer): 0 Next restart (default), 1 Transitions (experimental), 2 Gameplay (experimental). The cumulative policy covers optional Lighting/Effect pixel and IBL/Linear Lighting Composite shaders, including disk-cache reads, source compilation and device creation. All modes record discoveries and use eligible resident shaders. Restart mode is stricter than legacy OFF: disk-only variants wait for the next normal blocking startup, not save reload. Transition mode admits stages during core loading and engine sleep/wait intervals, independently of Stabilizer and upscaling profiles. Active compiler calls cannot be cancelled and may finish after close; their next stage waits for permission. Runtime families share Background Compiler Threads and cooperative priority, behind required work. Background boot is unchanged. preparation exposes selected mode, admissionReason, transitionKinds (loading=1, sleep=2, wait=4), windowGeneration, queued/deferred/inFlight/awaitingPublication, activeBudget, cache/source/deviceStages, postWindowCompletions, discoveredRequests and discoveryPersistenceFailed. residentOnly is deprecated: either input value maps to mode 0 unless preparationMode is supplied; its output and the legacy snapshot flag are true only in mode 0. Normal settings save can persist session changes. Disk-cache rollback flags in each snapshot come from one publication; compilation counters remain live. snapshot.diskCache.installation reports the boot admission issue (not_checked, none, wrong_runtime, invalid_pack) without triggering cache admission, cachedRuntime when mismatched, requiredRuntime (SE includes AE), and repairRequired. Rejected installations require resolving the installation or access problem and restarting; accept_cache_rebuild is blocked with cache_installation_repair_required. snapshot.compilation.sourceCompiles counts actual compiler invocations; contentDedupeTasks counts tasks reusing identical preprocessed bytecode across different shader keys. activeReuseTasks counts matching content in installed packs or the active loose cache; previousReuseTasks counts matching content in the loose rollback cache. snapshot.compilation.recentFailures contains the last 32 source compile failures as {key,path,error,epoch,frame}; error text is capped at 2000 bytes. Lifecycle mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile releases the boot compile wait and wakes the dispatcher to apply the background thread budget. exportTrace writes completed task timings as Chrome Trace JSON after a build finishes. set_skip_unchanged permits only content-verified disk hits when true; false skips disk reads while preserving disk writes.",
+			"description":"Reply and event strings replace invalid UTF-8 with U+FFFD; request validation remains strict. Versioned CSX shader, feature, compilation, and cache lifecycle API. Disk-cache rollback flags in each snapshot come from one publication; compilation counters remain live. snapshot.diskCache.installation reports the boot admission issue (not_checked, none, wrong_runtime, invalid_pack) without triggering cache admission, cachedRuntime when mismatched, requiredRuntime (SE includes AE), and repairRequired. Rejected installations require resolving the installation or access problem and restarting; accept_cache_rebuild is blocked with cache_installation_repair_required. snapshot.compilation.sourceCompiles counts actual compiler invocations; contentDedupeTasks counts tasks reusing identical preprocessed bytecode across different shader keys. activeReuseTasks counts matching content in installed packs or the active loose cache; previousReuseTasks counts matching content in the loose rollback cache. snapshot.compilation.recentFailures contains the last 32 source compile failures as {key,path,error,epoch,frame}; error text is capped at 2000 bytes. Mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile releases the boot compile wait and wakes the dispatcher to apply the background thread budget. exportTrace writes completed task timings as Chrome Trace JSON after a build finishes. set_skip_unchanged permits only content-verified disk hits when true; false skips disk reads while preserving disk writes.",
 			"inputSchema":{
 				"type":"object",
 				"required":["contractMajor","clientId","commandId","action"],
@@ -552,9 +530,7 @@ namespace CSX::Api::ShaderDevBenchBridge
 					"clientId":{"type":"string","minLength":1,"maxLength":128},
 					"commandId":{"type":"string","minLength":1,"maxLength":128},
 					"expectedBuildId":{"type":"string"},
-					"action":{"type":"string","enum":["registry","snapshot","features","preflight","execute","backgroundCompile","exportTrace","specializationPolicy"],"description":"snapshot includes compilation.contentDedupeTasks for shared bytecode and activeReuseTasks/previousReuseTasks for verified disk content reuse. backgroundCompile enables demand-only background compilation, drops unstarted startup precompiles that no draw or explicit compile requested, and wakes the dispatcher; result.changed reports whether the mode changed."},
-					"preparationMode":{"type":"integer","enum":[0,1,2],"description":"specializationPolicy only. Omit to read. 0: Next restart; 1: Transitions (experimental); 2: Gameplay (experimental). Applies to cache, compiler and D3D stages; preserves resident objects and discoveries."},
-					"residentOnly":{"type":"boolean","deprecated":true,"description":"Legacy specializationPolicy input. Either value selects Next restart; an explicit preparationMode wins."},
+					"action":{"type":"string","enum":["registry","snapshot","features","preflight","execute","backgroundCompile","exportTrace"],"description":"snapshot includes compilation.contentDedupeTasks for shared bytecode and activeReuseTasks/previousReuseTasks for verified disk content reuse. backgroundCompile enables demand-only background compilation, drops unstarted startup precompiles that no draw or explicit compile requested, and wakes the dispatcher; result.changed reports whether the mode changed."},
 					"path":{"type":"string","description":"exportTrace only: UTF-8 destination relative to the Community Shaders log directory; defaults to compile-trace.json. The returned path is UTF-8. Null characters, malformed UTF-8 and paths outside that directory are rejected."},
 					"mutation":{
 						"type":"object",
@@ -573,54 +549,15 @@ namespace CSX::Api::ShaderDevBenchBridge
 				}
 			},
 			"outputSchema":{
-				"$defs":{
-					"specializationPreparation":{
-						"type":["object","null"],
-						"properties":{
-							"sourceCompilationAllowed":{"type":"boolean"},
-							"mode":{"type":"integer","enum":[0,1,2]},
-							"admissionReason":{"enum":["blocking_startup","policy_or_initial_world","transition","gameplay"]},
-							"transitionKinds":{"type":"integer","minimum":0,"maximum":7},
-							"windowGeneration":{"type":"integer","minimum":0},
-							"queued":{"type":"integer","minimum":0},
-							"deferred":{"type":"integer","minimum":0},
-							"inFlight":{"type":"integer","minimum":0},
-							"awaitingPublication":{"type":"integer","minimum":0},
-							"activeBudget":{"type":"integer","minimum":1},
-							"cacheStages":{"type":"integer","minimum":0},
-							"sourceStages":{"type":"integer","minimum":0},
-							"deviceStages":{"type":"integer","minimum":0},
-							"postWindowCompletions":{"type":"integer","minimum":0},
-							"cacheHits":{"type":"integer","minimum":0},
-							"sourceCompiles":{"type":"integer","minimum":0},
-							"discoveredRequests":{"type":"integer","minimum":0,"maximum":8192},
-							"discoveryPersistenceFailed":{"type":"boolean"},
-							"pendingComposites":{"type":"integer","minimum":0}
-						}
-					}
-				},
 				"type":"object",
 				"description":"Invalid UTF-8 in output strings is replaced with U+FFFD; valid UTF-8 output is unchanged. Disk-cache rollback flags in each snapshot are coherent; installation remains not_checked until boot admission finishes, then remains fixed; other counters may advance independently.",
 				"properties":{
 					"result":{
 						"type":"object",
 						"properties":{
-							"residentOnly":{"type":"boolean","deprecated":true},
-							"preparationMode":{"type":"integer","enum":[0,1,2]},
-							"preparation":{"$ref":"#/$defs/specializationPreparation"},
-							"changed":{"type":"boolean"},
-							"scope":{"type":"string","const":"optional_shader_preparation"},
-							"queuedWorkRetained":{"type":"boolean","const":true},
 							"snapshot":{
 								"type":"object",
 								"properties":{
-									"compilation":{
-										"type":"object",
-										"properties":{
-											"residentOnlyLightingSpecializations":{"type":"boolean"},
-											"specializationPreparation":{"$ref":"#/$defs/specializationPreparation"}
-										}
-									},
 									"diskCache":{
 										"type":"object",
 										"properties":{

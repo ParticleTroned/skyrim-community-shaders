@@ -10,20 +10,11 @@ foreach(_lookup IN ITEMS VertexShaderLookup PixelShaderLookup)
     endif()
     file(APPEND "${OUTPUT_DIRECTORY}/shader_block_lookup_contract.h" "${_declaration}\n")
 endforeach()
-extract_between("${_header}" "static constexpr uint32_t kLightingDryWeather"
-    "enum class LightingShaderFlags" "shader_block_lighting_constants.h")
 extract_between(
     "${_source}" "RE::BSGraphics::VertexShader* ShaderCache::GetVertexShaderIfCached("
     "template <typename Interface, typename Cache>" "shader_block_vertex_under_test.h"
 )
 extract_between(
     "${_source}" "RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader("
-    "void ShaderCache::SelectLightingPixelShader(" "shader_block_pixel_under_test.h"
+    "ShaderCache::~ShaderCache()" "shader_block_pixel_compute_under_test.h"
 )
-extract_between(
-    "${_source}" "RE::BSGraphics::ComputeShader* ShaderCache::GetComputeShader("
-    "ShaderCache::~ShaderCache()" "shader_block_compute_under_test.h"
-)
-
-extract_between("${_source}" "bool ShaderCache::UsesRuntimeLightingSpecializationPolicy() const"
-    "void ShaderCache::RecordLightingSpecializationMiss(" "runtime_specialization_policy.h")

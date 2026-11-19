@@ -25,8 +25,6 @@
 #include "Utils/ContentHash.h"
 #include "Utils/ShaderAllocation.h"
 #include "Utils/ShaderContentReuse.h"
-#include "Utils/ShaderInclude.h"
-#include "Utils/ShaderSpecializationRequests.h"
 #include "Utils/ShaderTrackingKeyCache.h"
 #include "Utils/WinApi.h"
 
@@ -237,8 +235,7 @@ namespace SIE
 		{
 			Pending,
 			Failed,
-			Completed,
-			Deferred
+			Completed
 		};
 		ShaderCompilationTask(ShaderClass shaderClass, const RE::BSShader& shader,
 			uint32_t descriptor, bool a_precompile = false);
@@ -264,8 +261,6 @@ namespace SIE
 		RE::BSShader::Type GetType() const { return shader.shaderType.get(); }
 		/** @brief True for speculative startup work that rendering has not requested. */
 		bool IsPrecompile() const { return precompile; }
-		/** True when a stage lost admission rather than encountering a compiler error. */
-		bool IsDeferred() const { return deferred; }
 		/** @brief Retains queued startup work when a draw or explicit compile requests it. */
 		void RequireForRendering() { precompile = false; }
 
@@ -282,7 +277,6 @@ namespace SIE
 		int64_t enqueuedQpc = 0;
 		uint64_t generation = 0;
 		bool precompile = false;
-		mutable bool deferred = false;
 	};
 }
 
@@ -663,8 +657,7 @@ namespace SIE
 		void ResolvePendingFailure(
 			const std::string& key,
 			RE::BSShader::Type a_type,
-			std::optional<uint64_t> a_taskGeneration = std::nullopt,
-			bool a_deferred = false);
+			std::optional<uint64_t> a_taskGeneration = std::nullopt);
 
 		ID3DBlob* GetCompletedShader(const std::string& a_key);
 		ID3DBlob* GetCompletedShader(const SIE::ShaderCompilationTask& a_task);
@@ -714,88 +707,29 @@ namespace SIE
 			}
 		}
 
-		/** Cached lookups never compile; specialization lookups queue exact variants without fallback. */
+		/** Cached lookups never schedule compilation; draw lookups permit compatible deferred fallback. */
 		enum class PixelShaderLookup
 		{
 			Compile,
 			Precompile,
 			Draw,
-			Specialization,
 			Cached
 		};
 
 		/** Draw lookups may use the other deferred category layout while the exact variant compiles. */
 		RE::BSGraphics::PixelShader* GetPixelShader(const RE::BSShader& shader,
 			uint32_t descriptor, PixelShaderLookup a_lookup = PixelShaderLookup::Compile);
-		/** Binds a compatible per-draw lighting variant, retaining the technique shader while it compiles. */
-		void SelectLightingPixelShader(const RE::BSShader& shader, uint32_t specializationFlags);
-		/** Deprecated compatibility mapping: either value selects Next restart. */
-		void SetResidentOnlyLightingSpecializations(bool enabled);
-		/** Deprecated compatibility view: true only in Next restart mode. */
-		bool ResidentOnlyLightingSpecializations() const { return GetPreparationMode() == ShaderCompilationSchedulingPolicy::PreparationMode::StartupOnly; }
-		/** Sets the cumulative optional preparation policy without invalidating resident shaders. */
-		void SetPreparationMode(ShaderCompilationSchedulingPolicy::PreparationMode mode);
-		ShaderCompilationSchedulingPolicy::PreparationMode GetPreparationMode() const { return preparationMode.load(std::memory_order_acquire); }
-		/** Actual normal blocking startup, independent of runtime preparation permission. */
-		bool IsBlockingShaderStartup() const;
-		enum class OptionalStage
-		{
-			Cache,
-			Source,
-			Device
-		};
-		/** Serializes a ready worker's stage admission against mode and transition edges. */
-		bool TryAdmitOptionalShaderStage(OptionalStage stage);
-		/** Registers passive core listeners on every supported runtime. */
-		void RegisterShaderPreparationEvents();
-		/** Publishes a real loading/sleep/wait interval, never a persistence grace period. */
-		void SetShaderPreparationTransition(uint8_t kind, bool active);
-		/** Closes runtime admission immediately on return to the main menu. */
-		void SetShaderPreparationMainMenu(bool active);
-		/** Owner-thread reconciliation, stale-result rejection and nonblocking publication. */
-		void TickOptionalShaderPreparation(bool loading, bool mainMenu, bool safeMode, uint64_t observedWindow);
-		uint64_t GetShaderPreparationWindowGeneration();
-		using OptionalPreparationIdentity = ShaderCompilationSchedulingPolicy::PreparationIdentity;
-		/** Captures source/configuration ownership before assembling compiler inputs. */
-		OptionalPreparationIdentity CaptureOptionalPreparationIdentity(uint64_t ownerGeneration = 0) const;
-		/** Adds bounded deduplicated work to the existing dispatcher's shared budget. */
-		bool QueueOptionalShaderPreparation(uint64_t key, OptionalPreparationIdentity identity, std::function<bool()> run, std::function<void()> publish);
-		bool CanQueueOptionalShaderPreparation(uint64_t key, OptionalPreparationIdentity identity);
-
-		/** Captures standalone compiler/cache identity on the settings owner. */
-		Util::ContentHash::Hash128 CaptureStandaloneCompileStateDigest() const;
-		uint64_t GetShaderPreparationInputGeneration() const;
-		void RecordOptionalShaderPreparation(bool cacheHit, uint64_t sourceCompiles);
-		size_t GetShaderSpecializationRequestCount() const;
-		/** Includes background boot after DataLoaded, before startup work finishes. */
-		bool UsesRuntimeLightingSpecializationPolicy() const;
-		/** Records a current startup descriptor as an admissible base for discovery replay. */
-		void RegisterSpecializationBase(RE::BSShader::Type type, uint32_t descriptor);
-		/** Queues previously discovered variants only when their base is supported by this startup. */
-		void PrewarmDiscoveredPixelShaders(const RE::BSShader& shader);
-		/** In-memory discovery; persistence uses the cache writer and its save/load I/O gate. */
-		void RememberShaderSpecialization(Util::ShaderSpecializationRequest request) noexcept;
-		/** Returns the bounded history loaded before gameplay, excluding discoveries from this session. */
-		std::vector<Util::ShaderSpecializationRequest> GetStartupShaderSpecializations();
-		/** Returns the current bounded discovery backlog without filesystem work after initialization. */
-		std::vector<Util::ShaderSpecializationRequest> GetDiscoveredShaderSpecializations();
-#ifdef DEVBENCH_BRIDGE_ENABLED
-		/** Returns discovery and preparation state without filesystem access. */
-		nlohmann::json GetSpecializationPreparationStatus() const;
-#endif
-		/** Includes optional composite workers in the startup wait without changing graphics task counters. */
-		void BeginCompositePreparation() { pendingCompositePreparations.fetch_add(1, std::memory_order_acq_rel); }
 		RE::BSGraphics::ComputeShader* GetComputeShader(const RE::BSShader& shader,
 			uint32_t descriptor);
 
 		RE::BSGraphics::VertexShader* MakeAndAddVertexShader(const RE::BSShader& shader,
 			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
 		RE::BSGraphics::PixelShader* MakeAndAddPixelShader(const RE::BSShader& shader,
-			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt, bool* a_deferred = nullptr);
+			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
 		RE::BSGraphics::ComputeShader* MakeAndAddComputeShader(const RE::BSShader& shader,
 			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
 
-		static std::string GetDefinesString(const RE::BSShader& shader, uint32_t descriptor, ShaderClass shaderClass = ShaderClass::Pixel);
+		static std::string GetDefinesString(const RE::BSShader& shader, uint32_t descriptor);
 
 		uint64_t GetCachedHitTasks();
 		uint64_t GetCompletedTasks();
@@ -896,10 +830,6 @@ namespace SIE
 		std::jthread managementJthread;  // dedicated thread for ManageCompilationSet (not in pool)
 		/** @brief Sets compilation mode and wakes the dispatcher; returns the previous mode. */
 		bool SetBackgroundCompilation(bool value);
-		/** Ends startup include retention and checkpoints the legacy manifest before gameplay. */
-		void FinishStartupPreparation();
-		/** Returns bounded include reuse only while optimized blocking startup is active. */
-		Util::ShaderInclude::StartupCache* GetStartupIncludeCache(bool developerMode);
 		std::atomic<bool> backgroundCompilation = false;
 		std::atomic<bool> menuLoaded = false;
 		// Set only after DataLoaded and the initial compilation batch have both
@@ -930,23 +860,6 @@ namespace SIE
 			LODLandNoise = 18,
 			MTLandLODBlend = 19,
 		};
-
-		static constexpr uint32_t kLightingDryWeather = 1u << 21;
-		static constexpr uint32_t kLightingSnowCoverInactive = 1u << 19;
-		static constexpr uint32_t kLightingNoMeshVariation = 1u << 7;
-		static constexpr uint32_t kLightingNoLocalLights = 1u << 8;
-		static constexpr uint32_t kLightingNoContactShadows = 1u << 13;
-		static constexpr uint32_t kLightingNoLegacySubsurface = 1u << 17;
-		static constexpr uint32_t kLightingSpecializationMask = kLightingDryWeather | kLightingSnowCoverInactive | kLightingNoMeshVariation |
-		                                                        kLightingNoLocalLights | kLightingNoContactShadows | kLightingNoLegacySubsurface;
-		static constexpr uint32_t kEffectAmbientWorldIBL = 1u << 28;
-		/** Optional pixel flags are separate from engine flags and category output layouts. */
-		static constexpr uint32_t GetPixelSpecializationMask(RE::BSShader::Type type)
-		{
-			return type == RE::BSShader::Type::Lighting ? kLightingSpecializationMask :
-			       type == RE::BSShader::Type::Effect   ? kEffectAmbientWorldIBL :
-			                                              0u;
-		}
 
 		enum class LightingShaderFlags : uint32_t
 		{
@@ -981,29 +894,6 @@ namespace SIE
 			FurShells = 1u << 30,
 			FurShellsDepth = 1u << 31
 		};
-		static_assert((static_cast<uint32_t>(LightingShaderFlags::DetailMaps) & kLightingSpecializationMask) == 0);
-
-		/** Reports mesh techniques whose texture sampling can omit Terrain Variation. */
-		static constexpr bool SupportsMeshVariationVariant(uint32_t descriptor)
-		{
-			constexpr auto excluded = static_cast<uint32_t>(LightingShaderFlags::FurShells) |
-			                          static_cast<uint32_t>(LightingShaderFlags::Skinned) |
-			                          static_cast<uint32_t>(LightingShaderFlags::ProjectedUV) |
-			                          static_cast<uint32_t>(LightingShaderFlags::DoAlphaTest) |
-			                          static_cast<uint32_t>(LightingShaderFlags::AdditionalAlphaMask);
-			if (descriptor & excluded)
-				return false;
-			switch (static_cast<LightingShaderTechniques>((descriptor >> 24) & 0x3F)) {
-			case LightingShaderTechniques::None:
-			case LightingShaderTechniques::Envmap:
-			case LightingShaderTechniques::Glowmap:
-			case LightingShaderTechniques::Parallax:
-			case LightingShaderTechniques::ParallaxOcc:
-				return true;
-			default:
-				return false;
-			}
-		}
 
 		enum class BloodSplatterShaderTechniques
 		{
@@ -1322,7 +1212,6 @@ namespace SIE
 		bool isAsync = true;
 		bool isDump = false;
 		bool hideError = false;
-		Util::ShaderInclude::StartupCache startupIncludeCache;
 		std::atomic<bool> useFileWatcher = false;
 		std::atomic_bool pendingClear{ false };
 
@@ -1332,42 +1221,6 @@ namespace SIE
 		std::atomic_uint64_t graphicsShaderRevision{ 0 };
 		std::mutex vertexShadersMutex;
 		std::mutex pixelShadersMutex;
-		std::atomic<ShaderCompilationSchedulingPolicy::PreparationMode> preparationMode{ ShaderCompilationSchedulingPolicy::PreparationMode::StartupOnly };
-		struct OptionalPreparation
-		{
-			uint64_t key = 0, lastAttempt = UINT64_MAX;
-			OptionalPreparationIdentity identity;
-			std::function<bool()> run;
-			std::function<void()> publish;
-			bool inFlight = false, done = false, startupCounted = false, queued = false, publicationQueued = false;
-		};
-		std::unordered_map<uint64_t, std::shared_ptr<OptionalPreparation>> optionalPreparations;
-		std::deque<std::shared_ptr<OptionalPreparation>> optionalReady, optionalCompleted, optionalPublications;
-		uint64_t optionalDispatchWindow = UINT64_MAX;
-		uint64_t optionalMaintenanceRevision = UINT64_MAX, optionalMaintenanceInputs = UINT64_MAX;
-		bool optionalPublicationSweep = false;
-		bool IsOptionalPreparationCurrent(const OptionalPreparation& task) const
-		{
-			return task.identity.revision == GetGraphicsShaderRevision() && task.identity.inputs == GetShaderPreparationInputGeneration();
-		}
-		uint64_t optionalWindow = 0;
-#ifdef DEVBENCH_BRIDGE_ENABLED
-		uint64_t optionalPostCloseCompletions = 0;
-		uint64_t optionalCacheStages = 0, optionalSourceStages = 0, optionalDeviceStages = 0;
-		uint64_t optionalCacheHits = 0, optionalSourceCompiles = 0;
-#endif
-		uint32_t optionalInFlight = 0;
-		uint8_t optionalTransitions = 0;
-		bool optionalMainMenu = true, optionalSafeMode = true, optionalWorldReady = false;
-		bool OptionalPreparationAllowedLocked() const;
-		bool DispatchOptionalPreparationLocked();
-		bool QueueOptionalPixelShader(const RE::BSShader& shader, uint32_t descriptor);
-		void RequestPixelSpecialization(const RE::BSShader& shader, uint32_t descriptor);
-		void ReplayLivePixelSpecializations(const RE::BSShader& shader, uint32_t descriptor);
-		std::atomic_uint32_t pendingCompositePreparations{ 0 };
-		std::mutex specializationBasesMutex;
-		std::array<std::unordered_set<uint32_t>, 2> specializationBases;
-
 		std::mutex computeShadersMutex;
 		CompilationSet compilationSet;
 		ankerl::unordered_dense::map<std::string, ShaderCacheResult> shaderMap{};
@@ -1384,7 +1237,6 @@ namespace SIE
 		std::deque<std::string> deferredDiskWriteOrder;
 		static constexpr std::size_t kMaximumDeferredDiskWrites = 8192;
 		static constexpr std::size_t kDeferredDiskWriteBatchSize = 64;
-		static constexpr auto kSpecializationFlushDelay = std::chrono::milliseconds(250);
 		std::mutex deferredDiskWritesMutex;
 		std::condition_variable_any deferredDiskWritesCV;
 		std::jthread deferredDiskWriterJthread;
@@ -1393,9 +1245,6 @@ namespace SIE
 		std::atomic_bool saveLoadDiskPersistenceBlocked{ false };
 		std::size_t deferredDiskWritesInFlight = 0;  // guarded by deferredDiskWritesMutex
 		bool deferredManifestFlushPending = false;   // guarded by deferredDiskWritesMutex
-		bool deferredSpecializationFlushPending = false;
-		void QueueSpecializationHistoryFlush();
-		void FlushSpecializationHistory();
 
 		// efsw file watcher
 		efsw::FileWatcher* fileWatcher = nullptr;

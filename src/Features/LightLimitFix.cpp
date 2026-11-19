@@ -1,5 +1,4 @@
 #include "LightLimitFix.h"
-#include "Deferred.h"
 #include "EngineFix.h"
 #include "Features/InverseSquareLighting/Common.h"
 #include "Globals.h"
@@ -11,7 +10,6 @@
 #include "LinearLighting.h"
 #include "LocationContext.h"
 #include "Menu/SettingsPage.h"
-#include "TerrainVariation.h"
 #include "Utils/UI.h"
 
 #include "Menu/ThemeManager.h"
@@ -1415,10 +1413,6 @@ LightLimitFix::PerFrame LightLimitFix::GetCommonBufferData()
 	perFrame.EnableLightsVisualisation = settings.EnableLightsVisualisation;
 	perFrame.LightsVisualisationMode = settings.LightsVisualisationMode;
 	perFrame.ContactShadowFlags = PackContactShadowFlags(settings);
-	auto& shaderFlags = globals::state->lightingPixelShaderFlags;
-	shaderFlags &= ~SIE::ShaderCache::kLightingNoContactShadows;
-	if (loaded && perFrame.ContactShadowFlags == 0)
-		shaderFlags |= SIE::ShaderCache::kLightingNoContactShadows;
 	perFrame.ContactShadowParams = PackContactShadowParams(settings);
 	std::copy(clusterSize, clusterSize + 3, perFrame.ClusterSize);
 	return perFrame;
@@ -1560,7 +1554,6 @@ void LightLimitFix::SetupRenderTargetResources()
 
 void LightLimitFix::Reset()
 {
-	zeroClusteredLightsFrame = UINT32_MAX;
 	LightLimitFixDetail::LightAttach::Update(settings.SkipRedundantLightAttach, settings.LightAttachRefreshFrames,
 		loaded && !globals::state->IsFeatureDisabled(GetShortName()));
 	LightLimitFixDetail::ShadowCulling::Update(settings.ShadowCulling, loaded && !globals::state->IsFeatureDisabled(GetShortName()));
@@ -1852,22 +1845,22 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 #endif
 }
 
-bool LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
+void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 {
 	auto shaderCache = globals::shaderCache;
 	auto context = globals::d3d::context;
 	auto smState = globals::game::smState;
 
 	if (!shaderCache->IsEnabled())
-		return false;
+		return;
 
 	if (!smState || !strictLightDataCB) {
-		return false;
+		return;
 	}
 
 	auto accumulator = *globals::game::currentAccumulator.get();
 	if (!accumulator) {
-		return false;
+		return;
 	}
 
 	auto shadowSceneNode = smState->shadowSceneNode[0];
@@ -1889,7 +1882,6 @@ bool LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 		ID3D11Buffer* buffer = { strictLightDataCB->CB() };
 		context->PSSetConstantBuffers(3, 1, &buffer);
 	}
-	return shadowSceneNode && isWorld && isEmpty;
 }
 
 void LightLimitFix::SetLightPosition(LightLimitFix::LightData& a_light, RE::NiPoint3 a_initialPosition, bool a_cached)
@@ -3240,7 +3232,6 @@ float3 LightLimitFix::Saturation(float3 color, float saturation)
 void LightLimitFix::UpdateLights()
 {
 	ZoneScopedN("LLF::UpdateLights");
-	zeroClusteredLightsFrame = UINT32_MAX;
 
 	auto clearCachedParticleLights = [&]() {
 		std::lock_guard<std::shared_mutex> lk{ cachedParticleLightsMutex };
@@ -3567,8 +3558,6 @@ void LightLimitFix::UpdateLights()
 	}
 
 	UpdateStructure();
-	if (lightCount == 0)
-		zeroClusteredLightsFrame = globals::state->frameCount;
 }
 
 void LightLimitFix::UpdateStructure()
@@ -3707,20 +3696,7 @@ void LightLimitFix::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* T
 	if (directionalSlotSafe) {
 		func(This, Pass, RenderFlags);
 	}
-	const bool noStrictLights = singleton.BSLightingShader_SetupGeometry_After(Pass);
-	uint32_t specialization = 0;
-	const auto& state = *globals::state;
-	const auto& variation = globals::features::terrainVariation;
-	if (directionalSlotSafe && globals::deferred->deferredPass && noStrictLights &&
-		singleton.zeroClusteredLightsFrame == state.frameCount && !singleton.currentEnableLightsVisualisation && !singleton.settings.EnableLightsVisualisation &&
-		Pass && Pass->geometry)
-		specialization |= SIE::ShaderCache::kLightingNoLocalLights;
-	if (directionalSlotSafe && variation.loaded && Pass && Pass->geometry &&
-		SIE::ShaderCache::SupportsMeshVariationVariant(state.modifiedPixelDescriptor) &&
-		(globals::deferred->deferredPass || (state.permutationData.ExtraShaderDescriptor & static_cast<uint32_t>(State::ExtraShaderDescriptors::IsReflections))) &&
-		!(state.permutationData.ExtraFeatureDescriptor & static_cast<uint32_t>(State::ExtraFeatureDescriptors::TVMeshVariation)))
-		specialization |= SIE::ShaderCache::kLightingNoMeshVariation;
-	globals::shaderCache->SelectLightingPixelShader(*This, specialization);
+	singleton.BSLightingShader_SetupGeometry_After(Pass);
 }
 
 void LightLimitFix::Hooks::BSEffectShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)

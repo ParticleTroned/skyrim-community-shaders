@@ -2,10 +2,6 @@
 #	undef SNOW_COVER
 #endif
 
-#if defined(SNOW_COVER_INACTIVE)
-#	undef SNOW_COVER
-#endif
-
 #include "Common/ReverseZ.hlsli"
 #define LIGHTING
 #define LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS
@@ -1276,11 +1272,7 @@ WetnessSurfaceState CreateWetnessSurfaceState(
 	float wetnessLightingStrength = 0.0;
 	float filmHighlightReduction = 0.0;
 	float rainFilmWeight = 0.0;
-#		if defined(DRY_WEATHER)
-	const bool wetnessEnabled = false;
-#		else
 	const bool wetnessEnabled = (CS_WETNESS_SETTINGS.EnableWetnessEffects != 0);
-#		endif
 	float shoreHeightDelta = input.WorldPosition.z - waterHeight;
 	const bool wetSurfaceAllowed = shoreHeightDelta > 0.5;
 	// Keep puddle spawning farther away from the waterline than generic wet film.
@@ -4019,13 +4011,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		transmissionColor += pointLightOutput.transmission;
 	}
 
-#		elif !defined(LLF_NO_LOCAL_LIGHTS) || defined(LLFDEBUG)
+#		else
 
 	uint numClusteredLights = 0;
 	uint totalLightCount = LightLimitFix::NumStrictLights;
 	uint clusterIndex = 0;
 	uint lightOffset = 0;
-#			if defined(DEFERRED) && !defined(LLF_NO_CONTACT_SHADOWS)
+#			if defined(DEFERRED)
 	const bool contactShadowsEnabled = SharedData::lightLimitFixSettings.ContactShadowFlags != 0;
 	uint contactShadowOffset = 0;
 	uint contactShadowCount = 0;
@@ -4039,7 +4031,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		numClusteredLights = LightLimitFix::lightGrid[clusterIndex].lightCount;
 		totalLightCount += numClusteredLights;
 		lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
-#			if defined(DEFERRED) && !defined(LLF_NO_CONTACT_SHADOWS)
+#			if defined(DEFERRED)
 		[branch] if (contactShadowsEnabled)
 			LightLimitFix::GetContactShadowClusterRange(clusterIndex, contactShadowOffset, contactShadowCount);
 #			endif
@@ -4091,7 +4083,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		float3 normalizedLightDirection = lightDirection / lightDist;
 		float lightAngle = dot(worldNormal.xyz, normalizedLightDirection.xyz);
-#			if defined(DEFERRED) && !defined(LLF_NO_CONTACT_SHADOWS)
+#			if defined(DEFERRED)
 		const bool isParticleLight = (light.lightFlags & LightLimitFix::LightFlags::Particle) != 0;
 		const bool canUseContactShadow = contactShadowsEnabled && LightLimitFix::CanUseContactShadows(light, isParticleLight);
 		bool isContactShadowCandidate = false;
@@ -4142,7 +4134,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif  // defined(EMAT) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
 
 		float contactShadow = 1.0;
-#			if defined(DEFERRED) && !defined(LLF_NO_CONTACT_SHADOWS)
+#			if defined(DEFERRED)
 		[branch] if (
 			isContactShadowCandidate &&
 			lightAngle > 0.0 &&

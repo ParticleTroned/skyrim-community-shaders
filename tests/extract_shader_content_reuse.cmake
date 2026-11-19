@@ -10,6 +10,4 @@ extract_between("${_cache}" "\t\tstruct ShaderPackIdentity" "\n\t\tstd::string G
 extract_between("${_cache}" "\t\tstd::optional<ShaderPackIdentity> BuildShaderPackIdentity(" "\n\t\tvoid CompactShaderPacksIfNeeded()" "content_pack_reuse.h")
 extract_between("${_cache}" "\t\tbool SaveShaderBlobToDisk(" "\n\t}\n\n\t// Custom include handler" "content_persist.h")
 extract_between("${_cache}" "\t\tvoid RecordShaderDigest(" "\n\t\tstruct ShaderPackIdentity" "content_record_digest.h")
-extract_between("${_cache}" "\t\tconstexpr uint64_t kManifestFlushBatchSize" "\n\t\tstd::atomic<uint64_t> g_diskCacheGeneration" "content_manifest_policy.h")
-extract_between("${_cache}" "\t\tvoid FlushShaderCacheManifestLocked()" "\n\t\tvoid FlushShaderCacheManifest()" "content_manifest_flush.h")
 extract_between("${_cache}" "\t\tstruct GlobalCompileStateSnapshot" "\n\t\tconstexpr uint64_t kManifestFlushBatchSize" "content_abi_snapshot.h")

@@ -22,7 +22,6 @@
 #include "Features/WaterAppearance.h"
 #include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
-#include "State.h"
 #include "TruePBR.h"
 
 #include <array>
@@ -249,12 +248,7 @@ namespace
 std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 {
 	auto grassLightingSettings = globals::features::grassLighting.settings;
-	const auto wetternessSettings = globals::features::wetterness.PrepareFrameData();
-	const auto iblSettings = globals::features::ibl.PrepareFrameData();
-	const auto adaptiveSettings = globals::features::adaptiveBrightness.GetCommonBufferData();
-	globals::state->effectAmbientIBLUploaded = adaptiveSettings.useAmbientEffectLighting &&
-	                                           globals::features::ibl.loaded && globals::features::dynamicCubemaps.loaded &&
-	                                           iblSettings.EnableIBL && iblSettings.DALCMode == 0 && iblSettings.DALCAmount == 0.0f;
+	const auto wetternessSettings = globals::features::wetterness.GetCommonBufferData();
 	grassLightingSettings.Glossiness = globals::features::wetterness.GetEffectiveGrassGlossiness(
 		grassLightingSettings.Glossiness,
 		wetternessSettings);
@@ -275,15 +269,15 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::lodBlending.GetCommonBufferData(),
 		globals::features::hairSpecular.settings,
 		globals::features::terrainVariation.settings,
-		iblSettings,
+		globals::features::ibl.GetCommonBufferData(),
 		globals::features::extendedTranslucency.GetCommonBufferData(),
-		adaptiveSettings,
-		globals::features::linearLighting.PrepareFrameData(),
+		globals::features::adaptiveBrightness.GetCommonBufferData(),
+		globals::features::linearLighting.GetCommonBufferData(),
 		globals::features::terrainBlending.settings,
 		globals::features::truePBR.settings,
 		globals::features::foliageLighting.GetCommonBufferData(),
 		globals::features::unifiedWater.GetCommonBufferData(),
 		globals::features::adaptiveBrightness.GetEffectiveWaterAppearanceSettings(),
 		globals::features::adaptiveBrightness.GetEffectiveBloomSettings(),
-		globals::features::snowCover.PrepareFrameData(a_inWorld));
+		globals::features::snowCover.GetCommonBufferData(a_inWorld));
 }

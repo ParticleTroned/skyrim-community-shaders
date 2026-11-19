@@ -253,7 +253,7 @@ int main()
 		for (bool vr : { false, true })
 			for (bool pbr : { false, true })
 				for (bool lodBlending : { false, true }) {
-					std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "SNOW_COVER", "1" }, { "DO_ALPHA_TEST", "1" }, { "NO_LEGACY_SUBSURFACE", "1" }, { "DEFERRED", "1" } };
+					std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "SNOW_COVER", "1" }, { "DO_ALPHA_TEST", "1" }, { "DEFERRED", "1" } };
 					if (vr)
 						defines.push_back({ "VR", "1" });
 					if (pbr)
@@ -266,16 +266,14 @@ int main()
 		std::cout << "Snow weather distance: positive, zero and negative accumulation passed on WARP (SE/AE and VR, optimized/reference)\n";
 		for (bool vr : { false, true })
 			for (bool animated : { false, true })
-				for (bool inactive : { false, true }) {
+				for (bool snowCover : { false, true }) {
 					std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "TRUE_PBR", "1" }, { "DO_ALPHA_TEST", "1" }, { "DEFERRED", "1" } };
 					if (vr)
 						defines.push_back({ "VR", "1" });
 					if (animated)
 						defines.push_back({ "TREE_ANIM", "1" });
-					if (inactive) {
+					if (snowCover)
 						defines.push_back({ "SNOW_COVER", "1" });
-						defines.push_back({ "SNOW_COVER_INACTIVE", "1" });
-					}
 					CompilePixel(std::move(defines), "main", L"package/Shaders/Lighting.hlsl");
 				}
 		size_t materialCount = 0;

@@ -106,7 +106,6 @@ public:
 		uint32_t vertexDescriptor = 0, pixelDescriptor = 0;
 		bool pixelCleared = false;
 	} techniqueShaderSelection;
-	uint64_t techniqueShaderSequence = 0, techniqueShaderRevision = 0;
 	// A deferred draw must be withheld if neither compatible pixel variant is ready.
 	bool deferredPixelShaderMissing = false;
 	RE::BSShader* currentShader = nullptr;
@@ -349,7 +348,6 @@ public:
 	uint lastPixelDescriptor = 0;
 	uint modifiedVertexDescriptor = 0;
 	uint modifiedPixelDescriptor = 0;
-	uint32_t lightingPixelShaderFlags = 0;
 	uint lastModifiedVertexDescriptor = 0;
 	uint lastModifiedPixelDescriptor = 0;
 	uint lastExtraDescriptor = 0;
@@ -530,8 +528,6 @@ public:
 
 	PermutationCB permutationData{};
 	PermutationCB permutationDataPrevious{};
-	// Matches the effective feature data uploaded for the current scene pass.
-	bool effectAmbientIBLUploaded = false;
 
 	Util::FrameChecker frameChecker;
 	uint frameCount = 0;

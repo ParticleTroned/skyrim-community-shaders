@@ -3,7 +3,6 @@
 #include "Menu.h"
 #include "Menu/SettingsPage.h"
 #include "Profiler.h"
-#include "ShaderCache.h"
 #include "State.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
@@ -2239,18 +2238,6 @@ void Wetterness::RestorePerformanceCostMeasurementState(const json& a_state)
 	InvalidateSanitizedSettingsCache();
 	ResetRuntimeState();
 	DetectCurrentPreset();
-}
-
-Wetterness::PerFrame Wetterness::PrepareFrameData() const
-{
-	const auto data = GetCommonBufferData();
-	auto& flags = globals::state->lightingPixelShaderFlags;
-	constexpr auto dry = SIE::ShaderCache::kLightingDryWeather;
-	flags &= ~dry;
-	// The existing dry state includes the complete weather and post-rain timeline.
-	if (loaded && data.settings.EnableWetterness == 0u)
-		flags |= dry;
-	return data;
 }
 
 Wetterness::PerFrame Wetterness::GetCommonBufferData() const

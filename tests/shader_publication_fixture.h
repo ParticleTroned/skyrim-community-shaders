@@ -1,11 +1,9 @@
 #pragma once
 
-#include "../src/ShaderCompilationSchedulingPolicy.h"
 #include <array>
 #include <atomic>
 #include <barrier>
 #include <cassert>
-#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -127,24 +125,6 @@ namespace logger
 	void info(const char*, T&&...)
 	{}
 }
-namespace spdlog
-{
-	enum class level
-	{
-		info
-	};
-	constexpr bool should_log(level) { return false; }
-}
-namespace SKSE::stl
-{
-	template <class F>
-	struct scope_exit
-	{
-		F action;
-		explicit scope_exit(F f) : action(std::move(f)) {}
-		~scope_exit() { action(); }
-	};
-}
 namespace magic_enum
 {
 	const char* enum_name(RE::BSShader::Type) { return "Water"; }
@@ -191,18 +171,6 @@ struct Device
 } testDevice;
 namespace Util
 {
-	enum class SpecializationFamily : uint8_t
-	{
-		Lighting,
-		Effect,
-		Composite
-	};
-	struct ShaderSpecializationRequest
-	{
-		SpecializationFamily family;
-		uint32_t descriptor;
-	};
-
 	template <class... Args>
 	void SetResourceName(Resource* shader, const char* format, Args... args)
 	{
@@ -229,15 +197,11 @@ struct Blob
 	size_t GetBufferSize() const { return 1; }
 } blob;
 bool failCompile = false;
+bool failPixelReflection = false;
 std::function<void()> afterCompile;
 namespace SShaderCache
 {
-	struct PreparationInfo
-	{
-		const char* source = "unavailable";
-		uint32_t sourceCompiles = 0;
-	};
-	Blob* CompileShader(ShaderClass, const RE::BSShader&, uint32_t, bool, int*, std::optional<uint64_t>, PreparationInfo* = nullptr)
+	Blob* CompileShader(ShaderClass, const RE::BSShader&, uint32_t, bool, int*, std::optional<uint64_t>)
 	{
 		if (afterCompile)
 			afterCompile();
@@ -249,7 +213,7 @@ namespace SShaderCache
 	}
 	auto CreatePixelShader(const Blob&, const RE::BSShader&, uint32_t)
 	{
-		return std::make_unique<RE::BSGraphics::PixelShader>();
+		return failPixelReflection ? nullptr : std::make_unique<RE::BSGraphics::PixelShader>();
 	}
 }
 struct ShaderCache
@@ -285,24 +249,6 @@ struct ShaderCache
 		}
 	} compilationSet;
 	std::atomic_uint64_t graphicsShaderRevision{ 0 };
-	std::atomic_bool startupCompilationComplete{ false }, menuLoaded{ false }, backgroundCompilation{ false };
-	uint64_t GetGraphicsShaderRevision() const { return graphicsShaderRevision.load(); }
-	static constexpr uint32_t GetPixelSpecializationMask(RE::BSShader::Type) { return 0; }
-	enum class OptionalStage
-	{
-		Cache,
-		Source,
-		Device
-	};
-	bool TryAdmitOptionalShaderStage(OptionalStage)
-	{
-		assert(false && "Base shader publication must not request optional preparation");
-		return false;
-	}
-	void RememberShaderSpecialization(Util::ShaderSpecializationRequest) noexcept
-	{
-		assert(false && "Base shader publication must not queue specialization discovery");
-	}
 	std::unique_ptr<int> dependencyTracker;
 	std::mutex vertexShadersMutex, pixelShadersMutex;
 	std::array<std::unordered_map<uint32_t, std::unique_ptr<RE::BSGraphics::VertexShader>>, 1> vertexShaders;
@@ -318,7 +264,7 @@ struct ShaderCache
 	bool IsTaskStale(std::optional<uint64_t> a_taskGeneration) const;
 	bool IsTaskStale(std::optional<uint64_t> a_taskGeneration, RE::BSShader::Type a_type) const;
 	RE::BSGraphics::VertexShader* MakeAndAddVertexShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = {});
-	RE::BSGraphics::PixelShader* MakeAndAddPixelShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = {}, bool* = nullptr);
+	RE::BSGraphics::PixelShader* MakeAndAddPixelShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = {});
 };
 
 struct CompileDedupe

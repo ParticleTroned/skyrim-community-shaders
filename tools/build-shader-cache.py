@@ -1883,32 +1883,16 @@ def lighting_detail_map_policy(source_root: Path) -> tuple[int, int, frozenset[i
     return flag, excluded, techniques
 
 
-def append_lighting_specialization_variants(
+def append_lighting_detail_map_variants(
     config: dict[str, Any], source_root: Path, feature_states: dict[str, bool]
 ) -> int:
-    """Cover weather, deferred lighting and eligible Detail Maps pixel states."""
+    """Pair eligible Lighting pixels with their required Detail Maps variants."""
+    flag, excluded, techniques = lighting_detail_map_policy(source_root)
     header = (source_root / "src/ShaderCache.h").read_text(encoding="utf-8")
-    detail_flag, detail_excluded, detail_techniques = lighting_detail_map_policy(source_root)
-    specializations = []
-    mask = 0
-    for symbol, macro, feature, feature_macro, deferred_only in (
-        ("kLightingDryWeather", "DRY_WEATHER", "Wetterness", "WETTERNESS", False),
-        ("kLightingSnowCoverInactive", "SNOW_COVER_INACTIVE", "SnowCover", "SNOW_COVER", False),
-        ("kLightingNoContactShadows", "LLF_NO_CONTACT_SHADOWS", "LightLimitFix", "LIGHT_LIMIT_FIX", True),
-        ("kLightingNoLegacySubsurface", "NO_LEGACY_SUBSURFACE", None, None, True),
-        ("DetailMaps", "DETAIL_MAPS", "DetailMaps", None, False),
-    ):
-        match = re.search(rf"\b{symbol} = 1u? << (\d+)[,;]", header)
-        if match is None or int(match[1]) >= 32:
-            raise SystemExit(f"cannot locate runtime Lighting specialization flag: {symbol}")
-        flag = 1 << int(match[1])
-        if macro == "DETAIL_MAPS" and flag != detail_flag:
-            raise SystemExit("Detail Maps feature and shader descriptor flags disagree")
-        if mask & flag:
-            raise SystemExit("overlapping runtime Lighting specialization flags")
-        mask |= flag
-        specializations.append((flag, macro, feature, feature_macro, deferred_only))
-    macros = {macro for _, macro, _, _, _ in specializations}
+    match = re.search(r"\bDetailMaps = 1u? << (\d+)[,;]", header)
+    if match is None or int(match[1]) >= 32 or 1 << int(match[1]) != flag:
+        raise SystemExit("Detail Maps feature and shader descriptor flags disagree")
+    macro = "DETAIL_MAPS"
     delta = 0
     for shader in config["shaders"]:
         if shader["file"] != "Lighting.hlsl" or "PSHADER" not in shader["configs"]:
@@ -1917,9 +1901,8 @@ def append_lighting_specialization_variants(
         shared = [*config.get("common_defines", []), *config.get("common_pshader_defines", []),
                   *config.get("file_common_defines", {}).get("Lighting.hlsl", {}).get("PSHADER", []),
                   *stage.get("common_defines", [])]
-        shared_names = define_names(shared)
-        if macros & shared_names:
-            raise SystemExit("Lighting specialization must be scoped to a pixel entry")
+        if macro in define_names(shared):
+            raise SystemExit("Detail Maps must be scoped to a pixel entry")
         entries: dict[str, dict[str, Any]] = {}
         for entry in stage["entries"]:
             key = re.fullmatch(r"Lighting:Pixel:([0-9A-F]{1,8})", entry["entry"])
@@ -1927,75 +1910,21 @@ def append_lighting_specialization_variants(
                 raise SystemExit(f"invalid Lighting pixel entry: {entry['entry']}")
             descriptor = int(key[1], 16)
             defines = entry.get("defines", [])
-            names = define_names(defines)
-            for flag, macro, _, _, _ in specializations:
-                if bool(descriptor & flag) != (macro in names):
-                    raise SystemExit(f"Lighting specialization flag/macros disagree: {entry['entry']}")
-            general = [value for value in defines if normalized_define_name(value) not in macros]
-            variants = [(descriptor & ~mask, general)]
-            for flag, macro, feature, feature_macro, deferred_only in specializations:
-                if deferred_only and "DEFERRED" not in shared_names | names:
-                    continue
-                if feature is not None and not (feature_states.get(feature) and (feature_macro is None or feature_macro in shared_names | names)):
-                    continue
-                if flag == detail_flag and ((descriptor & ~mask) & detail_excluded or ((descriptor >> 24) & 0x3F) not in detail_techniques):
-                    continue
-                variants += [(bits | flag, [*values, macro]) for bits, values in tuple(variants)]
+            if bool(descriptor & flag) != (macro in define_names(defines)):
+                raise SystemExit(f"Detail Maps flag/macros disagree: {entry['entry']}")
+            general = [value for value in defines if normalized_define_name(value) != macro]
+            base = descriptor & ~flag
+            variants = [(base, general)]
+            if feature_states.get("DetailMaps") and not base & excluded and (base >> 24) & 0x3F in techniques:
+                variants.append((base | flag, [*general, macro]))
             for bits, values in variants:
                 variant_key = f"Lighting:Pixel:{bits:X}"
                 existing = entries.get(variant_key)
                 if existing is not None:
                     if pixel_entry_define_identity("Lighting.hlsl", variant_key, existing.get("defines", [])) != pixel_entry_define_identity("Lighting.hlsl", variant_key, values):
-                        raise SystemExit(f"conflicting Lighting specialization variant: {variant_key}")
+                        raise SystemExit(f"conflicting Detail Maps variant: {variant_key}")
                     continue
                 entries[variant_key] = {**entry, "entry": variant_key, "defines": values}
-        delta += len(entries) - len(stage["entries"])
-        stage["entries"] = list(entries.values())
-    return delta
-
-
-def append_effect_lighting_variants(
-    config: dict[str, Any], source_root: Path, feature_states: dict[str, bool]
-) -> int:
-    """Keep general fallbacks and bounded ambient-world Effect variants together."""
-    header = (source_root / "src/ShaderCache.h").read_text(encoding="utf-8")
-    match = re.search(r"kEffectAmbientWorldIBL = 1u << (\d+);", header)
-    if match is None or int(match[1]) >= 32:
-        raise SystemExit("cannot locate runtime ambient Effect specialization flag")
-    flag = 1 << int(match[1])
-    macro = "AMBIENT_WORLD_EFFECT_LIGHTING"
-    enabled = all(feature_states.get(feature) for feature in ("AdaptiveBrightness", "ImageBasedLighting", "DynamicCubemaps"))
-    delta = 0
-    for shader in config["shaders"]:
-        if shader["file"] != "Effect.hlsl" or "PSHADER" not in shader["configs"]:
-            continue
-        stage = shader["configs"]["PSHADER"]
-        shared = [*config.get("common_defines", []), *config.get("common_pshader_defines", []),
-                  *config.get("file_common_defines", {}).get("Effect.hlsl", {}).get("PSHADER", []),
-                  *stage.get("common_defines", [])]
-        shared_names = define_names(shared)
-        if macro in shared_names:
-            raise SystemExit("ambient Effect specialization must be scoped to a pixel entry")
-        entries: dict[str, dict[str, Any]] = {}
-        for entry in stage["entries"]:
-            key = re.fullmatch(r"Effect:Pixel:([0-9A-F]{1,8})", entry["entry"])
-            if key is None:
-                raise SystemExit(f"invalid Effect pixel entry: {entry['entry']}")
-            descriptor = int(key[1], 16)
-            defines = entry.get("defines", [])
-            if bool(descriptor & flag) != (macro in {normalized_define_name(value) for value in defines}):
-                raise SystemExit(f"ambient Effect flag/macros disagree: {entry['entry']}")
-            general = [value for value in defines if normalized_define_name(value) != macro]
-            eligible = enabled and {"IBL", "DYNAMIC_CUBEMAPS"} <= (shared_names | define_names(general))
-            for specialized in (False, True) if eligible else (False,):
-                variant_key = f"Effect:Pixel:{(descriptor & ~flag) | (flag if specialized else 0):X}"
-                variant_defines = [*general, macro] if specialized else general
-                existing = entries.get(variant_key)
-                if existing is not None:
-                    if pixel_entry_define_identity("Effect.hlsl", variant_key, existing.get("defines", [])) != pixel_entry_define_identity("Effect.hlsl", variant_key, variant_defines):
-                        raise SystemExit(f"conflicting ambient Effect variant: {variant_key}")
-                    continue
-                entries[variant_key] = {**entry, "entry": variant_key, "defines": variant_defines}
         delta += len(entries) - len(stage["entries"])
         stage["entries"] = list(entries.values())
     return delta
@@ -2068,10 +1997,8 @@ def filter_profile_defines(
     normalize_water_pixel_variants(config)
     category_count = append_character_category_variants(config, source_root)
     print(f"shader config: added {category_count} deferred character category variants")
-    lighting_delta = append_lighting_specialization_variants(config, source_root, feature_states)
-    print(f"shader config: Lighting specialization changed pixel variants by {lighting_delta}")
-    effect_delta = append_effect_lighting_variants(config, source_root, feature_states)
-    print(f"shader config: ambient Effect specialization changed pixel variants by {effect_delta}")
+    lighting_delta = append_lighting_detail_map_variants(config, source_root, feature_states)
+    print(f"shader config: Detail Maps changed pixel variants by {lighting_delta}")
     prepare_fxc_defines(config)
     out_path.write_text(
         yaml.safe_dump(config, sort_keys=False),

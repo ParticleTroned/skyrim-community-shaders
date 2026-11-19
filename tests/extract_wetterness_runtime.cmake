@@ -15,4 +15,3 @@ extract_between("${source}" "\tvoid SanitizeToggleSettings" "\n}\n\nNLOHMANN_DEF
 extract_between("${source}" "void Wetterness::ResetRuntimeState()" "void Wetterness::DrawEnabledCheckbox()" "wetterness_reset.h")
 extract_between("${source}" "bool Wetterness::HasPendingDrying()" "float Wetterness::GetEffectiveGrassGlossiness" "wetterness_activity.h")
 extract_between("${source}" "Wetterness::PerFrame Wetterness::GetCommonBufferData()" "void Wetterness::LoadSettings" "wetterness_update.h")
-extract_between("${source}" "Wetterness::PerFrame Wetterness::PrepareFrameData()" "Wetterness::PerFrame Wetterness::GetCommonBufferData()" "wetterness_prepare.h")

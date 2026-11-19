@@ -24,7 +24,7 @@ namespace
 
 	json Defaults()
 	{
-		return { { "General", { { "Enable Shaders", true }, { "Enable Async", true }, { "Resident Only Lighting Specializations", false } } },
+		return { { "General", { { "Enable Shaders", true }, { "Enable Async", true } } },
 			{ "Advanced", { { "Compiler Threads", std::int32_t{ 4 } }, { "Log Level", std::uint32_t{ 2 } },
 							  { "Refraction Scale", 1.0f }, { "Shader Defines", "DEFAULT" } } },
 			{ "Replace Original Shaders", { { "Lighting", true }, { "Water", true } } },
@@ -51,27 +51,6 @@ namespace
 		Check(defaults["Replace Original Shaders"]["Lighting"].get<bool>() && !defaults["Replace Original Shaders"]["Water"].get<bool>(), "Shader replacement flags were reset");
 		Check(defaults["Disable at Boot"]["Upscaling"].get<bool>() && defaults["Disable at Boot"]["WetnessEffects"].get<bool>() && !defaults["Disable at Boot"]["NewFeature"].get<bool>(), "Partial boot flags discarded saved choices");
 		Check(defaults["Upscaling"] == Defaults()["Upscaling"], "Core overlay synthesized a feature migration field");
-		Util::Settings::OverlayCoreSettings(defaults, "General", { { "Resident Only Lighting Specializations", true } });
-		Check(defaults["General"]["Resident Only Lighting Specializations"].get<bool>(), "Resident-only policy was not persisted");
-		Util::Settings::OverlayCoreSettings(defaults, "General", { { "Resident Only Lighting Specializations", "false" } });
-		Check(defaults["General"]["Resident Only Lighting Specializations"].get<bool>(), "Invalid resident-only policy replaced the saved choice");
-		Util::Settings::OverlayCoreSettings(defaults, "General", { { "Resident Only Lighting Specializations", false } });
-		Check(!defaults["General"]["Resident Only Lighting Specializations"].get<bool>(), "Resident-only policy could not be disabled");
-
-		using Mode = ShaderCompilationSchedulingPolicy::PreparationMode;
-		for (bool legacy : { false, true }) {
-			Check(Util::ReadShaderPreparationMode({ { "Resident Only Lighting Specializations", legacy } }) == Mode::StartupOnly, "Legacy policy enabled runtime work");
-			for (int mode : { 0, 1, 2 }) {
-				Check(Util::ReadShaderPreparationMode({ { "Resident Only Lighting Specializations", legacy }, { "Optimised Shader Preparation", mode } }) == static_cast<Mode>(mode), "Explicit preparation mode lost to legacy setting");
-			}
-		}
-		for (const auto& bad : { json(nullptr), json(true), json("1"), json(1.0), json(-1), json(3), json(UINT64_MAX) }) {
-			Check(Util::ReadShaderPreparationMode({ { "Optimised Shader Preparation", bad } }) == Mode::StartupOnly, "Invalid mode enabled runtime work");
-			auto merged = Defaults();
-			merged["General"]["Optimised Shader Preparation"] = 2;
-			Util::Settings::OverlayCoreSettings(merged, "General", { { "Optimised Shader Preparation", bad }, { "Enable Async", false } });
-			Check(merged["General"]["Optimised Shader Preparation"] == 0 && !merged["General"]["Enable Async"].get<bool>(), "Invalid mode discarded conservative fallback or unrelated settings");
-		}
 
 		for (const auto* section : { "General", "Advanced", "Replace Original Shaders", "Disable at Boot" }) {
 			for (const auto& bad : { json(nullptr), json(true), json(9), json("invalid"), json::array() }) {

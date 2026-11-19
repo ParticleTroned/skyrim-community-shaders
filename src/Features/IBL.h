@@ -99,13 +99,6 @@ public:
 
 	ID3D11ComputeShader* GetDiffuseIBLCS();
 	CommonBufferData GetCommonBufferData() const;
-	/** Captures the dynamic IBL mode alongside the settings sent to the GPU. */
-	CommonBufferData PrepareFrameData();
-	/** Reports the uploaded dynamic mode; static inventory lighting remains independent. */
-	bool UsesLuminanceRatioComposite() const { return uploadedLuminanceRatio; }
 	bool IsDisabledForCurrentScene(const Settings& a_settings) const;
 	bool IsRuntimeEnabled() const;
-
-private:
-	bool uploadedLuminanceRatio = false;
 };

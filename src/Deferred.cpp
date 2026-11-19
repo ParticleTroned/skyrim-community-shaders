@@ -1,7 +1,6 @@
 #include "Deferred.h"
 
 #include <algorithm>
-#include <chrono>
 #include <format>
 #include <stdexcept>
 #include <type_traits>
@@ -9,6 +8,7 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include <array>
+#	include <chrono>
 #endif
 
 #include <DDSTextureLoader.h>
@@ -21,7 +21,6 @@
 #include "Features/DynamicCubemaps.h"
 #include "Features/FurShells.h"
 #include "Features/IBL.h"
-#include "Features/LinearLighting.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
@@ -932,10 +931,6 @@ void Deferred::ClearShaderCache()
 {
 	mainCompositeCS.Reset();
 	mainCompositeInteriorCS.Reset();
-	for (auto& scene : specializedComposites)
-		for (auto& shader : scene)
-			shader.Reset();
-	++compositeRevision;
 	copyShadowCS.Reset();
 }
 
@@ -975,121 +970,11 @@ static std::vector<std::pair<const char*, const char*>> BuildCompositeDefines(bo
 ID3D11ComputeShader* Deferred::GetComputeMainComposite(bool interior)
 {
 	auto& general = interior ? mainCompositeInteriorCS : mainCompositeCS;
-	const bool luminanceRatio = globals::features::ibl.loaded && globals::features::dynamicCubemaps.loaded &&
-	                            globals::features::ibl.UsesLuminanceRatioComposite();
-	const bool linearLighting = globals::features::linearLighting.loaded && globals::features::linearLighting.UsesLinearLightingComposite();
-	const uint8_t specialization = (luminanceRatio ? kCompositeLuminanceRatio : 0u) | (linearLighting ? kCompositeLinearLighting : 0u);
-	if (specialization) {
-		if (auto* shader = specializedComposites[interior][specialization - 1].get())
-			return shader;
-	}
 	if (!general && !general.HasFailed()) {
 		general.Get(L"Data\\Shaders\\DeferredCompositeCS.hlsl", BuildCompositeDefines(interior), "cs_5_0", "main",
 			interior ? "Deferred::MainCompositeInteriorCS" : "Deferred::MainCompositeCS");
 	}
-	if (general && specialization && specializedComposites[interior][specialization - 1].CanPrepare())
-		RequestSpecializedComposite(interior, specialization);
 	return general.get();
-}
-
-void Deferred::PrewarmDiscoveredComposites()
-try {
-	auto& cache = *globals::shaderCache;
-	static uint64_t lastRevision = UINT64_MAX, lastCompositeRevision = UINT64_MAX, lastInputGeneration = UINT64_MAX;
-	static size_t lastCount = SIZE_MAX;
-	const auto count = cache.GetShaderSpecializationRequestCount();
-	if (!cache.IsBlockingShaderStartup()) {
-		if (lastRevision == cache.GetGraphicsShaderRevision() && lastCompositeRevision == compositeRevision && lastInputGeneration == cache.GetShaderPreparationInputGeneration() && lastCount == count)
-			return;
-	}
-	const auto requests = cache.IsBlockingShaderStartup() ? cache.GetStartupShaderSpecializations() : cache.GetDiscoveredShaderSpecializations();
-	lastRevision = cache.GetGraphicsShaderRevision();
-	lastCompositeRevision = compositeRevision;
-	lastInputGeneration = cache.GetShaderPreparationInputGeneration();
-	lastCount = count;
-	for (const auto& request : requests) {
-		if (request.family != Util::SpecializationFamily::Composite)
-			continue;
-		const auto specialization = static_cast<uint8_t>(request.descriptor & kCompositeSpecializationCount);
-		if ((specialization & kCompositeLuminanceRatio) && (!globals::features::ibl.loaded || !globals::features::dynamicCubemaps.loaded))
-			continue;
-		if ((specialization & kCompositeLinearLighting) && !globals::features::linearLighting.loaded)
-			continue;
-		RequestSpecializedComposite((request.descriptor & 4u) != 0, specialization);
-	}
-} catch (...) {
-	OutputDebugStringA("Optional composite history replay failed; retaining general shading.\n");
-}
-
-void Deferred::RequestSpecializedComposite(bool interior, uint8_t specialization) noexcept
-try {
-	if (!specialization || specialization > kCompositeSpecializationCount)
-		return;
-	auto& cache = *globals::shaderCache;
-	cache.RememberShaderSpecialization({ Util::SpecializationFamily::Composite, uint32_t(specialization) | (interior ? 4u : 0u) });
-	auto& variant = specializedComposites[interior][specialization - 1];
-	variant.get();
-	if (!variant.CanPrepare() || globals::state->IsSaveLoadSafeModeActive())
-		return;
-	const auto key = (uint64_t{ 1 } << 63) | uint64_t(specialization) | (interior ? 4u : 0u);
-	const auto identity = cache.CaptureOptionalPreparationIdentity(compositeRevision);
-	if (!cache.CanQueueOptionalShaderPreparation(key, identity))
-		return;
-	winrt::com_ptr<ID3D11Device> device;
-	device.copy_from(globals::d3d::device);
-	if (!device || (device->GetCreationFlags() & D3D11_CREATE_DEVICE_SINGLETHREADED))
-		return;
-	const auto revision = identity.revision;
-	const auto inputGeneration = identity.inputs;
-	auto snapshot = Util::CaptureShaderCompilerSnapshot();
-	Util::OwnedShaderMacros owned;
-	for (const auto& [name, definition] : BuildCompositeDefines(interior))
-		owned.values.emplace_back(name, definition ? std::optional<std::string>(definition) : std::nullopt);
-	if (specialization & kCompositeLuminanceRatio)
-		owned.values.emplace_back("IBL_LUMINANCE_RATIO", std::nullopt);
-	if (specialization & kCompositeLinearLighting)
-		owned.values.emplace_back("COMPOSITE_LINEAR_LIGHTING", std::nullopt);
-	struct Result
-	{
-		Util::ShaderBytecodeContinuation bytecode;
-		winrt::com_ptr<ID3D11ComputeShader> shader;
-	};
-	if (inputGeneration != cache.GetShaderPreparationInputGeneration())
-		return;
-	auto result = std::make_shared<Result>();
-	auto ticket = variant.BeginPreparation();
-	snapshot.isCancelled = [ticket] { return ticket->IsCancelled(); };
-	const auto current = [revision, inputGeneration] {
-		return globals::shaderCache->GetGraphicsShaderRevision() == revision &&
-		       globals::shaderCache->GetShaderPreparationInputGeneration() == inputGeneration;
-	};
-	try {
-		if (!cache.QueueOptionalShaderPreparation(key, identity, [ticket, device, snapshot = std::move(snapshot), owned = std::move(owned), result, interior, specialization, current] {
-				if (ticket->IsCancelled() || !current())
-					return true;
-				std::vector<std::pair<const char*, const char*>> macros;
-				for (const auto& [name, definition] : owned.values)
-					macros.emplace_back(name.c_str(), definition ? definition->c_str() : nullptr);
-				HRESULT hr = E_FAIL;
-				Util::ShaderCompileTiming timing;
-				const bool resuming = bool(result->bytecode.blob);
-				result->shader.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShaderOnDevice(device.get(),
-					L"Data\\Shaders\\DeferredCompositeCS.hlsl", macros, "cs_5_0", "main", hr, &timing, true, &snapshot, &result->bytecode)));
-				if (result->shader)
-					Util::SetResourceName(result->shader.get(), "Deferred::MainComposite%s::%u", interior ? "Interior" : "", specialization);
-				globals::shaderCache->RecordOptionalShaderPreparation(!resuming && (bool(result->shader) || bool(result->bytecode.blob)) && !timing.sourceCompiles, timing.sourceCompiles);
-				return !timing.deferred; }, [ticket, result, device, current] {
-				if (!current())
-					ticket->Defer();
-				else
-					ticket->Complete(!ticket->IsCancelled() && globals::d3d::device == device.get() ? std::move(result->shader) : nullptr); }))
-			ticket->Defer();
-	} catch (...) {
-		ticket->Complete(nullptr);
-		throw;
-	}
-} catch (...) {
-	OutputDebugStringA("[ShaderSpecialization] Unable to queue composite preparation; retaining general shading.\n");
 }
 
 void Deferred::Hooks::Main_RenderShadowMaps::thunk()

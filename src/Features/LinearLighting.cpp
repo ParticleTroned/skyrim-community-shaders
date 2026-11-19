@@ -255,13 +255,6 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	return data;
 }
 
-LinearLighting::PerFrameData LinearLighting::PrepareFrameData()
-{
-	const auto data = GetCommonBufferData();
-	uploadedLinearLighting = data.enableLinearLighting != 0;
-	return data;
-}
-
 bool LinearLighting::IsRuntimeEnabled() const
 {
 	if (!loaded || !settings.enableLinearLighting)

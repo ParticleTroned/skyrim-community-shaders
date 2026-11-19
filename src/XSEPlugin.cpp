@@ -279,7 +279,6 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 
 				// Register scene settings event handler (Interior Only transitions)
 				SceneSettingsManager::MenuOpenCloseEventHandler::Register();
-				shaderCache->RegisterShaderPreparationEvents();
 
 				// External shader-facing requirements must become immutable before
 				// any cache compatibility decision or shader compilation.
@@ -314,7 +313,6 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				// drains. Mark DataLoaded separately and let the last completion perform
 				// the priority transition in that path.
 				shaderCache->menuLoaded = true;
-				shaderCache->FinishStartupPreparation();
 				shaderCache->TryCompleteStartupCompilationPhase();
 
 				if (globals::game::quitGame.load(std::memory_order_relaxed)) {

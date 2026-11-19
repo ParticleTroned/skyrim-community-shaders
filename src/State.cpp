@@ -2,7 +2,6 @@
 #include "Diagnostics/PerformanceCostExperiments.h"
 #include "Features/ReverseZ.h"
 #include "Features/UnifiedWater.h"
-#include "Utils/ShaderPreparationSettings.h"
 #if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
 #	include "Diagnostics/NvPerf.h"
 #endif
@@ -912,7 +911,6 @@ void State::Reset()
 	if (!globals::game::ui->GameIsPaused())
 		timer += RE::GetSecondsSinceLastFrame();
 
-	const auto preparationWindow = globals::shaderCache->GetShaderPreparationWindowGeneration();
 	// Cache menu open states once per frame to avoid repeated IsMenuOpen calls
 	// (each call constructs a BSFixedString, which is expensive at scale).
 	if (auto ui = globals::game::ui) {
@@ -936,7 +934,6 @@ void State::Reset()
 	CSX::Diagnostics::GpuCrash::Checkpoint("Frame::Reset");
 #endif
 	UpdateSaveLoadSafeMode();
-	globals::shaderCache->TickOptionalShaderPreparation(isLoadingMenuOpen, isMainMenuOpen, IsSaveLoadSafeModeActive(), preparationWindow);
 	LODBlendRingFix::GetInstance().Update();
 
 	globals::shaderCache->TickActiveShaderCapture(globals::menu && globals::menu->IsEnabled);
@@ -988,7 +985,6 @@ void State::Setup()
 
 	// Load scene-specific settings (Interior Only, etc.)
 	SceneSettingsManager::GetSingleton()->LoadAll();
-	globals::deferred->PrewarmDiscoveredComposites();
 }
 
 void State::SetupRenderTargetResources()
@@ -1590,8 +1586,6 @@ void State::SaveToJson(
 	general["Enable Disk Cache"] = shaderCache->IsDiskCache();
 	general["Skip Unchanged Shaders"] = shaderCache->IsSkipUnchangedShaders();
 	general["Enable Async"] = shaderCache->IsAsync();
-	general["Optimised Shader Preparation"] = static_cast<int>(shaderCache->GetPreparationMode());
-	general.erase("Resident Only Lighting Specializations");
 
 	settings["General"] = general;
 
@@ -1717,7 +1711,6 @@ void State::LoadFromJson(
 			shaderCache->SetSkipUnchangedShaders(general["Skip Unchanged Shaders"]);
 		if (general.contains("Enable Async") && general["Enable Async"].is_boolean())
 			shaderCache->SetAsync(general["Enable Async"]);
-		shaderCache->SetPreparationMode(Util::ReadShaderPreparationMode(general));
 	}
 
 	if (settings.contains("Replace Original Shaders") && settings["Replace Original Shaders"].is_object()) {
@@ -2138,11 +2131,6 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::TruePbr |
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::LandscapeSeams);
 
-				using LightingFlags = SIE::ShaderCache::LightingShaderFlags;
-				constexpr auto legacyScattering = static_cast<uint32_t>(LightingFlags::SoftLighting) |
-				                                  static_cast<uint32_t>(LightingFlags::RimLighting) |
-				                                  static_cast<uint32_t>(LightingFlags::BackLighting);
-				const bool hasLegacyScattering = (a_pixelDescriptor & legacyScattering) != 0;
 				a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::AmbientSpecular |
 									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::ShadowDir |
 									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::DefShadow |
@@ -2166,14 +2154,9 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 				}
 
 				a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::Snow);
-				a_pixelDescriptor |= lightingPixelShaderFlags & ~SIE::ShaderCache::kLightingNoContactShadows;
 
-				if (deferred->deferredPass || a_forceDeferred) {
-					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::LightingShaderFlags::Deferred |
-					                     (lightingPixelShaderFlags & SIE::ShaderCache::kLightingNoContactShadows);
-					if (!hasLegacyScattering)
-						a_pixelDescriptor |= SIE::ShaderCache::kLightingNoLegacySubsurface;
-				}
+				if (deferred->deferredPass || a_forceDeferred)
+					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::LightingShaderFlags::Deferred;
 
 				{
 					uint32_t technique = 0x3F & (a_vertexDescriptor >> 24);
@@ -2231,14 +2214,10 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 			{
 				auto flags = ~((uint32_t)SIE::ShaderCache::EffectShaderFlags::GrayscaleToColor |
 							   (uint32_t)SIE::ShaderCache::EffectShaderFlags::GrayscaleToAlpha |
-							   (uint32_t)SIE::ShaderCache::EffectShaderFlags::IgnoreTexAlpha |
-							   SIE::ShaderCache::kEffectAmbientWorldIBL);
+							   (uint32_t)SIE::ShaderCache::EffectShaderFlags::IgnoreTexAlpha);
 				a_vertexDescriptor &= flags;
 				// Grayscale textures alter the pixel resource contract, so retain their lookup bits.
-				a_pixelDescriptor &= ~(static_cast<uint32_t>(SIE::ShaderCache::EffectShaderFlags::IgnoreTexAlpha) |
-									   SIE::ShaderCache::kEffectAmbientWorldIBL);
-				if (effectAmbientIBLUploaded && (permutationData.ExtraShaderDescriptor & static_cast<uint32_t>(ExtraShaderDescriptors::InWorld)))
-					a_pixelDescriptor |= SIE::ShaderCache::kEffectAmbientWorldIBL;
+				a_pixelDescriptor &= ~static_cast<uint32_t>(SIE::ShaderCache::EffectShaderFlags::IgnoreTexAlpha);
 
 				if (deferred->deferredPass || a_forceDeferred)
 					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::EffectShaderFlags::Deferred;

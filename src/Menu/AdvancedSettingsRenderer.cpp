@@ -164,19 +164,13 @@ void AdvancedSettingsRenderer::RenderShaderThreading()
 	Util::Widgets::SliderInt("Background Compiler Threads", &backgroundThreads, 1, maxThreads, "%d", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Background compiler concurrency, also shared by optional Lighting, Effect and Composite preparation. Default: half the logical processors on the highest efficiency class (including SMT). Optional work uses cooperative priority. More workers may increase frame-time variation.");
+			"Background compiler concurrency. Default: half the logical processors on the highest efficiency class (including SMT). More workers may increase frame-time variation.");
 	}
 
 	if (normalThreads != previousLimits.first || backgroundThreads != previousLimits.second)
 		shaderCache->SetCompilationThreadLimits(normalThreads, backgroundThreads);
 
 	auto& menuSettings = globals::menu->GetSettings();
-	int mode = static_cast<int>(shaderCache->GetPreparationMode());
-	const char* modes[] = { "Next restart", "Transitions (experimental)", "Gameplay (experimental)" };
-	if (Util::Widgets::Combo("Optimised shader preparation", &mode, modes, IM_ARRAYSIZE(modes)))
-		shaderCache->SetPreparationMode(ShaderCompilationSchedulingPolicy::ValidatePreparationMode(mode));
-	Util::AddTooltip("Every mode records discoveries and uses suitable optimised shaders already in memory. Next restart: prepare missing variants at the next normal blocking startup, including variants cached only on disk. This is stricter than the old checkbox's OFF state; both old values migrate to Next restart. Transitions (experimental): also prepare during confirmed loading and engine sleep/wait time passage. Gameplay (experimental): also prepare while playing using Background Compiler Threads; this may affect frame times. Work already running may finish after a transition closes; its next stage waits for permission. Background Compile on Boot stays independent. Saving/reloading a game is not a process restart. Save settings to retain this choice.");
-
 	Util::Widgets::Checkbox("Background Compile on Boot", &menuSettings.BackgroundShaderCompilationOnBoot);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(

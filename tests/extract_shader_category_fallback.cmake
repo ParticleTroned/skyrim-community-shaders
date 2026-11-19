@@ -2,11 +2,6 @@ include("${PROJECT_ROOT}/tests/extract_source_region.cmake")
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 file(READ "${PROJECT_ROOT}/src/ShaderCache.cpp" _cache)
 file(READ "${PROJECT_ROOT}/src/ShaderCache.h" _header)
-file(READ "${PROJECT_ROOT}/src/ShaderCacheSpecializations.cpp" _specializations)
-extract_between("${_specializations}" "void ShaderCache::RegisterSpecializationBase("
-    "std::vector<Util::ShaderSpecializationRequest> ShaderCache::GetStartupShaderSpecializations(" "specialization_bases.h")
-extract_between("${_specializations}" "void ShaderCache::PrewarmDiscoveredPixelShaders("
-    "void ShaderCache::RememberShaderSpecialization(" "specialization_replay.h")
 file(READ "${PROJECT_ROOT}/src/Hooks.cpp" _hooks)
 file(READ "${PROJECT_ROOT}/src/State.cpp" _state)
 string(FIND "${_hooks}" "for (const auto& entry : shader->pixelShaders)" _pixel_loop)
@@ -62,14 +57,3 @@ extract_between("${_cache}" "void ShaderCache::PrewarmDeferredPixelShaders("
     "RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader(" "pixel_prewarm.h")
 extract_between("${_pbr}" "void TruePBR::GenerateShaderPermutations("
     "struct ExtendedRendererState" "pbr_prewarm.h")
-
-extract_between("${_cache}" "bool ShaderCache::UsesRuntimeLightingSpecializationPolicy() const"
-    "void ShaderCache::PrewarmDeferredPixelShaders(" "runtime_specialization_policy.h")
-
-extract_between("${_cache}" "void ShaderCache::RequestPixelSpecialization("
-    "bool ShaderCache::QueueOptionalPixelShader(" "pixel_discovery.h")
-extract_between("${_pbr}" "namespace Permutations\n{"
-    "void TruePBR::GenerateShaderPermutations(" "pbr_startup_permutations.h")
-file(READ "${OUTPUT_DIRECTORY}/pbr_startup_permutations.h" _permutations)
-string(REPLACE "namespace Permutations" "namespace StartupPermutations" _permutations "${_permutations}")
-file(WRITE "${OUTPUT_DIRECTORY}/pbr_startup_permutations.h" "${_permutations}")

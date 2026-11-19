@@ -1277,6 +1277,11 @@ int main() {
         failCompile = true;
         assert(!publish(8) && testDevice.creates == 3);
         failCompile = false;
+        if (!vertex) {
+            failPixelReflection = true;
+            assert(!publish(8) && testDevice.creates == 3 && !cache.pixelShaders[0].contains(8));
+            failPixelReflection = false;
+        }
         testDevice.fail = true;
         assert(!publish(8) && testDevice.creates == 4 && resource.named == 3);
         assert(resource.releases == 2 && resource.live == 1 && testDevice.resources.size() == 3);

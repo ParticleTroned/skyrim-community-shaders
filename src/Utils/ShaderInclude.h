@@ -1,13 +1,9 @@
 #pragma once
 
-#include <atomic>
-#include <cstddef>
 #include <cstdint>
 #include <d3dcompiler.h>
 #include <filesystem>
 #include <memory>
-#include <mutex>
-#include <unordered_map>
 
 namespace Util::ShaderInclude
 {
@@ -25,51 +21,8 @@ namespace Util::ShaderInclude
 		uint64_t readBytes = 0;
 	};
 
-	/** Bounded include bytes retained only during blocking startup compilation. */
-	class StartupCache
-	{
-	public:
-		static constexpr size_t kMaximumBytes = 16 * 1024 * 1024;
-		static constexpr size_t kMaximumEntries = 1024;
-		explicit StartupCache(size_t bytes = kMaximumBytes, size_t entries = kMaximumEntries);
-		/** Permanently ends reuse and releases retained bytes, including during active reads. */
-		void Disable();
-		struct Usage
-		{
-			size_t bytes;
-			size_t entries;
-		};
-		/** Returns retained storage accounting, including path and entry payloads. */
-		Usage GetUsage() const;
-
-	private:
-		friend bool Read(const std::filesystem::path&, File&, ReadError&, StartupCache*, bool*) noexcept;
-		struct FileStamp
-		{
-			uint64_t size;
-			uint64_t lastWriteTime;
-			uint64_t changeTime;
-			uint64_t volume;
-			uint64_t fileId;
-			bool operator==(const FileStamp&) const = default;
-		};
-		struct Snapshot
-		{
-			FileStamp stamp;
-			std::shared_ptr<const char[]> bytes;
-			size_t charge;
-		};
-		const size_t maximumBytes;
-		const size_t maximumEntries;
-		std::atomic<bool> enabled = true;
-		mutable std::mutex mutex;
-		std::unordered_map<std::filesystem::path, Snapshot> snapshots;
-		size_t retainedBytes = 0;
-	};
-
-	/** Reads complete UINT-sized bytes; optional startup reuse never bypasses file access checks. */
-	bool Read(const std::filesystem::path& path, File& contents, ReadError& error,
-		StartupCache* cache = nullptr, bool* reused = nullptr) noexcept;
+	/** Reads a complete UINT-sized include without using the CRT file tables. */
+	bool Read(const std::filesystem::path& path, File& contents, ReadError& error) noexcept;
 	/** Emits bounded, deduplicated diagnostics without throwing into the compiler. */
 	void Report(const std::filesystem::path& source, const std::filesystem::path& attemptedPath, const ReadError& error) noexcept;
 }

@@ -175,7 +175,6 @@ public:
 	eastl::unique_ptr<Buffer> contactShadowGrid = nullptr;
 
 	std::uint32_t lightCount = 0;
-	std::uint32_t zeroClusteredLightsFrame = UINT32_MAX;
 	float lightsNear = 1;
 	float lightsFar = 16384;
 
@@ -481,8 +480,7 @@ public:
 
 	void BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(RE::BSRenderPass* a_pass);
 
-	/** Uploads changed strict-light constants and reports a valid world draw with no strict lights. */
-	bool BSLightingShader_SetupGeometry_After(RE::BSRenderPass* a_pass);
+	void BSLightingShader_SetupGeometry_After(RE::BSRenderPass* a_pass);
 
 	std::shared_mutex cachedParticleLightsMutex;
 	eastl::vector<CachedParticleLight> cachedParticleLights;

@@ -16,7 +16,6 @@
 #include <vector>
 
 namespace logger = spdlog;
-#include "Utils/AsyncShader.h"
 #include "Utils/LazyShader.h"
 #include "d3d_resource_naming.h"
 
@@ -110,62 +109,6 @@ namespace
 	ID3D11ComputeShader* Request(Util::LazyShader<ID3D11ComputeShader>& shader, const char* macro, Util::ShaderCompileTiming* timing = nullptr)
 	{
 		return shader.Get(path, { { macro, nullptr } }, "cs_5_0", "main", resourceName, timing);
-	}
-
-	void CheckAsyncPublication()
-	{
-		Util::AsyncShader<ID3D11ComputeShader> slot;
-		auto abandoned = slot.BeginPreparation();
-		Require(abandoned && !slot.get() && !slot.CanPrepare(), "Pending preparation must retain fallback and prohibit duplicate work");
-		const auto before = allocations.load();
-		for (unsigned frame = 0; frame < 10000; ++frame)
-			Require(!slot.get() && !slot.CanPrepare(), "Pending polling must remain nonblocking");
-		Require(allocations.load() == before, "Pending polling must not allocate");
-		slot.Reset();
-		Require(abandoned->IsCancelled() && slot.CanPrepare(), "Reset must abandon old work without waiting");
-		auto current = slot.BeginPreparation();
-		winrt::com_ptr<ID3D11ComputeShader> oldShader;
-		oldShader.attach(new TestShader);
-		abandoned->Complete(std::move(oldShader));
-		Require(!slot.get(), "A late result must not populate a replacement slot");
-		abandoned.reset();
-		Require(liveShaders == 0, "An abandoned result must release its device object");
-		winrt::com_ptr<ID3D11ComputeShader> newShader;
-		newShader.attach(new TestShader);
-		auto* expected = newShader.get();
-		current->Complete(std::move(newShader));
-		Require(slot.get() == expected && !slot.CanPrepare(), "Only the current ticket may publish its shader");
-		const auto readyAllocations = allocations.load();
-		for (unsigned frame = 0; frame < 10000; ++frame)
-			Require(slot.get() == expected, "Resident polling must preserve object identity");
-		Require(allocations.load() == readyAllocations, "Resident polling must not allocate");
-		slot.Reset();
-		Require(liveShaders == 0, "Reset must release a published shader");
-		auto deferred = slot.BeginPreparation();
-		deferred->Defer();
-		Require(!slot.get() && slot.CanPrepare(), "Deferred queue admission must be retryable without a reset");
-		auto failed = slot.BeginPreparation();
-		failed->Complete(nullptr);
-		Require(!slot.get() && !slot.CanPrepare(), "Preparation failure must remain latched");
-		slot.Reset();
-		failAllocation = true;
-		bool rejected = false;
-		try {
-			slot.BeginPreparation();
-		} catch (const std::bad_alloc&) {
-			rejected = true;
-		}
-		failAllocation = false;
-		Require(rejected && !slot.CanPrepare(), "Ticket allocation failure must not repeat every frame");
-		slot.Reset();
-		Require(slot.CanPrepare(), "Reset must allow retry after allocation failure");
-		std::shared_ptr<Util::AsyncShader<ID3D11ComputeShader>::Preparation> survivor;
-		{
-			Util::AsyncShader<ID3D11ComputeShader> temporary;
-			survivor = temporary.BeginPreparation();
-		}
-		Require(survivor->IsCancelled(), "Destroying a slot must cancel its surviving ticket");
-		survivor->Complete(nullptr);
 	}
 
 	void CheckCachedRequests()
@@ -322,7 +265,6 @@ int main()
 		CheckFailureAndReset();
 		CheckArgumentForms();
 		CheckExceptions();
-		CheckAsyncPublication();
 		Require(liveShaders == 0, "Reset and exception paths must not leak shaders");
 		std::cout << "Lazy shader: zero cached/failed allocations; macros, timing, naming, reset and ownership passed\n";
 		return 0;

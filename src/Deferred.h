@@ -2,10 +2,8 @@
 
 #include "Buffer.h"
 #include "RE/B/BSShadowDirectionalLight.h"
-#include "Utils/AsyncShader.h"
 #include "Utils/LazyShader.h"
 
-#include <array>
 #include <atomic>
 #include <optional>
 
@@ -50,8 +48,6 @@ public:
 
 	ID3D11ComputeShader* GetComputeMainComposite();
 	ID3D11ComputeShader* GetComputeMainCompositeInterior();
-	/** Queues previously discovered composites before the blocking startup wait. */
-	void PrewarmDiscoveredComposites();
 
 	ID3D11BlendState* deferredBlendStates[7][2][13][2];
 	ID3D11BlendState* forwardBlendStates[7][2][13][2];
@@ -102,13 +98,6 @@ public:
 
 private:
 	ID3D11ComputeShader* GetComputeMainComposite(bool interior);
-	/** Queues optional preparation without delaying the pass or repeating failed work. */
-	void RequestSpecializedComposite(bool interior, uint8_t specialization) noexcept;
-	static constexpr uint8_t kCompositeLuminanceRatio = 1u;
-	static constexpr uint8_t kCompositeLinearLighting = 2u;
-	static constexpr size_t kCompositeSpecializationCount = kCompositeLuminanceRatio | kCompositeLinearLighting;
-	std::array<std::array<Util::AsyncShader<ID3D11ComputeShader>, kCompositeSpecializationCount>, 2> specializedComposites;
-	uint64_t compositeRevision = 0;
 
 	/// Copies completed opaque depth without changing the active render targets.
 	bool CopySceneDepth();

@@ -138,7 +138,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 	float3 directionalAmbientColor = 0;
 
 #	if defined(IBL)
-	if (ImageBasedLighting::IsEnabled()) {
+	if (SharedData::iblSettings.EnableIBL) {
 		float3 vanillaDALC = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
 
 #		if defined(SKYLIGHTING)
@@ -217,14 +217,14 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 		sh2 skylightingSH = Skylighting::Sample(positionMS.xyz, R);
 		skylightingSpecular = Skylighting::EvaluateSpecular(skylightingSH, specularLobe);
 #		if defined(IBL)
-		if (!SharedData::InInterior && ImageBasedLighting::IsEnabled() && ImageBasedLighting::GetDALCMode() == 3) {
+		if (!SharedData::InInterior && SharedData::iblSettings.EnableIBL && SharedData::iblSettings.DALCMode == 3) {
 			skylightingVisibility = Skylighting::EvaluateVisibility(skylightingSH);
 		}
 #		endif
 #	endif
 
 #	if defined(IBL)
-		if (ImageBasedLighting::IsEnabled()) {
+		if (SharedData::iblSettings.EnableIBL) {
 			finalIrradiance = ImageBasedLighting::ComputeSpecularIBL(
 				EnvTexture,
 				EnvReflectionsTexture,

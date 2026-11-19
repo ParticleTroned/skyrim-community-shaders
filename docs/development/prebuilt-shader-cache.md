@@ -139,26 +139,13 @@ preserves captured-count metadata, and rejects conflicting descriptor or
 macro inputs. Rebuild the cache after changing the supported category layout;
 a new trace is unnecessary when its base permutations are already captured.
 
-Lighting pixel inventories also include all four combinations of wet/dry
-weather and active/inactive snow cover when Wetterness and Snow Cover are
-loaded with their shader macros. The builder reads the specialization bits
-from the runtime header and adds entry-scoped `DRY_WEATHER` and
-`SNOW_COVER_INACTIVE` macros, preserving general variants, category layouts,
-and captured-count metadata. Deferred entries also include independent
-`NO_LEGACY_SUBSURFACE` variants and, with Light Limit Fix loaded and its macro
-present, `LLF_NO_CONTACT_SHADOWS` variants. Missing feature dependencies
-suppress only their specializations. This overlay applies to SE/AE and VR;
-vertex descriptors are unchanged because the dry-weather bit has a different
-meaning in that stage. Per-draw mesh-variation and local-light specializations
-remain outside this overlay and compile on demand.
-
 When Detail Maps is loaded, eligible Lighting pixels also receive matching
 `DETAIL_MAPS` variants. The builder reads the runtime's eligibility mask and
 techniques from `DetailMapsPolicy.h`, including its forward-enabled startup
 prewarm path, and rejects unsupported policy changes. These entries combine
-with weather states, deferred specializations and category layouts. The
-shared inventory also includes unskinned hair/decal pixel variants for both
-SE/AE and VR. Captured provenance and vertex entries remain unchanged.
+with forward/deferred rendering and category layouts. The shared inventory
+also includes unskinned hair/decal pixel variants for both SE/AE and VR.
+Captured provenance and vertex entries remain unchanged.
 
 Both bundled profiles apply `PBR_GRASS=1` and the empty
 `GRASS_OPTIMIZATIONS` macro to RunGrass vertex and pixel stages only. Macro

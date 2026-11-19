@@ -1,6 +1,5 @@
 #pragma once
 
-#include "ShaderPreparationSettings.h"
 #include <nlohmann/json.hpp>
 
 #include <array>
@@ -109,8 +108,7 @@ namespace Util::Settings
 			// Persisted JSON loses the signedness and width of the C++ settings.
 			static const nlohmann::json schemas{
 				{ "General", { { "Enable Shaders", true }, { "Enable Disk Cache", true },
-								 { "Skip Unchanged Shaders", true }, { "Enable Async", true },
-								 { "Resident Only Lighting Specializations", false } } },
+								 { "Skip Unchanged Shaders", true }, { "Enable Async", true } } },
 				{ "Advanced", { { "Dump Shaders", false }, { "Log Level", std::int32_t{ 0 } },
 								  { "Shader Defines", "" }, { "Compiler Threads", std::int32_t{ 0 } },
 								  { "Background Compiler Threads", std::int32_t{ 0 } }, { "Use FileWatcher", false },
@@ -119,8 +117,6 @@ namespace Util::Settings
 								  { "PBR Verbose JSON Logging", false }, { "Partial Precision", false } } }
 			};
 			Detail::OverlayKnownValue(target, a_user, schemas.at(std::string(a_section)));
-			if (a_section == "General" && a_user.contains("Optimised Shader Preparation"))
-				target["Optimised Shader Preparation"] = static_cast<int>(ReadShaderPreparationMode(a_user));
 		}
 		return true;
 	}

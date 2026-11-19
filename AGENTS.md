@@ -276,6 +276,13 @@ contradict this policy.
 
 ## Repository tooling
 
+-   For requested Tracy recordings, the agent owns starting and verifying
+    the matching Tracy MCP server; do not hand routine server startup back
+    to the user. Reuse a healthy compatible instance. Read the local
+    `.local-docs/tracy-mcp-startup.md` note when present for the established
+    launcher and fpsVR execution context. An HTTP MCP entry does not start
+    its service. Confirm recorder readiness before giving a walking cue.
+
 -   Before performance work, use the installed Skyrim VR automation skill and
     its maintained entry point. See the [control routing guide](docs/development/tooling.md#skyrim-vr-control-routing).
     Reuse the existing fpsVR logger helpers and CSX profiler collector; do not

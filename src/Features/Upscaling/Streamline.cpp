@@ -1872,7 +1872,7 @@ bool Streamline::PostDevice()
 	BindNativeReflex(boundDeviceIdentity);
 	// Device binding precedes publication of the renderer globals.
 	if (featureDLSS && globals::game::isVR)
-		Util::NvidiaBindingWorkaround::Initialize(boundDeviceIdentity);
+		Util::NvidiaBindingWorkaround::Initialize();
 	featureCheckComplete = true;
 	return true;
 }

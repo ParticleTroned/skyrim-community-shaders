@@ -242,8 +242,11 @@ try {
 	Get().initialized = Get().installed = false;
 	Disable("early_shutdown");
 	Require(!Status().enabled && !Select(false) && !(Get().mode.load() & Stopped), "pre-install lifecycle was poisoned or reported enabled");
-	Initialize(nullptr);
-	Require(!Status().enabled && !Select(true) && std::string_view(Status().reason) == "device_missing", "missing device was accepted or mislabeled");
+	Require(!GetModuleHandleW(L"nvwgf2umx.dll"), "driver unexpectedly loaded in isolated fixture");
+	Initialize();
+	Require(!Status().installed && !Status().enabled && !Select(true) && std::string_view(Status().reason) == "driver_verification_or_install_failed" &&
+				Status().installationError == ERROR_MOD_NOT_FOUND,
+		"missing driver was accepted or mislabeled");
 	Reset();
 	Require(Run() == 0 && firstCalls == 1 && secondCalls == 1 && Status().applied == 1, "eligible refresh failed");
 	Require(GetLastError() == 79 && !inside, "native error/reentrancy state was not restored");

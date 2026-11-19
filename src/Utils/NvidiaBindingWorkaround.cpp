@@ -6,10 +6,7 @@
 #	include "Utils/VirtualFunctionHook.h"
 #	include <Windows.h>
 #	include <TlHelp32.h>
-#	include <d3d11.h>
-#	include <dxgi.h>
 #	include <detours/detours.h>
-#	include <wrl/client.h>
 #	include <winrt/base.h>
 #	include <array>
 #	include <atomic>
@@ -235,31 +232,12 @@ namespace Util::NvidiaBindingWorkaround
 			failure ? failure : state.reason.load(), state.candidates.load(), state.applied.load(), state.rejected.load(),
 			state.skipped.load(), state.lastSkipped.load(), false, state.loggingFailures.load(), state.installationError.load() };
 	}
-	void Initialize(ID3D11Device* device) noexcept
+	void Initialize() noexcept
 	try {
 		auto& state = Get();
 		if (state.initialized.exchange(true))
 			return;
-		Microsoft::WRL::ComPtr<IDXGIDevice> dxgi;
-		Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
-		DXGI_ADAPTER_DESC description{};
-		HRESULT adapterResult = S_OK;
-		const char* adapterFailure{};
-		if (!device) {
-			adapterResult = E_POINTER;
-			adapterFailure = "device_missing";
-		} else if (FAILED(adapterResult = device->QueryInterface(IID_PPV_ARGS(&dxgi))) || !dxgi) {
-			adapterFailure = "device_query_failed";
-		} else if (FAILED(adapterResult = dxgi->GetAdapter(&adapter)) || !adapter) {
-			adapterFailure = "adapter_query_failed";
-		} else if (FAILED(adapterResult = adapter->GetDesc(&description))) {
-			adapterFailure = "adapter_description_failed";
-		} else if (description.VendorId != 0x10de || description.DeviceId != 0x2f58) {
-			adapterFailure = "unsupported_adapter";
-		}
-		if (adapterFailure) {
-			Disable(adapterFailure);
-		} else if (const auto error = Install(); error != NO_ERROR) {
+		if (const auto error = Install(); error != NO_ERROR) {
 			state.installationError.store(error, std::memory_order_relaxed);
 			Disable("driver_verification_or_install_failed");
 		} else {

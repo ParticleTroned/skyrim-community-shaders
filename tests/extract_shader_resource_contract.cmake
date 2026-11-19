@@ -11,6 +11,13 @@ string(SUBSTRING "${_upscaling}" ${_blend_start} -1 _blend)
 extract_between("${_blend}" "ID3D11UnorderedAccessView* nullOutput = nullptr;"
     "ID3D11ShaderResourceView* boundSRVs[3]" "composite_bindings.h")
 file(READ "${PROJECT_ROOT}/src/Hooks.cpp" _hooks)
+extract_between("${_hooks}" "void BindOptionalMaterialTexture("
+    "\n}\n\nnamespace EffectExtensions" "optional_material_binding.h")
+extract_between("${_hooks}" "void ClearUnusedEffectPalette("
+    "struct BSEffectShader_SetupMaterial" "effect_material_binding.h")
+file(READ "${PROJECT_ROOT}/src/ShaderCache.h" _cache_header)
+extract_between("${_cache_header}" "enum class EffectShaderFlags"
+    "// Shader blocking data" "effect_flags.h")
 extract_between("${_hooks}" "void BindLightingEnvironmentTexture("
     "struct BSLightingShader_SetupMaterial" "lighting_environment_binding.h")
 file(READ "${PROJECT_ROOT}/src/TruePBR.cpp" _pbr)

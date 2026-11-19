@@ -926,8 +926,43 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	return shaderFound && !state->deferredPixelShaderMissing;
 }
 
+namespace
+{
+	void BindOptionalMaterialTexture(RE::BSGraphics::RendererShadowState* shadowState, uint32_t slot, RE::NiSourceTexture* source)
+	{
+		auto* texture = source ? source->rendererTexture : nullptr;
+		if (texture && !texture->resourceView)
+			texture = nullptr;
+		// Runtime branches still require compatible bindings when optional textures are absent.
+		shadowState->SetPSTexture(slot, texture);
+		if (!texture)
+			shadowState->SetPSTextureFilterMode(slot, RE::BSGraphics::TextureFilterMode::kAnisotropic);
+	}
+}
+
 namespace EffectExtensions
 {
+	void ClearUnusedEffectPalette(RE::BSGraphics::RendererShadowState* shadowState, uint32_t descriptor)
+	{
+		using Flags = SIE::ShaderCache::EffectShaderFlags;
+		constexpr auto palette = static_cast<uint32_t>(Flags::GrayscaleToColor) | static_cast<uint32_t>(Flags::GrayscaleToAlpha);
+		// Native setup owns active palettes; other techniques leave this slot untouched.
+		if ((descriptor & palette) == 0)
+			BindOptionalMaterialTexture(shadowState, 4, nullptr);
+	}
+
+	struct BSEffectShader_SetupMaterial
+	{
+		static void thunk(RE::BSShader* shader, const RE::BSShaderMaterial* material)
+		{
+			if (!material)
+				return;
+			func(shader, material);
+			ClearUnusedEffectPalette(globals::game::shadowState, globals::state->currentPixelDescriptor);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct BSEffectShader_SetupGeometry
 	{
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
@@ -2089,12 +2124,7 @@ namespace Hooks
 			return;
 		}
 		// Native fallback and custom draws share the engine's material-binding cache.
-		auto* texture = environment ? environment->rendererTexture : nullptr;
-		if (texture && !texture->resourceView)
-			texture = nullptr;
-		shadowState->SetPSTexture(4, texture);
-		if (!texture)
-			shadowState->SetPSTextureFilterMode(4, RE::BSGraphics::TextureFilterMode::kAnisotropic);
+		BindOptionalMaterialTexture(shadowState, 4, environment);
 	}
 
 	struct BSLightingShader_SetupMaterial
@@ -2687,6 +2717,7 @@ namespace Hooks
 
 		logger::info("Installing SetupGeometry hooks");
 		stl::write_vfunc<0x7, SkyExtensions::BSSkyShader_RestoreGeometry>(RE::VTABLE_BSSkyShader[0]);
+		stl::write_vfunc<0x4, EffectExtensions::BSEffectShader_SetupMaterial>(RE::VTABLE_BSEffectShader[0]);
 		stl::write_vfunc<0x6, EffectExtensions::BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
 		stl::write_vfunc<0x6, LightingExtensions::BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 		stl::write_vfunc<0x7, AcceptedDrawRestoreGeometry<1>>(RE::VTABLE_BSLightingShader[0]);

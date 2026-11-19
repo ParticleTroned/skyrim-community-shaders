@@ -71,14 +71,14 @@ set(_category_fallback_headers)
 foreach(_header IN ITEMS shader_support.h pixel_lookup.h category_flag.h pixel_binding.h begin_technique.h
     diagnostic_increment.h preparation_failure.h preparation_failure_type.h grass_material_admission.h
     lighting_flags.h pixel_prewarm.h pbr_prewarm.h
-    startup_pixel_lookup.h lighting_lookup.h effect_lookup.h effect_flags.h)
+    startup_pixel_lookup.h lighting_lookup.h effect_lookup.h effect_flags.h detail_prewarm.h)
     list(APPEND _category_fallback_headers "${_category_fallback_dir}/${_header}")
 endforeach()
 add_custom_command(OUTPUT ${_category_fallback_headers}
     COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
         "-DOUTPUT_DIRECTORY=${_category_fallback_dir}" -P
         "${PROJECT_SOURCE_DIR}/tests/extract_shader_category_fallback.cmake"
-    DEPENDS src/ShaderCache.cpp src/ShaderCache.h src/Hooks.cpp src/State.cpp src/TruePBR.cpp
+    DEPENDS src/ShaderCache.cpp src/ShaderCache.h src/Hooks.cpp src/State.cpp src/TruePBR.cpp src/Features/DetailMaps.cpp
         src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp
         src/Features/Upscaling/NeuralRendering/CharacterRendering.h
         tests/extract_shader_category_fallback.cmake tests/extract_source_region.cmake

@@ -1,3 +1,4 @@
+#include "Features/DetailMapsPolicy.h"
 #include "Utils/ShaderDescriptor.h"
 #include "reverse_z_test_stub.h"
 
@@ -6,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <intrin.h>
 #include <iostream>
 #include <limits>
@@ -126,7 +128,11 @@ struct TestState
 	{
 		uint32_t VertexShaderDescriptor = 0, PixelShaderDescriptor = 0;
 	} permutationData;
-	void ModifyShaderLookup(const RE::BSShader&, uint32_t&, uint32_t&) {}
+	void ModifyShaderLookup(const RE::BSShader&, uint32_t&, uint32_t& pixel, bool forceDeferred = false)
+	{
+		if (forceDeferred)
+			pixel |= 1u << 4;
+	}
 	bool IsDeveloperMode() const { return developer; }
 	bool IsShaderEnabled(const RE::BSShader&) const { return true; }
 	bool ShaderEnabled(RE::BSShader::Type) const { return true; }
@@ -940,6 +946,54 @@ void TestStartupLightingDescriptors()
 	}
 }
 
+namespace DetailPrewarmFixture
+{
+	constexpr const char* SetsPath = ".";
+	constexpr const char* RulesPath = ".";
+	constexpr auto DetailFlag = DetailMapsPolicy::ShaderFlag;
+	bool IsDetailDescriptor(uint32_t descriptor, bool allowForward)
+	{
+		return DetailMapsPolicy::IsEligible(descriptor, allowForward);
+	}
+	struct DetailMaps
+	{
+		struct
+		{
+			bool Enabled = true;
+		} settings;
+		void GenerateShaderPermutations(RE::BSShader* shader);
+	};
+#include "detail_prewarm.h"
+
+	void Test()
+	{
+		for (bool enabled : { false, true }) {
+			for (bool categories : { false, true }) {
+				Fixture f;
+				f.deferred.deferredPass = false;
+				f.deferred.categories = categories;
+				DetailMaps feature;
+				feature.settings.Enabled = enabled;
+				RE::BSGraphics::PixelShader material, excluded;
+				material.id = 1u;
+				excluded.id = 1u << 2;
+				f.shader.pixelShaders = { &material, &material, &excluded };
+				feature.GenerateShaderPermutations(&f.shader);
+				std::set<uint32_t> expected;
+				if (enabled) {
+					expected = { 1u | DetailFlag, 1u | DetailFlag | (1u << 4) };
+					if (categories)
+						expected.insert(1u | DetailFlag | (1u << 4) | (1u << 5));
+				}
+				Require(f.cache.compilationSet.requests == expected);
+				for (const auto descriptor : expected)
+					Require(f.cache.compilationSet.precompiles.at(descriptor));
+				Require(f.cache.compiles == 0);
+			}
+		}
+	}
+}
+
 void TestEffectResourceDescriptors()
 {
 	using Cache = SIE::ShaderCache;
@@ -960,9 +1014,9 @@ void TestEffectResourceDescriptors()
 				switch (RE::BSShader::Type::Effect) {
 #include "effect_lookup.h"
 				}
-				const auto expected = texture | grayscale | ((deferredPass || a_forceDeferred) ? deferredFlag : 0u);
+				const auto expected = texture | ((deferredPass || a_forceDeferred) ? deferredFlag : 0u);
 				Require(a_vertexDescriptor == texture && a_pixelDescriptor == expected);
-				Require(Util::ShaderDescriptor::UploadedPixelDescriptor(requested, a_pixelDescriptor, ignore) == ignore);
+				Require(Util::ShaderDescriptor::UploadedPixelDescriptor(requested, a_pixelDescriptor, 0u) == (ignore | grayscale));
 			}
 		}
 	}
@@ -1005,6 +1059,7 @@ int main()
 			TestWaterRuntimeDescriptor();
 			TestStartupLightingDescriptors();
 			TestEffectResourceDescriptors();
+			DetailPrewarmFixture::Test();
 			TestPBRPrewarming();
 			TestSeamPrewarming();
 			TestNativeImageSpaceAdmission();

@@ -16,6 +16,9 @@ extract_between("${_state}" "case RE::BSShader::Type::Lighting:"
 extract_between("${_state}" "case RE::BSShader::Type::Effect:"
     "case RE::BSShader::Type::DistantTree:" "effect_lookup.h")
 file(READ "${PROJECT_ROOT}/src/TruePBR.cpp" _pbr)
+file(READ "${PROJECT_ROOT}/src/Features/DetailMaps.cpp" _detail)
+extract_between("${_detail}" "void DetailMaps::GenerateShaderPermutations("
+    "DetailMaps::PassState::PassState(" "detail_prewarm.h")
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp" _character)
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterRendering.h" _character_header)
 extract_between("${_cache}" "bool ShaderCache::IsSupportedShader(const RE::BSShader& shader)"
@@ -33,7 +36,7 @@ extract_between("${_character}" "void RecordPreparationFailure("
 extract_between("${_character_header}" "struct CharacterPreparationFailure"
     "struct CharacterSnapshot" "preparation_failure_type.h")
 extract_between("${_hooks}" "bool Hooks::BSShader_BeginTechnique::thunk("
-    "namespace EffectExtensions" "begin_technique.h")
+    "\nnamespace\n{\n\tvoid BindOptionalMaterialTexture(" "begin_technique.h")
 foreach(_guard IN ITEMS
     "state->deferredPixelShaderMissing = false;"
     "return shaderFound && !state->deferredPixelShaderMissing;"

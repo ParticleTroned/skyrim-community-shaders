@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.11.19.1",
+    "packageVersion": "d2026.11.19.2",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -19,7 +19,7 @@
     },
     "runtimeSettingsContract": {
         "revision": 34,
-        "sourceTreeSha256": "8C07E890812A9D36F50A8E955672063D5E4CD5CCC2AF6B1F24FED94D016ABD6A",
+        "sourceTreeSha256": "75776F6C9BE8B3B124690C8299792BB825D2CC76F8130E76E4FD64AD8FE9E9BD",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",

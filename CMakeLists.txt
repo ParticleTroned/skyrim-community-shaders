@@ -3536,6 +3536,9 @@ if(BUILD_CONTROLLER_TESTS)
         "${_resource_contract_dir}/composite_shader_selection.h"
         "${_resource_contract_dir}/composite_bindings.h"
         "${_resource_contract_dir}/lighting_environment_binding.h"
+        "${_resource_contract_dir}/effect_material_binding.h"
+        "${_resource_contract_dir}/optional_material_binding.h"
+        "${_resource_contract_dir}/effect_flags.h"
         "${_resource_contract_dir}/pbr_displacement_binding.h"
     )
     add_custom_command(
@@ -3547,6 +3550,7 @@ if(BUILD_CONTROLLER_TESTS)
         DEPENDS
             src/Features/Upscaling.cpp
             src/Hooks.cpp
+            src/ShaderCache.h
             src/TruePBR.cpp
             tests/extract_shader_resource_contract.cmake
             tests/extract_source_region.cmake

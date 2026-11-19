@@ -2216,8 +2216,7 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 							   (uint32_t)SIE::ShaderCache::EffectShaderFlags::GrayscaleToAlpha |
 							   (uint32_t)SIE::ShaderCache::EffectShaderFlags::IgnoreTexAlpha);
 				a_vertexDescriptor &= flags;
-				// Grayscale textures alter the pixel resource contract, so retain their lookup bits.
-				a_pixelDescriptor &= ~static_cast<uint32_t>(SIE::ShaderCache::EffectShaderFlags::IgnoreTexAlpha);
+				a_pixelDescriptor &= flags;
 
 				if (deferred->deferredPass || a_forceDeferred)
 					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::EffectShaderFlags::Deferred;

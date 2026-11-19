@@ -5,6 +5,7 @@
 #include <DirectXTex.h>
 #include <fmt/ranges.h>
 
+#include "Features/Upscaling.h"
 #include "Globals.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -376,13 +377,14 @@ void DetailMaps::GenerateShaderPermutations(RE::BSShader* shader)
 	if (!std::filesystem::is_directory(std::filesystem::path(SetsPath), error) ||
 		!std::filesystem::is_directory(std::filesystem::path(RulesPath), error))
 		return;
+	const bool categories = globals::features::upscaling.NeedsCharacterCategoryShaders();
 	for (const auto& entry : shader->pixelShaders) {
 		for (bool deferred : { false, true }) {
 			auto vertex = entry->id;
 			auto pixel = entry->id;
 			globals::state->ModifyShaderLookup(*shader, vertex, pixel, deferred);
 			if (IsDetailDescriptor(pixel, true))
-				globals::shaderCache->PrewarmDeferredPixelShaders(*shader, pixel | DetailFlag, deferred, true);
+				globals::shaderCache->PrewarmDeferredPixelShaders(*shader, pixel | DetailFlag, deferred && categories, true);
 		}
 	}
 }

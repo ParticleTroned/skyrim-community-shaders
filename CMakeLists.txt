@@ -2150,6 +2150,46 @@ if(BUILD_CONTROLLER_TESTS)
     include("${PROJECT_SOURCE_DIR}/tests/game_setting_persistence.cmake")
     include("${PROJECT_SOURCE_DIR}/cmake/StateDrawTests.cmake")
 
+    add_controller_test(alpha_pass_list_test AlphaPassList tests/alpha_pass_list_test.cpp)
+    target_link_libraries(
+        alpha_pass_list_test
+        PRIVATE unordered_dense::unordered_dense
+    )
+    set_tests_properties(AlphaPassList PROPERTIES TIMEOUT 30)
+
+    add_controller_test(alpha_pass_list_hooks_test AlphaPassListHooks tests/alpha_pass_list_hooks_test.cpp)
+    set(_alpha_pass_list_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/alpha-pass-list"
+    )
+    add_custom_command(
+        OUTPUT "${_alpha_pass_list_test_dir}/alpha_pass_list_hooks.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_alpha_pass_list_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_alpha_pass_list.cmake"
+        DEPENDS
+            src/EngineFixes/VRAlphaPassListFix.cpp
+            tests/extract_alpha_pass_list.cmake
+        VERBATIM
+    )
+    target_sources(
+        alpha_pass_list_hooks_test
+        PRIVATE "${_alpha_pass_list_test_dir}/alpha_pass_list_hooks.h"
+    )
+    target_include_directories(
+        alpha_pass_list_hooks_test
+        PRIVATE "${_alpha_pass_list_test_dir}"
+    )
+    target_link_libraries(
+        alpha_pass_list_hooks_test
+        PRIVATE unordered_dense::unordered_dense nlohmann_json::nlohmann_json
+    )
+    target_compile_definitions(
+        alpha_pass_list_hooks_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+    set_tests_properties(AlphaPassListHooks PROPERTIES TIMEOUT 30)
+
     add_controller_test(
         shadow_batch_submissions_test
         ShadowBatchSubmissions

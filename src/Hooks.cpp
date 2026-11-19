@@ -5,6 +5,7 @@
 #endif
 #include "Api/AcceptedDrawService.h"
 #include "Deferred.h"
+#include "EngineFixes/VRAlphaPassListFix.h"
 #include "EngineFixes/VRShadowBatch.h"
 #include "Features/TerrainSeams.h"
 
@@ -2653,6 +2654,7 @@ namespace Hooks
 	void Install()
 	{
 		VRShadowBatch::Install();
+		VRAlphaPassListFix::Install();
 		Util::VRLoadingMenuClear::Install();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		InstallVRFaceGenTintAssignmentDiagnostic();

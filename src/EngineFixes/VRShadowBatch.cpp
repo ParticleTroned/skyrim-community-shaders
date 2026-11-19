@@ -1,4 +1,5 @@
 #include "VRShadowBatch.h"
+#include "VRAlphaPassListFix.h"
 
 #include "ShadowBatchSubmissions.h"
 #include "Utils/VirtualFunctionHook.h"
@@ -267,6 +268,7 @@ namespace VRShadowBatch
 
 		void Destroy(Renderer* a_renderer)
 		{
+			const VRAlphaPassListFix::RetirementScope lifetime;
 			auto state = FindState(a_renderer);
 			destroy(a_renderer);
 			if (state) {

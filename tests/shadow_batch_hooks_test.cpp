@@ -1,4 +1,5 @@
 #include "EngineFixes/ShadowBatchSubmissions.h"
+#include "EngineFixes/VRAlphaPassListFix.h"
 #include "EngineFixes/VRShadowBatchLayout.h"
 #include "EngineFixes/VRShadowBatchPolicy.h"
 
@@ -25,6 +26,13 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+namespace VRAlphaPassListFix
+{
+	inline std::atomic_uint64_t fixtureGeneration{};
+	RetirementScope::RetirementScope() noexcept { ++fixtureGeneration; }
+	RetirementScope::~RetirementScope() { ++fixtureGeneration; }
+}
 
 namespace
 {
@@ -393,6 +401,17 @@ namespace
 		Check(BucketEmpty(&renderer, key));
 		Clear<clearMap>(&renderer);
 		Check(fixture.geometry.refs == 0);
+	}
+	void AlphaLifetimeNotification()
+	{
+		using namespace VRShadowBatch;
+		Renderer renderer;
+		const auto beforeClear = VRAlphaPassListFix::fixtureGeneration.load();
+		Clear<clearPasses>(&renderer);
+		Check(VRAlphaPassListFix::fixtureGeneration == beforeClear);
+		const auto beforeDestroy = VRAlphaPassListFix::fixtureGeneration.load();
+		Destroy(&renderer);
+		Check(VRAlphaPassListFix::fixtureGeneration == beforeDestroy + 2);
 	}
 	void Exercise(bool sorted)
 	{
@@ -884,6 +903,7 @@ int main(int argc, char** argv)
 		destroy = NativeDestroy;
 		renderRange = NativeRange;
 		renderStep = NativeStep;
+		AlphaLifetimeNotification();
 		NativeLayoutRegression();
 		NativeOwnershipRegression();
 		Exercise(false);

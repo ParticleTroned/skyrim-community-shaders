@@ -9,30 +9,61 @@
 #	include "Common/PBR.hlsli"
 #endif
 
+/** Normalized surface inputs shared by every direct light at this pixel. */
+struct DirectLightingSurface
+{
+	float3 worldNormal;
+	float3 vertexNormal;
+	float3 viewDir;
+#if defined(TRUE_PBR)
+	float3 coatWorldNormal;
+	float3 coatViewDir;
+#endif
+};
+
 float3 SafeNormalizeLighting(float3 v, float3 fallback)
 {
 	float lenSq = dot(v, v);
 	return (lenSq > EPSILON_DIVISION && lenSq == lenSq && lenSq < 1.0e16) ? v * rsqrt(lenSq) : fallback;
 }
 
+/** Normalizes surface inputs once without changing the per-vector fallbacks. */
 #if defined(TRUE_PBR)
-DirectContext CreateDirectLightingContext(float3 worldNormal, float3 coatWorldNormal, float3 vertexNormal, float3 viewDir, float3 coatViewDir, float3 lightDir, float3 coatLightDir, float3 lightColor, float detailedShadow, float softShadow)
+DirectLightingSurface CreateDirectLightingSurface(float3 worldNormal, float3 coatWorldNormal, float3 vertexNormal, float3 viewDir, float3 coatViewDir)
 #else
-DirectContext CreateDirectLightingContext(float3 worldNormal, float3 vertexNormal, float3 viewDir, float3 lightDir, float3 lightColor, float detailedShadow, float softShadow)
+DirectLightingSurface CreateDirectLightingSurface(float3 worldNormal, float3 vertexNormal, float3 viewDir)
+#endif
+{
+	DirectLightingSurface surface;
+	surface.worldNormal = SafeNormalizeLighting(worldNormal, float3(0.0, 0.0, 1.0));
+	surface.vertexNormal = SafeNormalizeLighting(vertexNormal, surface.worldNormal);
+	surface.viewDir = SafeNormalizeLighting(viewDir, surface.worldNormal);
+#if defined(TRUE_PBR)
+	surface.coatWorldNormal = SafeNormalizeLighting(coatWorldNormal, surface.worldNormal);
+	surface.coatViewDir = SafeNormalizeLighting(coatViewDir, surface.coatWorldNormal);
+#endif
+	return surface;
+}
+
+/** Combines a prepared surface with the direction and visibility of one light. */
+#if defined(TRUE_PBR)
+DirectContext CreateDirectLightingContext(DirectLightingSurface surface, float3 lightDir, float3 coatLightDir, float3 lightColor, float detailedShadow, float softShadow)
+#else
+DirectContext CreateDirectLightingContext(DirectLightingSurface surface, float3 lightDir, float3 lightColor, float detailedShadow, float softShadow)
 #endif
 {
 	DirectContext context = (DirectContext)0;
-	context.worldNormal = SafeNormalizeLighting(worldNormal, float3(0.0, 0.0, 1.0));
-	context.vertexNormal = SafeNormalizeLighting(vertexNormal, context.worldNormal);
-	context.viewDir = SafeNormalizeLighting(viewDir, context.worldNormal);
+	context.worldNormal = surface.worldNormal;
+	context.vertexNormal = surface.vertexNormal;
+	context.viewDir = surface.viewDir;
 	context.lightDir = SafeNormalizeLighting(lightDir, context.worldNormal);
 	context.halfVector = SafeNormalizeLighting(context.viewDir + context.lightDir, context.worldNormal);
 	context.lightColor = lightColor;
 	context.detailedShadow = detailedShadow;
 	context.softShadow = softShadow;
 #if defined(TRUE_PBR)
-	context.coatWorldNormal = SafeNormalizeLighting(coatWorldNormal, context.worldNormal);
-	context.coatViewDir = SafeNormalizeLighting(coatViewDir, context.coatWorldNormal);
+	context.coatWorldNormal = surface.coatWorldNormal;
+	context.coatViewDir = surface.coatViewDir;
 	context.coatLightDir = SafeNormalizeLighting(coatLightDir, context.coatWorldNormal);
 	context.coatHalfVector = SafeNormalizeLighting(context.coatViewDir + context.coatLightDir, context.coatWorldNormal);
 	[branch] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
@@ -46,6 +77,19 @@ DirectContext CreateDirectLightingContext(float3 worldNormal, float3 vertexNorma
 #endif
 	return context;
 }
+
+/** Prepares a surface for callers that evaluate only one direct light. */
+#if defined(TRUE_PBR)
+DirectContext CreateDirectLightingContext(float3 worldNormal, float3 coatWorldNormal, float3 vertexNormal, float3 viewDir, float3 coatViewDir, float3 lightDir, float3 coatLightDir, float3 lightColor, float detailedShadow, float softShadow)
+{
+	return CreateDirectLightingContext(CreateDirectLightingSurface(worldNormal, coatWorldNormal, vertexNormal, viewDir, coatViewDir), lightDir, coatLightDir, lightColor, detailedShadow, softShadow);
+}
+#else
+DirectContext CreateDirectLightingContext(float3 worldNormal, float3 vertexNormal, float3 viewDir, float3 lightDir, float3 lightColor, float detailedShadow, float softShadow)
+{
+	return CreateDirectLightingContext(CreateDirectLightingSurface(worldNormal, vertexNormal, viewDir), lightDir, lightColor, detailedShadow, softShadow);
+}
+#endif
 
 IndirectContext CreateIndirectLightingContext(float3 worldNormal, float3 vertexNormal, float3 viewDir)
 {

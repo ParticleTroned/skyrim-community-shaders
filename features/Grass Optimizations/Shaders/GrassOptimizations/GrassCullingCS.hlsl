@@ -10,36 +10,8 @@
 #else
 #	define EYES 1
 #endif
-cbuffer Parameters : register(b0)
-{
-	uint InstanceCount, SliceCount, Capacity, EyeCount;
-	uint FrustumEnabled, DensityEnabled, MidEnabled, FarEnabled;
-	float MinPixels, FullPixels, MinDensity, BandPixels;
-	float MidPixels, FarPixels, DepthBias, ViewHeight;
-	float4 RepresentativeOrigin;
-	float4 ModelBound;
-	uint DepthWidth, DepthHeight, DepthMips, CollisionEnabled;
-	float4 DepthUVScale;  // xy: active viewport scale; z: absolute depth-range slack.
-	float MeshCostBias, CostBiasStartDistance, InvisibleFadeCull, RenderDistance;
-	float EdgeFadeStart, SimpleShadingPixelSize, QualityRadius;
-	uint ProjectionModes;
-	uint OverrideDistance;
-	float CollisionDistance;
-	uint SliceOffset;
-	float CollisionStrength;
-	uint4 IndexCounts;
-	float4 MeshWeights;
-	float4 FarDensity;  // Minimum pixels, minimum/maximum density, authored-bound area scale.
-	uint FarPolicyEnabled, ProportionalFade;
-	float2 ProjectionAsymptote;
-};
+#include "GrassOptimizations/GrassCullingInputs.hlsli"
 
-cbuffer FrustumParameters : register(b3)
-{
-	float4 CullingPlanes[12];
-	uint CullingPlanesValid;
-	uint3 CullingPlanesPadding;
-};
 #ifdef VR
 cbuffer StereoParameters : register(b1)
 {
@@ -48,24 +20,6 @@ cbuffer StereoParameters : register(b1)
 	float4 EyeClipEdge[2];
 };
 #endif
-cbuffer NativeGeometry : register(b2)
-{
-	row_major float4x4 WorldViewProj[EYES];
-	row_major float4x4 WorldView[EYES];
-	row_major float4x4 World[EYES];
-	row_major float4x4 PreviousWorld[EYES];
-	float4 FogNearColor;
-	float3 WindVector;
-	float WindTimer;
-	float3 DirLightDirection;
-	float PreviousWindTimer;
-	float3 DirLightColor;
-	float AlphaParam1;
-	float3 AmbientColor;
-	float AlphaParam2;
-	float3 ScaleMask;
-	float ShadowClampValue;
-};
 struct Slice
 {
 	uint first, count, end, padding;
@@ -113,9 +67,9 @@ uint Eye(uint eye)
 bool Outside(float4 clip, float radius, uint eye)
 {
 	float4 planes[6] = {
-		WorldViewProj[Eye(eye)][3] + WorldViewProj[Eye(eye)][0], WorldViewProj[Eye(eye)][3] - WorldViewProj[Eye(eye)][0],
-		WorldViewProj[Eye(eye)][3] + WorldViewProj[Eye(eye)][1], WorldViewProj[Eye(eye)][3] - WorldViewProj[Eye(eye)][1],
-		WorldViewProj[Eye(eye)][2], WorldViewProj[Eye(eye)][3] - WorldViewProj[Eye(eye)][2]
+		GrassGeometry(WorldViewProj)[Eye(eye)][3] + GrassGeometry(WorldViewProj)[Eye(eye)][0], GrassGeometry(WorldViewProj)[Eye(eye)][3] - GrassGeometry(WorldViewProj)[Eye(eye)][0],
+		GrassGeometry(WorldViewProj)[Eye(eye)][3] + GrassGeometry(WorldViewProj)[Eye(eye)][1], GrassGeometry(WorldViewProj)[Eye(eye)][3] - GrassGeometry(WorldViewProj)[Eye(eye)][1],
+		GrassGeometry(WorldViewProj)[Eye(eye)][2], GrassGeometry(WorldViewProj)[Eye(eye)][3] - GrassGeometry(WorldViewProj)[Eye(eye)][2]
 	};
 	float distances[6] = { clip.w + clip.x, clip.w - clip.x, clip.w + clip.y, clip.w - clip.y, clip.z, clip.w - clip.z };
 	[unroll] for (uint i = 0; i < 6; ++i) if (distances[i] < -radius * length(planes[i].xyz)) return true;
@@ -125,16 +79,16 @@ bool Outside(float4 clip, float radius, uint eye)
 bool OutsideCullingPlanes(float3 center, float radius, uint eye)
 {
 	bool outside = false;
-	if (CullingPlanesValid) {
+	if (GrassFrustum(CullingPlanesValid)) {
 		[unroll] for (uint i = 0; i < 6; ++i)
-			outside = outside || dot(CullingPlanes[Eye(eye) * 6 + i], float4(center, 1)) < -radius;
+			outside = outside || dot(GrassFrustum(CullingPlanes)[Eye(eye) * 6 + i], float4(center, 1)) < -radius;
 	} else
-		outside = Outside(mul(WorldViewProj[Eye(eye)], float4(center, 1)), radius, eye);
+		outside = Outside(mul(GrassGeometry(WorldViewProj)[Eye(eye)], float4(center, 1)), radius, eye);
 	return outside;
 }
 bool ProjectBounds(float3 center, float radius, uint eye, out float2 lo, out float2 hi, out float nearDepth)
 {
-	return GrassProjectSphere(WorldViewProj[Eye(eye)], center, radius, lo, hi, nearDepth);
+	return GrassProjectSphere(GrassGeometry(WorldViewProj)[Eye(eye)], center, radius, lo, hi, nearDepth);
 }
 
 bool Hidden(float2 lo, float2 hi, float nearest, uint eye, out uint reason, out uint cells)
@@ -147,18 +101,18 @@ bool Hidden(float2 lo, float2 hi, float nearest, uint eye, out uint reason, out 
 		return false;
 	}
 #endif
-	if (DepthMips == 0 || any(lo < -1) || any(hi > 1) || !isfinite(nearest) || nearest < 0 || nearest > 1) {
+	if (GrassParameter(DepthMips) == 0 || any(lo < -1) || any(hi > 1) || !isfinite(nearest) || nearest < 0 || nearest > 1) {
 		reason = 13;
 		return false;
 	}
 	float2 uvLo = float2(lo.x * .5 + .5, .5 - hi.y * .5);
 	float2 uvHi = float2(hi.x * .5 + .5, .5 - lo.y * .5);
-	uvLo *= DepthUVScale.xy;
-	uvHi *= DepthUVScale.xy;
-	uvLo.x = (uvLo.x + eye) / EyeCount;
-	uvHi.x = (uvHi.x + eye) / EyeCount;
-	float2 pixels = (uvHi - uvLo) * float2(DepthWidth, DepthHeight);
-	uint mip = min((uint)max(0, ceil(log2(max(1, max(pixels.x, pixels.y))))), DepthMips - 1);
+	uvLo *= GrassParameter(DepthUVScale).xy;
+	uvHi *= GrassParameter(DepthUVScale).xy;
+	uvLo.x = (uvLo.x + eye) / GrassParameter(EyeCount);
+	uvHi.x = (uvHi.x + eye) / GrassParameter(EyeCount);
+	float2 pixels = (uvHi - uvLo) * float2(GrassParameter(DepthWidth), GrassParameter(DepthHeight));
+	uint mip = min((uint)max(0, ceil(log2(max(1, max(pixels.x, pixels.y))))), GrassParameter(DepthMips) - 1);
 	uint width, height, levels;
 	DepthPyramid.GetDimensions(mip, width, height, levels);
 	int2 first = clamp(int2(floor(uvLo * float2(width, height))), 0, int2(width, height) - 1);
@@ -177,10 +131,40 @@ bool Hidden(float2 lo, float2 hi, float nearest, uint eye, out uint reason, out 
 		return false;
 	}
 	uint projectionEye = Eye(eye);
-	float margin = GrassOcclusionMargin(ProjectionAsymptote[projectionEye], (ProjectionModes >> (projectionEye * 2)) & 3,
-		nearest, farthest, DepthBias, DepthUVScale.z);
+	float margin = GrassOcclusionMargin(GrassParameter(ProjectionAsymptote)[projectionEye], (GrassParameter(ProjectionModes) >> (projectionEye * 2)) & 3,
+		nearest, farthest, GrassParameter(DepthBias), GrassParameter(DepthUVScale).z);
 	bool hidden = DepthOrder::IsBehindWithBias(nearest, farthest, margin);
-	if (abs(farthest - DepthOrder::Far()) <= 1e-6)
+	[branch] if (!hidden && GrassParameter(RefineHiZ) && mip >= 2)
+	{
+		// Keep resource indices valid for inactive lanes in a divergent wave.
+		uint fineMip = mip - min(mip, 2u);
+		uint fineWidth, fineHeight, fineLevels;
+		DepthPyramid.GetDimensions(fineMip, fineWidth, fineHeight, fineLevels);
+		int eyeFirst = int(eye * (fineWidth / GrassParameter(EyeCount)));
+		int eyeLast = eyeFirst + int(fineWidth / GrassParameter(EyeCount)) - 1;
+		int2 fineFirst = clamp(int2(floor(uvLo * float2(fineWidth, fineHeight))), int2(eyeFirst, 0), int2(eyeLast, fineHeight - 1));
+		int2 fineLast = clamp(int2(floor(uvHi * float2(fineWidth, fineHeight))), int2(eyeFirst, 0), int2(eyeLast, fineHeight - 1));
+		uint fineCells = uint(fineLast.x - fineFirst.x + 1) * uint(fineLast.y - fineFirst.y + 1);
+		if (fineCells <= 25) {
+			Count(20);
+			hidden = true;
+			[loop] for (int y = fineFirst.y; y <= fineLast.y && hidden; ++y)
+				[loop] for (int x = fineFirst.x; x <= fineLast.x; ++x)
+			{
+				float depth = DepthPyramid.Load(int3(x, y, fineMip));
+				++cells;
+				float fineMargin = GrassOcclusionMargin(GrassParameter(ProjectionAsymptote)[projectionEye], (GrassParameter(ProjectionModes) >> (projectionEye * 2)) & 3,
+					nearest, depth, GrassParameter(DepthBias), GrassParameter(DepthUVScale).z);
+				if (!isfinite(depth) || !DepthOrder::IsBehindWithBias(nearest, depth, fineMargin)) {
+					hidden = false;
+					break;
+				}
+			}
+			if (hidden)
+				Count(21);
+		}
+	}
+	if (!hidden && abs(farthest - DepthOrder::Far()) <= 1e-6)
 		reason = 16;
 	else if (!hidden)
 		reason = 17;
@@ -188,11 +172,11 @@ bool Hidden(float2 lo, float2 hi, float nearest, uint eye, out uint reason, out 
 }
 uint FindSlice(uint index)
 {
-	uint left = 0, right = SliceCount;
+	uint left = 0, right = GrassParameter(SliceCount);
 	[loop] while (left < right)
 	{
 		uint middle = (left + right) / 2;
-		if (index < Slices[SliceOffset + middle].end)
+		if (index < Slices[GrassParameter(SliceOffset) + middle].end)
 			right = middle;
 		else
 			left = middle + 1;
@@ -206,29 +190,29 @@ uint CullInstance(uint index, uint commonSlice, out uint sourceRecord, out uint 
 	tier = 0;
 	[unroll] for (uint initialEye = 0; initialEye < EYES; ++initialEye)
 		extras[initialEye] = (GrassInstanceExtra)0;
-	uint left = commonSlice < SliceCount ? commonSlice : FindSlice(index);
-	if (left >= SliceCount)
+	uint left = commonSlice < GrassParameter(SliceCount) ? commonSlice : FindSlice(index);
+	if (left >= GrassParameter(SliceCount))
 		return 0;
-	Slice slice = Slices[SliceOffset + left];
+	Slice slice = Slices[GrassParameter(SliceOffset) + left];
 	sourceRecord = slice.first + index - (slice.end - slice.count);
-	uint4 a = Records.Load4(sourceRecord * 32);
-	uint4 b = Records.Load4(sourceRecord * 32 + 16);
+	uint4 a = Records.Load4((GrassRecordBase + sourceRecord) * 32);
+	uint4 b = Records.Load4((GrassRecordBase + sourceRecord) * 32 + 16);
 	float4 instance1 = float4(UnpackGrassInstance(a.x), UnpackGrassInstance(a.y));
 	float4 instance2 = float4(UnpackGrassInstance(a.z), UnpackGrassInstance(a.w));
 	float4 instance3 = float4(UnpackGrassInstance(b.x), UnpackGrassInstance(b.y));
 	float4 instance4 = float4(UnpackGrassInstance(b.z), UnpackGrassInstance(b.w));
-	float3 scale = instance4.y * ScaleMask + 1;
+	float3 scale = instance4.y * GrassGeometry(ScaleMask) + 1;
 	float3x3 rotation = float3x3(instance2.xyz, instance3.xyz, float3(instance4.x, instance2.w, instance3.w));
-	float3 center = instance1.xyz + mul(rotation, ModelBound.xyz * scale) + slice.originFade.xyz - RepresentativeOrigin.xyz;
+	float3 center = instance1.xyz + mul(rotation, GrassParameter(ModelBound).xyz * scale) + slice.originFade.xyz - GrassParameter(RepresentativeOrigin).xyz;
 	float norm = GrassBasisNorm(rotation);
-	float radius = ModelBound.w * max(abs(scale.x), max(abs(scale.y), abs(scale.z))) * norm;
+	float radius = GrassParameter(ModelBound).w * max(abs(scale.x), max(abs(scale.y), abs(scale.z))) * norm;
 	bool valid = all(isfinite(center)) && isfinite(radius) && radius > 0;
-	float3 root = instance1.xyz + slice.originFade.xyz - RepresentativeOrigin.xyz;
-	float rootDistance = length(mul(World[0], float4(root, 1)).xyz);
-	float reach = (length(ModelBound.xyz) + ModelBound.w) * max(abs(scale.x), max(abs(scale.y), abs(scale.z))) * norm;
-	float deformation = .4 * abs(WindVector.z) * length(WindVector.xy);
-	if (CollisionEnabled && CollisionDistance > 0 && (!isfinite(rootDistance) || rootDistance <= CollisionDistance + reach))
-		deformation += 2 * reach * max(1, CollisionStrength);
+	float3 root = instance1.xyz + slice.originFade.xyz - GrassParameter(RepresentativeOrigin).xyz;
+	float rootDistance = length(mul(GrassGeometry(World)[0], float4(root, 1)).xyz);
+	float reach = (length(GrassParameter(ModelBound).xyz) + GrassParameter(ModelBound).w) * max(abs(scale.x), max(abs(scale.y), abs(scale.z))) * norm;
+	float deformation = .4 * abs(GrassGeometry(WindVector).z) * length(GrassGeometry(WindVector).xy);
+	if (GrassParameter(CollisionEnabled) && GrassParameter(CollisionDistance) > 0 && (!isfinite(rootDistance) || rootDistance <= GrassParameter(CollisionDistance) + reach))
+		deformation += 2 * reach * max(1, GrassParameter(CollisionStrength));
 	radius += deformation;
 	valid = valid && isfinite(radius);
 	float pixels = 1e20;
@@ -237,50 +221,50 @@ uint CullInstance(uint index, uint commonSlice, out uint sourceRecord, out uint 
 		pixels = 0;
 		[unroll] for (uint eye = 0; eye < EYES; ++eye)
 		{
-			float eyeDistance = length(mul(World[Eye(eye)], float4(root, 1)).xyz);
+			float eyeDistance = length(mul(GrassGeometry(World)[Eye(eye)], float4(root, 1)).xyz);
 			distance = eye == 0 ? eyeDistance : min(distance, eyeDistance);
-			float focal = length(WorldViewProj[Eye(eye)][1].xyz) * ViewHeight * .5;
-			pixels = max(pixels, QualityRadius * max(1, 1 + instance4.y) * focal / max(eyeDistance, 1e-4));
+			float focal = length(GrassGeometry(WorldViewProj)[Eye(eye)][1].xyz) * GrassParameter(ViewHeight) * .5;
+			pixels = max(pixels, GrassParameter(QualityRadius) * max(1, 1 + instance4.y) * focal / max(eyeDistance, 1e-4));
 		}
 	}
 	uint seed = Hash(asuint(instance1.x + slice.originFade.x) ^ Hash(asuint(instance1.y + slice.originFade.y)) ^ a.y);
 	float densityHash = (seed & 0xffffff) / 16777216.0;
 	float lodHash = (Hash(seed ^ 0x9e3779b9) & 0xffffff) / 16777216.0;
-	if (valid && MidEnabled && pixels < MidPixels + (lodHash - .5) * BandPixels)
+	if (valid && GrassParameter(MidEnabled) && pixels < GrassParameter(MidPixels) + (lodHash - .5) * GrassParameter(BandPixels))
 		tier = 1;
-	if (valid && FarEnabled && pixels < FarPixels + (lodHash - .5) * BandPixels)
+	if (valid && GrassParameter(FarEnabled) && pixels < GrassParameter(FarPixels) + (lodHash - .5) * GrassParameter(BandPixels))
 		tier = 2;
-	float meshWeight = MeshWeights[tier];
-	float costBias = MeshCostBias * saturate((distance - CostBiasStartDistance) / max(CostBiasStartDistance, 1e-4));
+	float meshWeight = GrassParameter(MeshWeights)[tier];
+	float costBias = GrassParameter(MeshCostBias) * saturate((distance - GrassParameter(CostBiasStartDistance)) / max(GrassParameter(CostBiasStartDistance), 1e-4));
 	float pixelScale = lerp(1, meshWeight, costBias);
-	float maximumDistance = RenderDistance * lerp(1, 1 / max(meshWeight, 1), costBias);
+	float maximumDistance = GrassParameter(RenderDistance) * lerp(1, 1 / max(meshWeight, 1), costBias);
 	float keep, minimumPixels;
 	bool thin;
-	bool farPolicy = FarPolicyEnabled && tier == 2;
+	bool farPolicy = GrassParameter(FarPolicyEnabled) && tier == 2;
 	[branch] if (farPolicy)
 	{
-		minimumPixels = FarDensity.x * pixelScale;
+		minimumPixels = GrassParameter(FarDensity).x * pixelScale;
 		// The validated interval stays positive without widening tightly spaced size limits.
-		float detail = saturate((pixels - minimumPixels) / ((FarPixels - FarDensity.x) * pixelScale));
-		keep = lerp(FarDensity.y, FarDensity.z, detail) * FarDensity.w;
+		float detail = saturate((pixels - minimumPixels) / ((GrassParameter(FarPixels) - GrassParameter(FarDensity).x) * pixelScale));
+		keep = lerp(GrassParameter(FarDensity).y, GrassParameter(FarDensity).z, detail) * GrassParameter(FarDensity).w;
 		thin = true;
 	}
 	else
 	{
-		minimumPixels = MinPixels * pixelScale;
-		keep = lerp(MinDensity, 1, saturate((pixels - minimumPixels) / max((FullPixels - MinPixels) * pixelScale, .01)));
-		thin = pixels < FullPixels * pixelScale;
+		minimumPixels = GrassParameter(MinPixels) * pixelScale;
+		keep = lerp(GrassParameter(MinDensity), 1, saturate((pixels - minimumPixels) / max((GrassParameter(FullPixels) - GrassParameter(MinPixels)) * pixelScale, .01)));
+		thin = pixels < GrassParameter(FullPixels) * pixelScale;
 	}
 	float densityFade;
 	// Keep the constant-width path free of a per-instance variable division.
-	[branch] if (ProportionalFade)
+	[branch] if (GrassParameter(ProportionalFade))
 	{
 		float fadeBand = .15 * keep;
 		densityFade = saturate((keep + fadeBand - densityHash) / max(fadeBand, 1e-6));
 	}
 	else densityFade = saturate((keep + .15 - densityHash) / .15);
-	densityFade = DensityEnabled && thin ? densityFade : 1;
-	bool densityReject = valid && DensityEnabled && (pixels < minimumPixels || (farPolicy && keep <= 0) || densityFade <= 0);
+	densityFade = GrassParameter(DensityEnabled) && thin ? densityFade : 1;
+	bool densityReject = valid && GrassParameter(DensityEnabled) && (pixels < minimumPixels || (farPolicy && keep <= 0) || densityFade <= 0);
 	uint eyeMask = 0;
 	bool windComputed = false;
 	float2 wind = 0;
@@ -291,7 +275,7 @@ uint CullInstance(uint index, uint commonSlice, out uint sourceRecord, out uint 
 			continue;
 #endif
 		Count(0);
-		if (valid && FrustumEnabled && OutsideCullingPlanes(center, radius, eye)) {
+		if (valid && GrassParameter(FrustumEnabled) && OutsideCullingPlanes(center, radius, eye)) {
 			Count(1);
 			continue;
 		}
@@ -300,29 +284,34 @@ uint CullInstance(uint index, uint commonSlice, out uint sourceRecord, out uint 
 			continue;
 		}
 		float fade = slice.originFade.w * densityFade;
-		if (valid && RenderDistance > 0) {
+		if (valid && GrassParameter(RenderDistance) > 0) {
 			if (distance > maximumDistance) {
 				Count(8);
 				continue;
 			}
 			float nativeDistance;
 #ifdef VR
-			nativeDistance = length(mul(World[0], float4(root, 1)).xyz);
+			nativeDistance = length(mul(GrassGeometry(World)[0], float4(root, 1)).xyz);
 #else
-			nativeDistance = length(mul(WorldViewProj[0], float4(root, 1)).xyz);
+			nativeDistance = length(mul(GrassGeometry(WorldViewProj)[0], float4(root, 1)).xyz);
 #endif
-			float distanceFade = 1 - saturate((nativeDistance - AlphaParam1) / max(AlphaParam2, 1e-4));
-			if (OverrideDistance)
+			float distanceFade = 1 - saturate((nativeDistance - GrassGeometry(AlphaParam1)) / max(GrassGeometry(AlphaParam2), 1e-4));
+			if (GrassParameter(OverrideDistance))
 				distanceFade = 1;
-			fade *= distanceFade * saturate((maximumDistance - distance) / max(maximumDistance * (1 - EdgeFadeStart), 1e-4));
+			fade *= distanceFade * saturate((maximumDistance - distance) / max(maximumDistance * (1 - GrassParameter(EdgeFadeStart)), 1e-4));
 		}
-		if (valid && fade <= InvisibleFadeCull) {
+		if (valid && fade <= GrassParameter(InvisibleFadeCull)) {
 			Count(9);
+			continue;
+		}
+		// Normalized texture alpha cannot make an instance more opaque than its fade.
+		if (!DisableAlphaRejection && valid && isfinite(fade) && fade + 1e-5 < GrassParameter(AlphaThreshold)) {
+			Count(19);
 			continue;
 		}
 		if (valid) {
 			Count(10);
-			if (DepthMips) {
+			if (GrassParameter(DepthMips)) {
 				float2 lo, hi;
 				float nearest;
 				if (ProjectBounds(center, radius, eye, lo, hi, nearest)) {
@@ -342,10 +331,10 @@ uint CullInstance(uint index, uint commonSlice, out uint sourceRecord, out uint 
 		}
 		if (!valid)
 			Count(7);
-		bool simple = valid && SimpleShadingPixelSize > 0 && pixels < SimpleShadingPixelSize;
+		bool simple = valid && GrassParameter(SimpleShadingPixelSize) > 0 && pixels < GrassParameter(SimpleShadingPixelSize);
 		[branch] if (!windComputed)
 		{
-			wind = float2(GrassWindScalar(instance1.xy, WindTimer), GrassWindScalar(instance1.xy, PreviousWindTimer));
+			wind = float2(GrassWindScalar(instance1.xy, GrassGeometry(WindTimer)), GrassWindScalar(instance1.xy, GrassGeometry(PreviousWindTimer)));
 			windComputed = true;
 		}
 		GrassInstanceExtra extra;
@@ -362,38 +351,58 @@ groupshared uint CommonSlice;
 groupshared uint BinCounts[3 * EYES];
 groupshared uint BinOffsets[3 * EYES];
 
-[numthreads(64, 1, 1)] void main(uint3 id : SV_DispatchThreadID, uint lane : SV_GroupIndex) {
+[numthreads(64, 1, 1)] void main(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
+#ifdef GRASS_CULL_BATCH
+	uint dispatchIndex = group.y * DispatchRowWidth + group.x;
+	// This exit is uniform across the group and precedes every group barrier.
+	if (dispatchIndex >= DispatchGroupCount)
+		return;
+	uint dispatchGroup = DispatchStartGroup + dispatchIndex;
+	uint firstBucket = 0, lastBucket = BucketCount - 1;
+	[loop] while (firstBucket < lastBucket)
+	{
+		uint middle = (firstBucket + lastBucket + 1) / 2;
+		if (CullBuckets[middle].DispatchStart <= dispatchGroup)
+			firstBucket = middle;
+		else
+			lastBucket = middle - 1;
+	}
+	Bucket = CullBuckets[firstBucket];
+	uint3 id = uint3((dispatchGroup - Bucket.DispatchStart) * 64 + lane, 0, 0);
+#else
+	uint3 id = uint3(group.x * 64 + lane, 0, 0);
+#endif
 	if (lane == 0) {
 		CommonSlice = FindSlice(id.x);
-		if (CommonSlice < SliceCount && Slices[SliceOffset + CommonSlice].end < min(id.x + 64, InstanceCount))
-			CommonSlice = SliceCount;
+		if (CommonSlice < GrassParameter(SliceCount) && Slices[GrassParameter(SliceOffset) + CommonSlice].end < min(id.x + 64, GrassParameter(InstanceCount)))
+			CommonSlice = GrassParameter(SliceCount);
 	}
 	if (lane < 3 * EYES)
 		BinCounts[lane] = 0;
-	if (id.x < 3 * EyeCount)
-		Arguments.Store(id.x * 32 + 12, IndexCounts[id.x / EyeCount]);
+	if (id.x < 3 * GrassParameter(EyeCount))
+		Arguments.Store(GrassArgsBase + id.x * 32 + 12, GrassParameter(IndexCounts)[id.x / GrassParameter(EyeCount)]);
 	GroupMemoryBarrierWithGroupSync();
 
 	uint sourceRecord = 0;
 	uint tier = 0, eyeMask = 0;
 	GrassInstanceExtra extras[EYES];
-	if (id.x < InstanceCount)
+	if (id.x < GrassParameter(InstanceCount))
 		eyeMask = CullInstance(id.x, CommonSlice, sourceRecord, tier, extras);
 	uint localSlots[EYES];
 	[unroll] for (uint reserveEye = 0; reserveEye < EYES; ++reserveEye) if (eyeMask & (1u << reserveEye))
-		InterlockedAdd(BinCounts[tier * EyeCount + reserveEye], 1, localSlots[reserveEye]);
+		InterlockedAdd(BinCounts[tier * GrassParameter(EyeCount) + reserveEye], 1, localSlots[reserveEye]);
 	GroupMemoryBarrierWithGroupSync();
 
 	if (lane < 3 * EYES && BinCounts[lane])
-		Arguments.InterlockedAdd(lane * 32 + 16, BinCounts[lane], BinOffsets[lane]);
+		Arguments.InterlockedAdd(GrassArgsBase + lane * 32 + 16, BinCounts[lane], BinOffsets[lane]);
 	GroupMemoryBarrierWithGroupSync();
 
 	[unroll] for (uint eye = 0; eye < EYES; ++eye) if (eyeMask & (1u << eye))
 	{
-		uint bin = tier * EyeCount + eye;
-		uint output = bin * Capacity + BinOffsets[bin] + localSlots[eye];
+		uint bin = tier * GrassParameter(EyeCount) + eye;
+		uint output = GrassOutputBase + bin * GrassParameter(Capacity) + BinOffsets[bin] + localSlots[eye];
 		// Source indices fit exactly in the float input-assembler stream.
-		Compacted.Store(output * 4, asuint(float(sourceRecord)));
+		Compacted.Store(output * 4, asuint(float(GrassRecordBase + sourceRecord)));
 		Extras[output] = extras[eye];
 	}
 }

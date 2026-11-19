@@ -131,15 +131,14 @@ struct Blob { const void* GetBufferPointer() const { return this; } size_t GetBu
 struct Buffer { winrt::com_ptr<ID3D11Buffer> resource; winrt::com_ptr<ID3D11ShaderResourceView> srv; };
 struct Bucket {
     struct Plan { std::array<Mesh, 3> meshes; std::array<winrt::com_ptr<ID3D11InputLayout>, 3> layouts;
-        struct { UINT eyes = 1; } params; UINT slot = 0; } plan;
-    struct Result { UINT capacity = 8; std::shared_ptr<Buffer> output, arguments, extras; } result;
-    std::shared_ptr<Buffer> records;
+        struct { UINT eyes = 1; } params; UINT slot = 0, outputBase = 137, argsBase = 384; } plan;
+    struct Result { UINT capacity = 8; } result;
 };
 struct Context {
-    struct Draw { ID3D11InputLayout* layout; ID3D11Buffer* vertices; UINT stride, argumentOffset; };
+    struct Draw { ID3D11InputLayout* layout; ID3D11Buffer* vertices; UINT stride, argumentOffset, instanceOffset; };
     ID3D11InputLayout* layout = nullptr;
     ID3D11Buffer* vertices = nullptr;
-    UINT stride = 0;
+    UINT stride = 0, instanceOffset = 0;
     ID3D11ShaderResourceView* pixelAtlas = nullptr;
     ID3D11ShaderResourceView* vertexNormalLength = nullptr;
     unsigned textureReads = 0;
@@ -158,11 +157,12 @@ struct Context {
     }
     void IASetPrimitiveTopology(UINT) {}
     void IASetInputLayout(ID3D11InputLayout* next) { layout = next; }
-    void IASetVertexBuffers(UINT slot, UINT, ID3D11Buffer** buffers, const UINT* strides, const UINT*) {
+    void IASetVertexBuffers(UINT slot, UINT, ID3D11Buffer** buffers, const UINT* strides, const UINT* offsets) {
         if (slot == 0) { vertices = *buffers; stride = *strides; }
+        else instanceOffset = *offsets;
     }
     void IASetIndexBuffer(ID3D11Buffer*, DXGI_FORMAT format, UINT) { Require(format == DXGI_FORMAT_R16_UINT, "Wrong index format"); }
-    void DrawIndexedInstancedIndirect(ID3D11Buffer*, UINT offset) { draws.push_back({layout, vertices, stride, offset}); }
+    void DrawIndexedInstancedIndirect(ID3D11Buffer*, UINT offset) { draws.push_back({layout, vertices, stride, offset, instanceOffset}); }
 };
 namespace GrassD3D { struct DrawState { explicit DrawState(Context*) {} }; }
 namespace SIE::ShaderCache {
@@ -182,6 +182,8 @@ PRODUCTION_CONSTANTS
 struct GrassBucketRenderer { struct Impl {
     std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> layouts;
     Blob* signature = &blob;
+    struct { std::shared_ptr<Buffer> output, arguments, extras; } cullBuffers;
+    std::shared_ptr<Buffer> recordPool;
     std::shared_ptr<Context> context = std::make_shared<Context>();
     std::array<winrt::com_ptr<Resource>, 2> drawVertexShaders;
     std::array<winrt::com_ptr<Resource>, 8> drawPixelShaders;
@@ -280,7 +282,7 @@ int main() {
         Bucket bucket;
         bucket.plan.meshes = {loaded[0], loaded[1], padded};
         for (UINT tier = 0; tier < 3; ++tier) bucket.plan.layouts[tier].copy_from(state.Layout(bucket.plan.meshes[tier].descriptor));
-        bucket.result.output = bucket.result.arguments = bucket.result.extras = bucket.records = std::make_shared<Buffer>();
+        state.cullBuffers.output = state.cullBuffers.arguments = state.cullBuffers.extras = state.recordPool = std::make_shared<Buffer>();
         const std::array<UINT, 3> expectedStrides{20, 28, 32};
         for (const UINT eyes : {1u, 2u}) {
             bucket.plan.params.eyes = eyes; state.context->draws.clear(); state.EmitDraws(bucket);
@@ -288,12 +290,13 @@ int main() {
             for (UINT tier = 0; tier < 3; ++tier) for (UINT eye = 0; eye < eyes; ++eye) {
                 const auto& draw = state.context->draws[tier * eyes + eye];
                 Require(draw.layout == bucket.plan.layouts[tier].get() && draw.vertices == bucket.plan.meshes[tier].vertices.get() &&
-                    draw.stride == expectedStrides[tier] && draw.argumentOffset == (tier * eyes + eye) * 32 + 12, "Draw mixed a tier layout, stride or eye slot");
+                    draw.stride == expectedStrides[tier] && draw.argumentOffset == bucket.plan.argsBase + (tier * eyes + eye) * 32 + 12 &&
+                    draw.instanceOffset == (bucket.plan.outputBase + (tier * eyes + eye) * bucket.result.capacity) * 4, "Draw mixed a tier layout, stride or eye slot");
             }
         }
         bucket.plan.meshes[1] = {}; bucket.plan.layouts[1] = {};
         state.context->draws.clear(); state.EmitDraws(bucket);
-        Require(state.context->draws.size() == 4 && state.context->draws[2].argumentOffset == 140, "Missing optional mesh shifted surviving tier slots");
+        Require(state.context->draws.size() == 4 && state.context->draws[2].argumentOffset == bucket.plan.argsBase + 140, "Missing optional mesh shifted surviving tier slots");
         Resource atlas;
         for (bool lightingLoaded : {false, true}) for (bool enabled : {false, true})
             for (bool farLOD : {false, true}) for (bool depth : {false, true})
@@ -752,7 +755,8 @@ struct Source {
 struct Plan {
     std::array<Mesh, 3> meshes;
     std::array<void*, 3> layouts{};
-    bool prepared = false, empty = false;
+    bool prepared = false, empty = false, alphaDepthWritten = false;
+    struct { float alphaThreshold = 0; } params;
     std::array<float, 152> geometry{};
     PRODUCTION_RETIRE
 };
@@ -794,6 +798,7 @@ struct GrassBucketRenderer {
         void UpdateLODDemand(const GrassPolicy::Settings&);
         bool HasCurrentPreparation() const { return true; }
         void EndBackgroundPreparation(const GrassPolicy::Settings&, bool) {}
+        void RetireCulling() {}
         std::array<const Mesh*, 2> LODMeshes(const Source&);
         std::vector<LODKey> pendingLoads;
         void CancelRetiredLODLoads() {

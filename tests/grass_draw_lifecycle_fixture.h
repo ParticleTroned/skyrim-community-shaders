@@ -133,6 +133,10 @@ namespace RE
 		struct ShadowState
 		{
 			uint32_t addressUpdates = 0, filterUpdates = 0;
+			bool alphaTestEnabled = false;
+			float alphaTestRef = 0;
+			const ShadowState& GetRuntimeData() const { return *this; }
+			const ShadowState& GetVRRuntimeData() const { return *this; }
 			void SetPSTextureAddressMode(uint32_t slot, TextureAddressMode mode)
 			{
 				if (slot != 0 || mode != TextureAddressMode::kClampSClampT)
@@ -306,6 +310,10 @@ struct Bucket
 	struct Plan
 	{
 		bool prepared = false;
+		struct
+		{
+			float alphaThreshold = 0;
+		} params;
 		bool empty = false;
 		std::array<float, 152> geometry{};
 		void Retire() { prepared = empty = false; }
@@ -422,6 +430,7 @@ inline bool CurrentGeometry(const Source& source)
 	return source.identity->GetGeometryRuntimeData().shaderProperty.get() == source.property.get();
 }
 inline bool CurrentContract(const Source&) { return true; }
+inline float AlphaCullThreshold(const Source&, float) { return 0; }
 inline bool CurrentGroups(const Source& source) { return source.groupsCurrent; }
 enum class DrawRejection
 {
@@ -480,6 +489,7 @@ public:
 		void ClearDrawContext() noexcept;
 		bool HasActiveDrawContext() const noexcept;
 		void UpdateLODDemand(const GrassPolicy::Settings&) {}
+		void RetireCulling() {}
 		void PollLODLoads() {}
 		bool HasCurrentPreparation() const { return true; }
 		void EndBackgroundPreparation(const GrassPolicy::Settings&, bool) {}
@@ -526,6 +536,13 @@ public:
 		bool HasBatchDrawState() const;
 		bool DrawBucket(Bucket&, Outcome&);
 		bool DrawMainPass(Bucket&, const PassKey&, bool);
+		bool throwOnAlphaRecovery = false;
+		void ValidateAlphaCulling(Bucket&)
+		{
+			if (throwOnAlphaRecovery)
+				throw std::runtime_error("Injected alpha recovery failure");
+		}
+		bool frameAlphaRejection = true;
 		void EmitDraws(const Bucket&)
 		{
 			++submissions;

@@ -36,6 +36,8 @@ public:
 	void DrawRenderPass(RE::BSRenderPass*, uint32_t, bool, uint32_t, RenderPass);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	void SetDiagnosticsEnabled(bool enabled);
+	/** @brief Stage session-only dispatch and alpha-rejection comparisons at the next grass frame. */
+	void SetCullingControls(bool combined, bool alpha);
 	/** @brief Override default-on worker preparation for this session at the next grass frame. */
 	void SetBackgroundPreparationEnabled(bool enabled);
 	/** @brief Request a rate-limited render-thread snapshot without enabling shader counters. */

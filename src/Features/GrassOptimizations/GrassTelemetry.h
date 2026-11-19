@@ -22,6 +22,8 @@ namespace GrassTelemetry
 		uint64_t identities = 0, residentSources = 0, residentGroups = 0, residentInstances = 0;
 		uint64_t buckets = 0, dormantBuckets = 0, lodModels = 0, lodVariants = 0;
 		uint64_t cpuSnapshotPayloadBytes = 0, activeRecordBytes = 0, dormantRecordBytes = 0;
+		uint64_t recordPoolBytes = 0;
+		bool combinedCulling = true, alphaRejection = true, refineHiZ = false;
 		uint64_t cullingBufferBytes = 0, scratchBufferBytes = 0, diagnosticBufferBytes = 0;
 		uint64_t lodReferencedBufferBytes = 0;
 		uint32_t hiZWidth = 0, hiZHeight = 0, hiZMips = 0;

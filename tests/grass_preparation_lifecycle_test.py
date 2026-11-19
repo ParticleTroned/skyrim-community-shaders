@@ -120,6 +120,9 @@ struct GrassBucketRenderer {
     struct Impl {
         FIELDS
         uint64_t residentRevision = 0, preparedRevision = UINT64_MAX, residentRecordBytes = 0, resultBytes = 0;
+        bool recordLayoutDirty = true;
+        std::atomic_uint32_t cullingControls{3};
+        bool frameCombinedCulling = true, frameAlphaRejection = true;
         bool preparedBatching = true, failed = false;
         GrassPolicy::Settings frameSettings;
         uint32_t frame = 1;
@@ -155,6 +158,7 @@ struct GrassBucketRenderer {
             GrassPreparation::BuildRuns(bucket.runs, bucket.sources.size(), [&](size_t index) -> const Source& { return bucket.sources[index]; });
         }
         void UpdateLODDemand(const GrassPolicy::Settings&) {}
+        void RetireCulling() {}
         void PollLODLoads() {}
         struct { void EndFrame(uint32_t) {} } textureCache;
         void ReuseRecordBuffers(std::vector<Bucket>&) { ++recordReusePasses; }

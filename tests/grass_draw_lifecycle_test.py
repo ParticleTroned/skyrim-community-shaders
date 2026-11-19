@@ -871,6 +871,16 @@ int main() {
                     f.property->windTimer == std::bit_cast<uint32_t>(10.f) && f.constants[wind + 7] == 9.f,
                     "An upload failure must preserve native wind and original constants before fallback");
             }
+            {
+                Fixture f;
+                f.renderer.impl->ready = true;
+                f.renderer.impl->throwOnAlphaRecovery = true;
+                f.Setup();
+                f.Draw();
+                Require(f.renderer.impl->submissions == 0 && GrassBucketRenderer::nativeCalls == 1 &&
+                        f.renderer.impl->buckets.front().outcomes.MainOutcome() == Outcome::Native,
+                    "First-pass alpha recovery failure must retain native rendering");
+            }
             for (unsigned unavailable : {0u, 1u, 2u}) {
                 Fixture f;
                 f.initialSnapshotAvailable = false;

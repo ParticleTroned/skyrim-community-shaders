@@ -129,6 +129,9 @@ namespace
 		RE::BSMultiStreamInstanceTriShape* identity;
 		std::shared_ptr<Lifetime> lifetime;
 		RE::NiPointer<RE::BSShaderProperty> property;
+		RE::NiPointer<RE::NiAlphaProperty> alphaProperty;
+		uint16_t alphaFlags = 0;
+		uint8_t alphaThreshold = 0;
 		RE::NiPointer<RE::NiSourceTexture> texture;
 		GrassRuntime::GroupLayout groupLayout;
 		RE::BSShaderMaterial* material;
@@ -183,11 +186,14 @@ namespace
 		std::array<float, 4> farDensity{};
 		uint32_t farPolicy = 0, proportionalFade = 0;
 		std::array<float, 2> projectionAsymptote{};
+		float alphaThreshold = 0;
+		uint32_t refineHiZ = 0;
+		std::array<uint32_t, 2> padding{};
 	};
-	static_assert(sizeof(Parameters) == 240 && offsetof(Parameters, projectionModes) == 156 && offsetof(Parameters, collisionStrength) == 172 &&
+	static_assert(sizeof(Parameters) == 256 && offsetof(Parameters, projectionModes) == 156 && offsetof(Parameters, collisionStrength) == 172 &&
 				  offsetof(Parameters, indexCounts) == 176 && offsetof(Parameters, meshWeights) == 192 &&
 				  offsetof(Parameters, farDensity) == 208 && offsetof(Parameters, farPolicy) == 224 &&
-				  offsetof(Parameters, projectionAsymptote) == 232);
+				  offsetof(Parameters, projectionAsymptote) == 232 && offsetof(Parameters, alphaThreshold) == 240 && offsetof(Parameters, refineHiZ) == 244);
 	using LODLookup = std::tuple<std::string_view, uint64_t, uintptr_t, uint32_t>;
 	struct LODKey
 	{
@@ -223,7 +229,7 @@ namespace
 	using Outcome = GrassPassCache::Outcome;
 	using PassKey = GrassPassCache::Key;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	inline constexpr uint32_t kDiagnosticCounterCount = 19;
+	inline constexpr uint32_t kDiagnosticCounterCount = 22;
 	enum class CaptureRejection : size_t
 	{
 		Unavailable,
@@ -261,12 +267,35 @@ namespace
 		size_t bucket, source;
 	};
 	using SliceRun = GrassPreparation::Run;
+	struct RecordAllocation
+	{
+		uint32_t base = UINT32_MAX;
+	};
 	struct CullResult
 	{
-		std::unique_ptr<Buffer> output, extras, arguments;
 		uint32_t capacity = 0, slots = 0;
+	};
+	struct CullBuffers
+	{
+		std::unique_ptr<Buffer> output, extras, arguments;
+		uint32_t capacity = 0, argumentCapacity = 0;
 		GrassPolicy::CullCapacityRetention retention;
 	};
+	struct CullBucketInput
+	{
+		uint32_t dispatchStart, recordBase, outputBase, argsBase;
+		Parameters parameters;
+		std::array<float, 152> geometry;
+		FrustumParameters frustum;
+	};
+	static_assert(sizeof(CullBucketInput) == 1088 && offsetof(CullBucketInput, geometry) == 272 && offsetof(CullBucketInput, frustum) == 880);
+	struct DispatchParameters
+	{
+		uint32_t buckets, firstGroup, groups, rowWidth;
+		uint32_t disableAlphaRejection = 0;
+		std::array<uint32_t, 3> padding{};
+	};
+	static_assert(sizeof(DispatchParameters) == 32);
 	struct CullPlan
 	{
 		std::array<float, 152> geometry{};
@@ -274,26 +303,28 @@ namespace
 		Parameters params{};
 		std::array<Mesh, 3> meshes;
 		std::array<winrt::com_ptr<ID3D11InputLayout>, 3> layouts;
-		uint32_t slot = 0;
-		bool prepared = false, empty = false;
+		uint32_t slot = 0, outputBase = 0, argsBase = 0, dispatchStart = 0;
+		bool prepared = false, empty = false, alphaDepthWritten = false;
 		/** @brief Release draw owners; constants are overwritten before the plan is prepared again. */
 		void Retire()
 		{
 			meshes = {};
 			layouts = {};
-			prepared = empty = false;
+			prepared = empty = alphaDepthWritten = false;
+			params.alphaThreshold = 0;
 		}
 	};
-	inline constexpr uint32_t kFrameSlotBytes = 3072, kSlotsPerPage = 21;
-	inline constexpr uint32_t kParametersOffset = 1024, kFrustumOffset = 1280, kDrawOffset = 1536;
-	static_assert(kParametersOffset + sizeof(Parameters) <= kFrustumOffset);
+	inline constexpr uint32_t kCullArgumentBytes = 6 * 32;
+	inline constexpr uint32_t kFrameSlotBytes = 2304, kSlotsPerPage = 28, kDrawOffset = 768;
+	static_assert(kFrameSlotBytes * kSlotsPerPage <= D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT * 16);
+	static_assert(GrassPolicy::kMaxResidentRecordBytes / GrassPolicy::kRecordBytes <= (1u << 24));
 	struct Bucket
 	{
 		std::vector<Source> sources;
 		std::vector<SliceRun> runs;
 		uint32_t instances = 0;
 		GrassPassCache::Cache outcomes;
-		std::unique_ptr<Buffer> records;
+		std::unique_ptr<RecordAllocation> records;
 		CullResult result;
 		CullPlan plan;
 		uint32_t recordsCapacity = 0;
@@ -449,6 +480,8 @@ namespace
 		const auto& mesh = shape.GetTrishapeRuntimeData();
 		const auto& bound = shape.GetModelData().modelBound;
 		return geometry.shaderProperty.get() == source.property.get() &&
+		       geometry.alphaProperty.get() == source.alphaProperty.get() &&
+		       (!source.alphaProperty || (source.alphaProperty->alphaFlags == source.alphaFlags && source.alphaProperty->alphaThreshold == source.alphaThreshold)) &&
 		       geometry.rendererData && geometry.rendererData == source.mesh &&
 		       source.vertices.get() == reinterpret_cast<ID3D11Buffer*>(geometry.rendererData->vertexBuffer) &&
 		       source.indices.get() == reinterpret_cast<ID3D11Buffer*>(geometry.rendererData->indexBuffer) &&
@@ -464,7 +497,7 @@ namespace
 		const bool sameModelMesh = !a.model.empty() && a.model == b.model &&
 		                           a.vertexCount == b.vertexCount && a.vertexBytes == b.vertexBytes && a.indexBytes == b.indexBytes;
 		return (sameBuffers || sameModelMesh) && a.material == b.material &&
-		       a.descriptor == b.descriptor && a.flags == b.flags && a.triangles == b.triangles &&
+		       a.descriptor == b.descriptor && a.flags == b.flags && a.alphaFlags == b.alphaFlags && a.alphaThreshold == b.alphaThreshold && a.triangles == b.triangles &&
 		       a.lights == b.lights && a.lightMask == b.lightMask && a.renderDistance == b.renderDistance && a.wavePeriod == b.wavePeriod && a.model == b.model &&
 		       a.bound.radius == b.bound.radius && a.bound.center == b.bound.center;
 	}
@@ -472,6 +505,52 @@ namespace
 	{
 		return CurrentContract(a) && CurrentContract(b) && CompatibleCaptured(a, b);
 	}
+	bool HasNormalizedAlpha(ID3D11ShaderResourceView* view)
+	{
+		if (!view)
+			return false;
+		D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
+		view->GetDesc(&desc);
+		if (desc.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D)
+			return false;
+		switch (desc.Format) {
+		case DXGI_FORMAT_R8G8B8A8_UNORM:
+		case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+		case DXGI_FORMAT_B8G8R8A8_UNORM:
+		case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+		case DXGI_FORMAT_B8G8R8X8_UNORM:
+		case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+		case DXGI_FORMAT_R16G16B16A16_UNORM:
+		case DXGI_FORMAT_R10G10B10A2_UNORM:
+		case DXGI_FORMAT_BC1_UNORM:
+		case DXGI_FORMAT_BC1_UNORM_SRGB:
+		case DXGI_FORMAT_BC2_UNORM:
+		case DXGI_FORMAT_BC2_UNORM_SRGB:
+		case DXGI_FORMAT_BC3_UNORM:
+		case DXGI_FORMAT_BC3_UNORM_SRGB:
+		case DXGI_FORMAT_BC7_UNORM:
+		case DXGI_FORMAT_BC7_UNORM_SRGB:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	float AlphaCullThreshold(const Source& source, float nativeReference)
+	{
+		const auto* alpha = source.alphaProperty.get();
+		if (!alpha || !alpha->GetAlphaTesting() || alpha->GetAlphaBlending() || !std::isfinite(nativeReference) || nativeReference <= 0 || nativeReference > 1)
+			return 0;
+		const auto comparison = RE::NiAlphaProperty::TestFunction((source.alphaFlags >> 10) & 7);
+		if (comparison != RE::NiAlphaProperty::TestFunction::kGreater && comparison != RE::NiAlphaProperty::TestFunction::kGreaterEqual)
+			return 0;
+		const auto* texture = source.texture ? source.texture->rendererTexture : nullptr;
+		if (!texture || !HasNormalizedAlpha(reinterpret_cast<ID3D11ShaderResourceView*>(texture->resourceView)))
+			return 0;
+		// Both the material's cutout threshold and the active native reference bound rejection.
+		return std::min(nativeReference, source.alphaThreshold / 255.0f);
+	}
+
 	size_t CompatibilityHash(const Source& source)
 	{
 		size_t value = 0;
@@ -489,6 +568,8 @@ namespace
 		combine(source.material);
 		combine(source.descriptor);
 		combine(source.flags);
+		combine(source.alphaFlags);
+		combine(source.alphaThreshold);
 		combine(source.triangles);
 		combine(source.model);
 		return value;
@@ -665,7 +746,14 @@ struct GrassBucketRenderer::Impl
 	std::array<winrt::com_ptr<ID3D11VertexShader>, 2> drawVertexShaders;
 	std::array<winrt::com_ptr<ID3D11PixelShader>, 8> drawPixelShaders;
 	uint64_t resultBytes = 0;
-	uint64_t lastResultTrimFrame = UINT64_MAX;
+	CullBuffers cullBuffers;
+	std::unique_ptr<Buffer> recordPool, cullInputs, dispatchParameters;
+	std::vector<CullBucketInput> cullInputCPU;
+	bool recordLayoutDirty = true;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	std::atomic_uint32_t cullingControls{ 3 };
+	bool frameCombinedCulling = true, frameAlphaRejection = true;
+#endif
 	GrassLOD::Cache<LODKey, Mesh> lodMeshes;
 	static constexpr size_t kMaxLODLoads = 8;
 	static constexpr uint32_t kLODRequestRetryFrames = 120;
@@ -796,6 +884,12 @@ struct GrassBucketRenderer::Impl
 	void RestoreCurrentGeometry();
 	bool PrepareBucket(Bucket& bucket);
 	void UploadCulling();
+	void PrepareRecordPool();
+	void RetireCulling();
+	void PrepareCullBuffers(uint32_t survivors, uint32_t argumentBytes);
+	void DispatchCulling(uint32_t firstGroup, uint32_t groups, bool disableAlpha = false);
+	void RunCulling(const Bucket* recovery = nullptr);
+	void ValidateAlphaCulling(Bucket& bucket);
 	ID3D11InputLayout* Layout(uint64_t descriptor);
 	void CompileSignature();
 	void UpdateLODDemand(const GrassPolicy::Settings& settings);
@@ -813,7 +907,6 @@ struct GrassBucketRenderer::Impl
 	bool HasBatchDrawState() const;
 	float frameHeight = 0;
 	void UploadRecords(Bucket& bucket);
-	void DispatchBucket(Bucket& bucket);
 	void EmitDraws(const Bucket& bucket);
 };
 
@@ -1256,6 +1349,9 @@ bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shap
 		}
 		source.residency.Observe(source.capturedFrame, true);
 		source.property = geometry.shaderProperty;
+		source.alphaProperty = geometry.alphaProperty;
+		source.alphaFlags = source.alphaProperty ? source.alphaProperty->alphaFlags : 0;
+		source.alphaThreshold = source.alphaProperty ? source.alphaProperty->alphaThreshold : 0;
 		source.texture.reset(source.property->GetBaseTexture());
 		source.material = property->material;
 		source.mesh = geometry.rendererData;
@@ -1401,13 +1497,13 @@ void GrassBucketRenderer::SetupResources()
 		data.pSysMem = zeros.data();
 		impl->disabled = std::make_unique<Buffer>(desc, &data, "GrassOptimizations::NativeParameters");
 		std::vector<std::pair<const char*, const char*>> defines;
-		if (!impl->cullShader.Get(L"Data\\Shaders\\GrassOptimizations\\GrassCullingCS.hlsl", defines, "cs_5_0", "main", "GrassOptimizations::CullCS"))
+		if (!impl->cullShader.Get(L"Data\\Shaders\\GrassOptimizations\\GrassCullingBatchCS.hlsl", defines, "cs_5_0", "main", "GrassOptimizations::CullCS"))
 			throw std::runtime_error("Grass culling shader unavailable");
 		impl->hiZ.SetupResources();
 		impl->CompileSignature();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		defines.emplace_back("GRASS_DIAGNOSTICS", "1");
-		impl->diagnosticShader.Get(L"Data\\Shaders\\GrassOptimizations\\GrassCullingCS.hlsl", defines, "cs_5_0", "main", "GrassOptimizations::DiagnosticCullCS");
+		impl->diagnosticShader.Get(L"Data\\Shaders\\GrassOptimizations\\GrassCullingBatchCS.hlsl", defines, "cs_5_0", "main", "GrassOptimizations::DiagnosticCullCS");
 		impl->gpuCounters = RawBuffer(kDiagnosticCounterCount * sizeof(uint32_t), D3D11_BIND_UNORDERED_ACCESS, 0, "GrassOptimizations::Counters");
 		D3D11_BUFFER_DESC staging{};
 		staging.ByteWidth = kDiagnosticCounterCount * sizeof(uint32_t);
@@ -1468,6 +1564,7 @@ void GrassBucketRenderer::EndFrame()
 	impl->UpdateLODDemand(settings);
 	impl->PollLODLoads();
 	impl->textureCache.EndFrame(globals::state->frameCount);
+	impl->RetireCulling();
 }
 
 void GrassBucketRenderer::Impl::PrepareFrame()
@@ -1491,6 +1588,11 @@ void GrassBucketRenderer::Impl::PrepareFrame()
 	telemetryViewportCount = 0;
 #endif
 	frameSettings = globals::features::grassOptimizations.GetSettings();
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	const auto controls = cullingControls.load(std::memory_order_relaxed);
+	frameCombinedCulling = (controls & 1) != 0;
+	frameAlphaRejection = (controls & 2) != 0;
+#endif
 	const auto& collision = globals::features::grassCollision;
 	frameCollisionEnabled = collision.NeedsVertexDeformation();
 	frameCollisionBasic = collision.GetVertexMode() == GrassCollisionMode::Mode::Basic;
@@ -1643,10 +1745,7 @@ void GrassBucketRenderer::Impl::PrepareFrame()
 	}
 	RefreshFades();
 	ReuseRecordBuffers(previousBuckets);
-	resultBytes = 0;
-	for (const auto& bucket : buckets)
-		if (bucket.result.output)
-			resultBytes += uint64_t(bucket.result.capacity) * bucket.result.slots * GrassPolicy::kSurvivorBytes + 192;
+	recordLayoutDirty = true;
 	for (auto& bucket : dormantBuckets) bucket.result = {};
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	publishedResultBytes.store(resultBytes, std::memory_order_relaxed);
@@ -1673,15 +1772,14 @@ bool GrassBucketRenderer::Impl::CurrentBucket(std::span<const Source> sources) c
 void GrassBucketRenderer::Impl::ReindexBuckets()
 {
 	admitted.clear();
-	residentRecordBytes = resultBytes = 0;
+	residentRecordBytes = 0;
+	recordLayoutDirty = true;
 	for (size_t index = 0; index < buckets.size(); ++index) {
 		const auto& bucket = buckets[index];
 		for (size_t source = 0; source < bucket.sources.size(); ++source)
 			admitted.emplace(bucket.sources[source].identity, Admission{ index, source });
 		if (bucket.records)
 			residentRecordBytes += uint64_t(bucket.recordsCapacity) * GrassPolicy::kRecordBytes;
-		if (bucket.result.output)
-			resultBytes += uint64_t(bucket.result.capacity) * bucket.result.slots * GrassPolicy::kSurvivorBytes + 192;
 	}
 	uint64_t dormantBytes = 0;
 	std::erase_if(dormantBuckets, [&](auto& bucket) {
@@ -2054,14 +2152,17 @@ bool GrassBucketRenderer::Impl::MakeRecordRoom(uint64_t replacementBytes)
 
 bool GrassBucketRenderer::Impl::EnsureRecords(Bucket& bucket)
 {
+	if (!bucket.instances || bucket.instances > GrassPolicy::kMaxBatchInstances)
+		return false;
 	if (bucket.records && bucket.recordsCapacity >= bucket.instances)
 		return true;
 	const auto next = std::bit_ceil(bucket.instances);
 	const uint64_t bytes = uint64_t(next) * GrassPolicy::kRecordBytes;
 	const uint64_t previous = bucket.records ? uint64_t(bucket.recordsCapacity) * GrassPolicy::kRecordBytes : 0;
-	if (previous > residentRecordBytes || !MakeRecordRoom(bytes))
+	if (previous > residentRecordBytes || !MakeRecordRoom(bytes - previous))
 		return false;
-	bucket.records = RawBuffer(uint32_t(bytes), D3D11_BIND_SHADER_RESOURCE, 0, "GrassOptimizations::BucketRecords");
+	bucket.records = std::make_unique<RecordAllocation>();
+	recordLayoutDirty = true;
 	bucket.recordsCapacity = next;
 	bucket.recordsDirty = true;
 	bucket.dirtyFirstInstance = 0;
@@ -2071,55 +2172,171 @@ bool GrassBucketRenderer::Impl::EnsureRecords(Bucket& bucket)
 
 bool GrassBucketRenderer::Impl::EnsureResult(Bucket& bucket, uint32_t candidates, uint32_t slots)
 {
-	auto& result = bucket.result;
-	const auto planned = GrassPolicy::PlanCullCapacity({ result.capacity, result.slots }, std::max(1u, candidates), slots);
-	if (candidates > bucket.instances || !planned)
+	const auto needed = GrassPolicy::PlanCullCapacity({}, std::max(1u, candidates), slots);
+	if (candidates > bucket.instances || !needed)
 		return false;
-	const bool reusable = !candidates || (result.capacity >= candidates && result.slots >= slots &&
-											 result.output && result.extras && result.arguments);
-	auto target = *planned;
-	if (reusable) {
-		const auto needed = candidates ? *GrassPolicy::PlanCullCapacity({}, candidates, slots) : GrassPolicy::CullCapacity{};
-		const auto trim = result.retention.Observe({ result.capacity, result.slots }, needed, frame);
-		if (!trim || lastResultTrimFrame == frame)
-			return true;
-		target = *trim;
+	bucket.result = candidates ? CullResult{ needed->instances, slots } : CullResult{};
+	return true;
+}
+
+void GrassBucketRenderer::Impl::RetireCulling()
+{
+	const auto trim = cullBuffers.retention.Observe({ cullBuffers.capacity, 1 }, {}, globals::state->frameCount);
+	if (trim && !trim->instances) {
+		cullBuffers = {};
+		resultBytes = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		publishedResultBytes.store(0, std::memory_order_relaxed);
+#endif
 	}
-	const uint32_t capacity = target.instances;
-	slots = target.slots;
-	const uint64_t previous = uint64_t(result.capacity) * result.slots * GrassPolicy::kSurvivorBytes + (result.arguments ? 192 : 0);
-	const uint64_t next = capacity ? uint64_t(capacity) * slots * GrassPolicy::kSurvivorBytes + 192 : 0;
-	if (previous > resultBytes)
-		return false;
-	if (!GrassPolicy::ReplacementFitsBudget(resultBytes, next, GrassPolicy::kMaxCullResultBytes)) {
-		result.retention = {};
-		return reusable;
-	}
-	if (reusable) {
-		lastResultTrimFrame = frame;
-		result.retention = {};
-	}
-	CullResult replacement;
-	try {
-		if (capacity) {
-			replacement.output = RawBuffer(capacity * slots * GrassPolicy::kSurvivorIndexBytes, D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_UNORDERED_ACCESS, 0, "GrassOptimizations::Compacted");
-			replacement.extras = Structured<std::array<float, 6>>(capacity * slots, true, false, "GrassOptimizations::Extras");
-			replacement.arguments = RawBuffer(192, D3D11_BIND_UNORDERED_ACCESS, D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS, "GrassOptimizations::IndirectArgs");
-			replacement.capacity = capacity;
-			replacement.slots = slots;
+	cullingBuckets.clear();
+}
+
+void GrassBucketRenderer::Impl::PrepareRecordPool()
+{
+	if (!recordLayoutDirty)
+		return;
+	uint32_t total = 0;
+	bool missing = !recordPool;
+	const auto inspect = [&](const auto& collection) {
+		for (const auto& bucket : collection) {
+			if (!bucket.records)
+				continue;
+			if (bucket.recordsCapacity > GrassPolicy::kMaxResidentRecordBytes / GrassPolicy::kRecordBytes - total)
+				throw std::length_error("Grass record pool exceeds the resident budget");
+			total += bucket.recordsCapacity;
+			missing |= bucket.records->base == UINT32_MAX;
 		}
-	} catch (const std::exception& error) {
-		if (!reusable)
-			throw;
-		logger::warn("Grass output trimming failed; retained usable buffers: {}", error.what());
-		return true;
+	};
+	inspect(buckets);
+	inspect(dormantBuckets);
+	if (!total) {
+		recordPool.reset();
+		recordLayoutDirty = false;
+		return;
 	}
-	result = std::move(replacement);
-	resultBytes = resultBytes - previous + next;
+	if (missing && recordPool) {
+		std::vector<std::pair<uint32_t, uint32_t>> occupied, gaps;
+		for (const auto* collection : { &buckets, &dormantBuckets })
+			for (const auto& bucket : *collection)
+				if (bucket.records && bucket.records->base != UINT32_MAX)
+					occupied.emplace_back(bucket.records->base, bucket.recordsCapacity);
+		std::sort(occupied.begin(), occupied.end());
+		uint32_t end = 0;
+		for (const auto& [base, capacity] : occupied) {
+			if (base > end)
+				gaps.emplace_back(end, base - end);
+			end = base + capacity;
+		}
+		const auto capacity = recordPool->desc.ByteWidth / GrassPolicy::kRecordBytes;
+		if (end < capacity)
+			gaps.emplace_back(end, capacity - end);
+		missing = false;
+		for (auto* collection : { &buckets, &dormantBuckets })
+			for (auto& bucket : *collection)
+				if (bucket.records && bucket.records->base == UINT32_MAX) {
+					auto gap = std::find_if(gaps.begin(), gaps.end(), [&](const auto& range) { return range.second >= bucket.recordsCapacity; });
+					if (gap == gaps.end()) {
+						missing = true;
+						continue;
+					}
+					bucket.records->base = gap->first;
+					gap->first += bucket.recordsCapacity;
+					gap->second -= bucket.recordsCapacity;
+				}
+	}
+	if (!missing && recordPool->desc.ByteWidth / GrassPolicy::kRecordBytes <= uint64_t(total) * 4) {
+		recordLayoutDirty = false;
+		return;
+	}
+	const uint32_t bytes = std::bit_ceil(total) * GrassPolicy::kRecordBytes;
+	// All source captures remain owned, so a pressure rebuild can upload them again.
+	if (recordPool && !GrassPolicy::ReplacementFitsBudget(recordPool->desc.ByteWidth, bytes, GrassPolicy::kMaxResidentRecordBytes)) {
+		recordPool.reset();
+		for (auto* collection : { &buckets, &dormantBuckets })
+			for (auto& bucket : *collection)
+				if (bucket.records) {
+					bucket.records->base = UINT32_MAX;
+					bucket.recordsDirty = true;
+					bucket.dirtyFirstInstance = 0;
+				}
+	}
+	std::unique_ptr<Buffer> replacement;
+	try {
+		replacement = RawBuffer(bytes, D3D11_BIND_SHADER_RESOURCE, 0, "GrassOptimizations::RecordPool");
+	} catch (const std::exception& error) {
+		if (missing || !recordPool)
+			throw;
+		logger::warn("Grass record pool shrink deferred: {}", error.what());
+		recordLayoutDirty = false;
+		return;
+	}
+	uint32_t base = 0;
+	for (auto* collection : { &buckets, &dormantBuckets })
+		for (auto& bucket : *collection)
+			if (bucket.records) {
+				if (recordPool && bucket.records->base != UINT32_MAX) {
+					const auto count = bucket.recordsDirty ? bucket.dirtyFirstInstance : bucket.instances;
+					if (count) {
+						const UINT first = bucket.records->base * GrassPolicy::kRecordBytes;
+						const D3D11_BOX box{ first, 0, 0, first + count * GrassPolicy::kRecordBytes, 1, 1 };
+						context->CopySubresourceRegion(replacement->resource.get(), 0, base * GrassPolicy::kRecordBytes, 0, 0, recordPool->resource.get(), 0, &box);
+					}
+				}
+				bucket.records->base = base;
+				base += bucket.recordsCapacity;
+			}
+	recordPool = std::move(replacement);
+	recordLayoutDirty = false;
+}
+
+void GrassBucketRenderer::Impl::PrepareCullBuffers(uint32_t survivors, uint32_t argumentBytes)
+{
+	auto& buffers = cullBuffers;
+	if (!survivors || survivors > GrassPolicy::kMaxCullResultBytes / GrassPolicy::kSurvivorBytes ||
+		!argumentBytes || argumentBytes > GrassPolicy::kMaxFrameSources * kCullArgumentBytes)
+		throw std::length_error("Grass culling allocation dimensions are invalid");
+	uint32_t args = std::max(buffers.argumentCapacity, std::bit_ceil(argumentBytes));
+	if (uint64_t(survivors) * GrassPolicy::kSurvivorBytes + args > GrassPolicy::kMaxCullResultBytes)
+		args = argumentBytes;
+	const uint32_t rounded = std::bit_ceil(survivors);
+	const uint32_t needed = uint64_t(rounded) * GrassPolicy::kSurvivorBytes + args <= GrassPolicy::kMaxCullResultBytes ? rounded : survivors;
+	if (uint64_t(needed) * GrassPolicy::kSurvivorBytes + args > GrassPolicy::kMaxCullResultBytes)
+		throw std::length_error("Grass culling output exceeds its budget");
+	const auto trim = buffers.retention.Observe({ buffers.capacity, 1 }, { needed, 1 }, frame);
+	uint32_t target = std::max(buffers.capacity, needed);
+	if (trim)
+		target = std::max(needed, trim->instances);
+	if (buffers.output && target == buffers.capacity && args == buffers.argumentCapacity)
+		return;
+	if (uint64_t(target) * GrassPolicy::kSurvivorBytes + args > GrassPolicy::kMaxCullResultBytes)
+		target = needed;
+	const uint64_t nextBytes = uint64_t(target) * GrassPolicy::kSurvivorBytes + args;
+	if (nextBytes > GrassPolicy::kMaxCullResultBytes)
+		throw std::length_error("Grass indirect arguments exceed the output budget");
+	// These outputs contain no retained records and are replaced before any draw owns them.
+	if (!GrassPolicy::ReplacementFitsBudget(resultBytes, nextBytes, GrassPolicy::kMaxCullResultBytes)) {
+		buffers = {};
+		resultBytes = 0;
+	}
+	CullBuffers replacement;
+	try {
+		replacement.output = RawBuffer(target * GrassPolicy::kSurvivorIndexBytes, D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_UNORDERED_ACCESS, 0, "GrassOptimizations::Compacted");
+		replacement.extras = Structured<std::array<float, 6>>(target, true, false, "GrassOptimizations::Extras");
+		replacement.arguments = RawBuffer(args, D3D11_BIND_UNORDERED_ACCESS, D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS, "GrassOptimizations::IndirectArgs");
+	} catch (const std::exception& error) {
+		if (!buffers.output || buffers.capacity < survivors || buffers.argumentCapacity < argumentBytes)
+			throw;
+		logger::warn("Grass culling buffer shrink deferred: {}", error.what());
+		return;
+	}
+	replacement.capacity = target;
+	replacement.argumentCapacity = args;
+	buffers = std::move(replacement);
+	resultBytes = nextBytes;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	publishedResultBytes.store(resultBytes, std::memory_order_relaxed);
 #endif
-	return true;
 }
 
 void GrassBucketRenderer::Impl::CompileSignature()
@@ -2531,6 +2748,9 @@ void GrassBucketRenderer::Impl::PrepareCulling(RE::BSRenderPass* pass, RE::BSSha
 	context->RSGetViewports(&count, &viewport);
 	if (count != 1 || !std::isfinite(viewport.Height) || viewport.Height <= 0)
 		return;
+	const auto* shadow = globals::game::shadowState;
+	const float nativeAlphaReference = !shadow ? 0.0f : globals::game::isVR ? (shadow->GetVRRuntimeData().alphaTestEnabled ? shadow->GetVRRuntimeData().alphaTestRef : 0.0f) :
+	                                                                          (shadow->GetRuntimeData().alphaTestEnabled ? shadow->GetRuntimeData().alphaTestRef : 0.0f);
 	frameHeight = viewport.Height;
 	if (globals::game::isVR) {
 		winrt::com_ptr<ID3D11Buffer> stereo;
@@ -2602,6 +2822,11 @@ void GrassBucketRenderer::Impl::PrepareCulling(RE::BSRenderPass* pass, RE::BSSha
 					GrassRuntime::PrepareGeometryWithoutAdvancingWind(shader, &prototype, flags, setup, globals::game::isVR);
 					CopyGeometryConstants();
 				}
+				bucket.plan.params.alphaThreshold = AlphaCullThreshold(*member, nativeAlphaReference);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+				if (!frameAlphaRejection)
+					bucket.plan.params.alphaThreshold = 0;
+#endif
 				currentOrigin = member->origin;
 			}
 			PrepareBucket(bucket);
@@ -2631,6 +2856,8 @@ bool GrassBucketRenderer::Impl::DrawBucket(Bucket& bucket, Outcome& outcome)
 				source.generation != source.lifetime->generation.load(std::memory_order_acquire) || !CurrentGroups(source))
 				return false;
 	}
+	if (!bucket.plan.empty)
+		ValidateAlphaCulling(bucket);
 	// Once submitted, owned buffers and constants finish the frame without rereading native groups.
 	outcome = Outcome::Batched;
 	bucket.outcomes.CommitMain(outcome);
@@ -2736,6 +2963,8 @@ bool GrassBucketRenderer::Impl::PrepareBucket(Bucket& bucket)
 	params.meshWeights = { GrassPolicy::MeshWeight(meshes[0].indexCount),
 		GrassPolicy::MeshWeight(meshes[1].indexCount), GrassPolicy::MeshWeight(meshes[2].indexCount), 1 };
 	params.collisionStrength = frameCollisionStrength;
+	params.refineHiZ = frameSettings.RefineHiZ;
+	params.alphaThreshold = bucket.plan.params.alphaThreshold;
 	params.farPolicy = frameSettings.FarLODOptimization && meshes[2].farLOD;
 	params.proportionalFade = frameSettings.ProportionalDensityFade;
 	params.farDensity = { frameSettings.FarLODMinPixelSize, frameSettings.FarLODMinDensity, frameSettings.FarLODMaxDensity,
@@ -2757,18 +2986,30 @@ bool GrassBucketRenderer::Impl::PrepareBucket(Bucket& bucket)
 void GrassBucketRenderer::Impl::UploadCulling()
 {
 	cullingBuckets.clear();
-	uint64_t candidateIndexWork = 0;
+	uint64_t candidateIndexWork = 0, survivors = 0, groups = 0;
 	for (auto& bucket : buckets)
 		if (bucket.plan.prepared && !bucket.plan.empty) {
-			bucket.plan.slot = uint32_t(cullingBuckets.size());
+			auto& plan = bucket.plan;
+			plan.slot = uint32_t(cullingBuckets.size());
+			plan.outputBase = uint32_t(survivors);
+			plan.argsBase = plan.slot * kCullArgumentBytes;
+			plan.dispatchStart = uint32_t(groups);
+			survivors += uint64_t(bucket.result.capacity) * bucket.result.slots;
+			groups += (plan.params.instances + 63) / 64;
+			if (survivors * GrassPolicy::kSurvivorBytes > GrassPolicy::kMaxCullResultBytes ||
+				groups > uint64_t(D3D11_CS_DISPATCH_MAX_THREAD_GROUPS_PER_DIMENSION) * D3D11_CS_DISPATCH_MAX_THREAD_GROUPS_PER_DIMENSION ||
+				cullingBuckets.size() >= GrassPolicy::kMaxFrameSources)
+				throw std::length_error("Grass combined dispatch exceeds its bounded capacity");
 			cullingBuckets.push_back(&bucket);
-			const auto& params = bucket.plan.params;
+			const auto& params = plan.params;
 			candidateIndexWork = GrassHiZPolicy::AddCandidateIndexWork(candidateIndexWork,
 				params.instances, params.eyes, *std::max_element(params.indexCounts.begin(), params.indexCounts.end()));
 		}
 	const auto slots = uint32_t(cullingBuckets.size());
 	if (!slots)
 		return;
+	PrepareRecordPool();
+	PrepareCullBuffers(uint32_t(survivors), slots * kCullArgumentBytes);
 	if (!table || table->desc.ByteWidth < frameSlices.size() * sizeof(Slice))
 		table = Structured<Slice>(std::bit_ceil(uint32_t(frameSlices.size())), false, true, "GrassOptimizations::FrameSlices");
 	Upload(context.get(), *table, frameSlices.data(), frameSlices.size() * sizeof(Slice));
@@ -2810,37 +3051,61 @@ void GrassBucketRenderer::Impl::UploadCulling()
 			auto bytes = static_cast<uint8_t*>(mapped.pData) + (plan.slot % kSlotsPerPage) * kFrameSlotBytes;
 			std::memset(bytes, 0, kFrameSlotBytes);
 			std::memcpy(bytes, plan.geometry.data(), globals::game::isVR ? 608 : 352);
-			std::memcpy(bytes + kParametersOffset, &params, sizeof(params));
-			std::memcpy(bytes + kFrustumOffset, &plan.frustum, sizeof(plan.frustum));
 			for (uint32_t tier = 0; tier < 3; ++tier)
 				for (uint32_t eye = 0; eye < params.eyes; ++eye) {
 					const auto index = tier * params.eyes + eye;
 					const uint32_t enabled = 1u | (tier == 2 && plan.meshes[tier].farLOD ? 2u : 0u);
-					const DrawConstants draw{ enabled, eye, index * params.capacity, frameSettings.CollisionDistance, params.origin };
+					const DrawConstants draw{ enabled, eye, plan.outputBase + index * params.capacity, frameSettings.CollisionDistance, params.origin };
 					std::memcpy(bytes + kDrawOffset + index * 256, &draw, sizeof(draw));
 				}
 		}
 	}
+
+	cullInputCPU.clear();
+	cullInputCPU.reserve(slots);
+	for (const auto* bucket : cullingBuckets) {
+		const auto& plan = bucket->plan;
+		cullInputCPU.push_back({ plan.dispatchStart, bucket->records->base, plan.outputBase, plan.argsBase, plan.params, plan.geometry, plan.frustum });
+	}
+	if (!cullInputs || cullInputs->desc.ByteWidth < slots * sizeof(CullBucketInput))
+		cullInputs = Structured<CullBucketInput>(std::bit_ceil(slots), false, true, "GrassOptimizations::CullBuckets");
+	Upload(context.get(), *cullInputs, cullInputCPU.data(), cullInputCPU.size() * sizeof(CullBucketInput));
+	if (!dispatchParameters)
+		dispatchParameters = std::make_unique<Buffer>(ConstantBufferDesc(sizeof(DispatchParameters)), nullptr, "GrassOptimizations::DispatchParameters");
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (diagnostics.load(std::memory_order_relaxed))
+		++cullingUploadMaps;
+	for (const auto* bucket : cullingBuckets) {
+		frameWork.candidateInstances += bucket->plan.params.instances;
+		frameWork.candidateEyeInstances += uint64_t(bucket->plan.params.instances) * bucket->plan.params.eyes;
+	}
+	if (diagnostics.load(std::memory_order_relaxed) && frameSettings.EnableOcclusionCulling)
+		(useHiZ ? hiZBatches : hiZUnavailable).fetch_add(slots, std::memory_order_relaxed);
+#endif
+	for (auto* bucket : cullingBuckets) UploadRecords(*bucket);
+	constexpr UINT zeros[4]{};
+	context->ClearUnorderedAccessViewUint(cullBuffers.arguments->uav.get(), zeros);
+	RunCulling();
+}
+
+void GrassBucketRenderer::Impl::RunCulling(const Bucket* recovery)
+{
 	std::vector<std::pair<const char*, const char*>> defines;
-	auto shader = cullShader.Get(L"Data\\Shaders\\GrassOptimizations\\GrassCullingCS.hlsl", defines, "cs_5_0", "main", "GrassOptimizations::CullCS");
+	auto shader = cullShader.Get(L"Data\\Shaders\\GrassOptimizations\\GrassCullingBatchCS.hlsl", defines, "cs_5_0", "main", "GrassOptimizations::CullCS");
 	if (!shader)
 		throw std::runtime_error("Grass culling shader unavailable");
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	if (countersActive && diagnostics.load(std::memory_order_relaxed) && gpuCounters) {
 		defines.emplace_back("GRASS_DIAGNOSTICS", "1");
-		if (auto diagnostic = diagnosticShader.Get(L"Data\\Shaders\\GrassOptimizations\\GrassCullingCS.hlsl", defines, "cs_5_0", "main", "GrassOptimizations::DiagnosticCullCS"))
+		if (auto diagnostic = diagnosticShader.Get(L"Data\\Shaders\\GrassOptimizations\\GrassCullingBatchCS.hlsl", defines, "cs_5_0", "main", "GrassOptimizations::DiagnosticCullCS"))
 			shader = diagnostic;
 	}
 #endif
-	// Bucket inputs and outputs are distinct; finish all uploads before binding culling resources.
-	for (auto bucket : cullingBuckets) {
-		UploadRecords(*bucket);
-		constexpr UINT zeros[4]{};
-		context->ClearUnorderedAccessViewUint(bucket->result.arguments->uav.get(), zeros);
-	}
-	GrassD3D::ComputeState restore(context.get(), kCullUAVCount);
-	const std::array<ID3D11ShaderResourceView*, 2> sharedSRVs{ table->srv.get(), useHiZ ? hiZ.SRV() : nullptr };
-	context->CSSetShaderResources(1, UINT(sharedSRVs.size()), sharedSRVs.data());
+	GrassD3D::ComputeState restore(context.get(), kCullUAVCount, 4);
+	const std::array<ID3D11ShaderResourceView*, 4> srvs{ recordPool->srv.get(), table->srv.get(), hiZ.SRV(), cullInputs->srv.get() };
+	context->CSSetShaderResources(0, UINT(srvs.size()), srvs.data());
+	const std::array<ID3D11UnorderedAccessView*, 3> uavs{ cullBuffers.output->uav.get(), cullBuffers.extras->uav.get(), cullBuffers.arguments->uav.get() };
+	context->CSSetUnorderedAccessViews(0, UINT(uavs.size()), uavs.data(), nullptr);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	auto counters = shader == diagnosticShader.get() ? gpuCounters->uav.get() : nullptr;
 	context->CSSetUnorderedAccessViews(3, 1, &counters, nullptr);
@@ -2853,8 +3118,19 @@ void GrassBucketRenderer::Impl::UploadCulling()
 		context->CSSetConstantBuffers1(1, 1, &buffer, &first, &count);
 	}
 	context->CSSetShader(shader, nullptr, 0);
-	for (auto bucket : cullingBuckets)
-		DispatchBucket(*bucket);
+	if (recovery) {
+		DispatchCulling(recovery->plan.dispatchStart, (recovery->plan.params.instances + 63) / 64, true);
+		return;
+	}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	if (!frameCombinedCulling) {
+		for (const auto* bucket : cullingBuckets)
+			DispatchCulling(bucket->plan.dispatchStart, (bucket->plan.params.instances + 63) / 64);
+		return;
+	}
+#endif
+	const auto& lastPlan = cullingBuckets.back()->plan;
+	DispatchCulling(0, lastPlan.dispatchStart + (lastPlan.params.instances + 63) / 64);
 }
 
 void GrassBucketRenderer::Impl::UploadRecords(Bucket& bucket)
@@ -2862,7 +3138,8 @@ void GrassBucketRenderer::Impl::UploadRecords(Bucket& bucket)
 #if defined(DEVBENCH_BRIDGE_ENABLED) || defined(TRACY_SUPPORT)
 	CS_GPU_PASS("GrassOptimizations::UploadRecords");
 #endif
-	auto& records = *bucket.records;
+	auto& records = *recordPool;
+	const UINT poolOffset = bucket.records->base * GrassPolicy::kRecordBytes;
 	if (bucket.recordsDirty) {
 		uint32_t offset = 0;
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -2877,9 +3154,9 @@ void GrassBucketRenderer::Impl::UploadRecords(Bucket& bucket)
 				}
 				const D3D11_BOX box{ 0, 0, 0, bytes, 1, 1 };
 				if (group.buffer)
-					context->CopySubresourceRegion(records.resource.get(), 0, offset, 0, 0, group.buffer.get(), 0, &box);
+					context->CopySubresourceRegion(records.resource.get(), 0, poolOffset + offset, 0, 0, group.buffer.get(), 0, &box);
 				else {
-					const D3D11_BOX destination{ offset, 0, 0, offset + bytes, 1, 1 };
+					const D3D11_BOX destination{ poolOffset + offset, 0, 0, poolOffset + offset + bytes, 1, 1 };
 					context->UpdateSubresource(records.resource.get(), 0, &destination, group.bytes->data(), 0, 0);
 				}
 				offset += bytes;
@@ -2904,42 +3181,54 @@ void GrassBucketRenderer::Impl::UploadRecords(Bucket& bucket)
 	}
 }
 
-void GrassBucketRenderer::Impl::DispatchBucket(Bucket& bucket)
+void GrassBucketRenderer::Impl::DispatchCulling(uint32_t firstGroup, uint32_t groups, bool disableAlpha)
 {
-#if defined(DEVBENCH_BRIDGE_ENABLED) || defined(TRACY_SUPPORT)
 	CS_GPU_PASS("GrassOptimizations::PrepareAndCull");
-#endif
-	const auto& plan = bucket.plan;
-	const auto& params = plan.params;
-	auto cb = frameConstants[plan.slot / kSlotsPerPage]->resource.get();
-	const UINT begin = (plan.slot % kSlotsPerPage) * (kFrameSlotBytes / 16);
-	const std::array<UINT, 3> offsets{ begin + kParametersOffset / 16, begin, begin + kFrustumOffset / 16 };
-	const std::array<UINT, 3> counts{ 16, 64, 16 };
-	for (UINT i = 0; i < 3; ++i) {
-		const UINT binding = i == 0 ? 0 : i == 1 ? 2 :
-		                                           3;
-		context->CSSetConstantBuffers1(binding, 1, &cb, &offsets[i], &counts[i]);
-	}
-	auto records = bucket.records->srv.get();
-	const std::array<ID3D11UnorderedAccessView*, 3> uavs{ bucket.result.output->uav.get(), bucket.result.extras->uav.get(), bucket.result.arguments->uav.get() };
-#ifdef DEVBENCH_BRIDGE_ENABLED
-	if (diagnostics.load(std::memory_order_relaxed) && frameSettings.EnableOcclusionCulling) {
-		if (params.depthMips)
-			++hiZBatches;
-		else
-			++hiZUnavailable;
-	}
-#endif
-	context->CSSetShaderResources(0, 1, &records);
-	context->CSSetUnorderedAccessViews(0, UINT(uavs.size()), uavs.data(), nullptr);
-	context->Dispatch((params.instances + 63) / 64, 1, 1);
+	const uint32_t width = std::min(groups, uint32_t(D3D11_CS_DISPATCH_MAX_THREAD_GROUPS_PER_DIMENSION));
+	const DispatchParameters params{ uint32_t(cullingBuckets.size()), firstGroup, groups, width, uint32_t(disableAlpha) };
+	Upload(context.get(), *dispatchParameters, &params, sizeof(params));
+	auto buffer = dispatchParameters->resource.get();
+	context->CSSetConstantBuffers(0, 1, &buffer);
+	context->Dispatch(width, (groups + width - 1) / width, 1);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	++frameWork.dispatches;
-	frameWork.candidateInstances += params.instances;
-	frameWork.candidateEyeInstances += uint64_t(params.instances) * params.eyes;
-	if (diagnostics.load(std::memory_order_relaxed))
+	if (diagnostics.load(std::memory_order_relaxed)) {
 		++cullingDispatches;
+		++cullingUploadMaps;
+	}
 #endif
+}
+
+void GrassBucketRenderer::Impl::ValidateAlphaCulling(Bucket& bucket)
+{
+	auto& plan = bucket.plan;
+	if (plan.params.alphaThreshold <= 0)
+		return;
+	const auto validate = [&](const auto& state) {
+		using Mode = RE::BSGraphics::DepthStencilDepthMode;
+		if (plan.alphaDepthWritten && state.depthStencilDepthMode == Mode::kTestEqual)
+			return true;
+		const auto descriptor = globals::state->modifiedPixelDescriptor;
+		const bool testsAlpha = (descriptor & 0xFu) == uint32_t(SIE::ShaderCache::GrassShaderTechniques::RenderDepth) ||
+		                        (descriptor & uint32_t(SIE::ShaderCache::GrassShaderFlags::AlphaTest));
+		if (!testsAlpha || !state.alphaTestEnabled || !std::isfinite(state.alphaTestRef) || state.alphaTestRef < plan.params.alphaThreshold)
+			return false;
+		winrt::com_ptr<ID3D11ShaderResourceView> texture;
+		context->PSGetShaderResources(0, 1, texture.put());
+		if (!HasNormalizedAlpha(texture.get()))
+			return false;
+		plan.alphaDepthWritten |= state.depthStencilDepthMode == Mode::kTestWrite;
+		return true;
+	};
+	const auto* shadow = globals::game::shadowState;
+	if (shadow && (globals::game::isVR ? validate(shadow->GetVRRuntimeData()) : validate(shadow->GetRuntimeData())))
+		return;
+	// A different pass or texture must recover rejected instances before using this bucket.
+	plan.params.alphaThreshold = 0;
+	constexpr std::array<uint32_t, kCullArgumentBytes / sizeof(uint32_t)> zeros{};
+	const D3D11_BOX region{ plan.argsBase, 0, 0, plan.argsBase + uint32_t(sizeof(zeros)), 1, 1 };
+	context->UpdateSubresource(cullBuffers.arguments->resource.get(), 0, &region, zeros.data(), 0, 0);
+	RunCulling(&bucket);
 }
 
 void GrassBucketRenderer::Impl::EmitDraws(const Bucket& bucket)
@@ -2965,7 +3254,7 @@ void GrassBucketRenderer::Impl::EmitDraws(const Bucket& bucket)
 		context->PSGetShaderResources(0, 1, texture.put());
 		normalLength = textureCache.Get(context.get(), texture.get(), frame);
 	}
-	const std::array<ID3D11ShaderResourceView*, 3> sources{ bucket.result.extras->srv.get(), bucket.records->srv.get(), normalLength };
+	const std::array<ID3D11ShaderResourceView*, 3> sources{ cullBuffers.extras->srv.get(), recordPool->srv.get(), normalLength };
 	context->VSSetShaderResources(2, UINT(sources.size()), sources.data());
 	for (UINT tier = 0; tier < 3; ++tier) {
 		if (!meshes[tier].vertices || !meshes[tier].indices)
@@ -2978,8 +3267,8 @@ void GrassBucketRenderer::Impl::EmitDraws(const Bucket& bucket)
 		context->IASetIndexBuffer(meshes[tier].indices.get(), DXGI_FORMAT_R16_UINT, 0);
 		for (UINT eye = 0; eye < eyes; ++eye) {
 			const auto slot = tier * eyes + eye;
-			auto compacted = bucket.result.output->resource.get();
-			const UINT instanceStride = GrassPolicy::kSurvivorIndexBytes, instanceOffset = slot * capacity * instanceStride;
+			auto compacted = cullBuffers.output->resource.get();
+			const UINT instanceStride = GrassPolicy::kSurvivorIndexBytes, instanceOffset = (bucket.plan.outputBase + slot * capacity) * instanceStride;
 			context->IASetVertexBuffers(1, 1, &compacted, &instanceStride, &instanceOffset);
 			auto drawCB = frameConstants[bucket.plan.slot / kSlotsPerPage]->resource.get();
 			const UINT begin = (bucket.plan.slot % kSlotsPerPage) * (kFrameSlotBytes / 16) + kDrawOffset / 16 + slot * 16, size = 16;
@@ -2990,7 +3279,7 @@ void GrassBucketRenderer::Impl::EmitDraws(const Bucket& bucket)
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			globals::features::grassCollision.ObserveDrawBindings(true);
 #endif
-			context->DrawIndexedInstancedIndirect(bucket.result.arguments->resource.get(), slot * 32 + 12);
+			context->DrawIndexedInstancedIndirect(cullBuffers.arguments->resource.get(), bucket.plan.argsBase + slot * 32 + 12);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			++frameWork.indirectDraws;
 #endif
@@ -3259,7 +3548,7 @@ void GrassBucketRenderer::Impl::PollCounters()
 	}
 	if (diagnostics.load(std::memory_order_relaxed) && !diagnosticShader.get()) {
 		std::vector<std::pair<const char*, const char*>> defines{ { "GRASS_DIAGNOSTICS", "1" } };
-		diagnosticShader.Get(L"Data\\Shaders\\GrassOptimizations\\GrassCullingCS.hlsl", defines, "cs_5_0", "main", "GrassOptimizations::DiagnosticCullCS");
+		diagnosticShader.Get(L"Data\\Shaders\\GrassOptimizations\\GrassCullingBatchCS.hlsl", defines, "cs_5_0", "main", "GrassOptimizations::DiagnosticCullCS");
 	}
 	countersActive = diagnostics.load(std::memory_order_relaxed) && diagnosticShader.get();
 	if (countersActive) {
@@ -3298,12 +3587,16 @@ void GrassBucketRenderer::Impl::PublishTelemetry()
 	snapshot.buckets = buckets.size();
 	snapshot.dormantBuckets = dormantBuckets.size();
 	for (const auto& bucket : buckets) {
-		snapshot.activeRecordBytes += bytes(bucket.records);
-		snapshot.cullingBufferBytes += bytes(bucket.result.output) + bytes(bucket.result.extras) + bytes(bucket.result.arguments);
+		snapshot.activeRecordBytes += bucket.records ? uint64_t(bucket.recordsCapacity) * GrassPolicy::kRecordBytes : 0;
 	}
 	for (const auto& bucket : dormantBuckets)
-		snapshot.dormantRecordBytes += bytes(bucket.records);
-	snapshot.scratchBufferBytes = bytes(table) + bytes(disabled);
+		snapshot.dormantRecordBytes += bucket.records ? uint64_t(bucket.recordsCapacity) * GrassPolicy::kRecordBytes : 0;
+	snapshot.cullingBufferBytes = bytes(cullBuffers.output) + bytes(cullBuffers.extras) + bytes(cullBuffers.arguments);
+	snapshot.recordPoolBytes = bytes(recordPool);
+	snapshot.combinedCulling = frameCombinedCulling;
+	snapshot.alphaRejection = frameAlphaRejection;
+	snapshot.refineHiZ = frameSettings.RefineHiZ;
+	snapshot.scratchBufferBytes = bytes(table) + bytes(disabled) + bytes(cullInputs) + bytes(dispatchParameters);
 	for (const auto& buffer : frameConstants)
 		snapshot.scratchBufferBytes += bytes(buffer);
 	snapshot.diagnosticBufferBytes = bytes(gpuCounters);
@@ -3344,6 +3637,11 @@ void GrassBucketRenderer::SetDiagnosticsEnabled(bool enabled)
 {
 	impl->diagnostics.store(enabled, std::memory_order_relaxed);
 	impl->hiZ.SetDiagnosticsEnabled(enabled);
+}
+
+void GrassBucketRenderer::SetCullingControls(bool combined, bool alpha)
+{
+	impl->cullingControls.store(uint32_t(combined) | (uint32_t(alpha) << 1), std::memory_order_relaxed);
 }
 
 void GrassBucketRenderer::SetBackgroundPreparationEnabled(bool enabled)
@@ -3393,12 +3691,13 @@ json GrassBucketRenderer::GetDiagnostics() const
 		const auto& s = *snapshot;
 		telemetry = { { "frame", s.frame }, { "publishedSteadyMilliseconds", s.publishedSteadyMilliseconds },
 			{ "ageMilliseconds", uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()) - s.publishedSteadyMilliseconds },
+			{ "combinedCulling", s.combinedCulling }, { "alphaRejection", s.alphaRejection }, { "refineHiZ", s.refineHiZ },
 			{ "enabled", s.enabled }, { "hiZRequested", s.hiZRequested }, { "meshLODRequested", s.meshLODRequested },
 			{ "cullingPrepared", s.cullingPrepared }, { "identities", s.identities }, { "residentSources", s.residentSources },
 			{ "residentGroups", s.residentGroups }, { "residentInstances", s.residentInstances },
 			{ "buckets", s.buckets }, { "dormantBuckets", s.dormantBuckets }, { "lodModels", s.lodModels }, { "lodVariants", s.lodVariants },
 			{ "cpuSnapshotPayloadBytes", s.cpuSnapshotPayloadBytes }, { "activeRecordBytes", s.activeRecordBytes },
-			{ "dormantRecordBytes", s.dormantRecordBytes }, { "cullingBufferBytes", s.cullingBufferBytes },
+			{ "dormantRecordBytes", s.dormantRecordBytes }, { "recordPoolBytes", s.recordPoolBytes }, { "cullingBufferBytes", s.cullingBufferBytes },
 			{ "scratchBufferBytes", s.scratchBufferBytes }, { "diagnosticBufferBytes", s.diagnosticBufferBytes },
 			{ "lodReferencedBufferBytes", s.lodReferencedBufferBytes },
 			{ "hiZWidth", s.hiZWidth }, { "hiZHeight", s.hiZHeight }, { "hiZMips", s.hiZMips },
@@ -3409,6 +3708,7 @@ json GrassBucketRenderer::GetDiagnostics() const
 						  { "candidateEyeInstances", s.work.candidateEyeInstances }, { "indirectDraws", s.work.indirectDraws },
 						  { "uploadedRecordBytes", s.work.uploadedRecordBytes } } } };
 	}
+	const auto controls = self.cullingControls.load(std::memory_order_relaxed);
 	const auto request = value(self.preparationRequest);
 	const json preparation = {
 		{ "enabled", bool(request & 1) }, { "active", self.preparationActive.load(std::memory_order_relaxed) },
@@ -3423,7 +3723,7 @@ json GrassBucketRenderer::GetDiagnostics() const
 	};
 	return { { "telemetrySchema", 1 }, { "telemetry", std::move(telemetry) }, { "backgroundPreparation", preparation },
 		{ "telemetryError", self.telemetryFailed.load(std::memory_order_relaxed) ? json("snapshot_failed") : json(nullptr) },
-		{ "telemetryScope", "resources at publication; work and main-depth culling viewport from last completed grass frame; CPU bytes cover resident snapshot payloads; buffer bytes exclude HiZ textures and native asset ownership; LOD references may be shared with native assets" },
+		{ "telemetryScope", "resources at publication; work and main-depth culling viewport from last completed grass frame; CPU bytes cover resident snapshot payloads; active/dormant record bytes are occupied pool ranges; recordPoolBytes is physical allocation; buffer bytes exclude HiZ textures and native asset ownership; LOD references may be shared with native assets" },
 		{ "hookInstalled", self.installed }, { "renderingAvailable", IsRenderingAvailable() }, { "diagnosticsEnabled", self.diagnostics.load(std::memory_order_relaxed) },
 		{ "captureAttempts", value(self.captureAttempts) }, { "capturedSources", value(self.capturedSources) },
 		{ "admittedSources", value(self.admittedSources) }, { "drawAttempts", value(self.drawAttempts) },
@@ -3433,6 +3733,9 @@ json GrassBucketRenderer::GetDiagnostics() const
 		{ "coarseRejectedSlices", value(self.coarseRejectedSlices) }, { "coarseRejectedInstances", value(self.coarseRejectedInstances) },
 		{ "cachedSources", value(self.cachedSources) }, { "nativeVisibilityBypassed", value(self.nativeVisibilityBypassed) },
 		{ "queuedRepresentatives", value(self.queuedRepresentatives) }, { "queueDuplicates", value(self.queueDuplicates) },
+		{ "combinedCulling", (controls & 1) != 0 },
+		{ "alphaRejection", (controls & 2) != 0 },
+		{ "alphaRejected", value(self.totals[19]) }, { "hiZRefinementAttempts", value(self.totals[20]) }, { "hiZRefinementRejected", value(self.totals[21]) },
 		{ "cullingDispatches", value(self.cullingDispatches) }, { "cullingUploadMaps", value(self.cullingUploadMaps) },
 		{ "drawsUsingFrameCulling", value(self.reusedCullingDraws) }, { "residentCullingBytes", value(self.publishedResultBytes) },
 		{ "expiredResidents", 0 }, { "pressureEvictions", value(self.pressureEvictions) },

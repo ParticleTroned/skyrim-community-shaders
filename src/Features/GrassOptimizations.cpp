@@ -10,7 +10,7 @@ namespace GrassPolicy
 {
 	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Settings, Enabled, CrossCellBatching, FrustumCulling,
 		DensityReduction, MinPixelSize, FullDetailPixelSize, MinDensity, EnableMeshLOD, EnableMidLOD, EnableFarLOD,
-		MidLODPixelSize, FarLODPixelSize, MeshLODBandPixels, EnableOcclusionCulling, OcclusionBias,
+		MidLODPixelSize, FarLODPixelSize, MeshLODBandPixels, EnableOcclusionCulling, RefineHiZ, OcclusionBias,
 		MeshCostBias, CostBiasStartDistance, InvisibleFadeCull, RenderDistanceOverride, EdgeFadeStart, SimpleShadingPixelSize, CollisionDistance,
 		FarLODOptimization, FarLODMinPixelSize, FarLODMinDensity, FarLODMaxDensity, FarLODCoverageBias, ProportionalDensityFade)
 }
@@ -242,6 +242,10 @@ void GrassOptimizations::DrawControls(bool advanced, std::string_view section)
 		{
 			changed |= Util::Widgets::Checkbox("Grass Hi-Z culling", &next.EnableOcclusionCulling);
 			Util::AddTooltip("Skip grass hidden behind solid objects. Depending on the scene, this can save work or have a small performance cost.", tooltipFlags);
+			if (next.EnableOcclusionCulling) {
+				changed |= Util::Widgets::Checkbox("Finer hidden-grass checks", &next.RefineHiZ);
+				Util::AddTooltip("Check smaller gaps around terrain and objects before drawing hidden grass. This can save performance in obstructed views, but the extra checks can cost performance in open areas. Requires Grass Hi-Z culling.", tooltipFlags);
+			}
 			if (advanced && next.EnableOcclusionCulling) {
 				changed |= Util::Widgets::SliderFloat("Grass occlusion tolerance", &next.OcclusionBias, 0.0f, 0.05f, "%.4f");
 				Util::AddTooltip("Relative distance margin for hidden-grass skipping: 0.001 means 0.1% of the nearest grass distance. Increase this if grass disappears incorrectly; higher values keep more grass and can cost performance.", tooltipFlags);

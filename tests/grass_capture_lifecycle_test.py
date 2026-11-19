@@ -138,6 +138,7 @@ namespace RE {
     inline const NiRTTI grassRTTI;
     inline const NiRTTI* NiRTTI_BSGrassShaderProperty = &grassRTTI;
     struct Property { const NiRTTI* GetRTTI() const { return &grassRTTI; } };
+    struct AlphaProperty { uint16_t alphaFlags = 0; uint8_t alphaThreshold = 0; };
     struct BSMultiStreamInstanceTriShape {
         struct NativeGroup { BSGraphics::VertexBuffer* vertexBuffer; };
         struct Runtime { std::vector<NativeGroup*> instanceGroups; } runtime;
@@ -331,6 +332,7 @@ struct Source {
     std::shared_ptr<int> vertices = std::make_shared<int>(), indices = std::make_shared<int>();
     std::string model;
     uint64_t descriptor = 1, flags = 0;
+    uint16_t alphaFlags = 0; uint8_t alphaThreshold = 0;
     uint32_t triangles = 12, vertexCount = 16, vertexBytes = 448, indexBytes = 72, lightMask = 0;
     std::vector<RE::BSLight*> lights;
     float renderDistance = 8000, wavePeriod = 1;
@@ -524,11 +526,13 @@ namespace RE {
         struct VertexBuffer { ID3D11Buffer* buffer; const void* m_data; uint64_t byteWidth; };
     }
     struct Property { const NiRTTI* GetRTTI() const { return &grassRTTI; } };
+    struct AlphaProperty { uint16_t alphaFlags = 0; uint8_t alphaThreshold = 0; };
     struct BSMultiStreamInstanceTriShape {
         struct Runtime { uint32_t instanceSize = 0, instanceCount = 0; float renderDistance = 8000; } runtime;
         struct RendererData { void* vertexBuffer = &vertices; void* indexBuffer = &indices; } meshData;
         struct Geometry {
             std::shared_ptr<Property> shaderProperty = std::make_shared<Property>();
+            std::shared_ptr<AlphaProperty> alphaProperty;
             RendererData* rendererData = nullptr;
             uint64_t vertexDesc = 1;
         } geometry;
@@ -561,6 +565,8 @@ struct Source {
     std::array<float, 3> origin{};
     RE::BSMultiStreamInstanceTriShape::Bound bound;
     float renderDistance = 8000;
+    std::shared_ptr<RE::AlphaProperty> alphaProperty;
+    uint16_t alphaFlags = 0; uint8_t alphaThreshold = 0;
 };
 bool CaptureGeometry(RE::BSMultiStreamInstanceTriShape* shape) {
     CAPTURE_GATE

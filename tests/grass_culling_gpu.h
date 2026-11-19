@@ -26,7 +26,7 @@ void RunCullingShader(bool vr, bool reversed = false)
 	Check(parameterReflection->GetVariableByName("MeshWeights")->GetDesc(&weightLayout));
 	Require(weightLayout.StartOffset == 192 && weightLayout.Size == 16, "Drawable mesh costs changed the CPU parameter layout");
 	Require(strengthLayout.StartOffset == 172 && strengthLayout.Size == sizeof(float), "Collision strength changed the CPU culling layout");
-	Require(parameterLayout.Size == 240 && indexCountLayout.StartOffset == 176 && indexCountLayout.Size == 16, "Indirect index counts changed the CPU parameter layout");
+	Require(parameterLayout.Size == 256 && indexCountLayout.StartOffset == 176 && indexCountLayout.Size == 16, "Indirect index counts changed the CPU parameter layout");
 	D3D11_SHADER_VARIABLE_DESC farLayout{}, policyLayout{};
 	Check(parameterReflection->GetVariableByName("FarDensity")->GetDesc(&farLayout));
 	Check(parameterReflection->GetVariableByName("FarPolicyEnabled")->GetDesc(&policyLayout));
@@ -68,7 +68,7 @@ void RunCullingShader(bool vr, bool reversed = false)
 	std::array<uint32_t, 48> initialArguments;
 	initialArguments.fill(0xdeadbeef);
 	auto args = makeBuffer(sizeof(initialArguments), D3D11_BIND_UNORDERED_ACCESS, 0, D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS | D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS, initialArguments.data(), "GrassTest::Args");
-	auto counters = makeBuffer(19 * sizeof(uint32_t), D3D11_BIND_UNORDERED_ACCESS, 0, D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, nullptr, "GrassTest::Counters");
+	auto counters = makeBuffer(22 * sizeof(uint32_t), D3D11_BIND_UNORDERED_ACCESS, 0, D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, nullptr, "GrassTest::Counters");
 	ComPtr<ID3D11ShaderResourceView> inputSRV, tableSRV;
 	D3D11_SHADER_RESOURCE_VIEW_DESC inputView{};
 	inputView.Format = DXGI_FORMAT_R32_TYPELESS;
@@ -199,11 +199,13 @@ void RunCullingShader(bool vr, bool reversed = false)
 		context->Unmap(staging.Get(), 0);
 		return result;
 	};
+	UINT depthMipLevels = 1, dispatchOrdinal = 0;
 	const auto dispatch = [&](bool frustum, bool density, bool hiZ, bool lod, UINT groups = 1) {
+		++dispatchOrdinal;
 		params.SetVariable("IndexCounts", indexCounts);
 		params.SetVariable("FrustumEnabled", UINT(frustum));
 		params.SetVariable("DensityEnabled", UINT(density));
-		params.SetVariable("DepthMips", hiZ ? 1u : 0u);
+		params.SetVariable("DepthMips", hiZ ? depthMipLevels : 0u);
 		params.SetVariable("MidEnabled", UINT(lod));
 		params.SetVariable("FarEnabled", UINT(lod));
 		params.Bind(context.Get());
@@ -221,13 +223,24 @@ void RunCullingShader(bool vr, bool reversed = false)
 		const auto values = read(args.Get());
 		for (UINT slot = 0; slot < 6; ++slot) {
 			const UINT expectedIndices = slot < 3 * eyes ? indexCounts[slot / eyes] : 0;
-			Require(values[slot * 8 + 3] == expectedIndices, "Indirect draw has stale or missing mesh index counts");
+			if (values[slot * 8 + 3] != expectedIndices)
+				throw std::runtime_error("Indirect index count at dispatch " + std::to_string(dispatchOrdinal) + ", slot " + std::to_string(slot) + ": expected " + std::to_string(expectedIndices) + ", got " + std::to_string(values[slot * 8 + 3]));
 			for (UINT word = 0; word < 8; ++word)
 				if (word != 3 && word != 4)
 					Require(values[slot * 8 + word] == 0, "Indirect draw offsets or padding were not reset");
 		}
 		return values;
 	};
+	params.SetVariable("AlphaThreshold", .5f);
+	auto alphaValues = dispatch(false, false, false, false);
+	for (UINT eye = 0; eye < eyes; ++eye)
+		Require(alphaValues[eye * 8 + 4] == 2, "Alpha rejection retained an instance below the cutout reference");
+	Require(read(counters.Get())[19] == eyes, "Alpha rejection diagnostics lost an eye");
+	params.SetVariable("AlphaThreshold", .125f);
+	alphaValues = dispatch(false, false, false, false);
+	for (UINT eye = 0; eye < eyes; ++eye)
+		Require(alphaValues[eye * 8 + 4] == 3, "Alpha rejection removed an instance at the cutout boundary");
+	params.SetVariable("AlphaThreshold", 0.0f);
 	auto values = dispatch(false, false, false, false);
 	for (UINT eye = 0; eye < eyes; ++eye) Require(values[eye * 8 + 4] == 3, "Full-density mode dropped an instance");
 	auto counts = read(counters.Get());
@@ -254,6 +267,156 @@ void RunCullingShader(bool vr, bool reversed = false)
 			}
 		}
 		Require(compacted[eye * capacity + 3] == 0xdeadbeef, "Dispatch wrote beyond survivor count");
+	}
+	// The production entry must preserve both buckets across the second dispatch row.
+	{
+		auto batchCode = Compile(L"features/Grass Optimizations/Shaders/GrassOptimizations/GrassCullingBatchCS.hlsl", "cs_5_0", defines);
+		ComPtr<ID3D11ComputeShader> batchShader;
+		Check(device->CreateComputeShader(batchCode->GetBufferPointer(), batchCode->GetBufferSize(), nullptr, batchShader.GetAddressOf()));
+		Util::SetResourceName(batchShader.Get(), "GrassTest::BatchCullCS");
+		ComPtr<ID3D11ShaderReflection> batchReflection;
+		Check(D3DReflect(batchCode->GetBufferPointer(), batchCode->GetBufferSize(), IID_PPV_ARGS(batchReflection.GetAddressOf())));
+		D3D11ShaderTest::ConstantBuffer batchParameters(device.Get(), batchReflection.Get(), "DispatchParameters");
+		batchParameters.SetVariable("BucketCount", 2u);
+		batchParameters.SetVariable("DispatchStartGroup", 0u);
+		batchParameters.SetVariable("DispatchGroupCount", 2u);
+		batchParameters.SetVariable("DispatchRowWidth", 1u);
+		const UINT outputStride = capacity * eyes * 3;
+		std::array<std::array<std::byte, 1088>, 2> buckets{};
+		for (UINT bucket = 0; bucket < 2; ++bucket) {
+			const std::array<UINT, 4> offsets{ bucket, bucket * 3, bucket * outputStride, bucket * 192 };
+			std::memcpy(buckets[bucket].data(), offsets.data(), sizeof(offsets));
+			std::memcpy(buckets[bucket].data() + 16, params.bytes.data(), params.bytes.size());
+			std::memcpy(buckets[bucket].data() + 272, native.bytes.data(), native.bytes.size());
+			if (bucket == 1) {
+				const float threshold = .5f;
+				std::memcpy(buckets[bucket].data() + 16 + 240, &threshold, sizeof(threshold));
+			}
+		}
+		auto bucketData = makeBuffer(sizeof(buckets), D3D11_BIND_SHADER_RESOURCE, 1088, D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, buckets.data(), "GrassTest::Buckets");
+		std::array<Record, 6> pooledRecords{};
+		std::copy(records.begin(), records.end(), pooledRecords.begin());
+		std::copy(records.begin(), records.end(), pooledRecords.begin() + 3);
+		auto pooledInput = makeBuffer(sizeof(pooledRecords), D3D11_BIND_SHADER_RESOURCE, 0, D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, pooledRecords.data(), "GrassTest::RecordPool");
+		ComPtr<ID3D11ShaderResourceView> pooledSRV, bucketsSRV;
+		auto pooledView = inputView;
+		pooledView.BufferEx.NumElements = sizeof(pooledRecords) / 4;
+		Check(device->CreateShaderResourceView(pooledInput.Get(), &pooledView, pooledSRV.GetAddressOf()));
+		Check(device->CreateShaderResourceView(bucketData.Get(), nullptr, bucketsSRV.GetAddressOf()));
+		Util::SetResourceName(pooledSRV.Get(), "GrassTest::RecordPool SRV");
+		Util::SetResourceName(bucketsSRV.Get(), "GrassTest::Buckets SRV");
+		auto savedOutput = output, savedExtras = extras, savedArgs = args;
+		std::vector<uint32_t> poolSentinels(outputStride * 2, 0xdeadbeef);
+		output = makeBuffer(UINT(poolSentinels.size() * 4), D3D11_BIND_UNORDERED_ACCESS, 0, D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, poolSentinels.data(), "GrassTest::PoolOutput");
+		extras = makeBuffer(outputStride * 2 * 24, D3D11_BIND_UNORDERED_ACCESS, 24, D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, nullptr, "GrassTest::PoolExtras");
+		args = makeBuffer(384, D3D11_BIND_UNORDERED_ACCESS, 0, D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS | D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS, nullptr, "GrassTest::PoolArgs");
+		makeOutputViews();
+		const UINT zero[4]{};
+		context->ClearUnorderedAccessViewUint(views[2].Get(), zero);
+		const std::array<ID3D11ShaderResourceView*, 4> srvs{ pooledSRV.Get(), tableSRV.Get(), depthSRV.Get(), bucketsSRV.Get() };
+		std::array<ID3D11UnorderedAccessView*, 4> uavs{ views[0].Get(), views[1].Get(), views[2].Get(), views[3].Get() };
+		context->CSSetShaderResources(0, 4, srvs.data());
+		context->CSSetUnorderedAccessViews(0, 4, uavs.data(), nullptr);
+		batchParameters.Bind(context.Get());
+		context->CSSetShader(batchShader.Get(), nullptr, 0);
+		context->Dispatch(1, 3, 1);  // Third row must return uniformly before group barriers.
+		uavs.fill(nullptr);
+		context->CSSetUnorderedAccessViews(0, 4, uavs.data(), nullptr);
+		auto batchArgs = read(args.Get()), batchOutput = read(output.Get()), batchExtras = read(extras.Get());
+		for (UINT bucket = 0; bucket < 2; ++bucket)
+			for (UINT eye = 0; eye < eyes; ++eye) {
+				Require(batchArgs[bucket * 48 + eye * 8 + 3] == indexCounts[0] && batchArgs[bucket * 48 + eye * 8 + 4] == (bucket ? 2u : 3u),
+					"Combined dispatch mixed bucket argument ranges");
+				std::array<bool, 3> seen{};
+				for (UINT instance = 0; instance < (bucket ? 2u : 3u); ++instance) {
+					const auto slot = bucket * outputStride + eye * capacity + instance;
+					const auto index = sourceIndex(batchOutput[slot], pooledRecords.size());
+					Require(index >= bucket * 3 && index < (bucket + 1) * 3, "Combined dispatch read another bucket's records");
+					seen[index - bucket * 3] = true;
+					Require(std::bit_cast<float>(batchExtras[slot * 6 + 3]) == (index % 3 == 0 ? .125f : .875f), "Combined dispatch mixed instance extras");
+				}
+				Require((seen[0] == (bucket == 0)) && seen[1] && seen[2] && batchOutput[bucket * outputStride + eye * capacity + (bucket ? 2u : 3u)] == 0xdeadbeef,
+					"Combined dispatch duplicated a source or overwrote its output range");
+			}
+		// Recover one bucket with the same input table; preserve all other indirect draws.
+		const std::array<uint32_t, 48> clearedArgs{};
+		const D3D11_BOX argumentRegion{ 192, 0, 0, 384, 1, 1 };
+		context->UpdateSubresource(args.Get(), 0, &argumentRegion, clearedArgs.data(), 0, 0);
+		batchParameters.SetVariable("DispatchStartGroup", 1u);
+		batchParameters.SetVariable("DispatchGroupCount", 1u);
+		batchParameters.SetVariable("DisableAlphaRejection", 1u);
+		batchParameters.Bind(context.Get());
+		uavs = { views[0].Get(), views[1].Get(), views[2].Get(), views[3].Get() };
+		context->CSSetUnorderedAccessViews(0, 4, uavs.data(), nullptr);
+		context->Dispatch(1, 1, 1);
+		uavs.fill(nullptr);
+		context->CSSetUnorderedAccessViews(0, 4, uavs.data(), nullptr);
+		const auto recovered = read(args.Get());
+		Require(std::equal(batchArgs.begin(), batchArgs.begin() + 48, recovered.begin()), "Alpha recovery changed another bucket's draw arguments");
+		for (UINT eye = 0; eye < eyes; ++eye)
+			Require(recovered[48 + eye * 8 + 4] == 3, "Alpha recovery did not restore the rejected instance");
+		std::array<ID3D11ShaderResourceView*, 4> empty{};
+		context->CSSetShaderResources(0, 4, empty.data());
+		output = savedOutput;
+		extras = savedExtras;
+		args = savedArgs;
+		makeOutputViews();
+	}
+	{
+		auto savedDepth = depthSRV;
+		auto refinedDesc = depthDesc;
+		refinedDesc.MipLevels = 3;
+		refinedDesc.Width = eyes * 8;
+		refinedDesc.Height = 8;
+		std::array<std::vector<float>, 3> levels;
+		std::array<D3D11_SUBRESOURCE_DATA, 3> initial{};
+		const float farDepth = reversed ? 0.f : 1.f, nearDepth = reversed ? .99f : .01f;
+		levels[0].assign(eyes * 64, farDepth);
+		for (UINT y = 0; y < 7; ++y)
+			for (UINT x = 0; x < 8; ++x) levels[0][y * eyes * 8 + x] = nearDepth;
+		for (UINT mip = 1; mip < 3; ++mip) {
+			const UINT width = eyes * (8 >> mip), height = 8 >> mip;
+			levels[mip].resize(width * height);
+			for (UINT y = 0; y < height; ++y)
+				for (UINT x = 0; x < width; ++x) {
+					float value = nearDepth;
+					for (UINT dy = 0; dy < 2; ++dy)
+						for (UINT dx = 0; dx < 2; ++dx) {
+							const float sample = levels[mip - 1][(y * 2 + dy) * width * 2 + x * 2 + dx];
+							value = reversed ? std::min(value, sample) : std::max(value, sample);
+						}
+					levels[mip][y * width + x] = value;
+				}
+		}
+		for (UINT mip = 0; mip < 3; ++mip)
+			initial[mip] = { levels[mip].data(), eyes * (8 >> mip) * 4, 0 };
+		ComPtr<ID3D11Texture2D> refinedDepth;
+		Check(device->CreateTexture2D(&refinedDesc, initial.data(), refinedDepth.GetAddressOf()));
+		Check(device->CreateShaderResourceView(refinedDepth.Get(), nullptr, depthSRV.ReleaseAndGetAddressOf()));
+		Util::SetResourceName(refinedDepth.Get(), "GrassTest::RefinedDepth");
+		Util::SetResourceName(depthSRV.Get(), "GrassTest::RefinedDepth SRV");
+		depthMipLevels = 3;
+		params.SetVariable("DepthWidth", eyes * 8);
+		params.SetVariable("DepthHeight", 8u);
+		params.SetVariable("ModelBound", std::array<float, 4>{ 0, 0, 0, .4f });
+		auto coarse = dispatch(false, false, true, false);
+		params.SetVariable("RefineHiZ", 1u);
+		auto finer = dispatch(false, false, true, false);
+		Require(coarse[4] == 3 && finer[4] == 1 && read(counters.Get())[21] == 2,
+			"Finer depth checks did not reject the two hidden instances");
+		if (vr)
+			Require(coarse[12] == 3 && finer[12] == 3, "Refinement crossed the stereo depth boundary");
+		// A clear texel inside the fine footprint must retain the overlapping instance.
+		levels[0][3 * eyes * 8 + 3] = farDepth;
+		context->UpdateSubresource(refinedDepth.Get(), 0, nullptr, levels[0].data(), eyes * 32, 0);
+		finer = dispatch(false, false, true, false);
+		Require(finer[4] > 1, "Refinement culled through a clear depth sample");
+		params.SetVariable("RefineHiZ", 0u);
+		params.SetVariable("ModelBound", std::array<float, 4>{ 0, 0, 0, .05f });
+		depthMipLevels = 1;
+		params.SetVariable("DepthWidth", depthDesc.Width);
+		params.SetVariable("DepthHeight", depthDesc.Height);
+		depthSRV = savedDepth;
 	}
 	values = dispatch(true, false, false, false);
 	for (UINT eye = 0; eye < eyes; ++eye) Require(values[eye * 8 + 4] == 2, "Frustum culling retained an outside instance or lost a visible one");

@@ -29,7 +29,7 @@ cbuffer Parameters : register(b0)
 	float2 ProjectionAsymptote;
 	float AlphaThreshold;
 	uint RefineHiZ;
-	uint HiZOptions, CullingPadding;
+	uint2 CullingPadding;
 };
 
 #ifdef GRASS_CULL_BATCH

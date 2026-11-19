@@ -24,10 +24,9 @@ namespace GrassTelemetry
 		uint64_t cpuSnapshotPayloadBytes = 0, activeRecordBytes = 0, dormantRecordBytes = 0;
 		uint64_t recordPoolBytes = 0;
 		bool combinedCulling = true, alphaRejection = true, refineHiZ = false;
-		bool reuseHiZProofs = false, costAwareHiZ = false, hiZEarlyVisibility = false, fineHiZDepth = false;
 		uint64_t cullingBufferBytes = 0, scratchBufferBytes = 0, diagnosticBufferBytes = 0;
 		uint64_t lodReferencedBufferBytes = 0;
-		uint32_t hiZWidth = 0, hiZHeight = 0, hiZMips = 0, hiZBaseReduction = 0;
+		uint32_t hiZWidth = 0, hiZHeight = 0, hiZMips = 0;
 		uint32_t viewportCount = 0;
 		float viewportWidth = 0, viewportHeight = 0;
 		Work work;

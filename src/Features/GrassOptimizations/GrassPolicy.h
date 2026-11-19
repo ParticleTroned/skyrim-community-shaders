@@ -228,10 +228,6 @@ namespace GrassPolicy
 		bool ProportionalDensityFade = false;
 		bool EnableOcclusionCulling = false;
 		bool RefineHiZ = false;
-		bool ReuseHiZProofs = false;
-		bool CostAwareHiZ = false;
-		bool HiZEarlyVisibility = false;
-		bool FineHiZDepth = false;
 		float OcclusionBias = 0.001f;  // Relative view-distance margin; 0.001 means 0.1%.
 
 		bool Valid() const

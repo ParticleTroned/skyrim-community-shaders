@@ -1052,7 +1052,7 @@ class GrassDrawLifecycleTests(unittest.TestCase):
     def test_hiz_retained_allocation_failure(self):
         source = (ROOT / "src/Features/GrassOptimizations/GrassHiZ.cpp").read_text(encoding="utf-8")
         method = block(source, "bool GrassHiZ::Build(")
-        marker = "\tconst auto reduction ="
+        marker = "\tif (pyramid.SRV()" if "\tif (pyramid.SRV()" in method else "\tif (builtFrame =="
         tail = method[method.index(marker):]
         driver = r'''
 #include "Features/GrassOptimizations/GrassHiZPolicy.h"
@@ -1081,21 +1081,13 @@ struct Pyramid {
 struct GrassHiZ {
     Pyramid pyramid;
     DepthPyramidPolicy::AllocationRetention allocationRetention;
-    UINT width = 1024, height = 1024, mipCount = 7, builtFrame = 3, activeWidth = 4032, activeHeight = 2240, builtReduction = 4;
-    UINT failedReduction = 0;
+    UINT width = 1024, height = 1024, builtFrame = 3, activeWidth = 4032, activeHeight = 2240;
     int sourceIdentity = 1;
     int allocations = 0;
     float depthViewportSlack = 0;
     std::array<float, 4> scale{};
-    bool failAllocation = true;
-    void Allocate(UINT nextWidth, UINT nextHeight, UINT eyes, UINT maximumMips) {
-        ++allocations; pyramid.valid = false;
-        if (failAllocation) throw std::runtime_error("resize");
-        width = nextWidth; height = nextHeight;
-        mipCount = DepthPyramidPolicy::MipCount({width, height}, eyes, maximumMips);
-        builtFrame = UINT32_MAX;
-    }
-    bool Build(UINT currentWidth, UINT currentHeight, uint64_t candidateIndexWork, int sourceResource = 1, UINT frame = 3, bool finerDepth = false) {
+    void Allocate(UINT, UINT, UINT) { ++allocations; pyramid.valid = false; throw std::runtime_error("resize"); }
+    bool Build(UINT currentWidth, UINT currentHeight, uint64_t candidateIndexWork, int sourceResource = 1, UINT frame = 3) {
         constexpr UINT eyes = 2;
         void* context = nullptr;
         void* source = nullptr;
@@ -1132,23 +1124,6 @@ int main() {
     assert(replaced.allocations == 1 && replaced.pyramid.builds == 0);
     assert(!replaced.Build(2016, 1120, moderate, 2, 5));
     assert(replaced.allocations == 2 && !replaced.pyramid.SRV());
-    GrassHiZ switched;
-    switched.failAllocation = false;
-    assert(switched.Build(4032, 2240, UINT64_MAX, 1, 3, true));
-    assert(switched.builtReduction == 2 && switched.width == 2048 && switched.height == 2048 && switched.mipCount == 8);
-    assert(switched.allocations == 1 && switched.pyramid.builds == 1);
-    assert(switched.Build(4032, 2240, 0, 1, 3, true));
-    assert(switched.pyramid.builds == 1);
-    assert(switched.Build(4032, 2240, UINT64_MAX, 1, 3, false));
-    assert(switched.builtReduction == 4 && switched.width == 1024 && switched.height == 1024 && switched.mipCount == 7);
-    assert(switched.allocations == 2 && switched.pyramid.builds == 2);
-    GrassHiZ failedSwitch;
-    assert(!failedSwitch.Build(4032, 2240, UINT64_MAX, 1, 3, true));
-    assert(failedSwitch.failedReduction == 2 && !failedSwitch.pyramid.SRV());
-    assert(!failedSwitch.Build(4032, 2240, UINT64_MAX, 1, 4, true));
-    assert(failedSwitch.allocations == 1);
-    assert(failedSwitch.Build(4032, 2240, UINT64_MAX));
-    assert(failedSwitch.failedReduction == 0 && failedSwitch.builtReduction == 4 && failedSwitch.pyramid.builds == 1);
 }
 '''.replace("TAIL", tail)
         result = compile_fixture(driver)

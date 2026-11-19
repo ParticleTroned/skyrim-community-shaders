@@ -1628,16 +1628,6 @@ namespace MenuDevBenchBridge
 			const GrassPolicy::Settings grassDefaults;
 			grassProperties["RefineHiZ"] = { { "type", "boolean" }, { "default", grassDefaults.RefineHiZ },
 				{ "description", "Finer hidden-grass checks; requires EnableOcclusionCulling. Extra depth reads may help obstructed views and cost performance in open areas." } };
-			grassProperties["ReuseHiZProofs"] = { { "type", "boolean" }, { "default", grassDefaults.ReuseHiZProofs },
-				{ "description", "Requires EnableOcclusionCulling. Avoid repeating finer checks in areas already confirmed to hide grass. This can reduce checking work in obstructed views, with a small extra cost. Requires Finer hidden-grass checks." } };
-			grassProperties["CostAwareHiZ"] = { { "type", "boolean" }, { "default", grassDefaults.CostAwareHiZ },
-				{ "description", "Requires EnableOcclusionCulling. Spend less time checking small or simple distant grass. This can save checking work, but may draw more hidden grass. With simpler distant models, some scenes also skip preparing hidden-grass checks." } };
-			grassProperties["HiZEarlyVisibility"] = { { "type", "boolean" }, { "default", grassDefaults.HiZEarlyVisibility },
-				{ "description", "Requires EnableOcclusionCulling. Check the middle of each finer test area first, then reuse that result. This may finish sooner around gaps, but can add a small cost when grass is fully hidden. Requires Finer hidden-grass checks." } };
-			grassProperties["FineHiZDepth"] = { { "type", "boolean" }, { "default", grassDefaults.FineHiZDepth },
-				{ "description", "Requires EnableOcclusionCulling. Use more detail to find grass hidden near edges and small gaps. This can skip more hidden grass, but uses roughly four times the memory for these checks and adds processing work." } };
-			document["description"] = document["description"].get<std::string>() +
-			                          " set_grass_optimizations_settings accepts ReuseHiZProofs, CostAwareHiZ, HiZEarlyVisibility and FineHiZDepth, all default false. ReuseHiZProofs and HiZEarlyVisibility require RefineHiZ. CostAwareHiZ uses the cheapest enabled compatible mesh for hierarchy admission and bounds finer reads by the selected mesh and projected size. FineHiZDepth selects a 2x2 depth base instead of 4x4 and takes effect on the next grass frame. Inspect completed-frame telemetry to distinguish requested settings from applied controls; depth-map dimensions describe retained allocation, not proof that occlusion ran.";
 			grassProperties["FarLODOptimization"] = { { "type", "boolean" }, { "default", grassDefaults.FarLODOptimization } };
 			grassProperties["ProportionalDensityFade"] = { { "type", "boolean" }, { "default", grassDefaults.ProportionalDensityFade } };
 			grassProperties["FarLODMinPixelSize"] = { { "type", "number" }, { "minimum", 0 }, { "maximum", 64 }, { "default", grassDefaults.FarLODMinPixelSize } };
@@ -1829,9 +1819,8 @@ namespace MenuDevBenchBridge
 				for (const auto* name : { "alphaRejected", "hiZRefinementAttempts", "hiZRefinementRejected" })
 					(*grassSchema)["properties"][name] = { { "type", "integer" }, { "minimum", 0 } };
 				auto& telemetry = (*grassSchema)["properties"]["telemetry"]["properties"];
-				telemetry["hiZBaseReduction"] = { { "type", "integer" }, { "enum", { 0, 2, 4 } }, { "description", "Base reduction of the last successful hierarchy build; zero when reset. Does not imply use in the sampled frame." } };
 				telemetry["recordPoolBytes"] = { { "type", "integer" }, { "minimum", 0 } };
-				for (const auto* name : { "combinedCulling", "alphaRejection", "refineHiZ", "reuseHiZProofs", "costAwareHiZ", "hiZEarlyVisibility", "fineHiZDepth" })
+				for (const auto* name : { "combinedCulling", "alphaRejection", "refineHiZ" })
 					telemetry[name] = { { "type", "boolean" }, { "description", "Control applied to this completed grass frame." } };
 			}
 			document["outputSchema"]["properties"]["scene"] = {

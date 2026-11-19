@@ -92,17 +92,6 @@ namespace
 			"Candidate work overflowed or lost stereo multiplicity");
 		Require(!ShouldBuild(UINT64_MAX, {}, 2) && OutputTexelWork({ 0x80000000u, 0x80000000u }, 1, 0) > (uint64_t(1) << 62),
 			"Invalid or large hierarchy work was underestimated");
-		const std::array<uint32_t, 4> tiers{ 120, 24, 6, 0 };
-		Require(CandidateMeshIndices(tiers, true, true, false) == 120 &&
-					CandidateMeshIndices(tiers, true, true, true) == 6 &&
-					CandidateMeshIndices(tiers, true, false, true) == 24 &&
-					CandidateMeshIndices(tiers, false, false, true) == 120 &&
-					CandidateMeshIndices({ 120, 0, 0, 0 }, true, true, true) == 120,
-			"Cost admission used a missing or disabled LOD");
-		Require(BaseReduction(false) == 4 && BaseReduction(true) == 2 && MaximumMips(true) == MaximumMips(false) + 1,
-			"Finer depth changed the maximum coarse footprint");
-		Require(!ShouldBuild(threshold + 1, { full.width * 2, full.height * 2 }, 2, MaximumMips(true)),
-			"Finer hierarchy ignored its extra construction work");
 	}
 }
 

@@ -558,7 +558,8 @@ public:
 	bool CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameToken* frameToken,
 		uint32_t eyeIndex, const UpscalingDLSS::ViewportCrop& currentCrop,
 		const UpscalingDLSS::CropContinuityDecision& cropContinuity,
-		const DLSSDispatchDiagnostics* diagnostics = nullptr
+		const DLSSDispatchDiagnostics* diagnostics = nullptr,
+		sl::Constants* capturedConstants = nullptr
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		,
 		DLSSDevBenchTraceSignature* outFrameConstantsSignature = nullptr

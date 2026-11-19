@@ -68,6 +68,15 @@ void RenderDoc::Load()
 	const auto stateVersion = reinterpret_cast<StateCompatibilityVersion>(GetProcAddress(module, "RENDERDOC_GetD3D11StateCompatibilityVersion"));
 	safeStateRestoration = stateVersion && stateVersion() >= 2;
 	Util::UseManualDeviceContextState(safeStateRestoration);
+	const auto externalWriteVersion = reinterpret_cast<pRENDERDOC_GetD3D11ExternalWriteVersion>(GetProcAddress(module, "RENDERDOC_GetD3D11ExternalWriteVersion"));
+	if (externalWriteVersion && externalWriteVersion() == 1) {
+		captureExternalWrite = reinterpret_cast<pRENDERDOC_CaptureD3D11ExternalWrite>(GetProcAddress(module, "RENDERDOC_CaptureD3D11ExternalWrite"));
+		failExternalWrite = reinterpret_cast<pRENDERDOC_FailD3D11ExternalWrite>(GetProcAddress(module, "RENDERDOC_FailD3D11ExternalWrite"));
+		if (!failExternalWrite)
+			captureExternalWrite = nullptr;
+	}
+	if (!captureExternalWrite)
+		logger::warn("[RenderDoc] Vendor-output capture is unavailable; DLSS/NR replay cannot be qualified");
 	if (!safeStateRestoration)
 		logger::warn("[RenderDoc] Capture library lacks safe D3D11 state restoration; VR upscaling remains disabled");
 	const auto getAPI = reinterpret_cast<pRENDERDOC_GetAPI>(GetProcAddress(module, "RENDERDOC_GetAPI"));
@@ -137,6 +146,12 @@ void RenderDoc::DrawSettings()
 {
 	static MenuUI::ActionFeedback feedback;
 	const bool captureReady = enableRenderDocCapture && IsAvailable();
+	if (renderDocModule && !HasVendorOutputCapture())
+		Util::Text::WrappedWarning("This RenderDoc DLL cannot record DLSS/NR output boundaries. Install the compatible fork before capturing vendor upscaling.");
+	if (GetVendorOutputFailures() != 0)
+		Util::Text::WrappedWarning("Vendor output capture failed (0x%08X). Owned captures were discarded; check the log before retrying.", static_cast<uint32_t>(GetVendorOutputError()));
+	if (HasVendorOutputCapture())
+		ImGui::TextWrapped("DLSS/NR outputs are captured at opaque boundaries. CSX passes replay normally; edits do not propagate through vendor inference, and inference internals/timing are unavailable.");
 	if (renderDocModule && !safeStateRestoration)
 		Util::Text::WrappedWarning("DLSS and Render Scale capture require the CSX-compatible RenderDoc fork with D3D11 state restoration support. Install its DLL and restart.");
 	if (enableRenderDocCapture && !IsAvailable())
@@ -663,6 +678,47 @@ void RenderDoc::InvalidateCaptureCache()
 	cacheInvalidated.store(true);
 }
 
+bool RenderDoc::IsFrameCapturing() const
+{
+	return renderDocApi && renderDocApi->IsFrameCapturing() != 0;
+}
+
+void RenderDoc::RecordVendorOutput(ID3D11DeviceContext* context, ID3D11Resource* output,
+	const char* label, std::span<ID3D11Resource* const> inputs, const std::string& metadata)
+{
+	if (!captureExternalWrite) {
+		if (IsFrameCapturing())
+			RejectVendorCapture(static_cast<int32_t>(E_NOINTERFACE), "loaded RenderDoc lacks vendor-output capture");
+		return;
+	}
+	if (inputs.size() > 16) {
+		RejectVendorCapture(static_cast<int32_t>(E_INVALIDARG), "vendor input count exceeds the capture contract", context);
+		return;
+	}
+	std::array<void*, 16> inputResources{};
+	std::copy(inputs.begin(), inputs.end(), inputResources.begin());
+	const auto result = captureExternalWrite(context, output, 0, label, metadata.c_str(),
+		static_cast<uint32_t>(inputs.size()), inputResources.data());
+	if (result == S_OK)
+		++vendorOutputCount;
+	else if (FAILED(result) && IsFrameCapturing())
+		RejectVendorCapture(result, label);
+}
+
+void RenderDoc::RejectVendorCapture(int32_t error, const char* detail, ID3D11DeviceContext* context)
+{
+	if (!IsFrameCapturing())
+		return;
+	if (context && failExternalWrite)
+		failExternalWrite(context, error);
+	vendorOutputError.store(error);
+	++vendorOutputFailures;
+	logger::error("[RenderDoc] Vendor boundary capture failed: {} (0x{:08X}); replay is invalid", detail, static_cast<uint32_t>(error));
+	// External owners finalize their own capture; the fork marks readback failures invalid.
+	vrFrameCapture.Fail(renderDocApi);
+	InvalidateCaptureCache();
+}
+
 void RenderDoc::BeginVRFrameCapture(uint64_t cycle, bool posesReady)
 {
 	if (IsUpscalingCompatible())
@@ -906,6 +962,13 @@ std::string RenderDoc::BuildAutomaticCaptureComments(const std::string& userComm
 		for (const auto& feature : enabledFeatures) {
 			comments += std::format("- {}\n", feature);
 		}
+	}
+
+	if (HasVendorOutputCapture()) {
+		comments +=
+			"\nDLSS/NR: actual outputs restored at labelled opaque boundaries. "
+			"Vendor inference is not re-executed. Shader edits do not propagate "
+			"through it; internal accesses and inference timing are unavailable.\n";
 	}
 
 	// Add user comments if provided

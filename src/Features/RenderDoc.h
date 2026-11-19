@@ -1,11 +1,13 @@
 #pragma once
 
 #include "Feature.h"
+#include "Features/RenderDocExternalWrite.h"
 #include "Features/VR/RenderDocFrameCapture.h"
 #include <atomic>
 #include <filesystem>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -16,6 +18,8 @@ using json = nlohmann::json;
 
 // Forward declarations
 struct ID3D11Device;
+struct ID3D11DeviceContext;
+struct ID3D11Resource;
 struct RENDERDOC_API_1_7_0;
 
 // Structure to hold capture file information for UI display
@@ -42,6 +46,25 @@ public:
 	bool IsUpscalingCompatible() const { return upscalingCompatible; }
 	bool HasVendorPassthrough() const { return vendorPassthrough; }
 	bool HasSafeStateRestoration() const { return safeStateRestoration; }
+	bool HasVendorOutputCapture() const { return captureExternalWrite != nullptr; }
+	bool IsFrameCapturing() const;
+	uint64_t GetVendorOutputCount() const { return vendorOutputCount.load(); }
+	uint64_t GetVendorOutputFailures() const { return vendorOutputFailures.load(); }
+	int32_t GetVendorOutputError() const { return vendorOutputError.load(); }
+	/** Records real output at an opaque vendor boundary; evaluation metadata is built only during capture. */
+	template <class Describe>
+	void CaptureVendorOutput(ID3D11DeviceContext* context, ID3D11Resource* output,
+		const char* label, std::span<ID3D11Resource* const> inputs, Describe&& describe)
+	{
+		if (!renderDocModule)
+			return;
+		try {
+			const auto metadata = IsFrameCapturing() ? describe().dump(-1, ' ', false, json::error_handler_t::replace) : std::string{};
+			RecordVendorOutput(context, output, label, inputs, metadata);
+		} catch (const std::exception& error) {
+			RejectVendorCapture(static_cast<int32_t>(0x80004005u), error.what(), context);
+		}
+	}
 	/** Records the verified startup bridge before the game creates its device. */
 	void SetUpscalingCompatible(bool compatible) { upscalingCompatible = compatible; }
 	/** Bounds VR captures around complete compositor cycles, including both submit eyes. */
@@ -109,6 +132,13 @@ private:
 	bool vendorPassthrough = false;
 	bool safeStateRestoration = false;
 	bool upscalingCompatible = false;
+	pRENDERDOC_CaptureD3D11ExternalWrite captureExternalWrite = nullptr;
+	pRENDERDOC_FailD3D11ExternalWrite failExternalWrite = nullptr;
+	std::atomic_uint64_t vendorOutputCount{ 0 }, vendorOutputFailures{ 0 };
+	std::atomic_int32_t vendorOutputError{ 0 };
+	void RecordVendorOutput(ID3D11DeviceContext* context, ID3D11Resource* output,
+		const char* label, std::span<ID3D11Resource* const> inputs, const std::string& metadata);
+	void RejectVendorCapture(int32_t error, const char* detail, ID3D11DeviceContext* context = nullptr);
 	void SetCaptureEnabled(bool a_enabled);
 	bool TriggerConfiguredCapture(bool a_checkDiskSpace = true);
 	uint32_t GetCaptureFrameCount() const;

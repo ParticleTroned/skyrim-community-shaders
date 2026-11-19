@@ -11,7 +11,9 @@ at least 2. This reports corrected predicate-wrapper ownership, bounded
 dynamic shader-instance getters, and native context-state lifetime handling.
 It is a fork capability, separate from
 the upstream capture API version. CSX also requires capture API 1.4 for
-discarding incomplete stereo captures.
+discarding incomplete stereo captures. Vendor output capture additionally
+requires `RENDERDOC_GetD3D11ExternalWriteVersion` version 1 and its write and
+failure exports. The capability is independent of state restoration.
 
 Build CSX normally with the required upscaling runtime payloads. Place the
 compatible `renderdoc.dll` in `Data/Renderdoc/`, enable RenderDoc on its CSX
@@ -44,6 +46,33 @@ captures are left alone; external capture controls keep their own frame
 boundaries. Disabling CSX capture cancels queued requests; an already active
 stereo pair finishes normally. Idle frames do not query the capture API.
 
+## Replay boundaries
+
+CSX's ordinary D3D11 passes remain recorded operations: guide encoding,
+per-eye preparation, NR reconstruction/compositing, sharpening and submit
+copies. DLSS and native D3D12 NR use explicitly labelled opaque boundaries.
+After successful evaluation and the existing D3D12-to-D3D11 fence join,
+CSX records the current native output before reconstruction or consumption.
+The live output is never replaced, cleared differently or rerouted for capture.
+Metadata retains the frame/eye or feature slot, input resource roles, extents,
+crops, reset state and evaluation settings. DLSS also retains the submitted
+camera and motion constants. An NR transport-bypass diagnostic is labelled as
+such and never reported as native inference.
+
+Replay restores these captured bytes at `External::CapturedVendorOutput`
+events. These are not inference dispatches. Vendor kernels, internal accesses,
+and original inference timing remain unavailable; editing earlier shaders
+or inputs does not recompute vendor inference. Boundary pixel values and the
+surrounding CSX passes remain inspectable. A high-severity replay message
+states these limitations for every boundary. The capture format requires the
+matching fork and is deliberately rejected by unmodified upstream RenderDoc.
+
+Readback errors reject the capture. CSX discards a failed owned capture and
+cancels its queued frames; external owners retain finalization ownership,
+and the fork rejects their failed capture. Capturing synchronously reads
+vendor output and can perturb timing; it is not a performance or
+synchronization qualification.
+
 ## Validation
 
 Build the controller tests and run `DeviceContextState`,
@@ -64,6 +93,9 @@ not establish that the submit path works.
 
 With a DevBench build, `communityshaders.upscaling_api` action `renderdoc`
 reports startup compatibility and pending, active, completed, and failed
-stereo capture counts. Use the existing upscaling and NR diagnostics to
+stereo capture counts, independent vendor-output support, output/failure
+counts, and the last HRESULT. `vendorReplay` identifies captured boundary
+restoration; `vendorInferenceReexecuted` remains false. Use the existing
+upscaling and NR diagnostics to
 verify actual evaluation. Shader and render-scale changes still follow
 their normal validation requirements.

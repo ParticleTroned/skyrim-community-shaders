@@ -101,6 +101,19 @@ int main()
 		capture.Begin(&api, &device, 10, true);
 		Require(capture.Completed() == 2 && !capture.IsActive(), "active pair finishes without starting cancelled captures");
 
+		capture.Queue(3);
+		capture.Begin(&api, &device, 11, true);
+		capture.Fail(&api);
+		capture.Fail(&api);
+		capture.Complete(&api, 11);
+		Require(!capture.IsActive() && capture.Pending() == 0 && capture.Failed() == 4 && capture.Completed() == 2,
+			"invalid vendor output discards its owned capture exactly once and cancels retries");
+		api.capturing = true;
+		const auto discards = api.discards;
+		capture.Fail(&api);
+		Require(api.discards == discards && api.capturing, "failure never discards an external owner's capture");
+		api.capturing = false;
+
 		std::array<std::uint8_t, 6> thunk{ 0xff, 0x25 };
 		const std::int32_t displacement = -0x106;
 		std::memcpy(thunk.data() + 2, &displacement, sizeof(displacement));

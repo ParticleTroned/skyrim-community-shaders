@@ -1,5 +1,7 @@
 #include "Streamline.h"
+#include "Features/RenderDoc.h"
 #include "Features/ReverseZ.h"
+#include "NeuralRendering/NativeEvaluationLayoutJson.h"
 #include "NvidiaProject.h"
 #include "StreamlineConstants.h"
 #include "Utils/GraphicsCameraState.h"
@@ -1916,7 +1918,7 @@ std::optional<Streamline::FrameTokenSnapshot> Streamline::AcquireFrameToken(
 bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameToken* frameToken,
 	uint32_t eyeIndex, const UpscalingDLSS::ViewportCrop& currentCrop,
 	const UpscalingDLSS::CropContinuityDecision& cropContinuity,
-	const DLSSDispatchDiagnostics* diagnostics
+	const DLSSDispatchDiagnostics* diagnostics, sl::Constants* capturedConstants
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	,
 	DLSSDevBenchTraceSignature* outFrameConstantsSignature
@@ -2140,6 +2142,8 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport, sl::FrameTok
 			*outFrameConstantsSignature = devBenchTraceSignature;
 	}
 #endif
+	if (capturedConstants)
+		*capturedConstants = slConstants;
 	const auto hasCachedFrameConstantsSignature = [&]() {
 		if (!canAcceptDuplicateConstants)
 			return false;
@@ -3289,13 +3293,17 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	diagnostics.frameToken = frameToken;
 #endif
+	std::optional<sl::Constants> capturedConstants;
+	if (globals::features::renderDoc.renderDocModule)
+		capturedConstants.emplace();
 	if (!CheckFrameConstants(
 			vp,
 			frameToken,
 			eyeIndex,
 			currentCrop,
 			cropContinuity,
-			diagnosticsPtr
+			diagnosticsPtr,
+			capturedConstants ? &*capturedConstants : nullptr
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			,
 			devBenchFrameConstantsSignaturePtr
@@ -3402,6 +3410,45 @@ bool Streamline::EvaluateDLSS(sl::ViewportHandle vp, uint32_t eyeIndex,
 #endif
 	const bool evaluationSucceeded = DLSSResultPolicy::IsEvaluationSuccessful(evalResult);
 	if (evaluationSucceeded) {
+		std::array<ID3D11Resource*, 5> captureInputs{ colorIn, depth, mvec, reactiveMask, transparencyMask };
+		const char* captureLabel = globals::game::isVR ? (eyeIndex == 0 ? "DLSS left eye" : "DLSS right eye") : "DLSS";
+		globals::features::renderDoc.CaptureVendorOutput(context, colorOut, captureLabel, captureInputs, [&] {
+			const auto extent = [](const auto& value) {
+				return json{ { "left", value.left }, { "top", value.top }, { "width", value.width }, { "height", value.height } };
+			};
+			json metadata{ { "schema", 1 }, { "frame", diagnostics.frame }, { "eye", eyeIndex },
+				{ "viewport", static_cast<uint32_t>(vp) }, { "viewportRole", static_cast<uint32_t>(viewportRole) },
+				{ "submitStage", submitStageVRDLSS }, { "renderScaleActive", upscaling.IsVRRenderScaleModeActive() },
+				{ "qualityMode", qualityMode }, { "profile", dlssPreset }, { "hdr", colorBuffersHDR },
+				{ "result", static_cast<int32_t>(evalResult) }, { "inputExtent", extent(extentIn) }, { "outputExtent", extent(extentOut) },
+				{ "crop", NeuralRendering::Evidence::ViewportJson(currentCrop) },
+				{ "previousCrop", NeuralRendering::Evidence::ViewportJson(cropContinuity.previousCrop) },
+				{ "inputRoles", { "color", "depth", "motionVectors", "reactiveMask", "transparencyMask" } } };
+			if (capturedConstants) {
+				const auto& c = *capturedConstants;
+				const auto vector = [](const auto& v) { return json::array({ v.x, v.y, v.z }); };
+				const auto matrix = [](const auto& m) {
+					json rows = json::array();
+					for (uint32_t row = 0; row < 4; ++row)
+						rows.push_back({ m[row].x, m[row].y, m[row].z, m[row].w });
+					return rows;
+				};
+				metadata["constants"] = { { "cameraViewToClip", matrix(c.cameraViewToClip) },
+					{ "clipToCameraView", matrix(c.clipToCameraView) }, { "clipToLensClip", matrix(c.clipToLensClip) },
+					{ "clipToPrevClip", matrix(c.clipToPrevClip) }, { "prevClipToClip", matrix(c.prevClipToClip) },
+					{ "jitter", { c.jitterOffset.x, c.jitterOffset.y } }, { "motionVectorScale", { c.mvecScale.x, c.mvecScale.y } },
+					{ "pinholeOffset", { c.cameraPinholeOffset.x, c.cameraPinholeOffset.y } },
+					{ "cameraPosition", vector(c.cameraPos) }, { "cameraUp", vector(c.cameraUp) },
+					{ "cameraRight", vector(c.cameraRight) }, { "cameraForward", vector(c.cameraFwd) },
+					{ "near", c.cameraNear }, { "far", c.cameraFar }, { "fov", c.cameraFOV }, { "aspectRatio", c.cameraAspectRatio },
+					{ "motionVectorsInvalidValue", c.motionVectorsInvalidValue }, { "depthInverted", static_cast<uint32_t>(c.depthInverted) },
+					{ "cameraMotionIncluded", static_cast<uint32_t>(c.cameraMotionIncluded) }, { "motionVectors3D", static_cast<uint32_t>(c.motionVectors3D) },
+					{ "reset", static_cast<uint32_t>(c.reset) }, { "orthographicProjection", static_cast<uint32_t>(c.orthographicProjection) },
+					{ "motionVectorsDilated", static_cast<uint32_t>(c.motionVectorsDilated) }, { "motionVectorsJittered", static_cast<uint32_t>(c.motionVectorsJittered) },
+					{ "minRelativeLinearDepthObjectSeparation", c.minRelativeLinearDepthObjectSeparation } };
+			}
+			return metadata;
+		});
 		*cropHistory = UpscalingDLSS::MakeSuccessfulCropHistory(
 			diagnostics.frame,
 			cropGeneration,

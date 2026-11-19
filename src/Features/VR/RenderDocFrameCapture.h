@@ -46,6 +46,17 @@ public:
 		activeCycle.store(cycle);
 	}
 
+	/** Discards an invalid owned capture and cancels its remaining queued frames. */
+	template <class API>
+	void Fail(API* api)
+	{
+		CancelPending();
+		if (api && activeCycle.exchange(0) != 0) {
+			api->DiscardFrameCapture(std::exchange(activeDevice, nullptr), nullptr);
+			++failed;
+		}
+	}
+
 	/** Called only after both eye calls return within the same verified native pair. */
 	template <class API>
 	void Complete(API* api, uint64_t cycle)

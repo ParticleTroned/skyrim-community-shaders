@@ -5973,7 +5973,10 @@ namespace SIE
 	ShaderCache::ShaderCache()
 	{
 		if (IsEnvVarTruthy("OPENSHADERS_BACKGROUND_COMPILE")) {
-			SetBackgroundCompilation(true);
+			// No compilation work is queued during construction. The live setter
+			// would notify completion and enter Instance() before construction ends.
+			startupIncludeCache.Disable();
+			backgroundCompilation.store(true, std::memory_order_relaxed);
 			logger::info("OPENSHADERS_BACKGROUND_COMPILE set; starting shaders in background compilation mode");
 		}
 

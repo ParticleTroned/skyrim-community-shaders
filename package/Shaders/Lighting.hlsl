@@ -3212,14 +3212,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	material.GlintMicrofacetRoughness = clamp(glintParameters.z, PBR::Constants::MinGlintRoughness, PBR::Constants::MaxGlintRoughness);
 	material.GlintDensityRandomization = clamp(glintParameters.w, PBR::Constants::MinGlintDensityRandomization, PBR::Constants::MaxGlintDensityRandomization);
 
-#		if defined(GLINT) && !defined(SNOW_COVER)
-	[branch] if (material.GlintLogMicrofacetDensity > PBR::Constants::GlintEnableThreshold)
-	{
-		float glintNoise = Random::R1Modified(float(SharedData::FrameCount), (Random::pcg2d(uint2(Stereo::EyeStableNoiseCoord(input.Position.xy, SharedData::BufferDim.xy))) / 4294967296.0).x);
-		Glints::PrecomputeGlints(glintNoise, uvOriginal, uvOriginal_ddx, uvOriginal_ddy, material.GlintScreenSpaceScale, material.GlintCache);
-	}
-#		endif
-
 	baseColor.xyz *= 1 - material.Metallic;
 
 	material.BaseColor = baseColor.xyz;
@@ -3559,13 +3551,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 	}
 #	endif  // SNOW_COVER
-#	if defined(GLINT) && defined(SNOW_COVER)
-	if (material.GlintLogMicrofacetDensity > SnowCover::GlintEnableThreshold) {
-		float glintNoise = Random::R1Modified(float(SharedData::FrameCount), (Random::pcg2d(uint2(Stereo::EyeStableNoiseCoord(input.Position.xy, SharedData::BufferDim.xy))) / 4294967296.0).x);
-		Glints::PrecomputeGlints(glintNoise, uvOriginal, uvOriginal_ddx, uvOriginal_ddy, material.GlintScreenSpaceScale, material.GlintCache);
-	}
-#	endif
-
 	float waterRoughnessSpecular = 1;
 
 #	if defined(WETTERNESS)
@@ -3892,6 +3877,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		postRainPuddleReflectionOverrideScale,
 		vrWetnessDirectDetailWeight,
 		vrWetnessDirectDetailEnabled);
+#	endif
+
+#	if defined(TRUE_PBR) && defined(GLINT)
+	// Keep the glint cache out of surface preparation and shadow evaluation.
+	[branch] if (material.GlintLogMicrofacetDensity > PBR::Constants::GlintEnableThreshold)
+	{
+		float glintNoise = Random::R1Modified(float(SharedData::FrameCount), (Random::pcg2d(uint2(Stereo::EyeStableNoiseCoord(input.Position.xy, SharedData::BufferDim.xy))) / 4294967296.0).x);
+		Glints::PrecomputeGlints(glintNoise, uvOriginal, uvOriginal_ddx, uvOriginal_ddy, material.GlintScreenSpaceScale, material.GlintCache);
+	}
 #	endif
 
 	// Directiontal Lighting

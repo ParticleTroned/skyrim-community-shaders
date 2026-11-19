@@ -3950,6 +3950,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		uint lightFlags = Color::GetVanillaPointLightFlags(lightIndex);
 		bool isPointLightLinear = (lightFlags & Color::PointLightFlagLinear) != 0;
 		float3 lightColor = Color::PointLight(PointLightColor[lightIndex].xyz, isPointLightLinear, lightFlags) * intensityMultiplier;
+		[branch] if (all(lightColor == 0.0)) continue;
 		float lightShadow = 1.f;
 		if (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow) {
 			if (lightIndex < numShadowLights) {
@@ -4017,20 +4018,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	const bool contactShadowsEnabled = SharedData::lightLimitFixSettings.ContactShadowFlags != 0;
 	uint contactShadowOffset = 0;
 	uint contactShadowCount = 0;
+	bool hasContactShadowRange = false;
 	float contactShadowNoise = 0.0;
 	bool hasContactShadowNoise = false;
 	float2 contactShadowScreenDim = 0.0;
-	[branch] if (contactShadowsEnabled)
-		contactShadowScreenDim = LightLimitFix::GetContactShadowScreenDim();
 #			endif
 	if (inWorld && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
 		numClusteredLights = LightLimitFix::lightGrid[clusterIndex].lightCount;
 		totalLightCount += numClusteredLights;
 		lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
-#			if defined(DEFERRED)
-		[branch] if (contactShadowsEnabled)
-			LightLimitFix::GetContactShadowClusterRange(clusterIndex, contactShadowOffset, contactShadowCount);
-#			endif
 	}
 
 	[loop] for (uint lightIndex = 0; lightIndex < totalLightCount; lightIndex++)
@@ -4067,6 +4063,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		const bool isPointLightLinear = (light.lightFlags & LightLimitFix::LightFlags::Linear) != 0;
 		float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * light.fade;
+		// Every direct lobe, including transmission and wet film, scales by this color.
+		[branch] if (all(lightColor == 0.0)) continue;
 		float lightShadow = 1.0;
 
 		float shadowComponent = 1.0;
@@ -4081,11 +4079,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float lightAngle = dot(worldNormal.xyz, normalizedLightDirection.xyz);
 #			if defined(DEFERRED)
 		const bool isParticleLight = (light.lightFlags & LightLimitFix::LightFlags::Particle) != 0;
-		const bool canUseContactShadow = contactShadowsEnabled && LightLimitFix::CanUseContactShadows(light, isParticleLight);
+		const bool canUseContactShadow = contactShadowsEnabled && vrAuxDetailEnabled &&
+		                                 lightAngle > 0.0 && shadowComponent != 0.0 && intensityMultiplier > 1e-5 &&
+		                                 LightLimitFix::CanUseContactShadows(light, isParticleLight);
 		bool isContactShadowCandidate = false;
 		[branch] if (canUseContactShadow)
 		{
 			if (isClusteredLight) {
+				if (!hasContactShadowRange) {
+					LightLimitFix::GetContactShadowClusterRange(clusterIndex, contactShadowOffset, contactShadowCount);
+					hasContactShadowRange = true;
+				}
 				isContactShadowCandidate = contactShadowCount > 0 && LightLimitFix::IsContactShadowCandidate(clusteredLightIndex, contactShadowOffset, contactShadowCount);
 			} else {
 				isContactShadowCandidate = !isParticleLight && lightIndex < LightLimitFix::GetStrictContactShadowBudget();
@@ -4131,14 +4135,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		float contactShadow = 1.0;
 #			if defined(DEFERRED)
-		[branch] if (
-			isContactShadowCandidate &&
-			lightAngle > 0.0 &&
-			shadowComponent != 0.0 &&
-			intensityMultiplier > 1e-5 &&
-			vrAuxDetailEnabled)
+		[branch] if (isContactShadowCandidate)
 		{
 			if (!hasContactShadowNoise) {
+				contactShadowScreenDim = LightLimitFix::GetContactShadowScreenDim();
 				contactShadowNoise = Random::InterleavedGradientNoise(
 					LightLimitFix::GetContactShadowNoiseCoord(input.Position.xy, screenUV, contactShadowScreenDim),
 					SharedData::FrameCount);

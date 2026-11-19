@@ -151,7 +151,7 @@ public:
 		uint EnableLightsVisualisation;
 		uint LightsVisualisationMode;
 		uint EnableParticleContactShadows;
-		uint pad1;
+		uint ClusteredLightCount;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 	// Compile-time size lock catches CPU/GPU cbuffer layout drift. STATIC_ASSERT_ALIGNAS_16
@@ -554,7 +554,7 @@ public:
 	void BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(RE::BSRenderPass* a_pass);
 
 	/** @brief Post-geometry setup: uploads the strict light constant buffer to the GPU if changed. */
-	bool BSLightingShader_SetupGeometry_After(RE::BSRenderPass* a_pass);
+	void BSLightingShader_SetupGeometry_After(RE::BSRenderPass* a_pass);
 
 	eastl::hash_map<RE::NiNode*, uint8_t> roomNodes;
 

@@ -121,7 +121,7 @@ public:
 	/** @brief Per-frame reset: advances timer, caches menu state, resets descriptors and frame counters. */
 	void Reset();
 
-	/** @brief Selects sphere-normal lighting and the TruePBR material for the next grass draw. */
+	/** @brief Selects sphere-normal lighting and TruePBR for the next grass draw. */
 	void SetGrassFlags(bool sphereNormal, bool pbr);
 	/** @brief One-time post-D3D setup: creates resources, probes GPU caps, initializes features. */
 	void Setup();
@@ -491,7 +491,8 @@ public:
 		NoFoliageTint = 1u << 24,
 		SnowRooftop = 1u << 23,
 		SnowLODTree = 1u << 22,
-		SnowInactive = 1u << 21
+		SnowInactive = 1u << 21,
+		MenuItem = 1u << 20
 	};
 
 	/** @brief Bitflags describing extra feature-specific properties related to terrain displacement and material models. */
@@ -744,8 +745,9 @@ public:
 	Util::FrameChecker frameChecker;
 	Util::FrameChecker shaderTrackingFrameChecker;
 	uint frameCount = 0;
-	uint32_t deferredLightingShaderFlags = 0;
-	bool effectAmbientIBLUploaded = false;
+	uint historyResetFrame = UINT_MAX;
+	void RequestHistoryReset() { historyResetFrame = frameCount + 1u; }
+	bool ShouldResetHistory() const { return frameCount == historyResetFrame; }
 	// Thread-safe mirror of frameCount maintained by the render thread.
 	// Off-thread readers (MCP listener, future telemetry) must read this
 	// instead of touching frameCount directly to avoid a data race.

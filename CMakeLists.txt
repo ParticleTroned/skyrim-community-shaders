@@ -34,7 +34,7 @@ option(
 project(
     # gersemi: ignore
     CommunityShaders
-    VERSION 2.22.0
+    VERSION 2.22.1
     LANGUAGES CXX
 )
 
@@ -327,6 +327,7 @@ target_link_libraries(
         ${DETOURS_LIBRARY}
         windowsapp
         windowscodecs
+        comdlg32
 )
 
 # devbench bridge: opt-out via -DDEVBENCH_BRIDGE=OFF. When off, the port isn't required

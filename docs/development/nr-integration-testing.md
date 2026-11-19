@@ -2,7 +2,7 @@
 
 This branch combines the four independent Neural Rendering changes for testing
 against Open Shaders `dev` at
-`d9e807cf562e34d54e112538dd992963ce63ae0a`. It includes the complete feature code
+`ce739db91b13cc16b2191249fd46da2ebf8f6e80`. It includes the complete feature code
 and the merge resolutions needed to use the features together. Keep the
 upstream PRs in draft until runtime testing is complete.
 
@@ -39,15 +39,15 @@ target `alandtse/open-shaders:dev`.
 
 The integration merges these branch heads in the same order as their upstream
 PRs were opened. Each feature branch independently incorporates the upstream
-`dev` commit above; the PRs are not stacked on each other. The November 15
+`dev` commit above; the PRs are not stacked on each other. The November 19
 rebase preserves the earlier implementation and follow-up fixes in each PR.
 
 | Order | Implementation                                                                                 | Feature branch                                                                                                                         | Included head                              |
 | ----- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| 1     | [RGB-guided reconstruction (#1053)](https://github.com/alandtse/open-shaders/pull/1053)        | [Guided reconstruction](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-guided-reconstruction-20261031)   | `6d42106e2fb79b02280c9e33a0e5d6de1be1cdbe` |
-| 2     | [Peripheral compression (#1054)](https://github.com/alandtse/open-shaders/pull/1054)           | [Peripheral compression](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-peripheral-compression-20261031) | `268d5e975921f9677c29ef5318312e50cd08aaab` |
-| 3     | [Pause NR during combat (#1055)](https://github.com/alandtse/open-shaders/pull/1055)           | [Combat pause](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-combat-pause-20261031)                     | `da68ba5dfd91d36aa4dd81b4dc8e34a374095b6a` |
-| 4     | [Reduced-model material selection (#1056)](https://github.com/alandtse/open-shaders/pull/1056) | [Scene selection](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-scene-selection-20261031)               | `24a947cfc975ad77cf6f53373626a54d7ba2e34b` |
+| 1     | [RGB-guided reconstruction (#1053)](https://github.com/alandtse/open-shaders/pull/1053)        | [Guided reconstruction](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-guided-reconstruction-20261031)   | `870763e92f9cd157d3c3a6a19735c19ca0c0efe0` |
+| 2     | [Peripheral compression (#1054)](https://github.com/alandtse/open-shaders/pull/1054)           | [Peripheral compression](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-peripheral-compression-20261031) | `28b57eb7ec8710d782fe20e36a1029ea78ea4593` |
+| 3     | [Pause NR during combat (#1055)](https://github.com/alandtse/open-shaders/pull/1055)           | [Combat pause](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-combat-pause-20261031)                     | `9d5259bafd28fafab6f726a093414fafe33dabaf` |
+| 4     | [Reduced-model material selection (#1056)](https://github.com/alandtse/open-shaders/pull/1056) | [Scene selection](https://github.com/ParticleTroned/skyrim-community-shaders/tree/pr/os-dev-nr-scene-selection-20261031)               | `bfafa333632e8d33442743534941b73b605f8bb6` |
 
 The refresh uses `main-VR` at
 `75799ca034562ea124b9aa19e94e531a639a9ec3` as its source baseline. It brings
@@ -108,7 +108,7 @@ the original source pixel and alpha.
 4. Supply your NR runtime locally at
    `Data/Shaders/Upscaling/Streamline/nvngx_dlssnr.dll`, using a validated build
    accepted by the existing NR runtime checks. See the
-   [upstream NR guide](https://github.com/alandtse/open-shaders/blob/d9e807cf562e34d54e112538dd992963ce63ae0a/docs/development/neural-rendering.md#enable)
+   [upstream NR guide](https://github.com/alandtse/open-shaders/blob/ce739db91b13cc16b2191249fd46da2ebf8f6e80/docs/development/neural-rendering.md#enable)
    for version requirements.
 5. Enable Neural Rendering in the Upscaling panel. Leave Developer Mode off
    and logging at Info. Model Scale and Peripheral Compression are available
@@ -203,30 +203,25 @@ compositor.
 
 ## Evidence and remaining validation
 
-Focused local checks passed for the November 15 rebase:
+Focused local checks passed for the November 19 rebase:
 
 -   Production-header Catch2 checks passed independently for all four PRs,
-    covering actual-grid RGB admission, density/alignment fallback, upstream
-    cadence and eye modes, combat recovery and material provider/compositor
-    behavior.
--   The combined portable Catch2 suites passed 82 cases and 3,977,713 assertions.
-    The ROI and runtime-decision suites require the Windows SDK and run in the
-    integration workflow's C++ test job.
--   19 combined shader-test entry points compiled under strict flags, including finite
-    half-float output, shared subcell coverage and forward/reverse-Z donor
-    selection, with the pinned ShaderTestFramework.
--   32 LowRes and four CategoryAlpha permutations compiled with Linux DXC,
-    covering reconstruction, compression, flat/VR and forward/reverse depth.
--   Translation synchronization/orphan checks, formatting and diff checks, plus
-    compatibility review of upstream colour strength, crop-motion compensation,
-    runtime capabilities and current rectangular gaze/FOV behavior.
+    covering actual-grid RGB admission, density/alignment fallback, combat
+    recovery and material provider/compositor behavior.
+-   The combined portable Catch2 suites passed 82 cases and 3,977,713 assertions,
+    including upstream cadence and eye-mode policies. The ROI, runtime-decision
+    and runtime shader-include suites require Windows and run in the integration
+    workflow's C++ test job.
+-   Translation synchronization/orphan checks and whitespace checks passed.
+    The combined feature tree preserves the existing integration resolutions,
+    the November 16 runtime include correction and upstream's new debug UI.
 
-The Linux DXC checks are preliminary Shader Model 6 compilation checks without
-GPU execution. LowRes checks omit `COMPUTESHADER` because of the existing
-upstream SharedData compatibility limitation; CategoryAlpha includes it.
-Production Windows compiler and GPU validation remain required. The integration
-workflow uses Open Shaders' Windows ALL build, full-config and release-parity
-FXC shader validation for flat/VR, shader tests and the C++ test targets.
+These local checks execute the production C++ policy headers on Linux; they
+are not a Windows plugin build, shader compilation, GPU execution or in-game
+validation. The integration workflow runs Open Shaders' Windows ALL build,
+full-config and release-parity FXC shader validation for flat/VR, shader tests
+and the C++ test targets, including compilation through the production shader
+include handler.
 
 Use the linked workflow for the Windows build and final package-verification
 results for the exact integration commit. A downloadable test build is ready

@@ -9,6 +9,9 @@
 #elif defined(GRASS_LIGHTING)
 #	include "Common/PBRMath.hlsli"
 #endif
+#if defined(WETNESS_EFFECTS)
+#	include "WetnessEffects/WetnessEffects.hlsli"
+#endif
 
 #if defined(TRUE_PBR)
 DirectContext CreateDirectLightingContext(float3 worldNormal, float3 coatWorldNormal, float3 vertexNormal, float3 viewDir, float3 coatViewDir, float3 lightDir, float3 coatLightDir, float3 lightColor, float detailedShadow, float softShadow)
@@ -129,7 +132,7 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
 	}
 #	endif
 #	if defined(CS_SKIN_SHADING)
-	if (SharedData::skinData.skinParams.w > 0.0f) {
+	if (Skin::GetSkinData().skinParams.w > 0.0f) {
 		Skin::SkinDirectLightInput(lightingOutput, context, material);
 		float3 softLightColor = context.lightColor * context.softShadow;
 
@@ -158,14 +161,17 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
 		lightingOutput.transmission += material.BaseColor * GetFoliageTransmission(NdotL, dot(context.viewDir, context.lightDir)) * diffuseLightColor * Color::VanillaNormalization();
 	}
 #	endif
-	if (HasSoftLighting())
-		lightingOutput.diffuse += softLightColor * GetSoftLightMultiplier(NdotL) * material.rimSoftLightColor * Color::VanillaNormalization();
+	[branch] if (HasLightingFlag(Permutation::LightingFlags::SoftLighting | Permutation::LightingFlags::RimLighting | Permutation::LightingFlags::BackLighting))
+	{
+		if (HasSoftLighting())
+			lightingOutput.diffuse += softLightColor * GetSoftLightMultiplier(NdotL) * material.rimSoftLightColor * Color::VanillaNormalization();
 
-	if (HasRimLighting())
-		lightingOutput.diffuse += softLightColor * GetRimLightMultiplier(context.lightDir, context.viewDir, context.worldNormal) * material.rimSoftLightColor * Color::VanillaNormalization();
+		if (HasRimLighting())
+			lightingOutput.diffuse += softLightColor * GetRimLightMultiplier(context.lightDir, context.viewDir, context.worldNormal) * material.rimSoftLightColor * Color::VanillaNormalization();
 
-	if (HasBackLighting())
-		lightingOutput.diffuse += softLightColor * saturate(-NdotL) * material.backLightColor * Color::VanillaNormalization();
+		if (HasBackLighting())
+			lightingOutput.diffuse += softLightColor * saturate(-NdotL) * material.backLightColor * Color::VanillaNormalization();
+	}
 
 #	if defined(VANILLA_FRESNEL)
 	if (SharedData::vanillaFresnelSettings.Enable && SharedData::vanillaFresnelSettings.EnableGGX) {
@@ -195,7 +201,7 @@ void GetIndirectLobeWeights(out IndirectLobeWeights lobeWeights, IndirectContext
 	}
 #	endif
 #	if defined(CS_SKIN_SHADING)
-	if (SharedData::skinData.skinParams.w > 0.0f) {
+	if (Skin::GetSkinData().skinParams.w > 0.0f) {
 		Skin::SkinIndirectLobeWeights(lobeWeights, material, context);
 		return;
 	}
@@ -219,71 +225,40 @@ void GetIndirectLobeWeights(out IndirectLobeWeights lobeWeights, IndirectContext
 #if defined(WETNESS_EFFECTS)
 void EvaluateWetnessLighting(float3 wetnessNormal, DirectContext context, float roughness, inout DirectLightingOutput lightingOutput)
 {
-	const float wetnessStrength = saturate(1 - roughness);
 #	if defined(TRUE_PBR)
+	const float3 viewDir = context.coatViewDir;
+	const float3 lightDir = context.coatLightDir;
 	const float3 lightColor = context.coatLightColor;
+	const float specularScale = 1.0;
 #	else
-	const float3 lightColor = context.lightColor * context.detailedShadow;
+	const float3 viewDir = context.viewDir;
+	const float3 lightDir = context.lightDir;
+	const float3 lightColor = context.lightColor;
+	const float specularScale = context.detailedShadow * Color::PBRLightingCompensation * Color::PBRLightingScale;
 #	endif
 
-	const float wetnessF0 = 0.02;
+	WetnessEffects::SurfaceWetnessState wetnessState = WetnessEffects::InitSurfaceWetnessState(wetnessNormal, roughness);
 
-	const float3 N = wetnessNormal;
-	const float3 V = context.viewDir;
-	const float3 L = context.lightDir;
-	const float3 H = context.halfVector;
-
-	float NdotL = clamp(dot(N, L), EPSILON_DOT_CLAMP, 1);
-	float NdotV = saturate(abs(dot(N, V)) + EPSILON_DOT_CLAMP);
-	float NdotH = saturate(dot(N, H));
-	float VdotH = saturate(dot(V, H));
-
-	float D = BRDF::D_GGX(roughness, NdotH);
-	float G = BRDF::Vis_SmithJointApprox(roughness, NdotV, NdotL);
-	float3 F = BRDF::F_Schlick(wetnessF0, VdotH);
-
-	// Separate physical Fresnel from effective contribution weighted by strength
-	float3 wetnessF = F * wetnessStrength;
-
-	float3 wetnessSpecular = D * G * wetnessF * NdotL * lightColor;
-
-#	if !defined(TRUE_PBR)
-	wetnessSpecular *= Color::PBRLightingCompensation * Color::PBRLightingScale;  // Compensate for GGX on traditional specular
-#	endif
-
-	lightingOutput.diffuse *= 1 - wetnessF;
-	lightingOutput.specular *= 1 - wetnessF;
+	float3 wetnessSpecular = 0;
+	float3 wetnessThroughput = WetnessEffects::ApplySurfaceWetnessDirectLighting(wetnessState, viewDir, lightDir, lightColor, specularScale, lightingOutput.diffuse, lightingOutput.specular, wetnessSpecular);
 #	if defined(TRUE_PBR)
 	if (PBR::IsThinSurfaceMaterial(PBRFlags))
-		lightingOutput.transmission *= 1 - wetnessF;
+		lightingOutput.transmission *= wetnessThroughput;
 #	endif
 	lightingOutput.specular += wetnessSpecular;
 }
 
 float3 GetWetnessIndirectLobeWeights(inout IndirectLobeWeights lobeWeights, float3 wetnessNormal, float roughness, IndirectContext context)
 {
-	const float wetnessF0 = 0.02;
-	const float wetnessStrength = saturate(1 - roughness);
-
-	const float3 N = wetnessNormal;
-	const float3 V = context.viewDir;
-
-	float NdotV = saturate(abs(dot(N, V)) + EPSILON_DOT_CLAMP);
-	float2 specularBRDF = BRDF::EnvBRDF(roughness, NdotV);
-	float3 specularLobeWeight = wetnessF0 * specularBRDF.x + specularBRDF.y;
-
-	specularLobeWeight *= wetnessStrength;
-
-	lobeWeights.diffuse *= 1 - specularLobeWeight;
-	lobeWeights.specular *= 1 - specularLobeWeight;
+	WetnessEffects::SurfaceWetnessState wetnessState = WetnessEffects::InitSurfaceWetnessState(wetnessNormal, roughness);
+	float3 wetnessReflectance = WetnessEffects::ApplySurfaceWetnessIndirectLobeWeights(lobeWeights.diffuse, lobeWeights.specular, wetnessState, context.viewDir);
 #	if defined(TRUE_PBR)
 	if (PBR::IsThinSurfaceMaterial(PBRFlags)) {
-		lobeWeights.frontTransmission *= 1 - specularLobeWeight;
-		lobeWeights.backTransmission *= 1 - specularLobeWeight;
+		lobeWeights.frontTransmission *= 1.0 - wetnessReflectance;
+		lobeWeights.backTransmission *= 1.0 - wetnessReflectance;
 	}
 #	endif
-
-	return specularLobeWeight;
+	return wetnessReflectance;
 }
 #endif
 
@@ -310,7 +285,7 @@ float3 GetThinSurfaceTransmissionLighting(float3 ambientColor, float3 transmissi
 	skylightingDiffuse = PBR::GetFoliageShadowVisibility(skylightingDiffuse, skyOccluderOpacity);
 #	endif
 #	if defined(IBL)
-	if (SharedData::iblSettings.EnableIBL) {
+	if (ImageBasedLighting::UseForDraw()) {
 #		if defined(LIGHTING)
 		if (useStaticIBL)
 			ambientColor = ImageBasedLighting::GetStaticDiffuseIBL(transmissionNormal, iblSampler);
@@ -329,7 +304,7 @@ float3 GetThinSurfaceTransmissionLighting(float3 ambientColor, float3 transmissi
 	float3 diffuseColor = transmittedAmbientColor;
 #	if defined(SKYLIGHTING)
 #		if defined(IBL) && !defined(INTERIOR)
-	if (!SharedData::iblSettings.EnableIBL)
+	if (!ImageBasedLighting::UseForDraw())
 #		endif
 		Skylighting::ApplySkylighting(diffuseColor, transmittedAmbientColor, transmissionWeight, skylightingDiffuse);
 #	endif

@@ -11,6 +11,10 @@
 #include "Common/SharedData.hlsli"
 #include "Common/VR.hlsli"
 
+#if defined(PROCEDURAL_AURORA)
+#	include "ProceduralAurora/ProceduralAurora.hlsli"
+#endif
+
 #if defined(PROCEDURAL_SUN)
 #	include "ProceduralSun/ProceduralSun.hlsli"
 
@@ -439,6 +443,10 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 	baseColor = PParams.xxxx * (-baseColor + blendColor) + baseColor;
 #		endif
+#		if defined(CLOUDS) && defined(EFFECTS11)
+	float3 unrelitCloudTexture = baseColor.xyz;
+#		endif
+
 #		if defined(CR_CLOUDS)
 	if (SharedData::cloudRelightSettings.enabled) {
 		if (composeAuthoredSky)
@@ -566,6 +574,21 @@ PS_OUTPUT main(PS_INPUT input)
 #				endif
 	psout.Color.xyz = ComposeSkyColor(skyGradientColor + noiseGrad, 1.0, skyScale, ENABLE_LL);
 	psout.Color.xyz *= skyBrightnessMultiplier;
+
+#				if defined(PROCEDURAL_AURORA)
+	// Drawn on the sky dome so stars, moons and clouds still draw over it.
+	const float3 auroraDirection = normalize(input.WorldPosition.xyz);
+	const float auroraPixelAngle = length(fwidth(auroraDirection));
+	[branch] if (SharedData::proceduralAuroraSettings.Enabled && SharedData::proceduralAuroraSettings.Atmosphere.x > 0.0 && auroraDirection.z > -0.03)
+	{
+		float3 aurora = Color::AuthoredColor(ProceduralAurora::Render(auroraDirection, auroraPixelAngle));
+#					if defined(EFFECTS11)
+		[branch] if (SharedData::enbSettings.Enable)
+			aurora = pow(max(aurora, 0.0), SharedData::enbSettings.AuroraCurve) * SharedData::enbSettings.AuroraIntensity;
+#					endif
+		psout.Color.xyz += aurora;
+	}
+#				endif
 	psout.Color.w = input.Color.w;
 #			endif  // TEX
 
@@ -605,7 +628,7 @@ PS_OUTPUT main(PS_INPUT input)
 		{
 			float3 viewDirection = normalize(input.WorldPosition.xyz);
 			float cloudTextureAlpha = saturate(baseColor.w);
-			float cloudTextureBrightness = max(dot(baseColor.xyz, 1.0 / 3.0), 0.0);
+			float cloudTextureBrightness = max(dot(unrelitCloudTexture, 1.0 / 3.0), 0.0);
 			float cloudTextureGray = pow(cloudTextureBrightness, SharedData::enbSettings.CloudsCurve);
 
 			float3 cloudColor = pow(max(ComposeSkyColor(input.Color.xyz, baseColor.xyz, 0.0, composeAuthoredSky), 0.0), SharedData::enbSettings.CloudsCurve);

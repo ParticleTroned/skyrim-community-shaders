@@ -20,6 +20,7 @@
 #if defined(ENABLE_EFFECTS11)
 #	include "Features/Effects11.h"
 #	include "Features/Effects11/EffectManager.h"
+#	include "Features/Effects11/Overlays/PresetOverlays.h"
 #	include "Features/Effects11/SettingManager.h"
 #endif
 #include "Features/ExponentialHeightFog.h"
@@ -37,11 +38,13 @@
 #include "Features/Skylighting.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
+#include "Features/TreeWind.h"
 #include "Features/Upscaling.h"
 #include "Features/VR.h"
 #include "Features/VRStereoOptimizations.h"
 #include "Features/VolumetricShadows.h"
 #include "Features/Wind/Wind.h"
+#include "HiZPyramid.h"
 #include "Menu.h"
 #include "PostProcessingMode.h"
 #include "Presets/BaseSettingsCustomization.h"
@@ -240,6 +243,11 @@ void State::Draw()
 		if (volumetricShadows.loaded) {
 			CS_DRAW_ZONE("VolumetricShadows::SetShaderResources");
 			volumetricShadows.SetShaderResources(context);
+		}
+
+		if (globals::features::treeWind.loaded) {
+			CS_DRAW_ZONE("TreeWind::SetShaderResources");
+			globals::features::treeWind.SetShaderResources(context);
 		}
 
 		UpdatePermutationBuffer();
@@ -500,6 +508,7 @@ void State::Setup()
 {
 	globals::features::truePBR.SetupResources();
 	SetupResources();
+	globals::hiZPyramid->SetupResources();
 
 	// Probe typed UAV load support before features set up their resources, so any
 	// gating logic that wants to read the log can run during feature SetupResources.
@@ -1869,8 +1878,7 @@ void State::Save(ConfigMode a_configMode, bool a_isExplicitUserSave)
 		// Effects11's ENB state lives in enbseries.ini, not the Settings JSON -- persist
 		// it here too, not just via MenuManager's own "Save"/"Save & Apply" buttons.
 		if (a_isExplicitUserSave && EffectManager::GetSingleton().IsPresetLoaded()) {
-			SettingManager::GetSingleton().Save();
-			EffectManager::GetSingleton().Save();
+			Overlays::Manager::GetSingleton().SavePreset();
 		}
 #endif
 	}
@@ -2248,11 +2256,6 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::TruePbr |
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::LandscapeSeams);
 
-				using LightingFlags = SIE::ShaderCache::LightingShaderFlags;
-				constexpr auto legacyScattering = static_cast<uint32_t>(LightingFlags::SoftLighting) |
-				                                  static_cast<uint32_t>(LightingFlags::RimLighting) |
-				                                  static_cast<uint32_t>(LightingFlags::BackLighting);
-				const bool hasLegacyScattering = (a_pixelDescriptor & legacyScattering) != 0;
 				a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::AmbientSpecular |
 									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::ShadowDir |
 									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::DefShadow |
@@ -2278,12 +2281,8 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 
 				a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::Snow);
 
-				if (deferred->deferredPass || a_forceDeferred) {
-					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::LightingShaderFlags::Deferred | deferredLightingShaderFlags;
-					if (!hasLegacyScattering)
-						a_pixelDescriptor |= SIE::ShaderCache::kLightingNoLegacySubsurface;
-				} else if (permutationData.ExtraShaderDescriptor & static_cast<uint32_t>(ExtraShaderDescriptors::IsReflections))
-					a_pixelDescriptor |= deferredLightingShaderFlags & ~(SIE::ShaderCache::kLightingNoLocalShadowMaps | SIE::ShaderCache::kLightingNoLocalContactShadows);
+				if (deferred->deferredPass || a_forceDeferred)
+					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::LightingShaderFlags::Deferred;
 
 				{
 					uint32_t technique = 0x3F & (a_vertexDescriptor >> 24);
@@ -2320,12 +2319,7 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 							   (uint32_t)SIE::ShaderCache::EffectShaderFlags::GrayscaleToAlpha |
 							   (uint32_t)SIE::ShaderCache::EffectShaderFlags::IgnoreTexAlpha);
 				a_vertexDescriptor &= flags;
-				a_pixelDescriptor &= flags & ~(SIE::ShaderCache::kEffectLinearACEScg | SIE::ShaderCache::kEffectAmbientWorldIBL);
-				if (effectAmbientIBLUploaded &&
-					(permutationData.ExtraShaderDescriptor & static_cast<uint32_t>(ExtraShaderDescriptors::InWorld)))
-					a_pixelDescriptor |= SIE::ShaderCache::kEffectAmbientWorldIBL;
-				if (deferredLightingShaderFlags & SIE::ShaderCache::kLightingLinearACEScg)
-					a_pixelDescriptor |= SIE::ShaderCache::kEffectLinearACEScg;
+				a_pixelDescriptor &= flags;
 
 				if (deferred->deferredPass || a_forceDeferred)
 					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::EffectShaderFlags::Deferred;
@@ -2353,9 +2347,6 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 
 uint32_t State::GetRuntimePixelBits(const RE::BSShader& a_shader)
 {
-	if (a_shader.shaderType.get() == RE::BSShader::Type::Lighting)
-		return static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::BaseObjectIsSnow);
-
 	// Water's pixel stage branches on Wading at runtime; losing the bit skips the wading displacement without any error.
 	return a_shader.shaderType.get() == RE::BSShader::Type::Water ? static_cast<uint32_t>(SIE::ShaderCache::WaterShaderFlags::Wading) : 0u;
 }

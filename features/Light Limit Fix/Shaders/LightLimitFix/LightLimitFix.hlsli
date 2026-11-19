@@ -29,22 +29,26 @@ namespace LightLimitFix
 
 	bool GetClusterIndex(in float2 uv, in float z, inout uint clusterIndex)
 	{
-		const uint3 clusterSize = SharedData::lightLimitFixSettings.ClusterSize.xyz;
+		bool found = false;
+		[branch] if (SharedData::lightLimitFixSettings.ClusteredLightCount > 0)
+		{
+			const uint3 clusterSize = SharedData::lightLimitFixSettings.ClusterSize.xyz;
 
-		if (!FrameBuffer::FrameParams.y)  // Fix first person lights
-			uv = 0.5;
+			if (!FrameBuffer::FrameParams.y)  // Fix first person lights
+				uv = 0.5;
 
-		z = max(z, SharedData::CameraData.y);
+			z = max(z, SharedData::CameraData.y);
 
-		uint clusterZ = log(z / SharedData::CameraData.y) * clusterSize.z / log(SharedData::CameraData.x / SharedData::CameraData.y);
-		uint3 cluster = uint3(uint2(uv * clusterSize.xy), clusterZ);
+			uint clusterZ = log(z / SharedData::CameraData.y) * clusterSize.z / log(SharedData::CameraData.x / SharedData::CameraData.y);
+			uint3 cluster = uint3(uint2(uv * clusterSize.xy), clusterZ);
 
-		// Bounds validation to prevent out-of-range cluster indices
-		if (any(cluster >= clusterSize))
-			return false;
-
-		clusterIndex = cluster.x + (clusterSize.x * cluster.y) + (clusterSize.x * clusterSize.y * cluster.z);
-		return true;
+			// Bounds validation to prevent out-of-range cluster indices
+			if (all(cluster < clusterSize)) {
+				clusterIndex = cluster.x + (clusterSize.x * cluster.y) + (clusterSize.x * clusterSize.y * cluster.z);
+				found = true;
+			}
+		}
+		return found;
 	}
 
 	// Per-eye stereo-stable IGN coord. In VR we use screenUV (per-eye via
@@ -665,27 +669,35 @@ namespace LightLimitFix
 
 		ShadowLightData shadowLightData = Shadows[shadowIndex];
 
-		[flatten] if (shadowLightData.ShadowLightParam.y == 0) return 1.0;
-		[flatten] if (shadowLightData.ShadowLightParam.y < 0) return 0.0;
-
-		float4 positionLS = mul(shadowLightData.ShadowProj, float4(worldPositionWS, 1));
-
-		[branch] if (shadowLightData.ShadowLightParam.x == 0)
+		float result = 1.0;
+		[branch] if (shadowLightData.ShadowLightParam.y <= 0)
 		{
-			float shadowBaseVisibility = GetSpotlightShadow(shadowLightData, shadowIndex, positionLS, rotationMatrix, sampleCount);
-			positionLS.xyz /= positionLS.w;
-
-			float spotFalloff = saturate(1.0 - dot(positionLS.xy, positionLS.xy));
-
-			// Spotlight shadows define the light's footprint and must not fade toward fully lit.
-			return shadowBaseVisibility * spotFalloff;
+			result = shadowLightData.ShadowLightParam.y == 0 ? 1.0 : 0.0;
 		}
+		else
+		{
+			float4 positionLS = mul(shadowLightData.ShadowProj, float4(worldPositionWS, 1));
 
-		float rawShadow = GetOmnidirectionalShadow(shadowLightData, shadowIndex, positionLS, rotationMatrix, sampleCount);
-		// Blend toward fully lit while the shadow fades in after this caster
-		// first gained a shadow slot, so the shadow eases in instead of
-		// popping on top of a light that was already visible.
-		return lerp(1.0, rawShadow, shadowLightData.FadeParam.x);
+			[branch] if (shadowLightData.ShadowLightParam.x == 0)
+			{
+				float shadowBaseVisibility = GetSpotlightShadow(shadowLightData, shadowIndex, positionLS, rotationMatrix, sampleCount);
+				positionLS.xyz /= positionLS.w;
+
+				float spotFalloff = saturate(1.0 - dot(positionLS.xy, positionLS.xy));
+
+				// Spotlight shadows define the light's footprint and must not fade toward fully lit.
+				result = shadowBaseVisibility * spotFalloff;
+			}
+			else
+			{
+				float rawShadow = GetOmnidirectionalShadow(shadowLightData, shadowIndex, positionLS, rotationMatrix, sampleCount);
+				// Blend toward fully lit while the shadow fades in after this caster
+				// first gained a shadow slot, so the shadow eases in instead of
+				// popping on top of a light that was already visible.
+				result = lerp(1.0, rawShadow, shadowLightData.FadeParam.x);
+			}
+		}
+		return result;
 	}
 
 	float GetShadowLightShadow(uint shadowIndex, float3 worldPositionWS, float2x2 rotationMatrix, out bool hasCoverage)

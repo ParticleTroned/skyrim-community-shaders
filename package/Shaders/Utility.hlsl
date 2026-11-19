@@ -56,7 +56,7 @@ struct VS_OUTPUT
 #	endif
 
 #	if defined(RENDER_SHADOWMAP_PB)
-	float4 TexCoord1: TEXCOORD2;
+	float3 TexCoord1: TEXCOORD2;
 #	elif defined(ALPHA_TEST) && (defined(RENDER_DEPTH) || defined(RENDER_SHADOWMAP))
 	float4 TexCoord1: TEXCOORD2;
 #	elif defined(ADDITIONAL_ALPHA_MASK)
@@ -100,9 +100,6 @@ cbuffer PerTechnique : register(b0)
 #	endif  // VR
 };
 
-static const float ParaboloidCasterNearDistance = 12.0;
-static const float ParaboloidCasterNearRadiusFraction = ParaboloidCasterNearDistance / 256.0;
-
 cbuffer PerMaterial : register(b1)
 {
 	float4 TexcoordOffset : packoffset(c0);
@@ -130,7 +127,16 @@ float2 SmoothSaturate(float2 value)
 	return value * value * (3 - 2 * value);
 }
 
+#	if defined(TREE_WIND) && defined(VC) && !defined(TREE_ANIM) && !defined(LOD_LANDSCAPE) && !defined(SKINNED)
+#		define TREE_WIND_VS
+#		include "TreeWind/TreeWind.hlsli"
+#	endif
+
+#	if defined(TREE_WIND_VS)
+VS_OUTPUT main(VS_INPUT input, uint vertexID : SV_VertexID)
+#	else
 VS_OUTPUT main(VS_INPUT input)
+#	endif
 {
 	VS_OUTPUT vsout;
 
@@ -139,7 +145,7 @@ VS_OUTPUT main(VS_INPUT input)
 		input.InstanceID
 #	endif
 	);
-#	if defined(NO_TREE_BEND)
+#	if defined(LOD_OBJECT)
 	const bool treeBendEnabled = false;
 #	else
 	const bool treeBendEnabled = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::TreeBend) != 0;
@@ -203,6 +209,14 @@ VS_OUTPUT main(VS_INPUT input)
 	float2 treeTmp1 = SmoothSaturate(abs(2 * frac(leafPhase) - 1));
 	float normalMult = (treeTmp1.x + 0.1 * treeTmp1.y) * input.Color.w * leafAnimationStrength;
 	positionMS.xyz += normalMS.xyz * normalMult;
+#		endif
+
+#		if defined(TREE_WIND_VS)
+	// Same offset as Lighting.hlsl, so depth and shadow passes match the swaying trees
+	if (TreeLodWind::IsEnabled()) {
+		float nearScale = TreeLodWind::GetNearScale((float3x4)World[eyeIndex], input.PositionMS.xyz);
+		positionMS.xy += TreeLodWind::GetOffset(input.PositionMS.xyz, TreeLodWind::Wind.x, vertexID, nearScale);
+	}
 #		endif
 
 #		if defined(LOD_LANDSCAPE)
@@ -285,7 +299,7 @@ VS_OUTPUT main(VS_INPUT input)
 	texCoord.xy = input.TexCoord * TexcoordOffset.zw + TexcoordOffset.xy;
 
 #			if defined(RENDER_NORMAL)
-	texCoord.z = max(1, 0.0013333333 * positionCS.z + 0.8);
+	texCoord.z = max(1, 0.0013333333 * FrameBuffer::ToStandardClipZ(positionCS) + 0.8);
 
 	float falloff = 1;
 #				if defined(RENDER_NORMAL_FALLOFF)
@@ -306,7 +320,6 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.TexCoord1.y = positionCS.w;
 	precise float parabolaParam = ParabolaParam.y * positionCS.z;
 	vsout.TexCoord1.z = parabolaParam * 0.5 + 0.5;
-	vsout.TexCoord1.w = min(ParabolaParam.x * ParaboloidCasterNearDistance, ParaboloidCasterNearRadiusFraction);
 #		elif defined(ALPHA_TEST) && (defined(RENDER_DEPTH) || defined(RENDER_SHADOWMAP))
 	float4 texCoord1 = float4(0, 0, 0, 0);
 	texCoord1.xy = positionCS.zw;
@@ -537,7 +550,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 baseColor = TexBaseSampler.SampleBias(SampBaseSampler, baseTexCoord, SharedData::MipBias);
 
 #	if defined(RENDER_SHADOWMAP_PB)
-	if (input.TexCoord1.z < 0 || input.TexCoord1.x < input.TexCoord1.w) {
+	if (input.TexCoord1.z < 0) {
 		discard;
 	}
 #	endif

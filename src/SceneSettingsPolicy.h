@@ -22,6 +22,7 @@ namespace SceneSettingsPolicy
 		{ "ExponentialHeightFog", "volumetricHistoryMissSampleCount" },
 		{ "ExponentialHeightFog", "volumetricSampleJitterMultiplier" },
 		{ "ExponentialHeightFog", "volumetricUpsampleJitterMultiplier" },
+		{ "ImageBasedLighting", "DisableInInteriors" },
 		{ "ImageBasedLighting", "DisableInWorldMap" },
 		{ "ImageBasedLighting", "DisableInLoadingScreen" },
 		{ "PostProcessing", "Border" },
@@ -34,6 +35,8 @@ namespace SceneSettingsPolicy
 		{ "ScreenSpaceGI", "EnableGI" },
 		{ "ScreenSpaceGI", "EnableTemporalDenoiser" },
 		{ "ScreenSpaceGI", "EnableExperimentalSpecularGI" },
+		// Debug section: backend log verbosity, read only at startup
+		{ "Upscaling", "streamlineLogLevel" },
 		{ "VolumetricLighting" },
 		{ "CSUtility", "Scene Dof", "locked" },
 		{ "CSUtility", "Scene Dof", "baseline" },

@@ -7,13 +7,8 @@
 #include "Common/SharedData.hlsli"
 
 #ifndef VSHADER
-#	if defined(LINEAR_ACESCG)
-#		define ENABLE_LL true
-#		define ENABLE_ACEScg true
-#	else
-#		define ENABLE_LL SharedData::linearLightingSettings.enableLinearLighting
-#		define ENABLE_ACEScg SharedData::linearLightingSettings.enableACEScg
-#	endif
+#	define ENABLE_LL SharedData::linearLightingSettings.enableLinearLighting
+#	define ENABLE_ACEScg SharedData::linearLightingSettings.enableACEScg
 #endif
 
 #if defined(PSHADER) && defined(LIGHTING)
@@ -55,6 +50,7 @@ namespace Color
 	static const float SRGBOffset = 0.055;
 	static const float SRGBScale = 1.055;
 	static const float SRGBExponent = 2.4;
+	static const float MinEmissiveDivisor = 1e-5f;
 
 	// Copyright 2019 Google LLC.
 	// SPDX-License-Identifier: Apache-2.0
@@ -86,24 +82,25 @@ namespace Color
 	}
 
 	static const float3 kRec709LuminanceWeights = float3(0.2125, 0.7154, 0.0721);
+	static const float3 kAP1LuminanceWeights = float3(0.2722287168, 0.6740817658, 0.0536895174);
 
 #if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
 	float RGBToLuminance(float3 color)
 	{
 		// AP1 (ACEScg) luminance coefficients from AP1_2_XYZ_MAT Y row
-		return ENABLE_ACEScg ? dot(color, float3(0.2722287168, 0.6740817658, 0.0536895174)) : dot(color, kRec709LuminanceWeights);
+		return dot(color, ENABLE_ACEScg ? kAP1LuminanceWeights : kRec709LuminanceWeights);
 	}
 
 	float RGBToLuminanceAlternative(float3 color)
 	{
 		// For ACEScg, fall back to the accurate AP1 luminance
-		return ENABLE_ACEScg ? dot(color, float3(0.2722287168, 0.6740817658, 0.0536895174)) : dot(color, float3(0.3, 0.59, 0.11));
+		return dot(color, ENABLE_ACEScg ? kAP1LuminanceWeights : float3(0.3, 0.59, 0.11));
 	}
 
 	float RGBToLuminance2(float3 color)
 	{
 		// For ACEScg, fall back to the accurate AP1 luminance
-		return ENABLE_ACEScg ? dot(color, float3(0.2722287168, 0.6740817658, 0.0536895174)) : dot(color, float3(0.299, 0.587, 0.114));
+		return dot(color, ENABLE_ACEScg ? kAP1LuminanceWeights : float3(0.299, 0.587, 0.114));
 	}
 #else
 	float RGBToLuminance(float3 color)
@@ -415,13 +412,17 @@ namespace Color
 	/** @brief Decodes a PBR material color for linear energy calculations. */
 	float3 PBRMaterialToLinear(float3 color)
 	{
-		return ENABLE_LL ? color : SrgbToLinear(color);
+		[branch] if (!ENABLE_LL)
+			color = SrgbToLinear(color);
+		return color;
 	}
 
 	/** @brief Encodes a linear energy value in the current PBR material domain. */
 	float3 LinearToPBRMaterial(float3 color)
 	{
-		return ENABLE_LL ? color : LinearToSrgb(color);
+		[branch] if (!ENABLE_LL)
+			color = LinearToSrgb(color);
+		return color;
 	}
 
 	float3 Albedo(float3 color)
@@ -465,8 +466,12 @@ namespace Color
 
 	float3 Light(float3 color, bool isLinear = false, float2 adjustment = float2(1.0, 0.0))
 	{
-		color = (ENABLE_LL && !isLinear) ? AuthoredColor(color) : (ENABLE_LL && isLinear) ? GamutTransform(color) :
-		                                                                                    color;
+		[branch] if (ENABLE_LL)
+		{
+			if (!isLinear)
+				color = CompensateConvertedColor(AuthoredGammaToLinear(color));
+			color = GamutTransform(color);
+		}
 		color = AdjustUtilityColor(color, adjustment);
 #	if defined(TRUE_PBR)
 		return color * PBRLightingCompensation;  // Compensate for traditional Lambertian diffuse
@@ -490,12 +495,15 @@ namespace Color
 
 	float3 SceneGammaToLinear(float3 color)
 	{
-		return ENABLE_LL ? GamutTransform(SignedPow(color, GameGamma)) : SkyrimGammaToLinear(color);
+		float3 linearColor = SkyrimGammaToLinear(color);
+		return ENABLE_LL ? GamutTransform(sign(color) * linearColor) : linearColor;
 	}
 
 	float3 SceneLinearToGamma(float3 color)
 	{
-		return ENABLE_LL ? SignedPow(ENABLE_ACEScg ? AP1TosRGB(color) : color, 1.0 / GameGamma) : LinearToSkyrimGamma(color);
+		float3 sourceColor = (ENABLE_LL && ENABLE_ACEScg) ? AP1TosRGB(color) : color;
+		float3 gammaColor = LinearToSkyrimGamma(sourceColor);
+		return ENABLE_LL ? sign(sourceColor) * gammaColor : gammaColor;
 	}
 
 	/** @brief Adjusts effect lighting while retaining the scene blending domain. */
@@ -564,7 +572,13 @@ namespace Color
 
 	float3 EffectPointLight(float3 color, bool isLinear = false, uint lightFlags = 0)
 	{
-		return AdjustUtilityColor(isLinear ? EffectLight(color, true) : AuthoredColor(color), GetPointLightColorAdjustment(isLinear, lightFlags)) *
+		[branch] if (ENABLE_LL)
+		{
+			if (!isLinear)
+				color = CompensateConvertedColor(AuthoredGammaToLinear(color));
+			color = GamutTransform(color);
+		}
+		return AdjustUtilityColor(color, GetPointLightColorAdjustment(isLinear, lightFlags)) *
 		       GetPointLightMultiplier(isLinear) *
 		       GetPointLightTypeMultiplier(isLinear, lightFlags);
 	}
@@ -582,9 +596,11 @@ namespace Color
 #	if defined(LIGHTING)
 	float3 EmitColor(float3 color)
 	{
-		if (ENABLE_LL)
-			color = AdjustUtilityColor(AuthoredColor(color / max(emissiveMult, 1e-5)), SharedData::csUtilitySettings.emitColor) * emissiveMult;
-		else
+		if (ENABLE_LL) {
+			const float emissiveSign = emissiveMult < 0.0f ? -1.0f : 1.0f;
+			const float emissiveDivisor = emissiveSign * max(abs(emissiveMult), MinEmissiveDivisor);
+			color = AdjustUtilityColor(AuthoredColor(color / emissiveDivisor), SharedData::csUtilitySettings.emitColor) * emissiveMult;
+		} else
 			color = AdjustUtilityColor(color, SharedData::csUtilitySettings.emitColor);
 		return color * SharedData::csUtilitySettings.emitColorMult;
 	}
@@ -678,27 +694,37 @@ namespace Color
 
 	float3 RadianceToLinear(float3 color)
 	{
-		return ENABLE_LL ? color : SkyrimGammaToLinear(color);
+		[branch] if (!ENABLE_LL)
+			color = SkyrimGammaToLinear(color);
+		return color;
 	}
 
 	float IrradianceToLinear(float color)
 	{
-		return ENABLE_LL ? color : SkyrimGammaToLinear(color);
+		[branch] if (!ENABLE_LL)
+			color = SkyrimGammaToLinear(color);
+		return color;
 	}
 
 	float IrradianceToGamma(float color)
 	{
-		return ENABLE_LL ? color : LinearToSkyrimGamma(color);
+		[branch] if (!ENABLE_LL)
+			color = LinearToSkyrimGamma(color);
+		return color;
 	}
 
 	float3 IrradianceToLinear(float3 color)
 	{
-		return ENABLE_LL ? color : SkyrimGammaToLinear(color);
+		[branch] if (!ENABLE_LL)
+			color = SkyrimGammaToLinear(color);
+		return color;
 	}
 
 	float3 IrradianceToGamma(float3 color)
 	{
-		return ENABLE_LL ? color : LinearToSkyrimGamma(color);
+		[branch] if (!ENABLE_LL)
+			color = LinearToSkyrimGamma(color);
+		return color;
 	}
 
 	float VanillaNormalization()

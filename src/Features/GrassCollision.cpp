@@ -47,6 +47,12 @@ struct GrassCollisionActorCandidate
 	float sqDistance;
 };
 
+struct GrassCollisionShapeCandidate
+{
+	RE::NiPointer<RE::bhkNiCollisionObject> object;
+	Util::ShapeCollisionCapsule capsule;
+};
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	GrassCollision::Settings,
 	EnableGrassCollision,
@@ -64,37 +70,34 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void GrassCollision::DrawSettings()
 {
-	if (ImGui::TreeNodeEx(T(TKEY("grass_collision"), "Grass Collision"), ImGuiTreeNodeFlags_DefaultOpen)) {
-		Util::CheckboxFlag(T(TKEY("enable"), "Enable Grass Collision"), settings.EnableGrassCollision);
-		ImGui::SliderFloat(T(TKEY("radius_scale"), "Collision Radius Scale"), &settings.CollisionRadiusScale,
-			MIN_COLLISION_RADIUS_SCALE, MAX_COLLISION_RADIUS_SCALE, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
-		ImGui::SliderFloat(T(TKEY("grass_interaction_radius"), "Grass Interaction Radius"),
-			&settings.GrassInteractionRadius, MIN_GRASS_INTERACTION_RADIUS, MAX_GRASS_INTERACTION_RADIUS,
-			"%.0f units", ImGuiSliderFlags_AlwaysClamp);
-		ImGui::SliderFloat(T(TKEY("impact_strength"), "Collision Impact"), &settings.CollisionImpactStrength,
-			MIN_COLLISION_IMPACT_STRENGTH, MAX_COLLISION_IMPACT_STRENGTH, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
-		ImGui::SliderFloat(T(TKEY("spring_strength"), "Spring Strength"), &settings.SpringStrength,
-			MIN_SPRING_STRENGTH, MAX_SPRING_STRENGTH, "%.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic);
-		ImGui::SliderFloat(T(TKEY("damping"), "Damping"), &settings.Damping,
-			MIN_DAMPING, MAX_DAMPING, "%.1f", ImGuiSliderFlags_AlwaysClamp);
-		ImGui::SliderFloat(T(TKEY("maximum_bend"), "Maximum Bend"), &settings.MaximumBend,
-			MIN_MAXIMUM_BEND, MAX_MAXIMUM_BEND, "%.0f degrees", ImGuiSliderFlags_AlwaysClamp);
-		ImGui::SliderFloat(T(TKEY("maximum_compression"), "Maximum Compression"), &settings.MaximumCompression,
-			MIN_MAXIMUM_COMPRESSION, MAX_MAXIMUM_COMPRESSION, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-		ImGui::SliderFloat(T(TKEY("compression_height"), "Compression Reach"), &settings.CompressionHeight,
-			MIN_COMPRESSION_HEIGHT, MAX_COMPRESSION_HEIGHT, "%.0f%% of blade", ImGuiSliderFlags_AlwaysClamp);
-		ImGui::SliderFloat(T(TKEY("maximum_compressible_grass_height"), "Maximum Compressible Grass Height"),
-			&settings.MaximumCompressibleGrassHeight, MIN_MAXIMUM_COMPRESSIBLE_GRASS_HEIGHT,
-			MAX_MAXIMUM_COMPRESSIBLE_GRASS_HEIGHT, "%.0f units", ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted(T(TKEY("maximum_compressible_grass_height_tooltip"),
-				"Grass taller than this can still bend around actors but will not be vertically compressed."));
-		ImGui::SliderFloat(T(TKEY("compression_recovery"), "Compression Recovery"), &settings.CompressionRecovery,
-			MIN_COMPRESSION_RECOVERY, MAX_COMPRESSION_RECOVERY, "%.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted(T(TKEY("compression_recovery_tooltip"), "Lower values keep grass compressed longer after an actor moves away."));
-		ImGui::TreePop();
-	}
+	Util::CheckboxFlag(T(TKEY("enable"), "Enable Grass Collision"), settings.EnableGrassCollision);
+	ImGui::SliderFloat(T(TKEY("radius_scale"), "Collision Radius Scale"), &settings.CollisionRadiusScale,
+		MIN_COLLISION_RADIUS_SCALE, MAX_COLLISION_RADIUS_SCALE, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat(T(TKEY("grass_interaction_radius"), "Grass Interaction Radius"),
+		&settings.GrassInteractionRadius, MIN_GRASS_INTERACTION_RADIUS, MAX_GRASS_INTERACTION_RADIUS,
+		"%.0f units", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat(T(TKEY("impact_strength"), "Collision Impact"), &settings.CollisionImpactStrength,
+		MIN_COLLISION_IMPACT_STRENGTH, MAX_COLLISION_IMPACT_STRENGTH, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat(T(TKEY("spring_strength"), "Spring Strength"), &settings.SpringStrength,
+		MIN_SPRING_STRENGTH, MAX_SPRING_STRENGTH, "%.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic);
+	ImGui::SliderFloat(T(TKEY("damping"), "Damping"), &settings.Damping,
+		MIN_DAMPING, MAX_DAMPING, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat(T(TKEY("maximum_bend"), "Maximum Bend"), &settings.MaximumBend,
+		MIN_MAXIMUM_BEND, MAX_MAXIMUM_BEND, "%.0f degrees", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat(T(TKEY("maximum_compression"), "Maximum Compression"), &settings.MaximumCompression,
+		MIN_MAXIMUM_COMPRESSION, MAX_MAXIMUM_COMPRESSION, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat(T(TKEY("compression_height"), "Compression Reach"), &settings.CompressionHeight,
+		MIN_COMPRESSION_HEIGHT, MAX_COMPRESSION_HEIGHT, "%.0f%% of blade", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat(T(TKEY("maximum_compressible_grass_height"), "Maximum Compressible Grass Height"),
+		&settings.MaximumCompressibleGrassHeight, MIN_MAXIMUM_COMPRESSIBLE_GRASS_HEIGHT,
+		MAX_MAXIMUM_COMPRESSIBLE_GRASS_HEIGHT, "%.0f units", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted(T(TKEY("maximum_compressible_grass_height_tooltip"),
+			"Grass taller than this can still bend around actors but will not be vertically compressed."));
+	ImGui::SliderFloat(T(TKEY("compression_recovery"), "Compression Recovery"), &settings.CompressionRecovery,
+		MIN_COMPRESSION_RECOVERY, MAX_COMPRESSION_RECOVERY, "%.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::TextUnformatted(T(TKEY("compression_recovery_tooltip"), "Lower values keep grass compressed longer after an actor moves away."));
 }
 
 GrassCollision::ShaderData GrassCollision::GetCommonBufferData() const noexcept
@@ -113,8 +116,10 @@ GrassCollision::ShaderData GrassCollision::GetCommonBufferData() const noexcept
 
 void GrassCollision::QueueCollisions()
 {
-	if (!settings.EnableGrassCollision)
+	if (!settings.EnableGrassCollision) {
+		actorCollisionHistory.clear();
 		return;
+	}
 	const float collisionRadiusScale = std::clamp(settings.CollisionRadiusScale,
 		MIN_COLLISION_RADIUS_SCALE, MAX_COLLISION_RADIUS_SCALE);
 	const float grassInteractionRadius = std::clamp(settings.GrassInteractionRadius,
@@ -158,28 +163,27 @@ void GrassCollision::QueueCollisions()
 				continue;
 
 			float distance = std::sqrt(actorCandidate.sqDistance);
-			eastl::vector<Util::ShapeCollisionCapsule> collisionShapes{};
+			eastl::vector<GrassCollisionShapeCandidate> collisionShapes{};
 
-			RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
+			Util::TraverseCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
 				Util::ShapeCollisionCapsule capsule;
 				if (Util::GetShapeCollisionCapsule(a_object, capsule)) {
 					capsule.radius *= collisionRadiusScale;
 					if (capsule.radius < distance * MIN_COLLISION_RADIUS_DISTANCE_SCALE)
 						return RE::BSVisit::BSVisitControl::kContinue;
-					collisionShapes.push_back(capsule);
+					collisionShapes.push_back({ RE::NiPointer(a_object), capsule });
 				}
 				return RE::BSVisit::BSVisitControl::kContinue;
 			});
 
 			std::sort(collisionShapes.begin(), collisionShapes.end(), [](const auto& a, const auto& b) {
-				return a.radius > b.radius;
+				return a.capsule.radius > b.capsule.radius;
 			});
 			if (collisionShapes.size() > MAX_COLLISIONS_PER_BOUNDING_BOX)
 				collisionShapes.resize(MAX_COLLISIONS_PER_BOUNDING_BOX);
 
 			const uint32_t actorID = actor->GetFormID();
 			auto historyIt = actorCollisionHistory.find(actorID);
-			const bool hasHistory = historyIt != actorCollisionHistory.end();
 			std::vector<CapsuleHistory> newHistory;
 			newHistory.reserve(collisionShapes.size());
 
@@ -189,24 +193,26 @@ void GrassCollision::QueueCollisions()
 			boundingBox.IndexStart = collisionIndexExtent;
 			boundingBox.IndexEnd = collisionIndexExtent;
 
-			for (size_t shapeIndex = 0; shapeIndex < collisionShapes.size(); ++shapeIndex) {
-				const auto& shape = collisionShapes[shapeIndex];
-				const CapsuleHistory currentShape{
+			for (auto& [object, shape] : collisionShapes) {
+				const auto& currentShape = newHistory.emplace_back(CapsuleHistory{
+					std::move(object),
 					{ shape.pointA.x, shape.pointA.y, shape.pointA.z },
-					{ shape.pointB.x, shape.pointB.y, shape.pointB.z }
-				};
-				const CapsuleHistory& previousShape = hasHistory && shapeIndex < historyIt->second.size() ?
-				                                          historyIt->second[shapeIndex] :
-				                                          currentShape;
-				newHistory.push_back(currentShape);
+					{ shape.pointB.x, shape.pointB.y, shape.pointB.z } });
+				const auto* previousShape = &currentShape;
+				if (historyIt != actorCollisionHistory.end()) {
+					const auto& history = historyIt->second;
+					const auto match = std::ranges::find(history, currentShape.object.get(), [](const auto& entry) { return entry.object.get(); });
+					if (match != history.end())
+						previousShape = &*match;
+				}
 
 				auto toCameraRelative = [&](const float3& point) {
 					return float3{ point.x - cameraPosition.x, point.y - cameraPosition.y, point.z - cameraPosition.z };
 				};
 				const float3 currentA = toCameraRelative(currentShape.pointA);
 				const float3 currentB = toCameraRelative(currentShape.pointB);
-				const float3 previousA = toCameraRelative(previousShape.pointA);
-				const float3 previousB = toCameraRelative(previousShape.pointB);
+				const float3 previousA = toCameraRelative(previousShape->pointA);
+				const float3 previousB = toCameraRelative(previousShape->pointB);
 				CollisionShapePacked data{
 					{ currentA.x, currentA.y, currentA.z, shape.radius },
 					{ currentB.x, currentB.y, currentB.z, 0.0f },

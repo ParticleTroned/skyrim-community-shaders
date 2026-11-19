@@ -26,6 +26,9 @@
 #include "Globals.h"
 #include "GpuPass.h"
 #include "Menu.h"
+#include "RE/B/BSLightingShaderMaterialEnvmap.h"
+#include "RE/B/BSLightingShaderMaterialEye.h"
+#include "RE/B/BSLightingShaderMaterialMultiLayerParallax.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
@@ -2080,6 +2083,31 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	void BindLightingEnvironmentTexture(RE::BSGraphics::RendererShadowState* shadowState, const RE::BSLightingShaderMaterialBase* material)
+	{
+		RE::NiSourceTexture* environment = nullptr;
+		switch (material->GetFeature()) {
+		case RE::BSShaderMaterial::Feature::kEnvironmentMap:
+			environment = static_cast<const RE::BSLightingShaderMaterialEnvmap*>(material)->envTexture.get();
+			break;
+		case RE::BSShaderMaterial::Feature::kMultilayerParallax:
+			environment = static_cast<const RE::BSLightingShaderMaterialMultiLayerParallax*>(material)->envTexture.get();
+			break;
+		case RE::BSShaderMaterial::Feature::kEye:
+			environment = static_cast<const RE::BSLightingShaderMaterialEye*>(material)->envTexture.get();
+			break;
+		default:
+			return;
+		}
+		// Native fallback and custom draws share the engine's material-binding cache.
+		auto* texture = environment ? environment->rendererTexture : nullptr;
+		if (texture && !texture->resourceView)
+			texture = nullptr;
+		shadowState->SetPSTexture(4, texture);
+		if (!texture)
+			shadowState->SetPSTextureFilterMode(4, RE::BSGraphics::TextureFilterMode::kAnisotropic);
+	}
+
 	struct BSLightingShader_SetupMaterial
 	{
 		static void thunk(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material)
@@ -2104,6 +2132,8 @@ namespace Hooks
 
 			// vanilla
 			func(shader, material);
+
+			BindLightingEnvironmentTexture(globals::game::shadowState, material);
 
 			// terrain helper
 			auto& terrainHelper = globals::features::terrainHelper;

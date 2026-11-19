@@ -73,7 +73,7 @@ foreach(_header IN ITEMS shader_support.h pixel_lookup.h category_flag.h pixel_b
     lighting_flags.h pixel_prewarm.h pbr_prewarm.h runtime_specialization_policy.h specialization_bases.h specialization_replay.h
     pixel_discovery.h
     pbr_startup_permutations.h
-    startup_pixel_lookup.h lighting_lookup.h)
+    startup_pixel_lookup.h lighting_lookup.h effect_lookup.h effect_flags.h)
     list(APPEND _category_fallback_headers "${_category_fallback_dir}/${_header}")
 endforeach()
 add_custom_command(OUTPUT ${_category_fallback_headers}

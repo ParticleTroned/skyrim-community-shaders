@@ -2234,7 +2234,9 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 							   (uint32_t)SIE::ShaderCache::EffectShaderFlags::IgnoreTexAlpha |
 							   SIE::ShaderCache::kEffectAmbientWorldIBL);
 				a_vertexDescriptor &= flags;
-				a_pixelDescriptor &= flags;
+				// Grayscale textures alter the pixel resource contract, so retain their lookup bits.
+				a_pixelDescriptor &= ~(static_cast<uint32_t>(SIE::ShaderCache::EffectShaderFlags::IgnoreTexAlpha) |
+									   SIE::ShaderCache::kEffectAmbientWorldIBL);
 				if (effectAmbientIBLUploaded && (permutationData.ExtraShaderDescriptor & static_cast<uint32_t>(ExtraShaderDescriptors::InWorld)))
 					a_pixelDescriptor |= SIE::ShaderCache::kEffectAmbientWorldIBL;
 

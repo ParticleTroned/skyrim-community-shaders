@@ -427,13 +427,17 @@ SamplerState SampBaseSampler : register(s0);
 SamplerState SampNormalSampler : register(s1);
 SamplerState SampNoiseSampler : register(s2);
 SamplerState SampDepthSampler : register(s3);
+#if defined(GRAYSCALE_TO_COLOR) || defined(GRAYSCALE_TO_ALPHA)
 SamplerState SampGrayscaleSampler : register(s4);
+#endif
 
 Texture2D<float4> TexBaseSampler : register(t0);
 Texture2D<float4> TexNormalSampler : register(t1);
 Texture2D<float4> TexNoiseSampler : register(t2);
 Texture2D<float4> TexDepthSamplerEffect : register(t3);
+#if defined(GRAYSCALE_TO_COLOR) || defined(GRAYSCALE_TO_ALPHA)
 Texture2D<float4> TexGrayscaleSampler : register(t4);
+#endif
 
 #if defined(DEFERRED)
 struct PS_OUTPUT
@@ -852,17 +856,19 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float4 baseTexColor = float4(1, 1, 1, 1);
 	float4 baseColor = float4(1, 1, 1, 1);
-#	if !defined(TEXTURE)
-	[branch] if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToColor || Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha)
-#	endif
+#	if defined(TEXTURE) || defined(GRAYSCALE_TO_COLOR) || defined(GRAYSCALE_TO_ALPHA)
 	{
 		baseTexColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
 		baseTexColor.xyz = Color::Effect(baseTexColor.xyz);
 		baseColor *= baseTexColor;
-		if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::IgnoreTexAlpha || Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha) {
+#		if !defined(GRAYSCALE_TO_ALPHA)
+		if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::IgnoreTexAlpha)
+#		endif
+		{
 			baseColor.w = 1;
 		}
 	}
+#	endif
 
 #	if defined(MEMBRANE)
 	float4 baseColorMul = float4(1, 1, 1, 1);
@@ -914,18 +920,20 @@ PS_OUTPUT main(PS_INPUT input)
 	baseColorScale = MembraneVars.z;
 #	endif
 
-	if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha)
-		alpha = TexGrayscaleSampler.Sample(SampGrayscaleSampler, float2(baseTexColor.w, alpha)).w;
+#	if defined(GRAYSCALE_TO_ALPHA)
+	alpha = TexGrayscaleSampler.Sample(SampGrayscaleSampler, float2(baseTexColor.w, alpha)).w;
+#	endif
 
-	[branch] if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToColor)
+#	if defined(GRAYSCALE_TO_COLOR)
 	{
 		float2 grayscaleToColorUv = float2(baseTexColor.y, baseColorMul.x);
-#	if defined(MEMBRANE)
+#		if defined(MEMBRANE)
 		grayscaleToColorUv.y = PropertyColor.x;
-#	endif
+#		endif
 		float3 grayscaleColor = baseColorScale * TexGrayscaleSampler.Sample(SampGrayscaleSampler, grayscaleToColorUv).xyz;
 		baseColor.xyz = Color::Effect(grayscaleColor);
 	}
+#	endif
 
 #	if !defined(MOTIONVECTORS_NORMALS)
 	if (alpha * fogMul.w - AlphaTestRefRS < 0) {
@@ -982,8 +990,8 @@ PS_OUTPUT main(PS_INPUT input)
 		SharedData::adaptiveBalanceSettings.appearance.effectLightingGammaOffset);
 #	endif
 
-#	if !defined(LIGHTING) && defined(VC) && defined(TEXCOORD) && defined(NORMALS) && defined(TEXTURE) && defined(FALLOFF) && defined(SOFT)
-	const bool isSkyStatic = Color::IsSceneColorDraw() && (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha) && lightingInfluence == 1.0;
+#	if !defined(LIGHTING) && defined(VC) && defined(TEXCOORD) && defined(NORMALS) && defined(TEXTURE) && defined(FALLOFF) && defined(SOFT) && defined(GRAYSCALE_TO_ALPHA)
+	const bool isSkyStatic = Color::IsSceneColorDraw() && lightingInfluence == 1.0;
 #	else
 	const bool isSkyStatic = false;
 #	endif

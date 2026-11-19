@@ -3524,6 +3524,42 @@ if(BUILD_CONTROLLER_TESTS)
         MotionSharpeningRuntimeCompile
         tests/motion_sharpening_runtime_compile_test.cpp
     )
+    add_d3d_shader_test(
+        shader_resource_contract_test
+        ShaderResourceContract
+        tests/shader_resource_contract_test.cpp
+    )
+    set(_resource_contract_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/resource-contract"
+    )
+    set(_resource_contract_headers
+        "${_resource_contract_dir}/composite_shader_selection.h"
+        "${_resource_contract_dir}/composite_bindings.h"
+        "${_resource_contract_dir}/lighting_environment_binding.h"
+        "${_resource_contract_dir}/pbr_displacement_binding.h"
+    )
+    add_custom_command(
+        OUTPUT ${_resource_contract_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_resource_contract_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_shader_resource_contract.cmake"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            src/Hooks.cpp
+            src/TruePBR.cpp
+            tests/extract_shader_resource_contract.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    target_sources(
+        shader_resource_contract_test
+        PRIVATE ${_resource_contract_headers}
+    )
+    target_include_directories(
+        shader_resource_contract_test
+        PRIVATE "${_resource_contract_dir}"
+    )
     set(_core_settings_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/core_settings_test"
     )

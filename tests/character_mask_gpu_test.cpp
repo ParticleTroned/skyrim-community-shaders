@@ -1,6 +1,7 @@
 #define NOMINMAX
 #include <Windows.h>
 #include <d3d11.h>
+#include <d3d11sdklayers.h>
 #include <d3d11shader.h>
 #include <d3dcompiler.h>
 #include <wrl/client.h>
@@ -144,9 +145,16 @@ namespace
 		{
 			D3D_FEATURE_LEVEL actual{};
 			constexpr D3D_FEATURE_LEVEL requested = D3D_FEATURE_LEVEL_11_0;
-			Check(D3D11CreateDevice(nullptr, benchmark ? D3D_DRIVER_TYPE_HARDWARE : D3D_DRIVER_TYPE_WARP, nullptr, 0,
-					  &requested, 1, D3D11_SDK_VERSION, &device_, &actual, &context_),
-				"Create WARP device");
+			auto deviceResult = D3D11CreateDevice(nullptr, benchmark ? D3D_DRIVER_TYPE_HARDWARE : D3D_DRIVER_TYPE_WARP, nullptr,
+				benchmark ? 0 : D3D11_CREATE_DEVICE_DEBUG, &requested, 1, D3D11_SDK_VERSION, &device_, &actual, &context_);
+			if (deviceResult == DXGI_ERROR_SDK_COMPONENT_MISSING)
+				deviceResult = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0,
+					&requested, 1, D3D11_SDK_VERSION, &device_, &actual, &context_);
+			Check(deviceResult, "Create shader-test device");
+			if (device_->GetCreationFlags() & D3D11_CREATE_DEVICE_DEBUG)
+				Check(device_.As(&infoQueue_), "Query debug messages");
+			else if (!benchmark)
+				std::cout << "D3D11 debug layer unavailable; API-message checks skipped\n";
 			const D3D_SHADER_MACRO diagnosticDefines[]{ { "NR_DIAGNOSTICS", "1" }, { nullptr, nullptr } };
 			auto maskBlob = Compile(shaderDirectory / "DLSS5CharacterMaskCS.hlsl", D3D_COMPILE_STANDARD_FILE_INCLUDE, diagnosticDefines);
 			auto productionBlob = Compile(shaderDirectory / "DLSS5CharacterMaskCS.hlsl");
@@ -205,6 +213,13 @@ namespace
 			Check(device_->CreateComputeShader(blendBlob->GetBufferPointer(),
 					  blendBlob->GetBufferSize(), nullptr, &blendShader_),
 				"Create blend shader");
+			Util::SetResourceName(blendShader_.Get(), "CharacterMaskTest::BlendFloat");
+			const D3D_SHADER_MACRO unormDefines[]{ { "OUTPUT_UNORM", "1" }, { nullptr, nullptr } };
+			auto unormBlendBlob = Compile(blendPath, &includes, unormDefines);
+			Check(device_->CreateComputeShader(unormBlendBlob->GetBufferPointer(),
+					  unormBlendBlob->GetBufferSize(), nullptr, &blendUnormShader_),
+				"Create UNORM blend shader");
+			Util::SetResourceName(blendUnormShader_.Get(), "CharacterMaskTest::BlendUnorm");
 			const auto colorRoot = shaderDirectory.parent_path().parent_path() / "features/Neural Rendering/Shaders";
 			auto depthBlob = Compile(colorRoot / "Upscaling/NeuralRendering/CopyDepthGuideCS.hlsl");
 			Check(device_->CreateComputeShader(depthBlob->GetBufferPointer(), depthBlob->GetBufferSize(), nullptr,
@@ -555,13 +570,25 @@ namespace
 			Check(device_->CreateSamplerState(&samplerDesc, &sampler), "Create blend sampler");
 			Util::SetResourceName(sampler.Get(), "CharacterMaskTest::BlendSampler");
 			std::array<ID3D11ShaderResourceView*, 3> srvs{ nr.srv.Get(), base.srv.Get(), mask.srv.Get() };
-			context_->CSSetShader(blendShader_.Get(), nullptr, 0);
+			if (infoQueue_)
+				infoQueue_->ClearStoredMessages();
+			context_->CSSetShader(unormOutput ? blendUnormShader_.Get() : blendShader_.Get(), nullptr, 0);
 			context_->CSSetConstantBuffers(0, 1, cb.GetAddressOf());
 			context_->CSSetSamplers(0, 1, sampler.GetAddressOf());
 			context_->CSSetShaderResources(0, 3, srvs.data());
 			context_->CSSetUnorderedAccessViews(0, 1, output.uav.GetAddressOf(), nullptr);
 			context_->Dispatch((static_cast<UINT>(constants.dispatchDim[0]) + 7u) / 8u,
 				(static_cast<UINT>(constants.dispatchDim[1]) + 7u) / 8u, 1);
+			if (infoQueue_) {
+				for (UINT64 i = 0; i < infoQueue_->GetNumStoredMessagesAllowedByRetrievalFilter(); ++i) {
+					SIZE_T size = 0;
+					Check(infoQueue_->GetMessage(i, nullptr, &size), "Size blend debug message");
+					std::vector<std::uint8_t> storage(size);
+					auto* message = reinterpret_cast<D3D11_MESSAGE*>(storage.data());
+					Check(infoQueue_->GetMessage(i, message, &size), "Read blend debug message");
+					Require(message->Severity > D3D11_MESSAGE_SEVERITY_ERROR, message->pDescription);
+				}
+			}
 			context_->ClearState();
 			if (!unormOutput)
 				return Read<Color>(output.resource.Get());
@@ -927,7 +954,8 @@ namespace
 
 		ComPtr<ID3D11Device> device_;
 		ComPtr<ID3D11DeviceContext> context_;
-		ComPtr<ID3D11ComputeShader> supportShader_, maskShader_, productionMaskShader_, boundsShader_, captureShader_, blendShader_, prepareShader_, reconstructShader_, depthShader_, compactDepthShader_;
+		ComPtr<ID3D11InfoQueue> infoQueue_;
+		ComPtr<ID3D11ComputeShader> supportShader_, maskShader_, productionMaskShader_, boundsShader_, captureShader_, blendShader_, blendUnormShader_, prepareShader_, reconstructShader_, depthShader_, compactDepthShader_;
 	};
 
 	void FullImageAndReducedSelection(Harness& gpu)

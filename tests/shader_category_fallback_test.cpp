@@ -255,6 +255,7 @@ namespace SIE
 	struct ShaderCache
 	{
 #include "category_flag.h"
+#include "effect_flags.h"
 #include "lighting_flags.h"
 		std::array<std::unordered_map<uint32_t, std::unique_ptr<RE::BSGraphics::PixelShader>>,
 			static_cast<unsigned>(RE::BSShader::Type::Total)>
@@ -1172,6 +1173,48 @@ void TestStartupLightingDescriptors(bool forwardCached)
 	}
 }
 
+void TestEffectResourceDescriptors()
+{
+	using Cache = SIE::ShaderCache;
+	using Flags = Cache::EffectShaderFlags;
+	constexpr auto color = static_cast<uint32_t>(Flags::GrayscaleToColor);
+	constexpr auto alpha = static_cast<uint32_t>(Flags::GrayscaleToAlpha);
+	constexpr auto ignore = static_cast<uint32_t>(Flags::IgnoreTexAlpha);
+	constexpr auto texture = static_cast<uint32_t>(Flags::Texture);
+	constexpr auto deferredFlag = static_cast<uint32_t>(Flags::Deferred);
+	for (auto grayscale : { 0u, color, alpha, color | alpha }) {
+		for (bool deferredPass : { false, true }) {
+			for (bool a_forceDeferred : { false, true }) {
+				for (bool ambientWorld : { false, true }) {
+					Fixture f;
+					f.deferred.deferredPass = deferredPass;
+					auto* deferred = globals::deferred;
+					const bool effectAmbientIBLUploaded = ambientWorld;
+					enum class ExtraShaderDescriptors : uint32_t
+					{
+						InWorld = 1
+					};
+					struct
+					{
+						uint32_t ExtraShaderDescriptor = 1;
+					} permutationData;
+					const auto requested = texture | grayscale | ignore | Cache::kEffectAmbientWorldIBL;
+					uint32_t a_vertexDescriptor = requested, a_pixelDescriptor = requested;
+					switch (RE::BSShader::Type::Effect) {
+#include "effect_lookup.h"
+					}
+					const auto expected = texture | grayscale |
+					                      ((deferredPass || a_forceDeferred) ? deferredFlag : 0u) |
+					                      (ambientWorld ? Cache::kEffectAmbientWorldIBL : 0u);
+					Require(a_vertexDescriptor == texture && a_pixelDescriptor == expected);
+					Require(Util::ShaderDescriptor::UploadedPixelDescriptor(requested, a_pixelDescriptor, ignore) ==
+							(ignore | (ambientWorld ? 0u : Cache::kEffectAmbientWorldIBL)));
+				}
+			}
+		}
+	}
+}
+
 void TestCombinedLightingSpecializations()
 {
 	using Cache = SIE::ShaderCache;
@@ -1428,6 +1471,7 @@ int main()
 			TestFallbackShaderRecovery();
 			TestStartupLightingDescriptors(false);
 			TestStartupLightingDescriptors(true);
+			TestEffectResourceDescriptors();
 			TestCombinedLightingSpecializations();
 			TestDetailMapsSpecializationFallback();
 			TestResidentLightingSpecializations();

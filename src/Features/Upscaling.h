@@ -2897,7 +2897,9 @@ public:
 	ID3D11ComputeShader* GetFoveatedPeripheryCS();
 
 	Util::LazyShader<ID3D11ComputeShader> foveatedCenterBlendCS;
-	ID3D11ComputeShader* GetFoveatedCenterBlendCS();
+	Util::LazyShader<ID3D11ComputeShader> foveatedCenterBlendUnormCS;
+	/** Selects the output's typed shader; protected save frames only use an already cached variant. */
+	ID3D11ComputeShader* GetFoveatedCenterBlendCS(DXGI_FORMAT outputFormat);
 
 	Util::LazyShader<ID3D11ComputeShader> foveatedSpatialCompositeCS;
 	ID3D11ComputeShader* GetFoveatedSpatialCompositeCS();
@@ -5042,7 +5044,7 @@ private:
 	void ResetHMDMaskClearResources();
 	/** @brief Prepares HMD-mask resources, caching shader failures until shader invalidation. */
 	bool EnsureHMDMaskClearResources();
-	bool EnsureFoveatedDispatchShaders(bool usePeripheryTAA, bool visualizeMask, const char* context, const char* fallbackAction);
+	bool EnsureFoveatedDispatchShaders(bool usePeripheryTAA, bool visualizeMask, const char* context, const char* fallbackAction, DXGI_FORMAT outputFormat = DXGI_FORMAT_UNKNOWN);
 	void BeginVRMenuFinalCompositeFrame(uint32_t a_frame);
 	void ResetVRMenuFinalCompositeLayer();
 	bool EnsureVRMenuFinalCompositeLayer(uint32_t a_width, uint32_t a_height, DXGI_FORMAT a_format);

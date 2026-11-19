@@ -1,5 +1,7 @@
 #pragma once
+
 #include "Upscaling/NeuralRendering/ReconstructionTuning.h"
+#include "Utils/DeviceContextState.h"
 
 #include "Upscaling/FrameTelemetryRing.h"
 
@@ -2895,7 +2897,9 @@ public:
 	ID3D11ComputeShader* GetFoveatedPeripheryCS();
 
 	Util::LazyShader<ID3D11ComputeShader> foveatedCenterBlendCS;
-	ID3D11ComputeShader* GetFoveatedCenterBlendCS();
+	Util::LazyShader<ID3D11ComputeShader> foveatedCenterBlendUnormCS;
+	/** Selects the output's typed shader; protected save frames only use an already cached variant. */
+	ID3D11ComputeShader* GetFoveatedCenterBlendCS(DXGI_FORMAT outputFormat);
 
 	Util::LazyShader<ID3D11ComputeShader> foveatedSpatialCompositeCS;
 	ID3D11ComputeShader* GetFoveatedSpatialCompositeCS();
@@ -4565,6 +4569,8 @@ public:
 		uint32_t depthWidthPerEye, uint32_t depthHeight, uint32_t colorWidthPerEye, uint32_t colorHeight, uint32_t colorOffsetX = 0);
 
 private:
+	/** Preserves capture wrapping through the verified VR device-creation import thunk. */
+	bool InstallRenderDocDeviceCreationBridge();
 	void SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& a_args,
 		const UpscalingDLSS::ViewportCrop& a_dlssCrop, const std::array<uint32_t, 2>& a_colorOrigin,
 		const std::array<uint32_t, 2>& a_guideOrigin) noexcept;
@@ -5038,7 +5044,7 @@ private:
 	void ResetHMDMaskClearResources();
 	/** @brief Prepares HMD-mask resources, caching shader failures until shader invalidation. */
 	bool EnsureHMDMaskClearResources();
-	bool EnsureFoveatedDispatchShaders(bool usePeripheryTAA, bool visualizeMask, const char* context, const char* fallbackAction);
+	bool EnsureFoveatedDispatchShaders(bool usePeripheryTAA, bool visualizeMask, const char* context, const char* fallbackAction, DXGI_FORMAT outputFormat = DXGI_FORMAT_UNKNOWN);
 	void BeginVRMenuFinalCompositeFrame(uint32_t a_frame);
 	void ResetVRMenuFinalCompositeLayer();
 	bool EnsureVRMenuFinalCompositeLayer(uint32_t a_width, uint32_t a_height, DXGI_FORMAT a_format);
@@ -5159,7 +5165,7 @@ private:
 	std::atomic_bool vrMenuTransparencyFixRequested{ false };
 	bool vrMenuTransparencyFixActive = false;
 	winrt::com_ptr<ID3D11DeviceContext1> vrMenuNativeFallbackContext;
-	winrt::com_ptr<ID3DDeviceContextState> vrMenuNativeFallbackState;
+	std::unique_ptr<Util::IsolatedDeviceContextState> vrMenuNativeFallbackState;
 	winrt::com_ptr<ID3D11Buffer> vrMenuNativeFallbackConstants;
 	std::uintptr_t vrMenuNativeFallbackTarget = 0;
 	bool vrMenuNativeFallbackPending = false;

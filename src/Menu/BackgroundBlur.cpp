@@ -35,7 +35,7 @@ namespace BackgroundBlur
 
 		// DirectX resources (RAII managed)
 		winrt::com_ptr<ID3D11DeviceContext1> isolatedContext;
-		winrt::com_ptr<ID3DDeviceContextState> isolatedState;
+		std::unique_ptr<Util::IsolatedDeviceContextState> isolatedState;
 		winrt::com_ptr<ID3D11VertexShader> vertexShader;
 		winrt::com_ptr<ID3D11PixelShader> horizontalPixelShader;
 		winrt::com_ptr<ID3D11PixelShader> verticalPixelShader;

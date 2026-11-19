@@ -1020,7 +1020,7 @@ bool VR::ShouldUseInSceneOverlay() const
 		return false;
 	}
 
-	// Keep the menu off the eye-submit path while RenderDoc owns the device.
+	// Submit-path state restoration requires a compatible capture library.
 	if (openVRInfo.runtimeType == VRDetection::RuntimeType::SteamVR &&
 		openVRInfo.hasOverlayInterface &&
 		globals::features::renderDoc.ShouldBlockUpscaling()) {
@@ -1851,7 +1851,7 @@ namespace
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("Auto uses IVROverlay on SteamVR from startup; OpenComposite or runtimes without IVROverlay use in-scene.");
-				ImGui::Text("RenderDoc forces IVROverlay on SteamVR while capture is enabled or loaded, regardless of this choice.");
+				ImGui::Text("RenderDoc requires IVROverlay unless its VR compatibility path is ready.");
 				ImGui::Text("Use IVROverlay only to force the compositor overlay path for troubleshooting.");
 				ImGui::Text("In-scene draws into submitted eye textures and may appear in desktop VR mirrors.");
 			}

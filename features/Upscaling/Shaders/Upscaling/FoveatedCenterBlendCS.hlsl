@@ -24,7 +24,11 @@ Texture2D<float4> CenterColor : register(t0);
 Texture2D<float4> BaselineCenterColor : register(t1);
 Texture2D<float> CharacterMask : register(t2);
 SamplerState LinearSampler : register(s0);
+#ifdef OUTPUT_UNORM
+RWTexture2D<unorm float4> OutputColor : register(u0);
+#else
 RWTexture2D<float4> OutputColor : register(u0);
+#endif
 
 float4 PrepareFinalLdrModelColor(float4 modelColor, float4 originalColor)
 {

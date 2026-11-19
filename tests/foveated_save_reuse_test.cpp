@@ -289,10 +289,11 @@ public:
 		++shaderRequests;
 		return &shader;
 	}
-	int* GetFoveatedCenterBlendCS()
+	int* GetFoveatedCenterBlendCS(DXGI_FORMAT format)
 	{
-		++shaderRequests;
-		return &shader;
+		if (!reuseOnly)
+			++shaderRequests;
+		return format != DXGI_FORMAT_UNKNOWN && foveatedCenterBlendCS ? &shader : nullptr;
 	}
 	int* GetFoveatedSpatialCompositeCS()
 	{
@@ -314,7 +315,7 @@ public:
 	}
 	bool EnsureFoveatedTexture(eastl::unique_ptr<Texture2D>&, ID3D11Resource*, uint32_t, uint32_t, bool, bool, bool, bool, const char*, DXGI_FORMAT = DXGI_FORMAT_UNKNOWN,
 		const UpscalingTextures::TextureSourceDescription* = nullptr);
-	bool EnsureFoveatedDispatchShaders(bool, bool, const char*, const char*);
+	bool EnsureFoveatedDispatchShaders(bool, bool, const char*, const char*, DXGI_FORMAT = 3);
 	bool EnsurePeripheryTAAResources(uint32_t, uint32_t, ID3D11Resource*,
 		const UpscalingTextures::TextureSourceDescription* = nullptr);
 	bool EnsurePeripheryTAATileBuffer(uint32_t, uint32_t);
@@ -392,6 +393,11 @@ namespace
 		Upscaling upscaling;
 		upscaling.peripheryTAACB = false;
 		Require(!upscaling.EnsureFoveatedDispatchShaders(true, false, "test", "fallback"));
+		upscaling.peripheryTAACB = true;
+		upscaling.foveatedCenterBlendCS = false;
+		Require(!upscaling.EnsureFoveatedDispatchShaders(true, false, "test", "fallback"));
+		upscaling.foveatedCenterBlendCS = true;
+		Require(!upscaling.EnsureFoveatedDispatchShaders(true, false, "test", "fallback", DXGI_FORMAT_UNKNOWN));
 		upscaling.reuseOnly = false;
 		upscaling.peripheryTAACB = true;
 		const auto before = shaderRequests;
@@ -481,10 +487,10 @@ namespace
 			const auto beforeRecreation = textureCreations;
 			Require(upscaling.EnsurePeripheryTAAResources(100, 80, &source));
 			Require(textureDescriptionQueries == queries + 1 && textureCreations == beforeRecreation + 1 &&
-				(*history)[0][0]->resource);
+					(*history)[0][0]->resource);
 			Require(!upscaling.peripheryTAAHistory.HasHistory() && upscaling.peripheryTAAHistoryReadIndex == 0 &&
-				upscaling.submitStageFoveatedPeripheryTAAFrame == std::numeric_limits<uint32_t>::max() &&
-				!upscaling.submitStageFoveatedPeripheryTAAEyeReady[0] && !upscaling.submitStageFoveatedPeripheryTAAEyeReady[1]);
+					upscaling.submitStageFoveatedPeripheryTAAFrame == std::numeric_limits<uint32_t>::max() &&
+					!upscaling.submitStageFoveatedPeripheryTAAEyeReady[0] && !upscaling.submitStageFoveatedPeripheryTAAEyeReady[1]);
 		}
 	}
 

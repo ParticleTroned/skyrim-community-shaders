@@ -18,6 +18,8 @@ extract_between("${_pixel_startup}" "auto vertexShaderDesriptor = entry->id;"
     "\n\t\t\t}" "startup_pixel_lookup.h")
 extract_between("${_state}" "case RE::BSShader::Type::Lighting:"
     "case RE::BSShader::Type::Grass:" "lighting_lookup.h")
+extract_between("${_state}" "case RE::BSShader::Type::Effect:"
+    "case RE::BSShader::Type::DistantTree:" "effect_lookup.h")
 file(READ "${PROJECT_ROOT}/src/TruePBR.cpp" _pbr)
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp" _character)
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterRendering.h" _character_header)
@@ -54,6 +56,8 @@ extract_between("${_pbr}" "auto* boundShader = *globals::game::currentPixelShade
 
 extract_between("${_header}" "enum class LightingShaderTechniques"
     "enum class EffectShaderFlags" "lighting_flags.h")
+extract_between("${_header}" "enum class EffectShaderFlags"
+    "// Shader blocking data" "effect_flags.h")
 extract_between("${_cache}" "void ShaderCache::PrewarmDeferredPixelShaders("
     "RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader(" "pixel_prewarm.h")
 extract_between("${_pbr}" "void TruePBR::GenerateShaderPermutations("

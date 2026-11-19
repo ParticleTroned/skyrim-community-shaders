@@ -1,4 +1,5 @@
 #pragma once
+
 #include "Buffer.h"
 #include "Features/VR/MenuPositioningPolicy.h"
 #include "Features/VR/OpenVRDetection.h"
@@ -6,6 +7,7 @@
 #include "Features/VRDepthCullingEnablePolicy.h"
 #include "Menu.h"
 #include "OverlayFeature.h"
+#include "Utils/DeviceContextState.h"
 #include "Utils/Input.h"
 #include <algorithm>
 #include <array>
@@ -777,7 +779,7 @@ public:
 	struct InSceneResources
 	{
 		winrt::com_ptr<ID3D11DeviceContext1> immediateContext;
-		winrt::com_ptr<ID3DDeviceContextState> overlayContextState;
+		std::unique_ptr<Util::IsolatedDeviceContextState> overlayContextState;
 		winrt::com_ptr<ID3D11VertexShader> vs;
 		winrt::com_ptr<ID3D11PixelShader> ps;
 		winrt::com_ptr<ID3D11InputLayout> inputLayout;

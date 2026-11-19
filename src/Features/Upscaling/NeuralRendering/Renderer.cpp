@@ -1,7 +1,9 @@
 #include "Renderer.h"
 #include "DevelopmentDiagnostics.h"
+#include "Features/RenderDoc.h"
 #include "Globals.h"
 #include "GpuPass.h"
+#include "NativeEvaluationLayoutJson.h"
 
 #include "CapacityFallback.h"
 #include "CharacterRendering.h"
@@ -4586,6 +4588,30 @@ namespace NeuralRendering
 				"device removal was detected before the external output commit",
 				a_args.front().featureSlot,
 				true);
+		}
+
+		for (std::size_t index = 0; index < a_args.size(); ++index) {
+			const auto& args = a_args[index];
+			const auto& slot = *slots[index];
+			const bool bypass = colorConfiguration_.experiments.transportBypass;
+			std::array<ID3D11Resource*, 4> inputs{ slot.color.resource11.Get(), slot.depth.resource11.Get(),
+				slot.motionVectors.resource11.Get(), args.controlMask ? slot.controlMask.resource11.Get() : nullptr };
+			globals::features::renderDoc.CaptureVendorOutput(args.context, slot.output.resource11.Get(),
+				bypass ? "NR transport bypass (no inference)" : "NR", inputs, [&] {
+					const auto& tuning = args.tuning;
+					return nlohmann::json{ { "schema", 1 }, { "frame", args.frameId }, { "sourceWorldFrame", args.sourceWorldFrame },
+						{ "featureSlot", args.featureSlot }, { "generation", args.generation }, { "insertionPoint", static_cast<uint32_t>(args.insertionPoint) },
+						{ "nativeLayout", Evidence::NativeLayoutJson(resources[index].nativeLayout) },
+						{ "inputRoles", { "color", "depth", "motionVectors", "controlMask" } },
+						{ "nativeInference", !bypass }, { "reset", args.reset || forcedHistoryReset[index] },
+						{ "providerBlending", args.providerBlending }, { "runtimeVersion", snapshot_.runtimeVersion },
+						{ "requestedNetworkPreset", tuning.networkPreset },
+						{ "actualNetworkPreset", Runtime::Instance().GetFeatureNetworkPresets()[args.featureSlot] }, { "intensity", tuning.intensity },
+						{ "localToneStrength", tuning.localToneStrength }, { "localStructureStrength", tuning.localStructureStrength },
+						{ "skinStructureStrength", tuning.skinStructureStrength }, { "style", tuning.style },
+						{ "autoMask", tuning.useAutoMask }, { "uiCorrection", tuning.uiCorrection },
+						{ "depthInverted", tuning.depthInverted }, { "singleSubrectScale", tuning.singleSubrectScale } };
+				});
 		}
 
 		// Reconstruct ALL physical regions before the first external write. This is

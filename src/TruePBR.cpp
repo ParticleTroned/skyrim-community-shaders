@@ -1441,12 +1441,15 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 				shaderFlags.set(PBRShaderFlags::HasEmissive);
 			}
 
-			const bool hasDisplacement = pbrMaterial->displacementTexture != nullptr && pbrMaterial->displacementTexture != graphicsState->GetRuntimeData().defaultTextureBlack;
+			const bool hasDisplacement = pbrMaterial->displacementTexture != nullptr &&
+			                             pbrMaterial->displacementTexture != graphicsState->GetRuntimeData().defaultTextureBlack &&
+			                             pbrMaterial->displacementTexture->rendererTexture &&
+			                             pbrMaterial->displacementTexture->rendererTexture->resourceView;
+			// Optional displacement still declares a regular sampler in the shared shader.
+			shadowState->SetPSTexture(4, hasDisplacement ? pbrMaterial->displacementTexture->rendererTexture : nullptr);
+			shadowState->SetPSTextureAddressMode(4, static_cast<RE::BSGraphics::TextureAddressMode>(pbrMaterial->textureClampMode));
+			shadowState->SetPSTextureFilterMode(4, RE::BSGraphics::TextureFilterMode::kAnisotropic);
 			if (hasDisplacement) {
-				shadowState->SetPSTexture(4, pbrMaterial->displacementTexture->rendererTexture);
-				shadowState->SetPSTextureAddressMode(4, static_cast<RE::BSGraphics::TextureAddressMode>(pbrMaterial->textureClampMode));
-				shadowState->SetPSTextureFilterMode(4, RE::BSGraphics::TextureFilterMode::kAnisotropic);
-
 				shaderFlags.set(PBRShaderFlags::HasDisplacement);
 			}
 

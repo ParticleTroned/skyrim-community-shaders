@@ -80,7 +80,7 @@ namespace
 		expectedContext = context.get();
 		Util::RegisterDeviceContextStateForHooks(context.get());
 		winrt::com_ptr<ID3D11DeviceContext1> context1;
-		winrt::com_ptr<ID3DDeviceContextState> isolated;
+		std::unique_ptr<Util::IsolatedDeviceContextState> isolated;
 		Require(Util::CreateIsolatedDeviceContextState(device.get(), context.get(), context1, isolated, "ContextHookTest::BeforePublicationFailure"),
 			"Initial isolated state creation failed");
 		static auto& state = *new HookState;
@@ -125,7 +125,7 @@ namespace
 		canonicalReceiver = true;
 		Util::RegisterDeviceContextStateForHooks(context.get());
 		winrt::com_ptr<ID3D11DeviceContext1> context1;
-		winrt::com_ptr<ID3DDeviceContextState> isolated;
+		std::unique_ptr<Util::IsolatedDeviceContextState> isolated;
 		Require(Util::CreateIsolatedDeviceContextState(device.get(), context.get(), context1, isolated, "ContextHookTest::Isolated"),
 			"New renderer context did not permit isolated state creation");
 		Install<110, ClearStateHook>(context.get(), method);

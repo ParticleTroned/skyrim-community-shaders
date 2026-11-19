@@ -202,10 +202,8 @@ namespace NeuralRendering
 		/** Checks creation compatibility without changing a resident handle. */
 		[[nodiscard]] bool HasCompatibleFeature(std::uint32_t slot, const NativeEvaluationLayout&, bool providerBlending,
 			std::uint32_t networkPreset = kNetworkDefault) const;
-#ifdef DEVBENCH_BRIDGE_ENABLED
 		/** Actual creation presets by logical slot; UINT32_MAX denotes no valid configured feature. */
 		[[nodiscard]] std::array<std::uint32_t, kFeatureSlotCount> GetFeatureNetworkPresets() const;
-#endif
 
 	private:
 		struct FeatureConfiguration

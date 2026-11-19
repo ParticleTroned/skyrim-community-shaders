@@ -899,6 +899,7 @@ namespace NeuralRendering
 		std::scoped_lock lock(mutex_);
 		return { initializationRoute_, discoveryDetail_ };
 	}
+#endif
 
 	std::array<std::uint32_t, Runtime::kFeatureSlotCount> Runtime::GetFeatureNetworkPresets() const
 	{
@@ -909,6 +910,7 @@ namespace NeuralRendering
 		return result;
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	Runtime::LifecycleCounts Runtime::GetLifecycleCounts() const
 	{
 		std::scoped_lock lock(mutex_);

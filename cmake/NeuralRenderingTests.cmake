@@ -68,7 +68,8 @@ target_compile_definitions(nr_model_resolution_shader_bridge_test PRIVATE DEVBEN
 add_test(NAME NRReconstructionBridgeGate COMMAND "${Python3_EXECUTABLE}"
     "${PROJECT_SOURCE_DIR}/tests/nr_reconstruction_bridge_gate_test.py" --compiler "${CMAKE_CXX_COMPILER}")
 set_tests_properties(NRReconstructionBridgeGate PROPERTIES LABELS "ControllerTests" TIMEOUT 30)
-set_tests_properties(${_nr_model_tests} PROPERTIES TIMEOUT 120)
+# WARP also compiles every permutation; the bridge adds diagnostic shader cases.
+set_tests_properties(${_nr_model_tests} PROPERTIES TIMEOUT 300)
 set(_neural_failure_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_failure_diagnostics")
 set(_neural_failure_headers
     "${_neural_failure_dir}/neural_failure_diagnostics_under_test.h"

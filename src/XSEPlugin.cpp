@@ -1,4 +1,5 @@
 #include "Api/AcceptedDrawService.h"
+#include "Api/ColourPipelineProbeDevBenchBridge.h"
 #include "Api/EditorDevBenchBridge.h"
 #include "Api/EditorService.h"
 #include "Api/FeatureDevBenchBridge.h"
@@ -212,6 +213,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 #endif
 			ScreenshotDevBenchBridge::Install();
 			CSX::Api::UpscalingDevBenchBridge::Install();
+			CSX::Api::ColourPipelineProbeDevBenchBridge::Install();
 			CSX::Api::WeatherDevBenchBridge::Install();
 			CSX::Api::EditorDevBenchBridge::Install();
 			CSX::Api::FeatureDevBenchBridge::Install();
@@ -234,6 +236,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				// CSX's listener ran first, this is the first deterministic retry after
 				// all PostLoad listeners have completed.
 				CSX::Api::UpscalingDevBenchBridge::Install();
+				CSX::Api::ColourPipelineProbeDevBenchBridge::Install();
 				CSX::Api::WeatherDevBenchBridge::Install();
 				CSX::Api::EditorDevBenchBridge::Install();
 				CSX::Api::FeatureDevBenchBridge::Install();
@@ -347,6 +350,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				NvPerf::InstallDevBench();
 #endif
 				CSX::Api::UpscalingDevBenchBridge::Install();
+				CSX::Api::ColourPipelineProbeDevBenchBridge::Install();
 				CSX::Api::WeatherDevBenchBridge::Install();
 				CSX::Api::ShaderDevBenchBridge::Install();
 				CSX::RenderMap::DevBenchBridge::Install();

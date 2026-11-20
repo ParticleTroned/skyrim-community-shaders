@@ -19,7 +19,7 @@
     },
     "runtimeSettingsContract": {
         "revision": 34,
-        "sourceTreeSha256": "E138E7348A54958BC11DCBB4D8B2B0F8AA14A7CC8D37FBF6812EE6C18FC7AF7D",
+        "sourceTreeSha256": "F0D474843681253F52EDADAEC6C6A738934C71F2B297013037BC4F97A742E7E7",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",

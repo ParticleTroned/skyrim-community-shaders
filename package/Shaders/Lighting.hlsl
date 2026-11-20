@@ -3915,7 +3915,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	[branch] if (material.GlintLogMicrofacetDensity > PBR::Constants::GlintEnableThreshold)
 	{
 		float glintNoise = Random::R1Modified(float(SharedData::FrameCount), (Random::pcg2d(uint2(Stereo::EyeStableNoiseCoord(input.Position.xy, SharedData::BufferDim.xy))) / 4294967296.0).x);
-		Glints::PrecomputeGlints(glintNoise, uvOriginal, uvOriginal_ddx, uvOriginal_ddy, material.GlintScreenSpaceScale, material.GlintCache);
+		float2 glintUV = uv;
+#		if defined(EMAT)
+#			if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
+		// Refraction moves the substrate, not the outer surface carrying coating glints.
+		if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
+			glintUV = uvOriginal;
+#			endif
+		// Exponent bits retain the invalid-hit guard under FXC's finite-math optimizations.
+		if (any((asuint(glintUV) & 0x7f800000u) == 0x7f800000u))
+			glintUV = uvOriginal;
+#		endif
+		// Parallax moves the pattern; original gradients keep its filtering footprint stable.
+		Glints::PrecomputeGlints(glintNoise, glintUV, uvOriginal_ddx, uvOriginal_ddy, material.GlintScreenSpaceScale, material.GlintCache);
 	}
 #	endif
 

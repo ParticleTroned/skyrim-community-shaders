@@ -1,0 +1,37 @@
+#define __SHARED_DATA_DEPENDENCY_HLSL__
+#include "Common/Glints/Glints2023.hlsli"
+#include "Common/PBRMath.hlsli"
+
+cbuffer TestInput : register(b0)
+{
+	float2 uv;
+	float2 uvOriginal;
+	float2 uvOriginal_ddx;
+	float2 uvOriginal_ddy;
+	float2 ExpectedUV;
+	uint HasInterlayer;
+	uint HasProjectedGlint;
+	float projectedMaterialWeight;
+};
+RWStructuredBuffer<Glints::GlintCachedVars> Result : register(u0);
+
+struct MaterialFixture
+{
+	float GlintScreenSpaceScale;
+	Glints::GlintCachedVars GlintCache;
+};
+
+[numthreads(1, 1, 1)]
+void main()
+{
+	float glintNoise = 0.25;
+	uint PBRFlags = (HasInterlayer ? PBR::Flags::InterlayerParallax : 0) | (HasProjectedGlint ? PBR::Flags::ProjectedGlint : 0);
+	MaterialFixture material = (MaterialFixture)0;
+	material.GlintScreenSpaceScale = 4;
+@GLINT_PRECOMPUTE@
+
+	Glints::GlintCachedVars expected;
+	Glints::PrecomputeGlints(glintNoise, ExpectedUV, uvOriginal_ddx, uvOriginal_ddy, material.GlintScreenSpaceScale, expected);
+	Result[0] = material.GlintCache;
+	Result[1] = expected;
+}

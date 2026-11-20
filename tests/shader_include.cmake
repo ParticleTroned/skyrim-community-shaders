@@ -99,6 +99,33 @@ add_d3d_shader_test(
 )
 target_compile_definitions(projected_material_shader_test PRIVATE NOMINMAX)
 
+set(_glint_parallax_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/glint-parallax")
+set(_glint_parallax_shader "${_glint_parallax_dir}/glint_parallax.hlsl")
+add_custom_command(
+    OUTPUT "${_glint_parallax_shader}"
+    COMMAND
+        "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_glint_parallax_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_glint_parallax.cmake"
+    DEPENDS
+        package/Shaders/Lighting.hlsl
+        tests/extract_source_region.cmake
+        tests/extract_glint_parallax.cmake
+        tests/glint_parallax.hlsl.in
+    VERBATIM
+)
+set_source_files_properties("${_glint_parallax_shader}" PROPERTIES HEADER_FILE_ONLY TRUE)
+add_d3d_shader_test(
+    glint_parallax_shader_test
+    GlintParallaxShader
+    tests/glint_parallax_shader_test.cpp
+)
+target_sources(glint_parallax_shader_test PRIVATE "${_glint_parallax_shader}")
+target_compile_definitions(
+    glint_parallax_shader_test
+    PRIVATE NOMINMAX GLINT_PARALLAX_TEST_SHADER=L"${_glint_parallax_shader}"
+)
+
 add_d3d_shader_test(
     foveated_blend_curve_shader_test
     FoveatedBlendCurveShader
@@ -147,6 +174,7 @@ foreach(
     IN
     ITEMS
         shader_include_test
+        glint_parallax_shader_test
         adaptive_balance_color_shader_test
         foveated_blend_curve_shader_test
         foveated_mask_overlay_shader_test

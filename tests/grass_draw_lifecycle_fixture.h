@@ -234,6 +234,37 @@ namespace REL
 		}
 	};
 }
+#ifdef DEVBENCH_BRIDGE_ENABLED
+namespace CSX::RenderMap
+{
+	struct GeometryBoundary
+	{};
+	struct Collector
+	{
+		struct ScopeGuard
+		{};
+	};
+	struct Runtime
+	{
+		// Grass lifecycle cases exercise the hook with capture dormant.
+		bool IsCapturing() const noexcept { return false; }
+		void SetCpuFrame(std::uint64_t) noexcept {}
+		Collector::ScopeGuard EnterGeometry(const GeometryBoundary&) noexcept { return {}; }
+	};
+	inline Runtime& GetRuntime() noexcept
+	{
+		static Runtime runtime;
+		return runtime;
+	}
+}
+
+inline CSX::RenderMap::GeometryBoundary BuildRenderMapGeometryBoundary(
+	RE::BSShader*, RE::BSRenderPass*, std::uint32_t, RE::BSShader::Type) noexcept
+{
+	return {};
+}
+#endif
+
 namespace logger
 {
 	template <class... T>

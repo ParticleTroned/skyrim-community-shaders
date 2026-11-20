@@ -8,6 +8,7 @@
 
 static thread_local bool onGameThread = false;
 static std::atomic<unsigned> offThreadNativeAccesses = 0;
+static unsigned originalGameUpdates = 0;
 namespace RE
 {
 	struct Main
@@ -63,10 +64,24 @@ namespace REL
 	template <class Signature>
 	using Relocation = std::function<Signature>;
 }
+namespace globals::features
+{
+	struct Upscaling
+	{
+		unsigned combatUpdates = 0;
+		bool afterGameUpdate = true;
+		void UpdateNeuralCombatState()
+		{
+			if (!onGameThread)
+				++offThreadNativeAccesses;
+			afterGameUpdate &= originalGameUpdates == combatUpdates + 1;
+			++combatUpdates;
+		}
+	} upscaling;
+}
 #include "menu_game_update_under_test.h"
 
 static unsigned gameUpdates = 0;
-static unsigned originalGameUpdates = 0;
 static void GameUpdate()
 {
 	onGameThread = true;
@@ -233,6 +248,10 @@ int main()
 	passed &= Check(offThreadNativeAccesses == 0 && RE::setting.GetFloat() == 45,
 		"all native camera and INI access runs on the game thread and final release restores settings");
 	passed &= Check(originalGameUpdates == gameUpdates, "the production main hook forwards each update exactly once");
+	passed &= Check(globals::features::upscaling.combatUpdates == gameUpdates,
+		"the production main hook publishes combat state on every game update");
+	passed &= Check(globals::features::upscaling.afterGameUpdate,
+		"combat publication follows the completed engine update");
 	if (passed)
 		std::puts("Menu session stability checks passed");
 	return passed ? 0 : 1;

@@ -17,6 +17,7 @@
 #include "Upscaling/NeuralRendering/CentralAreaPolicy.h"
 #include "Upscaling/NeuralRendering/CharacterRendering.h"
 #include "Upscaling/NeuralRendering/CombatPausePolicy.h"
+#include "Upscaling/NeuralRendering/CombatState.h"
 #include "Upscaling/NeuralRendering/MainDepthPresentation.h"
 #include "Upscaling/NeuralRendering/ModelResolutionPolicy.h"
 #include "Upscaling/NeuralRendering/PipelinePolicy.h"
@@ -151,6 +152,9 @@ public:
 
 	/** Last frame-latched combat decision; reading status never samples gameplay. */
 	[[nodiscard]] NeuralRendering::CombatPauseSnapshot GetNeuralCombatPauseSnapshot() const noexcept;
+
+	/** @brief Publishes combat and menu state from the main thread after the game update. */
+	void UpdateNeuralCombatState();
 
 	/** @brief One coherent two-eye neural-rendering routing decision. */
 	struct NeuralStereoRouteSnapshot
@@ -3498,6 +3502,7 @@ public:
 	std::atomic<uint32_t> neuralTemporalAdmissionLatch{ 0 };
 	mutable std::mutex neuralCombatPauseMutex;
 	mutable NeuralRendering::CombatPausePolicy neuralCombatPause;
+	mutable NeuralRendering::CombatState neuralCombatState;
 	uint32_t neuralInsertionPointLatchedFrame = std::numeric_limits<uint32_t>::max();
 	NeuralRendering::InsertionPoint neuralInsertionPointLatched =
 		NeuralRendering::kDefaultInsertionPoint;

@@ -3098,6 +3098,7 @@ namespace Hooks
 #else
 			func(a_this, a2);
 #endif
+			globals::features::upscaling.UpdateNeuralCombatState();
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};

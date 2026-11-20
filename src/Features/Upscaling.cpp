@@ -19295,7 +19295,7 @@ namespace
 				ImGui::TextUnformatted("Preserves more detail when NR works at reduced resolution or compressed edges. Off uses simpler smoothing, which can look softer. Adds processing work where supported.");
 		}
 		Util::Widgets::Checkbox("Pause NR during combat", &settings.neuralRenderingPauseInCombat);
-		Util::AddTooltip("Pauses NR during combat to save rendering work. Normal upscaling continues. NR returns after three seconds out of combat. Off keeps NR active during combat.");
+		Util::AddTooltip("Pauses NR during combat to save rendering work. Normal upscaling continues. NR returns after three continuous seconds of peaceful, unpaused gameplay; opening the map also restarts recovery. Off keeps NR active during combat.");
 	}
 
 	void DrawNeuralCentralAreaSettings(Upscaling::Settings& settings)
@@ -62108,6 +62108,20 @@ void Upscaling::RequestHistoryReset() noexcept
 		historyResetThisFrame = true;
 }
 
+void Upscaling::UpdateNeuralCombatState()
+{
+	auto* const ui = globals::game::ui;
+	const bool worldAvailable = globals::state && ui &&
+	                            !Util::IsMenuOpen<RE::MainMenu>(ui) &&
+	                            !Util::IsMenuOpen<RE::LoadingMenu>(ui);
+	std::optional<bool> inCombat;
+	if (worldAvailable) {
+		if (auto* player = RE::PlayerCharacter::GetSingleton())
+			inCombat = player->IsInCombat();
+	}
+	neuralCombatState.Publish(inCombat, !worldAvailable || ui->GameIsPaused() || Util::IsMenuOpen<RE::MapMenu>(ui), GetTickCount64());
+}
+
 NeuralRendering::CombatPauseSnapshot Upscaling::GetNeuralCombatPauseSnapshot() const noexcept
 {
 	std::scoped_lock lock(neuralCombatPauseMutex);
@@ -62122,13 +62136,9 @@ NeuralRendering::CombatPauseSnapshot Upscaling::ResolveNeuralCombatPause() const
 	if (neuralCombatPause.HasFrame(frame))
 		return neuralCombatPause.GetSnapshot();
 	const bool enabled = settings.neuralRenderingEnabled && settings.neuralRenderingPauseInCombat;
-	std::optional<bool> inCombat;
-	auto* const ui = globals::game::ui;
-	if (enabled && state && ui && !state->IsMainOrLoadingMenuOpen(ui)) {
-		if (auto* player = RE::PlayerCharacter::GetSingleton())
-			inCombat = player->IsInCombat();
-	}
-	return neuralCombatPause.Update(frame, enabled, GetTickCount64(), inCombat, ui && ui->GameIsPaused());
+	const auto sample = neuralCombatState.ConsumeSnapshot();
+	return neuralCombatPause.Update(frame, enabled, sample.sampledAtMs, sample.inCombat, sample.gamePaused,
+		sample.combatInterrupted, sample.gameplayInterrupted);
 }
 
 NeuralRendering::TemporalAdmissionResult Upscaling::BuildNeuralTemporalAdmission(

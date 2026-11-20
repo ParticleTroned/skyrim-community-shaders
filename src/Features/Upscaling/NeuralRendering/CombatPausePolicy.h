@@ -61,13 +61,16 @@ namespace NeuralRendering
 
 		[[nodiscard]] constexpr CombatPauseSnapshot GetSnapshot() const noexcept { return snapshot; }
 
-		/** Paused gameplay interrupts recovery without initiating a new combat pause. */
+		/** Updates one render frame using main-thread time and retained interruptions. */
 		constexpr CombatPauseSnapshot Update(std::uint32_t a_frame, bool a_enabled,
-			std::uint64_t a_nowMs, std::optional<bool> a_inCombat, bool a_gamePaused = false) noexcept
+			std::uint64_t a_nowMs, std::optional<bool> a_inCombat, bool a_gamePaused = false,
+			bool a_combatInterrupted = false, bool a_gameplayInterrupted = false) noexcept
 		{
 			if (HasFrame(a_frame))
 				return snapshot;
-			if (snapshot.sampled && (!IsSequentialFrame(snapshot.frame, a_frame) || a_nowMs < lastSampleMs))
+			const bool sampleDiscontinuous = snapshot.sampled &&
+			                                 (!IsSequentialFrame(snapshot.frame, a_frame) || a_nowMs < lastSampleMs);
+			if (a_combatInterrupted || (snapshot.IsPaused() && (a_gameplayInterrupted || sampleDiscontinuous)))
 				snapshot.phase = CombatPausePhase::Unavailable;
 			snapshot.sampled = true;
 			snapshot.frame = a_frame;

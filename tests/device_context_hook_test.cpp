@@ -11,7 +11,7 @@ namespace
 {
 	ID3D11DeviceContext* expectedContext = nullptr;
 	bool canonicalReceiver = true;
-	unsigned clears = 0, viewportSets = 0, viewportGets = 0;
+	unsigned clears = 0, viewportSets = 0, viewportGets = 0, stateSwaps = 0;
 
 	void Require(bool condition, const char* message)
 	{
@@ -52,6 +52,16 @@ namespace
 		static inline decltype(&Call) original = nullptr;
 	};
 
+	struct SwapStateHook
+	{
+		static void Call(ID3D11DeviceContext1* context, ID3DDeviceContextState* state, ID3DDeviceContextState** previous)
+		{
+			++stateSwaps;
+			original(context, state, previous);
+		}
+		static inline decltype(&Call) original = nullptr;
+	};
+
 	Util::DetourAttachResult RejectDetour(void**, void*) { return { ERROR_INVALID_BLOCK, true }; }
 	BOOL WINAPI RejectProtection(LPVOID, SIZE_T, DWORD, PDWORD)
 	{
@@ -84,7 +94,7 @@ namespace
 		Require(Util::CreateIsolatedDeviceContextState(device.get(), context.get(), context1, isolated, "ContextHookTest::BeforePublicationFailure"),
 			"Initial isolated state creation failed");
 		static auto& state = *new HookState;
-		const auto result = CompleteContextHook(context.get(), InstallHook(state, context.get(), 110, kContextSlots, ContextSlots,
+		const auto result = CompleteContextHook(context.get(), InstallHook(state, context.get(), 110, kContextSlots, ContextSlots<kContextSlots>,
 																   reinterpret_cast<void**>(&ClearStateHook::original), reinterpret_cast<void*>(ClearStateHook::Call), RejectDetour, FailProtectionRestore));
 		DWORD ignored = 0;
 		auto** table = *reinterpret_cast<void***>(context.get());
@@ -108,7 +118,7 @@ namespace
 		auto** original = reinterpret_cast<void**>(&Hook::original);
 		auto* hook = reinterpret_cast<void*>(Hook::Call);
 		const auto result = method == Util::VirtualHookMethod::Detour ? Util::InstallVirtualFunctionHook(context, Slot, original, hook) :
-		                                                                CompleteContextHook(context, InstallHook(state, context, Slot, kContextSlots, ContextSlots, original, hook,
+		                                                                CompleteContextHook(context, InstallHook(state, context, Slot, kContextSlots, ContextSlots<kContextSlots>, original, hook,
 																										 RejectDetour, method == Util::VirtualHookMethod::Clone ? RejectProtection : VirtualProtect));
 		Require(result.error == NO_ERROR, "Native context hook installation failed");
 		Require(result.method == method,
@@ -133,6 +143,12 @@ namespace
 		Install<95, GetViewportsHook>(context.get(), method);
 		Util::RegisterDeviceContextStateForHooks(context.get());
 		const bool swapsAllowed = method == Util::VirtualHookMethod::Detour;
+		if (swapsAllowed) {
+			const auto result = Util::InstallVirtualFunctionHook(context1.get(), 131,
+				reinterpret_cast<void**>(&SwapStateHook::original), reinterpret_cast<void*>(SwapStateHook::Call));
+			Require(result.error == NO_ERROR && result.method == Util::VirtualHookMethod::Detour,
+				"Context1 slot 131 failed to install through the native hook path");
+		}
 		auto* originalIsolated = isolated.get();
 		Require(Util::CreateIsolatedDeviceContextState(device.get(), context.get(), context1, isolated, "ContextHookTest::Replacement") == swapsAllowed,
 			"Context isolation did not follow the installed native hook method");
@@ -142,6 +158,7 @@ namespace
 			const unsigned setsBefore = viewportSets;
 			context->RSSetViewports(1, &sceneViewport);
 			Require(viewportSets == setsBefore + 1, "Scene viewport setter bypassed its hook");
+			const auto swapsBefore = stateSwaps;
 			{
 				Util::ScopedDeviceContextState guard(context1.get(), isolated.get());
 				Require(static_cast<bool>(guard) == swapsAllowed, "Previously created isolation ignored native hook compatibility");
@@ -151,6 +168,8 @@ namespace
 					context->RSSetViewports(1, &overlayViewport);
 				}
 			}
+			Require(stateSwaps == swapsBefore + (swapsAllowed ? 2u : 0u),
+				"Context1 hook did not observe the expected native state swaps");
 			D3D11_VIEWPORT restored{};
 			UINT count = 1;
 			const unsigned getsBefore = viewportGets;

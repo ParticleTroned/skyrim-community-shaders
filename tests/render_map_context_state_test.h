@@ -108,7 +108,7 @@ namespace CSX::RenderMap
 				const auto binding = std::find_if(snapshot->targetBindingObservations.begin(), snapshot->targetBindingObservations.end(),
 					[&](const TargetBindingObservationRecord& value) { return value.observationId == draws[index]->targetBindingObservationId; });
 				Require(binding != snapshot->targetBindingObservations.end() &&
-							ObservedView(*snapshot, binding->renderTargetObservationIds[0]) ==
+							ObservedView(*snapshot, binding->renderTargetObservationIds[Context::renderTargetSlot]) ==
 								reinterpret_cast<std::uintptr_t>(native ? native->target : nullptr),
 					"draw retained render targets from another native context state");
 				Require(ObservedView(*snapshot, reads[index]->payload.words[0]) ==

@@ -57,7 +57,7 @@ string(SUBSTRING "${_target}" 0 ${_target_end} _target)
 foreach(_input IN ITEMS
     src/RenderMap/D3DContextHooks.cpp src/RenderMap/Runtime.cpp
     src/RenderMap/Collector.cpp tests/render_map_context_hooks_test.cpp
-    CSX_RENDER_MAP_TESTING=1 CSX_RENDER_MAP_CONTEXT_TESTING=1
+    CSX_RENDER_MAP_TESTING=1 CSX_RENDER_MAP_CONTEXT_TESTING=1 CSX_RENDER_MAP_ACTIVATION_TESTING=1
 )
     string(FIND "${_target}" "${_input}" _found)
     if(_found EQUAL -1)

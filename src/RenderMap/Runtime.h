@@ -2,6 +2,7 @@
 
 #include "RenderMap/Collector.h"
 #include "RenderMap/ShaderBytecodeCatalogue.h"
+#include "RenderMap/TransferVersionPolicy.h"
 
 #include <bitset>
 #include <cstdint>
@@ -53,6 +54,13 @@ namespace CSX::RenderMap
 		kCommandListObservation = 28,
 		kFinishCommandList = 29,
 		kExecuteCommandList = 30,
+		kPostProcessingBoundary = 31,
+		kRasterState = 32,
+		kTransferResourceAccess = 33,
+		kEyePublication = 34,
+		kTransferOperation = 35,
+		kTransferCopyRegion = 36,
+		kNativePipelineSnapshot = 37,
 	};
 
 	enum class DeviceContextKind : std::uint8_t
@@ -234,11 +242,58 @@ namespace CSX::RenderMap
 	class Runtime
 	{
 	public:
+		class PostProcessingScope
+		{
+		public:
+			~PostProcessingScope();
+			PostProcessingScope(const PostProcessingScope&) = delete;
+			PostProcessingScope& operator=(const PostProcessingScope&) = delete;
+
+		private:
+			friend class Runtime;
+			PostProcessingScope(Runtime& a_owner, const ResourceObservationInput& a_source,
+				const ResourceObservationInput& a_destination, std::uint32_t a_target,
+				std::uint64_t a_publicationGeneration) noexcept;
+			const Runtime* previousOwner = nullptr;
+			std::uint64_t previousGeneration = 0;
+			std::uint64_t previousOperation = 0;
+			Collector::ScopeGuard scope;
+		};
+
+		/** Bound observations to the exact original engine post-processing call. */
+		PostProcessingScope EnterPostProcessing(const ResourceObservationInput& a_source,
+			const ResourceObservationInput& a_destination, std::uint32_t a_target,
+			std::uint64_t a_publicationGeneration) noexcept;
+		bool IsInsidePostProcessing() const noexcept;
+		/** Correlate one operation with its queried native shader-stage bindings. */
+		void BeginTransferOperation(std::uintptr_t a_context, bool a_compute,
+			std::uint32_t a_operation, const std::array<std::uintptr_t, 6>& a_shaders) noexcept;
+		/** Record a queried raster slot immediately before an observed operation. */
+		void RecordRasterState(std::uintptr_t a_context, std::uint32_t a_slot,
+			const std::array<float, 6>& a_viewport, const std::array<std::int32_t, 4>& a_scissor,
+			std::uint32_t a_viewportCount, std::uint32_t a_scissorCount, bool a_scissorEnabled) noexcept;
+		/** Record bound candidates and observed command epochs, never pixel identity. */
+		void RecordTransferResourceAccess(std::uintptr_t a_context, const ResourceViewInput& a_view,
+			ResourceStage a_stage, std::uint32_t a_slot, bool a_write) noexcept;
+		void RecordTransferCopyRegion(std::uintptr_t a_context, std::uint32_t a_sourceSubresource,
+			std::uint32_t a_destinationSubresource, const std::array<std::uint32_t, 3>& a_destination,
+			const std::array<std::uint32_t, 6>& a_sourceBox, bool a_hasSourceBox) noexcept;
+
 		StartResult StartCapture(const CollectorConfig& a_config);
 		std::optional<CaptureSnapshot> StopCapture(
 			StopReason a_reason = StopReason::kRequested,
 			std::chrono::milliseconds a_drainTimeout = std::chrono::milliseconds(100));
 		bool IsCapturing(std::uint64_t a_expectedGeneration = 0) const noexcept;
+		/** Start the opt-in late window before constructing its native boundary. */
+		bool ActivatePostProcessingWindow(std::uint32_t a_target, std::uint64_t a_frame,
+			std::uint64_t a_publicationGeneration) noexcept;
+		void CompleteWindowBootstrap(bool a_success) noexcept;
+		/** Record queried shader state only for the retained scope generation, without inventing execution. */
+		void RecordPostProcessingBootstrap(const std::array<std::uintptr_t, 6>& a_shaders,
+			std::uint64_t a_expectedCaptureGeneration) noexcept;
+		/** Retained scope generation; remains unchanged when the active capture turns over. */
+		std::uint64_t PostProcessingCaptureGeneration() const noexcept;
+		CaptureWindowSnapshot GetCaptureWindow() const noexcept;
 		bool IsCaptureDraining() const noexcept;
 		std::uint64_t ActiveCaptureGeneration() const noexcept;
 
@@ -253,7 +308,8 @@ namespace CSX::RenderMap
 		/** Invalidate bindings after a native clear or context-state swap, including restoration. */
 		void InvalidateContextState(std::uintptr_t a_context) noexcept;
 		/** Claim one effective shader snapshot after capture start or native state replacement. */
-		std::uint64_t ClaimStageStateSeed(std::uintptr_t a_context) noexcept;
+		std::uint64_t ClaimStageStateSeed(std::uintptr_t a_context,
+			std::uint64_t a_expectedCaptureGeneration = 0) noexcept;
 		void RegisterDeferredContext(
 			std::uintptr_t a_context,
 			std::uint32_t a_contextFlags,
@@ -285,7 +341,8 @@ namespace CSX::RenderMap
 			bool a_keepTargets = false,
 			TargetBindingSource a_source = TargetBindingSource::kObservedCall,
 			std::uint64_t a_expectedCaptureGeneration = 0) noexcept;
-		std::uint64_t ClaimRenderTargetStateSeed(std::uintptr_t a_context) noexcept;
+		std::uint64_t ClaimRenderTargetStateSeed(std::uintptr_t a_context,
+			std::uint64_t a_expectedCaptureGeneration = 0) noexcept;
 		void BindResourceViews(
 			std::uintptr_t a_context,
 			ResourceBindingKind a_bindingKind,
@@ -296,7 +353,8 @@ namespace CSX::RenderMap
 			bool a_keepViews = false,
 			ResourceBindingSource a_source = ResourceBindingSource::kRequestedCall,
 			std::uint64_t a_expectedCaptureGeneration = 0) noexcept;
-		std::uint64_t ClaimResourceViewStateSeed(std::uintptr_t a_context) noexcept;
+		std::uint64_t ClaimResourceViewStateSeed(std::uintptr_t a_context,
+			std::uint64_t a_expectedCaptureGeneration = 0) noexcept;
 		void RecordResourceFlow(
 			std::uintptr_t a_context,
 			ResourceFlowOperation a_operation,
@@ -354,7 +412,8 @@ namespace CSX::RenderMap
 			float a_uMax,
 			float a_vMax,
 			std::uint32_t a_submitFlags,
-			std::uint64_t a_compositorCycle) noexcept;
+			std::uint64_t a_compositorCycle, std::uint64_t a_publicationGeneration,
+			std::uint64_t a_expectedCaptureGeneration, std::uint64_t a_cpuFrame = kUnknownFrame) noexcept;
 		void RecordDraw(
 			std::uintptr_t a_context,
 			DrawOperation a_operation,
@@ -413,31 +472,23 @@ namespace CSX::RenderMap
 					return owner.BindResourceViews(std::forward<Args>(a_arguments)...);
 				});
 			}
-			template <class... Args>
-			decltype(auto) ClaimStageStateSeed(Args&&... a_arguments) const noexcept
+			std::uint64_t ClaimStageStateSeed(std::uintptr_t a_context) const noexcept
 			{
-				return Publish([&]() noexcept -> decltype(auto) {
-					return owner.ClaimStageStateSeed(std::forward<Args>(a_arguments)...);
-				});
+				return generation == 0 ? 0 : owner.ClaimStageStateSeed(a_context, generation);
 			}
 			/** Getter snapshots never update a successor capture's native binding shadow. */
 			void ObserveStageState(std::uintptr_t a_context, ShaderStage a_stage, std::uintptr_t a_object) const noexcept
 			{
 				Publish([&]() noexcept { owner.BindStage(a_context, a_stage, a_object); });
 			}
-			template <class... Args>
-			decltype(auto) ClaimRenderTargetStateSeed(Args&&... a_arguments) const noexcept
+			// The seed helper serializes the generation check and claim.
+			std::uint64_t ClaimRenderTargetStateSeed(std::uintptr_t a_context) const noexcept
 			{
-				return Publish([&]() noexcept -> decltype(auto) {
-					return owner.ClaimRenderTargetStateSeed(std::forward<Args>(a_arguments)...);
-				});
+				return generation == 0 ? 0 : owner.ClaimRenderTargetStateSeed(a_context, generation);
 			}
-			template <class... Args>
-			decltype(auto) ClaimResourceViewStateSeed(Args&&... a_arguments) const noexcept
+			std::uint64_t ClaimResourceViewStateSeed(std::uintptr_t a_context) const noexcept
 			{
-				return Publish([&]() noexcept -> decltype(auto) {
-					return owner.ClaimResourceViewStateSeed(std::forward<Args>(a_arguments)...);
-				});
+				return generation == 0 ? 0 : owner.ClaimResourceViewStateSeed(a_context, generation);
 			}
 			template <class... Args>
 			decltype(auto) RecordFinishCommandList(Args&&... a_arguments) const noexcept
@@ -481,6 +532,40 @@ namespace CSX::RenderMap
 					return owner.RecordDispatch(std::forward<Args>(a_arguments)...);
 				});
 			}
+			void BeginTransferOperation(std::uintptr_t a_context, bool a_compute, std::uint32_t a_operation,
+				const std::array<std::uintptr_t, 6>& a_shaders) const noexcept
+			{
+				Publish([&]() noexcept {
+					owner.BeginTransferOperation(a_context, a_compute, a_operation, a_shaders);
+				});
+			}
+
+			void RecordRasterState(std::uintptr_t a_context, std::uint32_t a_slot,
+				const std::array<float, 6>& a_viewport, const std::array<std::int32_t, 4>& a_scissor,
+				std::uint32_t a_viewportCount, std::uint32_t a_scissorCount, bool a_scissorEnabled) const noexcept
+			{
+				Publish([&]() noexcept {
+					owner.RecordRasterState(a_context, a_slot, a_viewport, a_scissor, a_viewportCount, a_scissorCount, a_scissorEnabled);
+				});
+			}
+
+			void RecordTransferResourceAccess(std::uintptr_t a_context, const ResourceViewInput& a_view,
+				ResourceStage a_stage, std::uint32_t a_slot, bool a_write) const noexcept
+			{
+				Publish([&]() noexcept {
+					owner.RecordTransferResourceAccess(a_context, a_view, a_stage, a_slot, a_write);
+				});
+			}
+
+			void RecordTransferCopyRegion(std::uintptr_t a_context, std::uint32_t a_sourceSubresource,
+				std::uint32_t a_destinationSubresource, const std::array<std::uint32_t, 3>& a_destination,
+				const std::array<std::uint32_t, 6>& a_sourceBox, bool a_hasSourceBox) const noexcept
+			{
+				Publish([&]() noexcept {
+					owner.RecordTransferCopyRegion(a_context, a_sourceSubresource, a_destinationSubresource, a_destination, a_sourceBox, a_hasSourceBox);
+				});
+			}
+
 			void BindStage(std::uintptr_t a_context, ShaderStage a_stage, std::uintptr_t a_object) const noexcept
 			{
 				const std::scoped_lock lock(owner.captureLifecycleMutex);
@@ -549,7 +634,7 @@ namespace CSX::RenderMap
 		std::uint32_t PausedCommandListAdmissionsForTesting() const noexcept;
 		void ResumeCommandListAdmissionsForTesting() noexcept;
 		std::size_t CommandListCatalogueSizeForTesting() noexcept;
-		void PauseNextProducerPublicationForTesting() noexcept;
+		void PauseNextProducerPublicationForTesting(std::uint32_t a_skipPublications = 0) noexcept;
 		void PauseNextDeferredPublicationForTesting() noexcept;
 		void PauseNextImmediateStagePublicationForTesting() noexcept;
 		void PauseNextImmediateDispatchAdmissionForTesting() noexcept;
@@ -689,6 +774,10 @@ namespace CSX::RenderMap
 		void ResetImmediatePipelineState() noexcept;
 		void ResetImmediateStageObservations(bool a_clearBindings) noexcept;
 		void SetImmediateBoundStage(ShaderStage a_stage, std::uintptr_t a_d3dObject) noexcept;
+		void BindBootstrapStage(ShaderStage a_stage, std::uintptr_t a_d3dObject,
+			std::uint64_t a_expectedCaptureGeneration) noexcept;
+		std::uint64_t ClaimImmediateStateSeed(std::atomic_uint64_t& a_seed,
+			std::uintptr_t a_context, std::uint64_t a_expectedCaptureGeneration) noexcept;
 		ImmediateStageObservation ReadImmediateStageObservation(ShaderStage a_stage) const noexcept;
 		void ApplyEffectiveResourceViewResetLocked() noexcept;
 		std::uint64_t NextCommandStreamSequence() noexcept;
@@ -716,6 +805,8 @@ namespace CSX::RenderMap
 			std::uint64_t a_commandStreamSequence, std::uint64_t a_expectedCaptureGeneration) noexcept;
 
 		Collector collector;
+		std::mutex transferVersionMutex;
+		TransferVersions transferVersions;
 		// Serializes reset-before-publish capture transitions with shutdown.
 		std::mutex captureLifecycleMutex;
 		std::atomic_uintptr_t immediateContext{ 0 };
@@ -755,10 +846,11 @@ namespace CSX::RenderMap
 #if defined(CSX_RENDER_MAP_TESTING)
 		std::atomic_bool failNextDeferredContextCatalogueAdmission{ false };
 		std::atomic_bool failNextCommandListCatalogueAdmission{ false };
+		std::atomic_bool pauseNextProducerPublication{ false };
+		std::atomic_uint32_t producerPublicationsToSkip{ 0 };
 		std::atomic_uint32_t commandListAdmissionsToPause{ 0 };
 		std::atomic_uint32_t pausedCommandListAdmissions{ 0 };
 		std::atomic_bool resumeCommandListAdmissions{ false };
-		std::atomic_bool pauseNextProducerPublication{ false };
 		std::atomic_bool pauseNextDeferredPublication{ false };
 		std::atomic_bool pauseNextImmediateStagePublication{ false };
 		std::atomic_bool pauseNextImmediateDispatchAdmission{ false };

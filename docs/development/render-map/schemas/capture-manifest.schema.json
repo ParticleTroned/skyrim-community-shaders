@@ -261,6 +261,7 @@
                 "maxSceneObjectObservations": { "type": "integer", "minimum": 1 },
                 "maxGeometryObservations": { "type": "integer", "minimum": 1 },
                 "maxMaterialStateObservations": { "type": "integer", "minimum": 1 },
+                "maxTransferVersionResources": { "type": "integer", "const": 256 },
                 "geometryShaderTypes": {
                     "type": "array",
                     "minItems": 1,
@@ -269,6 +270,16 @@
                     "uniqueItems": true
                 },
                 "executionWithinSelectedGeometry": { "type": "boolean" },
+                "activation": {
+                    "type": "object",
+                    "required": ["mode", "target", "maxWaitMs"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "mode": { "enum": ["immediate", "main-post-processing-to-accepted-eyes"] },
+                        "target": { "type": ["integer", "null"], "minimum": 0 },
+                        "maxWaitMs": { "type": "integer", "minimum": 0 }
+                    }
+                },
                 "pointerPolicy": { "enum": ["retain", "hash", "redact"] }
             }
         },
@@ -470,11 +481,152 @@
                 }
             ]
         },
+        "captureWindow": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "phase": {
+                    "enum": [
+                        "disabled",
+                        "armed",
+                        "bootstrap",
+                        "active",
+                        "matched-eyes",
+                        "incomplete"
+                    ]
+                },
+                "failure": {
+                    "enum": [
+                        "none",
+                        "activation-timeout",
+                        "bootstrap-failed",
+                        "frame-changed",
+                        "active-timeout",
+                        "stopped"
+                    ]
+                },
+                "armedTick": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "activationTick": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "endTick": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "publicationGeneration": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "compositorCycle": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "bootstrapThreadId": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "bootstrapEventCount": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "activationBoundary": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "scope",
+                        "attemptCount",
+                        "targetRejections",
+                        "frameRejections",
+                        "publicationRejections",
+                        "lastTarget",
+                        "lastCpuFrame",
+                        "lastPublicationGeneration"
+                    ],
+                    "properties": {
+                        "scope": { "const": "armed-window-input-validation" },
+                        "attemptCount": { "type": "integer", "minimum": 0 },
+                        "targetRejections": { "type": "integer", "minimum": 0 },
+                        "frameRejections": { "type": "integer", "minimum": 0 },
+                        "publicationRejections": { "type": "integer", "minimum": 0 },
+                        "lastTarget": {
+                            "type": ["integer", "null"],
+                            "minimum": 0,
+                            "maximum": 4294967295
+                        },
+                        "lastCpuFrame": { "type": ["integer", "null"], "minimum": 0 },
+                        "lastPublicationGeneration": { "type": ["integer", "null"], "minimum": 0 }
+                    }
+                },
+                "cpuFrame": {
+                    "type": ["integer", "null"],
+                    "minimum": 0
+                },
+                "acceptedEyeMask": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 3
+                },
+                "bootstrapComplete": {
+                    "type": "boolean"
+                },
+                "prefixEventCount": {
+                    "type": "null"
+                },
+                "preWindowProducerHistory": {
+                    "const": "unobserved"
+                },
+                "fullPipelineEstablished": {
+                    "const": false
+                },
+                "pixelTransferEstablished": {
+                    "const": false
+                },
+                "omittedPrefix": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["fromTickInclusive", "toTickExclusive"],
+                    "properties": {
+                        "fromTickInclusive": {
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        "toTickExclusive": {
+                            "type": ["integer", "null"],
+                            "minimum": 0
+                        }
+                    }
+                }
+            },
+            "required": [
+                "phase",
+                "failure",
+                "armedTick",
+                "activationTick",
+                "endTick",
+                "publicationGeneration",
+                "compositorCycle",
+                "bootstrapThreadId",
+                "bootstrapEventCount",
+                "cpuFrame",
+                "acceptedEyeMask",
+                "bootstrapComplete",
+                "prefixEventCount",
+                "preWindowProducerHistory",
+                "fullPipelineEstablished",
+                "pixelTransferEstablished",
+                "omittedPrefix"
+            ]
+        },
         "extensions": {
             "type": "object",
             "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$" },
             "properties": {
-                "csx.shaderCompilation": { "$ref": "#/$defs/shaderCompilationProvenance" }
+                "csx.shaderCompilation": { "$ref": "#/$defs/shaderCompilationProvenance" },
+                "csx.captureWindow": { "$ref": "#/$defs/captureWindow" }
             },
             "additionalProperties": true
         }

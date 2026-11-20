@@ -124,9 +124,11 @@ namespace CSX::RenderMap
 	ControllerSnapshot CaptureController::GetStatus() const
 	{
 		std::lock_guard lock(mutex);
+		const auto window = GetRuntime().GetCaptureWindow();
 		ControllerSnapshot output{
 			.active = active,
 			.accepting = active.has_value() && GetRuntime().IsCapturing(),
+			.window = window,
 		};
 		output.completedCaptureIds.reserve(completed.size());
 		for (const auto& capture : completed)

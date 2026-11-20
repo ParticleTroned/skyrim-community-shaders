@@ -106,29 +106,44 @@ namespace CSX::RenderMap::ContextHookFixture
 			pDesc->Buffer.NumElements = 16;
 		}
 	};
+	template <class Interface, class Description>
+	struct OutputView : DeviceChild<Interface>
+	{
+		Buffer& resource;
+		Description description{};
+		unsigned resourceQueries = 0;
+		unsigned descriptionQueries = 0;
+
+		explicit OutputView(Buffer& input) : resource(input) {}
+
+		void STDMETHODCALLTYPE GetResource(ID3D11Resource** output) override
+		{
+			TouchGetter();
+			++resourceQueries;
+			*output = &resource;
+			resource.AddRef();
+		}
+		void STDMETHODCALLTYPE GetDesc(Description* output) override
+		{
+			TouchGetter();
+			++descriptionQueries;
+			*output = description;
+		}
+	};
 	struct CommandList : DeviceChild<ID3D11CommandList>
 	{
 		UINT STDMETHODCALLTYPE GetContextFlags() override { return 0; }
 	};
-	struct RenderTargetView : DeviceChild<ID3D11RenderTargetView>
+	struct RenderTargetView : OutputView<ID3D11RenderTargetView, D3D11_RENDER_TARGET_VIEW_DESC>
 	{
-		Buffer* resource;
-		explicit RenderTargetView(Buffer& input) : resource(&input) {}
-		void STDMETHODCALLTYPE GetResource(ID3D11Resource** output) override
+		explicit RenderTargetView(Buffer& input) : OutputView<ID3D11RenderTargetView, D3D11_RENDER_TARGET_VIEW_DESC>(input)
 		{
-			TouchGetter();
-			*output = resource;
-			resource->AddRef();
-		}
-		void STDMETHODCALLTYPE GetDesc(D3D11_RENDER_TARGET_VIEW_DESC* desc) override
-		{
-			TouchGetter();
-			*desc = {};
-			desc->Format = DXGI_FORMAT_R32_FLOAT;
-			desc->ViewDimension = D3D11_RTV_DIMENSION_BUFFER;
-			desc->Buffer.NumElements = 16;
+			description.Format = DXGI_FORMAT_R32_FLOAT;
+			description.ViewDimension = D3D11_RTV_DIMENSION_BUFFER;
+			description.Buffer.NumElements = 16;
 		}
 	};
+
 	struct ContextState : DeviceChild<ID3DDeviceContextState>
 	{
 		std::array<ID3D11ShaderResourceView*, 6> resources{};
@@ -136,16 +151,44 @@ namespace CSX::RenderMap::ContextHookFixture
 		ID3D11PixelShader* pixel = nullptr;
 		ID3D11ComputeShader* compute = nullptr;
 		ID3D11RenderTargetView* target = nullptr;
+		ID3D11UnorderedAccessView* computeOutput = nullptr;
 	};
 	struct Context : DeviceChild<ID3D11DeviceContext1>
 	{
 		D3D11_DEVICE_CONTEXT_TYPE type = D3D11_DEVICE_CONTEXT_IMMEDIATE;
 		std::array<ID3D11ShaderResourceView*, 6> resources{};
 		unsigned queries = 0;
+		static constexpr UINT renderTargetSlot = 2;
+		static constexpr UINT computeOutputSlot = 3;
+		ID3D11RenderTargetView* renderTarget = nullptr;
+		ID3D11UnorderedAccessView* computeOutput = nullptr;
+		void (*outputTurnover)() = nullptr;
+		unsigned outputReferencesReturned = 0;
+		unsigned lastOutputGetterEntry = 0;
+
+		template <class ViewType>
+		void ReadOutputViews(UINT start, UINT count, ViewType** output, UINT slot, ViewType* view)
+		{
+			TouchGetter();
+			bool acquired = false;
+			for (UINT index = 0; index < count; ++index) {
+				output[index] = start + index == slot ? view : nullptr;
+				if (output[index]) {
+					output[index]->AddRef();
+					++outputReferencesReturned;
+					acquired = true;
+				}
+			}
+			if (acquired) {
+				lastOutputGetterEntry = getterEntries;
+				if (auto callback = std::exchange(outputTurnover, nullptr))
+					callback();
+			}
+		}
+		void (*onVertexShaderQuery)() noexcept = nullptr;
 		ID3D11VertexShader* queriedVertex = nullptr;
 		ID3D11PixelShader* queriedPixel = nullptr;
 		ID3D11ComputeShader* queriedCompute = nullptr;
-		ID3D11RenderTargetView* queriedTarget = nullptr;
 		ContextState* activeState = nullptr;
 		void ReadResources(unsigned stage, UINT start, UINT count, ID3D11ShaderResourceView** output)
 		{
@@ -641,6 +684,8 @@ namespace CSX::RenderMap::ContextHookFixture
 			*ppVertexShader = queriedVertex;
 			if (*ppVertexShader)
 				(*ppVertexShader)->AddRef();
+			if (auto callback = std::exchange(onVertexShaderQuery, nullptr))
+				callback();
 		}
 		void STDMETHODCALLTYPE PSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer** ppConstantBuffers) override
 		{
@@ -720,14 +765,9 @@ namespace CSX::RenderMap::ContextHookFixture
 		}
 		void STDMETHODCALLTYPE OMGetRenderTargets(UINT NumViews, ID3D11RenderTargetView** ppRenderTargetViews, ID3D11DepthStencilView** ppDepthStencilView) override
 		{
-			TouchGetter();
-			for (UINT index = 0; index < NumViews; ++index) {
-				ppRenderTargetViews[index] = index == 0 ? queriedTarget : nullptr;
-				if (ppRenderTargetViews[index])
-					ppRenderTargetViews[index]->AddRef();
-			}
 			if (ppDepthStencilView)
 				*ppDepthStencilView = nullptr;
+			ReadOutputViews(0, NumViews, ppRenderTargetViews, renderTargetSlot, renderTarget);
 		}
 		void STDMETHODCALLTYPE OMGetRenderTargetsAndUnorderedAccessViews(UINT NumRTVs, ID3D11RenderTargetView** ppRenderTargetViews, ID3D11DepthStencilView** ppDepthStencilView, UINT UAVStartSlot, UINT NumUAVs, ID3D11UnorderedAccessView** ppUnorderedAccessViews) override
 		{
@@ -834,9 +874,7 @@ namespace CSX::RenderMap::ContextHookFixture
 		}
 		void STDMETHODCALLTYPE CSGetUnorderedAccessViews(UINT StartSlot, UINT NumUAVs, ID3D11UnorderedAccessView** ppUnorderedAccessViews) override
 		{
-			TouchGetter();
-			(void)StartSlot;
-			for (UINT index = 0; index < NumUAVs; ++index) ppUnorderedAccessViews[index] = nullptr;
+			ReadOutputViews(StartSlot, NumUAVs, ppUnorderedAccessViews, computeOutputSlot, computeOutput);
 		}
 		void STDMETHODCALLTYPE CSGetShader(ID3D11ComputeShader** ppComputeShader, ID3D11ClassInstance** ppClassInstances, UINT* pNumClassInstances) override
 		{
@@ -868,7 +906,8 @@ namespace CSX::RenderMap::ContextHookFixture
 			queriedVertex = nullptr;
 			queriedPixel = nullptr;
 			queriedCompute = nullptr;
-			queriedTarget = nullptr;
+			renderTarget = nullptr;
+			computeOutput = nullptr;
 		}
 		void STDMETHODCALLTYPE Flush(void) override
 		{
@@ -930,7 +969,8 @@ namespace CSX::RenderMap::ContextHookFixture
 				activeState->vertex = queriedVertex;
 				activeState->pixel = queriedPixel;
 				activeState->compute = queriedCompute;
-				activeState->target = queriedTarget;
+				activeState->target = renderTarget;
+				activeState->computeOutput = computeOutput;
 			}
 			if (previous) {
 				*previous = activeState;
@@ -943,7 +983,8 @@ namespace CSX::RenderMap::ContextHookFixture
 				queriedVertex = activeState->vertex;
 				queriedPixel = activeState->pixel;
 				queriedCompute = activeState->compute;
-				queriedTarget = activeState->target;
+				renderTarget = activeState->target;
+				computeOutput = activeState->computeOutput;
 			} else {
 				ClearState();
 			}

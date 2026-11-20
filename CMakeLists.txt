@@ -5188,6 +5188,10 @@ if(BUILD_CONTROLLER_TESTS)
         render_map_collector_test
         PRIVATE "${PROJECT_SOURCE_DIR}/src"
     )
+    target_link_libraries(
+        render_map_collector_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
     add_test(NAME RenderMapCollector COMMAND render_map_collector_test)
     set_tests_properties(RenderMapCollector PROPERTIES LABELS "ControllerTests")
 
@@ -5207,6 +5211,10 @@ if(BUILD_CONTROLLER_TESTS)
         render_map_runtime_test
         PRIVATE "${PROJECT_SOURCE_DIR}/src"
     )
+    target_link_libraries(
+        render_map_runtime_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
     add_test(NAME RenderMapRuntime COMMAND render_map_runtime_test)
     set_tests_properties(RenderMapRuntime PROPERTIES LABELS "ControllerTests")
 
@@ -5224,6 +5232,7 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE
             CSX_RENDER_MAP_TESTING=1
             CSX_RENDER_MAP_CONTEXT_TESTING=1
+            CSX_RENDER_MAP_ACTIVATION_TESTING=1
             NOMINMAX
             WIN32_LEAN_AND_MEAN
     )
@@ -5255,6 +5264,10 @@ if(BUILD_CONTROLLER_TESTS)
         src/Utils/CryptoHash.cpp
     )
     target_compile_features(render_map_controller_test PRIVATE cxx_std_23)
+    target_compile_definitions(
+        render_map_controller_test
+        PRIVATE CSX_RENDER_MAP_ACTIVATION_TESTING=1
+    )
     target_include_directories(
         render_map_controller_test
         PRIVATE "${PROJECT_SOURCE_DIR}/src"

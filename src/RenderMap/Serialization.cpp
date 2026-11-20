@@ -1,5 +1,7 @@
 #include "RenderMap/Serialization.h"
 
+#include "RenderMap/PayloadSchemaNames.h"
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -518,7 +520,7 @@ namespace CSX::RenderMap
 			const auto observationId = a_payload.words[0];
 			if (!a_observation) {
 				return {
-					{ "schema", "shader-observation-v2" },
+					{ "schema", PayloadSchemaNames::kShaderObservationV2 },
 					{ "shaderObservationId", ShaderObservationId(observationId, a_generation) },
 					{ "shaderPointer", PointerEvidence(a_payload.words[1]) },
 					{ "pointerGeneration", a_payload.words[2] },
@@ -527,7 +529,7 @@ namespace CSX::RenderMap
 				};
 			}
 			return {
-				{ "schema", "shader-observation-v2" },
+				{ "schema", PayloadSchemaNames::kShaderObservationV2 },
 				{ "shaderObservationId", ShaderObservationId(observationId, a_generation) },
 				{ "shaderPointer", PointerEvidence(a_observation->pointerEvidence) },
 				{ "pointerGeneration", a_observation->pointerGeneration },
@@ -556,7 +558,7 @@ namespace CSX::RenderMap
 			const auto observationId = a_payload.words[0];
 			if (!a_observation) {
 				return {
-					{ "schema", "stage-shader-observation-v3" },
+					{ "schema", PayloadSchemaNames::kStageShaderObservationV3 },
 					{ "stageShaderObservationId", StageShaderObservationId(stage, observationId, a_generation) },
 					{ "stage", ShaderStageName(stage) },
 					{ "d3dObjectPointer", PointerEvidence(a_payload.words[1]) },
@@ -582,7 +584,7 @@ namespace CSX::RenderMap
 				});
 			}
 			return {
-				{ "schema", "stage-shader-observation-v3" },
+				{ "schema", PayloadSchemaNames::kStageShaderObservationV3 },
 				{ "stageShaderObservationId", StageShaderObservationId(
 												  a_observation->stage, observationId, a_generation) },
 				{ "stage", ShaderStageName(a_observation->stage) },
@@ -613,7 +615,7 @@ namespace CSX::RenderMap
 			const auto observationId = a_payload.words[0];
 			if (!a_observation) {
 				return {
-					{ "schema", "scene-object-observation-v1" },
+					{ "schema", PayloadSchemaNames::kSceneObjectObservationV1 },
 					{ "sceneObjectObservationId", SceneObjectObservationId(observationId, a_generation) },
 					{ "referencePointer", PointerEvidence(a_payload.words[1]) },
 					{ "pointerGeneration", a_payload.words[2] },
@@ -621,7 +623,7 @@ namespace CSX::RenderMap
 				};
 			}
 			return {
-				{ "schema", "scene-object-observation-v1" },
+				{ "schema", PayloadSchemaNames::kSceneObjectObservationV1 },
 				{ "sceneObjectObservationId", SceneObjectObservationId(observationId, a_generation) },
 				{ "referencePointer", PointerEvidence(a_observation->pointerEvidence) },
 				{ "pointerGeneration", a_observation->pointerGeneration },
@@ -647,7 +649,7 @@ namespace CSX::RenderMap
 			const auto observationId = a_payload.words[0];
 			if (!a_observation) {
 				return {
-					{ "schema", "geometry-observation-v1" },
+					{ "schema", PayloadSchemaNames::kGeometryObservationV1 },
 					{ "geometryObservationId", GeometryObservationId(observationId, a_generation) },
 					{ "geometryPointer", PointerEvidence(a_payload.words[1]) },
 					{ "pointerGeneration", a_payload.words[2] },
@@ -655,7 +657,7 @@ namespace CSX::RenderMap
 				};
 			}
 			return {
-				{ "schema", "geometry-observation-v1" },
+				{ "schema", PayloadSchemaNames::kGeometryObservationV1 },
 				{ "geometryObservationId", GeometryObservationId(observationId, a_generation) },
 				{ "geometryPointer", PointerEvidence(a_observation->pointerEvidence) },
 				{ "pointerGeneration", a_observation->pointerGeneration },
@@ -683,7 +685,7 @@ namespace CSX::RenderMap
 			const auto observationId = a_payload.words[0];
 			if (!a_observation) {
 				return {
-					{ "schema", "material-state-observation-v1" },
+					{ "schema", PayloadSchemaNames::kMaterialStateObservationV1 },
 					{ "materialStateObservationId", MaterialStateObservationId(observationId, a_generation) },
 					{ "shaderPropertyPointer", PointerEvidence(a_payload.words[1]) },
 					{ "materialPointer", PointerEvidence(a_payload.words[2]) },
@@ -707,7 +709,7 @@ namespace CSX::RenderMap
 				});
 			}
 			return {
-				{ "schema", "material-state-observation-v1" },
+				{ "schema", PayloadSchemaNames::kMaterialStateObservationV1 },
 				{ "materialStateObservationId", MaterialStateObservationId(observationId, a_generation) },
 				{ "stateRevision", a_observation->stateRevision },
 				{ "fingerprint", std::format("0x{:016X}", a_observation->fingerprint) },
@@ -746,7 +748,7 @@ namespace CSX::RenderMap
 				}
 			}
 			return {
-				{ "schema", "render-target-binding-v2" },
+				{ "schema", PayloadSchemaNames::kRenderTargetBindingV2 },
 				{ "source", TargetBindingSourceName(a_source) },
 				{ "targetBindingObservationId", TargetBindingObservationId(a_observationId, a_generation) },
 				{ "renderTargetObservationIds", std::move(renderTargets) },
@@ -1068,6 +1070,20 @@ namespace CSX::RenderMap
 				}
 			case PayloadSchema::kResourceViewStateObserved:
 				return json::array();
+			case PayloadSchema::kPostProcessingBoundary:
+				{
+					json refs = json::array();
+					for (const auto [word, roleName] : std::array{
+							 std::pair{ std::size_t{ 1 }, "main-resource-candidate" }, std::pair{ std::size_t{ 2 }, "destination-before" } })
+						if (a_event.payload.words[word])
+							refs.push_back({ { "id", ResourceObservationId(a_event.payload.words[word], a_event.sessionGeneration) },
+								{ "kind", "resource" }, { "role", roleName }, { "pointerEvidence", nullptr } });
+					return refs;
+				}
+			case PayloadSchema::kTransferResourceAccess:
+			case PayloadSchema::kEyePublication:
+				return json::array({ { { "id", ResourceObservationId(a_event.payload.words[0], a_event.sessionGeneration) },
+					{ "kind", "resource" }, { "role", "observed-transfer-resource" }, { "pointerEvidence", nullptr } } });
 			case PayloadSchema::kResourceFlow:
 				{
 					json refs = json::array();
@@ -1185,9 +1201,123 @@ namespace CSX::RenderMap
 			std::uint64_t a_preparedGeometrySetupObservationId)
 		{
 			switch (static_cast<PayloadSchema>(a_payload.schema)) {
+			case PayloadSchema::kPostProcessingBoundary:
+				return {
+					{ "schema", PayloadSchemaNames::kPostProcessingBoundaryV1 },
+					{ "symbol", "Upscaling::Main_PostProcessing::original" },
+					{ "boundaryObservationId", a_payload.words[0] },
+					{ "mainResourceCandidateObservationId", ResourceObservationId(a_payload.words[1], a_generation) },
+					{ "destinationBeforeResourceObservationId", ResourceObservationId(a_payload.words[2], a_generation) },
+					{ "engineTarget", a_payload.words[3] },
+					{ "renderTargetPublicationGeneration", a_payload.words[4] ? json(a_payload.words[4]) : json(nullptr) },
+					{ "actualSourceEstablishedByBoundary", false },
+				};
+			case PayloadSchema::kTransferOperation:
+				return {
+					{ "schema", PayloadSchemaNames::kPostProcessingOperationV1 },
+					{ "operationObservationId", a_payload.words[0] },
+					{ "family", (a_payload.words[1] & 0xFFFFFFFFu) >= 0x100u ? "resource-flow" : (a_payload.words[1] >> 32u) ? "dispatch" :
+																															   "draw" },
+					{ "operationValue", a_payload.words[1] & 0xFFFFFFFFu },
+					{ "nativeShaderBindings", {
+												  { "vertex", PointerEvidence(a_payload.words[2]) },
+												  { "hull", PointerEvidence(a_payload.words[3]) },
+												  { "domain", PointerEvidence(a_payload.words[4]) },
+												  { "geometry", PointerEvidence(a_payload.words[5]) },
+												  { "pixel", PointerEvidence(a_payload.words[6]) },
+												  { "compute", PointerEvidence(a_payload.words[7]) },
+											  } },
+					{ "nativeLifetimeJoinVerified", false },
+				};
+			case PayloadSchema::kNativePipelineSnapshot:
+				return {
+					{ "schema", PayloadSchemaNames::kNativePipelineSnapshotV1 },
+					{ "source", "activation-getters" },
+					{ "nativeShaderBindings", {
+												  { "vertex", PointerEvidence(a_payload.words[0]) },
+												  { "hull", PointerEvidence(a_payload.words[1]) },
+												  { "domain", PointerEvidence(a_payload.words[2]) },
+												  { "geometry", PointerEvidence(a_payload.words[3]) },
+												  { "pixel", PointerEvidence(a_payload.words[4]) },
+												  { "compute", PointerEvidence(a_payload.words[5]) },
+											  } },
+					{ "nativeLifetimeJoinVerified", false },
+				};
+			case PayloadSchema::kRasterState:
+				return {
+					{ "schema", PayloadSchemaNames::kRasterStateObservationV1 },
+					{ "operationObservationId", a_payload.words[7] >> 1u },
+					{ "slot", a_payload.words[0] },
+					{ "viewportCount", static_cast<std::uint32_t>(a_payload.words[6]) },
+					{ "scissorCount", a_payload.words[6] >> 32u },
+					{ "viewport", a_payload.words[0] < static_cast<std::uint32_t>(a_payload.words[6]) ? json({
+																											{ "x", UnpackFloat(a_payload.words[1], false) },
+																											{ "y", UnpackFloat(a_payload.words[1], true) },
+																											{ "width", UnpackFloat(a_payload.words[2], false) },
+																											{ "height", UnpackFloat(a_payload.words[2], true) },
+																											{ "minDepth", UnpackFloat(a_payload.words[3], false) },
+																											{ "maxDepth", UnpackFloat(a_payload.words[3], true) },
+																										}) :
+																										json(nullptr) },
+					{ "scissorEnabled", (a_payload.words[7] & 1u) != 0 },
+					{ "scissor", a_payload.words[0] < (a_payload.words[6] >> 32u) ? json({
+																						{ "left", static_cast<std::int32_t>(a_payload.words[4]) },
+																						{ "top", static_cast<std::int32_t>(a_payload.words[4] >> 32u) },
+																						{ "right", static_cast<std::int32_t>(a_payload.words[5]) },
+																						{ "bottom", static_cast<std::int32_t>(a_payload.words[5] >> 32u) },
+																					}) :
+																					json(nullptr) },
+				};
+			case PayloadSchema::kTransferResourceAccess:
+				return {
+					{ "schema", PayloadSchemaNames::kPostProcessingResourceAccessV1 },
+					{ "resourceObservationId", ResourceObservationId(a_payload.words[0], a_generation) },
+					{ "viewObservationId", TargetViewObservationId(static_cast<TargetViewKind>((a_payload.words[6] >> 8u) & 0xFFu), a_payload.words[1], a_generation) },
+					{ "commandVersionObservationId", a_payload.words[2] ? json(a_payload.words[2]) : json(nullptr) },
+					{ "commandEpoch", a_payload.words[3] ? json(a_payload.words[3]) : json(nullptr) },
+					{ "resourceStage", ResourceStageName(static_cast<ResourceStage>(a_payload.words[4])) },
+					{ "slotOrSubresource", a_payload.words[5] },
+					{ "role", (a_payload.words[6] & 1u) ? "observed-write-candidate" : "observed-read-candidate" },
+					{ "versionCatalogueAdmissionAvailable", (a_payload.words[6] & 2u) != 0 },
+					{ "versionUnavailableReason", a_payload.words[2] ? json(nullptr) : json((a_payload.words[6] & 2u) ? "no-retained-same-frame-command-or-uncovered-execution" : "capacity-frame-or-event-admission-unavailable") },
+					{ "operationObservationId", a_payload.words[7] },
+					{ "pixelReadOrWriteEstablished", false },
+					{ "nativeLifetimeJoinVerified", false },
+				};
+			case PayloadSchema::kEyePublication:
+				return {
+					{ "schema", PayloadSchemaNames::kAcceptedEyePublicationV1 },
+					{ "resourceObservationId", ResourceObservationId(a_payload.words[0], a_generation) },
+					{ "commandVersionObservationId", a_payload.words[1] ? json(a_payload.words[1]) : json(nullptr) },
+					{ "commandEpoch", a_payload.words[2] ? json(a_payload.words[2]) : json(nullptr) },
+					{ "renderTargetPublicationGeneration", a_payload.words[3] ? json(a_payload.words[3]) : json(nullptr) },
+					{ "compositorCycle", a_payload.words[4] },
+					{ "eye", EyeName(static_cast<Eye>(a_payload.words[5])) },
+					{ "eyeMask", a_payload.words[6] },
+					{ "acceptedWithCurrentPublicationLease", a_payload.words[3] != 0 },
+					{ "causalPixelTransferEstablished", false },
+				};
+			case PayloadSchema::kTransferCopyRegion:
+				return {
+					{ "schema", PayloadSchemaNames::kPostProcessingCopyRegionV1 },
+					{ "operationObservationId", a_payload.words[0] },
+					{ "sourceSubresource", static_cast<std::uint32_t>(a_payload.words[1]) },
+					{ "destinationSubresource", a_payload.words[1] >> 32u },
+					{ "destinationOrigin", { static_cast<std::uint32_t>(a_payload.words[2]), a_payload.words[2] >> 32u, a_payload.words[3] } },
+					{ "sourceBox", a_payload.words[7] ? json({
+															{ "left", static_cast<std::uint32_t>(a_payload.words[4]) },
+															{ "top", a_payload.words[4] >> 32u },
+															{ "front", static_cast<std::uint32_t>(a_payload.words[5]) },
+															{ "right", a_payload.words[5] >> 32u },
+															{ "bottom", static_cast<std::uint32_t>(a_payload.words[6]) },
+															{ "back", a_payload.words[6] >> 32u },
+														}) :
+														json(nullptr) },
+					{ "nullBoxMeansEntireSourceSubresource", a_payload.words[7] == 0 },
+				};
 			case PayloadSchema::kRenderPassBoundary:
 				return {
-					{ "schema", "render-pass-boundary-v1" },
+					{ "schema", PayloadSchemaNames::kRenderPassBoundaryV1 },
 					{ "renderPassPointer", PointerEvidence(a_payload.words[0]) },
 					{ "geometryPointer", PointerEvidence(a_payload.words[1]) },
 					{ "technique", a_payload.words[2] },
@@ -1197,7 +1327,7 @@ namespace CSX::RenderMap
 				};
 			case PayloadSchema::kTechniqueBoundary:
 				return {
-					{ "schema", "technique-boundary-v2" },
+					{ "schema", PayloadSchemaNames::kTechniqueBoundaryV2 },
 					{ "shaderObservationId", ShaderObservationId(a_payload.words[0], a_generation) },
 					{ "shaderPointer", PointerEvidence(a_payload.words[1]) },
 					{ "shaderType", a_payload.words[2] },
@@ -1208,7 +1338,7 @@ namespace CSX::RenderMap
 				};
 			case PayloadSchema::kGeometryBoundary:
 				return {
-					{ "schema", "geometry-boundary-v1" },
+					{ "schema", PayloadSchemaNames::kGeometryBoundaryV1 },
 					{ "shaderPointer", PointerEvidence(a_payload.words[0]) },
 					{ "renderPassPointer", PointerEvidence(a_payload.words[1]) },
 					{ "geometryPointer", PointerEvidence(a_payload.words[2]) },
@@ -1218,7 +1348,7 @@ namespace CSX::RenderMap
 				};
 			case PayloadSchema::kGeometryBoundaryV2:
 				return {
-					{ "schema", "geometry-boundary-v2" },
+					{ "schema", PayloadSchemaNames::kGeometryBoundaryV2 },
 					{ "shaderPointer", PointerEvidence(a_payload.words[0]) },
 					{ "renderPassPointer", PointerEvidence(a_payload.words[1]) },
 					{ "geometryPointer", PointerEvidence(a_payload.words[2]) },
@@ -1247,7 +1377,7 @@ namespace CSX::RenderMap
 				{
 					const auto flags = a_payload.words[6];
 					return {
-						{ "schema", "technique-resolution-v1" },
+						{ "schema", PayloadSchemaNames::kTechniqueResolutionV1 },
 						{ "inputVertexDescriptor", a_payload.words[0] },
 						{ "inputPixelDescriptor", a_payload.words[1] },
 						{ "resolvedVertexDescriptor", a_payload.words[2] },
@@ -1301,7 +1431,7 @@ namespace CSX::RenderMap
 						break;
 					}
 					return {
-						{ "schema", "draw-call-v4" },
+						{ "schema", PayloadSchemaNames::kDrawCallV4 },
 						{ "operation", DrawOperationName(operation) },
 						{ "deviceContextPointer", PointerEvidence(a_payload.words[0]) },
 						{ "vertexShaderObservationId", StageShaderObservationId(
@@ -1330,7 +1460,7 @@ namespace CSX::RenderMap
 																							 { "threadGroupCountZ", a_payload.words[5] },
 																						 };
 					return {
-						{ "schema", "dispatch-call-v2" },
+						{ "schema", PayloadSchemaNames::kDispatchCallV2 },
 						{ "operation", DispatchOperationName(operation) },
 						{ "deviceContextPointer", PointerEvidence(a_payload.words[0]) },
 						{ "computeShaderObservationId", StageShaderObservationId(
@@ -1340,7 +1470,7 @@ namespace CSX::RenderMap
 				}
 			case PayloadSchema::kDeviceContextObservation:
 				return {
-					{ "schema", "device-context-observation-v2" },
+					{ "schema", PayloadSchemaNames::kDeviceContextObservationV2 },
 					{ "deviceContextObservationId", DeviceContextObservationId(
 														a_payload.words[0], a_generation) },
 					{ "contextPointer", PointerEvidence(a_payload.words[1]) },
@@ -1351,7 +1481,7 @@ namespace CSX::RenderMap
 				};
 			case PayloadSchema::kCommandRecordingObservation:
 				return {
-					{ "schema", "command-recording-observation-v1" },
+					{ "schema", PayloadSchemaNames::kCommandRecordingObservationV1 },
 					{ "commandRecordingObservationId", CommandRecordingObservationId(a_payload.words[0], a_generation) },
 					{ "deviceContextObservationId", DeviceContextObservationId(a_payload.words[1], a_generation) },
 					{ "epoch", a_payload.words[2] },
@@ -1359,7 +1489,7 @@ namespace CSX::RenderMap
 				};
 			case PayloadSchema::kCommandListObservation:
 				return {
-					{ "schema", "command-list-observation-v2" },
+					{ "schema", PayloadSchemaNames::kCommandListObservationV2 },
 					{ "commandListObservationId", CommandListObservationId(a_payload.words[0], a_generation) },
 					{ "commandListPointer", PointerEvidence(a_payload.words[1]) },
 					{ "pointerGeneration", a_payload.words[2] },
@@ -1370,7 +1500,7 @@ namespace CSX::RenderMap
 				};
 			case PayloadSchema::kFinishCommandList:
 				return {
-					{ "schema", "finish-command-list-v2" },
+					{ "schema", PayloadSchemaNames::kFinishCommandListV2 },
 					{ "commandRecordingObservationId", CommandRecordingObservationId(a_payload.words[0], a_generation) },
 					{ "commandListObservationId", CommandListObservationId(a_payload.words[1], a_generation) },
 					{ "commandListPointer", PointerEvidence(a_payload.words[2]) },
@@ -1382,7 +1512,7 @@ namespace CSX::RenderMap
 				};
 			case PayloadSchema::kExecuteCommandList:
 				return {
-					{ "schema", "execute-command-list-v1" },
+					{ "schema", PayloadSchemaNames::kExecuteCommandListV1 },
 					{ "commandListObservationId", CommandListObservationId(a_payload.words[0], a_generation) },
 					{ "commandListPointer", PointerEvidence(a_payload.words[1]) },
 					{ "sourceCommandRecordingObservationId", CommandRecordingObservationId(a_payload.words[2], a_generation) },
@@ -1393,7 +1523,7 @@ namespace CSX::RenderMap
 					const auto kind = static_cast<TargetViewKind>(a_payload.words[3]);
 					const auto* observation = FindTargetViewObservation(a_snapshot, a_payload.words[0]);
 					return {
-						{ "schema", "target-view-observation-v1" },
+						{ "schema", PayloadSchemaNames::kTargetViewObservationV1 },
 						{ "targetViewObservationId", TargetViewObservationId(
 														 kind, a_payload.words[0], a_generation) },
 						{ "kind", TargetViewKindName(kind) },
@@ -1418,7 +1548,7 @@ namespace CSX::RenderMap
 				{
 					const auto* observation = FindResourceObservation(a_snapshot, a_payload.words[0]);
 					return {
-						{ "schema", "resource-observation-v1" },
+						{ "schema", PayloadSchemaNames::kResourceObservationV1 },
 						{ "resourceObservationId", ResourceObservationId(a_payload.words[0], a_generation) },
 						{ "d3dObjectPointer", PointerEvidence(observation ? observation->d3dObject : a_payload.words[1]) },
 						{ "pointerGeneration", observation ? observation->pointerGeneration : a_payload.words[2] },
@@ -1445,7 +1575,7 @@ namespace CSX::RenderMap
 					                          TargetViewKind::kShaderResource :
 					                          TargetViewKind::kUnorderedAccess;
 					return {
-						{ "schema", "resource-view-binding-v2" },
+						{ "schema", PayloadSchemaNames::kResourceViewBindingV2 },
 						{ "viewObservationId", TargetViewObservationId(viewKind, a_payload.words[0], a_generation) },
 						{ "bindingKind", bindingKind == ResourceBindingKind::kShaderResource ? "shader-resource" : "unordered-access" },
 						{ "stage", ResourceStageName(static_cast<ResourceStage>(a_payload.words[2])) },
@@ -1456,7 +1586,7 @@ namespace CSX::RenderMap
 				}
 			case PayloadSchema::kResourceViewStateObserved:
 				return {
-					{ "schema", "resource-view-state-observed-v1" },
+					{ "schema", PayloadSchemaNames::kResourceViewStateObservedV1 },
 					{ "bindingKind", static_cast<ResourceBindingKind>(a_payload.words[0]) ==
 											 ResourceBindingKind::kShaderResource ?
 										 "shader-resource" :
@@ -1502,7 +1632,7 @@ namespace CSX::RenderMap
 						break;
 					}
 					return {
-						{ "schema", "resource-flow-v1" },
+						{ "schema", PayloadSchemaNames::kResourceFlowV1 },
 						{ "operation", name },
 						{ "sourceResourceObservationId", ResourceObservationId(a_payload.words[1], a_generation) },
 						{ "destinationResourceObservationId", ResourceObservationId(a_payload.words[2], a_generation) },
@@ -1521,7 +1651,7 @@ namespace CSX::RenderMap
 					const auto readable = mapType == 1 || mapType == 3;
 					const auto writable = mapType >= 2 && mapType <= 5;
 					return {
-						{ "schema", "resource-cpu-access-v1" },
+						{ "schema", PayloadSchemaNames::kResourceCpuAccessV1 },
 						{ "phase", phase == ResourceCpuAccessPhase::kMap ? "map" : "unmap" },
 						{ "mapObservationId", CpuMapObservationId(a_payload.words[1], a_generation) },
 						{ "resourceObservationId", ResourceObservationId(a_payload.words[2], a_generation) },
@@ -1556,7 +1686,7 @@ namespace CSX::RenderMap
 					const auto readiness = static_cast<ResourceReadinessDomain>(a_payload.words[6]);
 					const auto eye = static_cast<Eye>(a_payload.words[7] & 0xFFu);
 					return {
-						{ "schema", "resource-version-observation-v1" },
+						{ "schema", PayloadSchemaNames::kResourceVersionObservationV1 },
 						{ "resourceVersionObservationId", ResourceVersionObservationId(a_payload.words[0], a_generation) },
 						{ "resourceObservationId", ResourceObservationId(a_payload.words[1], a_generation) },
 						{ "subresources", { { "first", a_payload.words[2] }, { "count", a_payload.words[3] } } },
@@ -1571,14 +1701,14 @@ namespace CSX::RenderMap
 				}
 			case PayloadSchema::kVisibilityCandidate:
 				return {
-					{ "schema", "visibility-candidate-v1" },
+					{ "schema", PayloadSchemaNames::kVisibilityCandidateV1 },
 					{ "objectPointer", PointerEvidence(a_payload.words[0]) },
 					{ "objectIndex", a_payload.words[1] },
 					{ "producerFrame", OptionalFrame(a_payload.words[2]) },
 				};
 			case PayloadSchema::kVisibilityResult:
 				return {
-					{ "schema", "visibility-result-ready-v1" },
+					{ "schema", PayloadSchemaNames::kVisibilityResultReadyV1 },
 					{ "resourceVersionObservationId", ResourceVersionObservationId(a_payload.words[0], a_generation) },
 					{ "viewObservationId", TargetViewObservationId(
 											   TargetViewKind::kShaderResource, a_payload.words[1], a_generation) },
@@ -1589,7 +1719,7 @@ namespace CSX::RenderMap
 				{
 					const auto flags = a_payload.words[7];
 					return {
-						{ "schema", "visibility-submission-v1" },
+						{ "schema", PayloadSchemaNames::kVisibilitySubmissionV1 },
 						{ "submissionObservationId", SubmissionObservationId(a_payload.words[0], a_generation) },
 						{ "renderPassPointer", PointerEvidence(a_payload.words[1]) },
 						{ "geometryPointer", PointerEvidence(a_payload.words[2]) },
@@ -1607,7 +1737,7 @@ namespace CSX::RenderMap
 				}
 			case PayloadSchema::kEyeSubmission:
 				return {
-					{ "schema", "eye-submission-v1" },
+					{ "schema", PayloadSchemaNames::kEyeSubmissionV1 },
 					{ "resourceObservationId", ResourceObservationId(a_payload.words[0], a_generation) },
 					{ "eye", EyeName(static_cast<Eye>(a_payload.words[1])) },
 					{ "eyeMask", a_payload.words[2] == 0 ? json(nullptr) : json(a_payload.words[2]) },
@@ -1622,7 +1752,7 @@ namespace CSX::RenderMap
 				};
 			case PayloadSchema::kCullDecision:
 				return {
-					{ "schema", "cull-decision-v1" },
+					{ "schema", PayloadSchemaNames::kCullDecisionV1 },
 					{ "resourceVersionObservationId", ResourceVersionObservationId(a_payload.words[0], a_generation) },
 					{ "objectIndex", a_payload.words[1] },
 					{ "producerVisible", a_payload.words[2] != 0 },
@@ -1690,7 +1820,47 @@ namespace CSX::RenderMap
 			{ "maxMaterialStateObservations", a_config.maxMaterialStateObservations },
 			{ "geometryShaderTypes", SerializeGeometryShaderTypeMask(a_config.geometryShaderTypeMask) },
 			{ "executionWithinSelectedGeometry", a_config.executionWithinSelectedGeometry },
+			{ "activation", {
+								{ "mode", a_config.latePostProcessingWindow ? "main-post-processing-to-accepted-eyes" : "immediate" },
+								{ "target", a_config.latePostProcessingWindow ? json(a_config.activationTarget) : json(nullptr) },
+								{ "maxWaitMs", std::chrono::duration_cast<std::chrono::milliseconds>(a_config.maxActivationWait).count() },
+							} },
 			{ "pointerPolicy", "retain" },
+		};
+	}
+
+	nlohmann::json SerializeCaptureWindow(const CaptureWindowSnapshot& a_window)
+	{
+		static constexpr std::array phases{ "disabled", "armed", "bootstrap", "active", "matched-eyes", "incomplete" };
+		static constexpr std::array failures{ "none", "activation-timeout", "bootstrap-failed", "frame-changed", "active-timeout", "stopped" };
+		return {
+			{ "phase", phases.at(static_cast<std::size_t>(a_window.phase)) },
+			{ "failure", failures.at(static_cast<std::size_t>(a_window.failure)) },
+			{ "armedTick", a_window.armedTick },
+			{ "activationTick", a_window.activationTick },
+			{ "endTick", a_window.endTick },
+			{ "cpuFrame", a_window.cpuFrame == kUnknownFrame ? json(nullptr) : json(a_window.cpuFrame) },
+			{ "publicationGeneration", a_window.publicationGeneration },
+			{ "compositorCycle", a_window.compositorCycle },
+			{ "acceptedEyeMask", a_window.acceptedEyeMask },
+			{ "bootstrapThreadId", a_window.bootstrapThreadId },
+			{ "bootstrapComplete", a_window.bootstrapComplete },
+			{ "bootstrapEventCount", a_window.bootstrapEventCount },
+			{ "activationBoundary", {
+										{ "scope", "armed-window-input-validation" },
+										{ "attemptCount", a_window.activationBoundary.attemptCount },
+										{ "targetRejections", a_window.activationBoundary.targetRejections },
+										{ "frameRejections", a_window.activationBoundary.frameRejections },
+										{ "publicationRejections", a_window.activationBoundary.publicationRejections },
+										{ "lastTarget", a_window.activationBoundary.attemptCount ? json(a_window.activationBoundary.lastTarget) : json(nullptr) },
+										{ "lastCpuFrame", a_window.activationBoundary.lastCpuFrame == kUnknownFrame ? json(nullptr) : json(a_window.activationBoundary.lastCpuFrame) },
+										{ "lastPublicationGeneration", a_window.activationBoundary.attemptCount ? json(a_window.activationBoundary.lastPublicationGeneration) : json(nullptr) },
+									} },
+			{ "prefixEventCount", nullptr },
+			{ "preWindowProducerHistory", "unobserved" },
+			{ "fullPipelineEstablished", false },
+			{ "pixelTransferEstablished", false },
+			{ "omittedPrefix", { { "fromTickInclusive", a_window.armedTick }, { "toTickExclusive", a_window.activationTick ? json(a_window.activationTick) : json(nullptr) } } },
 		};
 	}
 
@@ -1706,8 +1876,10 @@ namespace CSX::RenderMap
 		}
 		return {
 			{ "capturing", a_status.accepting },
-			{ "state", !a_status.active ? "idle" : (a_status.accepting ? "capturing" : "awaiting-finalization") },
+			{ "state", !a_status.active ? "idle" : a_status.window.phase == CaptureWindowPhase::kArmed ? "armed" :
+																										 (a_status.accepting ? "capturing" : "awaiting-finalization") },
 			{ "active", std::move(active) },
+			{ "captureWindow", SerializeCaptureWindow(a_status.window) },
 			{ "completedCaptureIds", a_status.completedCaptureIds },
 		};
 	}
@@ -1727,6 +1899,15 @@ namespace CSX::RenderMap
 			}
 		};
 		structuralReason(statistics.scopeOverflow, "scope-overflow", "scope depth overflowed during capture");
+		const auto& window = a_snapshot.window;
+		const bool matchedWindow = window.phase == CaptureWindowPhase::kMatchedEyes && window.bootstrapComplete &&
+		                           window.acceptedEyeMask == 3 && window.cpuFrame != kUnknownFrame && window.cpuFrame != 0 &&
+		                           window.publicationGeneration != 0 && window.compositorCycle != 0;
+		structuralReason(a_snapshot.config.latePostProcessingWindow && !matchedWindow,
+			"capture-window-incomplete", "declared late window did not retain its matching accepted-eye pair");
+		structuralReason(a_snapshot.config.latePostProcessingWindow && std::any_of(a_snapshot.events.begin(), a_snapshot.events.end(),
+																		   [&](const auto& event) { return event.frame.cpuFrame != window.cpuFrame; }),
+			"window-frame-unobserved", "retained late-window event did not establish the activation frame");
 		structuralReason(statistics.scopeMismatch, "scope-mismatch", "scope nesting mismatch occurred during capture");
 		structuralReason(statistics.droppedShaderObservations, "shader-observation-loss", "shader observation capacity was exceeded during capture");
 		structuralReason(statistics.droppedStageShaderObservations, "stage-shader-observation-loss", "stage shader observation capacity was exceeded during capture");
@@ -1736,6 +1917,11 @@ namespace CSX::RenderMap
 		structuralReason(statistics.droppedSceneObjectObservations, "scene-object-observation-loss", "scene object observation capacity was exceeded during capture");
 		structuralReason(statistics.droppedGeometryObservations, "geometry-observation-loss", "geometry observation capacity was exceeded during capture");
 		structuralReason(statistics.droppedMaterialStateObservations, "material-state-observation-loss", "material state observation capacity was exceeded during capture");
+		result.transferAdmissionFailures = std::count_if(a_snapshot.events.begin(), a_snapshot.events.end(), [](const EventRecord& a_event) {
+			return a_event.payload.schema == static_cast<std::uint16_t>(PayloadSchema::kTransferResourceAccess) &&
+			       (a_event.payload.words[6] & 2u) == 0;
+		});
+		structuralReason(result.transferAdmissionFailures, "transfer-version-admission-failure", "post-processing command-version admission was unavailable during capture");
 		result.terminalFailure = a_snapshot.stopReason == StopReason::kShutdown || a_snapshot.stopReason == StopReason::kFailure;
 		if (result.terminalFailure) {
 			result.reasons.push_back("lifecycle-failure");
@@ -1753,6 +1939,7 @@ namespace CSX::RenderMap
 			{ "numericId", a_capture.descriptor.numericId },
 			{ "state", "complete" },
 			{ "bounds", SerializeBounds(snapshot.config) },
+			{ "captureWindow", SerializeCaptureWindow(snapshot.window) },
 			{ "clock", {
 						   { "source", "QueryPerformanceCounter" },
 						   { "frequencyHz", snapshot.clockFrequencyHz },
@@ -1769,6 +1956,8 @@ namespace CSX::RenderMap
 								{ "stopRaceRejectionCount", snapshot.statistics.droppedStopped },
 								{ "scopeOverflowCount", snapshot.statistics.scopeOverflow },
 								{ "scopeMismatchCount", snapshot.statistics.scopeMismatch },
+								{ "maximumTransferVersionResources", TransferVersions::kCapacity },
+								{ "observedTransferVersionAdmissionFailures", completeness.transferAdmissionFailures },
 								{ "shaderObservationCount", snapshot.shaderObservations.size() },
 								{ "droppedShaderObservationCount", snapshot.statistics.droppedShaderObservations },
 								{ "stageShaderObservationCount", snapshot.stageShaderObservations.size() },

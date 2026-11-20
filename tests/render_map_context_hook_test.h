@@ -87,6 +87,8 @@ namespace CSX::RenderMap
 			Buffer source;
 			Buffer destination;
 			View view{ source };
+			OutputView<ID3D11RenderTargetView, D3D11_RENDER_TARGET_VIEW_DESC> renderTarget{ destination };
+			OutputView<ID3D11UnorderedAccessView, D3D11_UNORDERED_ACCESS_VIEW_DESC> computeOutput{ destination };
 			CommandList commandList;
 			DeviceChild<ID3D11PixelShader> pixel;
 			DeviceChild<ID3D11VertexShader> vertex;

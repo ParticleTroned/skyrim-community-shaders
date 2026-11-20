@@ -31,7 +31,6 @@ namespace CSX::RenderMap
 		nlohmann::json manifestArtifact;
 		std::string error;
 	};
-
 	/// Reports the loaded runtime family/version; contradictory observed shader identity is rejected.
 	nlohmann::json BuildSkyrimModuleIdentity(bool a_virtualReality, std::string_view a_version,
 		std::optional<bool> a_shaderVirtualReality = std::nullopt);

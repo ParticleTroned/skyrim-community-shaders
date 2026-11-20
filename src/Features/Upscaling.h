@@ -798,6 +798,7 @@ public:
 
 	struct RuntimeResolutionPlan
 	{
+		VRVendorRelatchPolicy::NativeResolutionPlanKey nativeStabilization{};
 		UpscaleMethod upscaleMethod = UpscaleMethod::kNONE;
 		ResolutionOwner owner = ResolutionOwner::Native;
 		UpscalingOutputTarget outputTarget = UpscalingOutputTarget::Main;
@@ -2750,11 +2751,9 @@ public:
 	bool SetFSRTemporalTuningSettings(const FSRTemporalTuningPolicy::Settings& a_settings);
 	// Refresh both the cached plan and restart-required state from the current VR render-scale settings.
 	void RefreshRuntimeResolutionState();
-	// Read-side helper: avoid rebuilding the cached plan multiple times in one frame.
+	// Reuse the plan only while both work-frame and native ownership match.
 	void EnsureRuntimeResolutionStateCurrent();
 	void InvalidateFrameScopedUpscalingState();
-	// Rebuild only the cached plan from already-latched state; backend dispatch code must only read the cached plan.
-	void RefreshRuntimeResolutionPlan();
 	bool IsRenderScaleModeRequested() const;
 	/** Return saved intent while native AA suspends physical Render Scale. */
 	bool GetVRRenderScaleModePreference() const;
@@ -3379,6 +3378,7 @@ public:
 	void NotifyGameLoadStarted(bool a_newGame, bool a_initialProcessSaveLoad);
 	void RequestPostLoadRuntimeReset();
 	bool ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod);
+	bool TryRetainFSRForCompletedSaveLoad(UpscaleMethod a_upscaleMethod, uint64_t a_recoveryEpoch);
 	[[nodiscard]] bool ShouldDeferVRVendorLifecycleMutation() const;
 	/** Ordinary-save recovery may only reuse resources while persistence remains guarded. */
 	[[nodiscard]] bool ShouldReuseOrdinarySaveResources() const;
@@ -3806,11 +3806,17 @@ private:
 
 	mutable std::mutex submitTemporalInputsMutex;
 	SubmitTemporalInputs submitTemporalInputs;
+	VRVendorRelatchPolicy::WorldResolutionPlanWitness vrViewportResolutionPlan;
+	VRVendorRelatchPolicy::WorldResolutionPlanWitness vrCompletedWorldResolutionPlan;
 	std::atomic_uint64_t submitTemporalCompositorCycle{ 0 };
 	inline static thread_local const SubmitTemporalSnapshot* submitTemporalDispatchSnapshot = nullptr;
 	inline static thread_local const VRSubmitColorContract::Contract* submitColorDispatchContract = nullptr;
 
 public:
+	/** Captures the viewport plan at world-render entry and invalidates the previous completion. */
+	[[nodiscard]] VRVendorRelatchPolicy::WorldResolutionPlanWitness BeginVRWorldResolutionObservation();
+	/** Publishes the completed world only if it used the same viewport plan throughout. */
+	void CompleteVRWorldResolutionObservation(VRVendorRelatchPolicy::WorldResolutionPlanWitness a_observation);
 	/** Captures both world cameras before post-processing can replace engine constants. */
 	void CaptureSubmitTemporalSnapshot();
 	void InvalidateSubmitTemporalSnapshot();
@@ -4298,7 +4304,8 @@ public:
 	void RecordVRRenderScalePreparationCreatorEntered(
 		uint64_t a_transitionEpoch);
 #endif
-	void QueueVRFpsStabilizerLoadSync(uint32_t a_frame);
+	void QueueVRFpsStabilizerLoadSync(
+		VRVendorRelatchPolicy::LoadingMenuClose a_close, std::optional<uint64_t> a_discoveryEdge = std::nullopt);
 	void ApplyPendingVRFpsStabilizerLoadSync();
 	bool ShouldStageVRRenderScaleTransition(bool a_renderScaleModeEnabled, uint32_t a_qualityMode) const;
 	bool ShouldDeferVRUpscalingTransitionSettings() const;
@@ -4723,6 +4730,11 @@ private:
 		bool fsr4RuntimeEnabled = false;
 	};
 	std::optional<VRRenderScaleProfileSnapshot> GetStableVRRenderScaleRuntimeProfile() const;
+	std::optional<VRRenderScaleProfileSnapshot> GetGuardedNativeStabilizationProfile() const;
+	static VRVendorRelatchPolicy::NativeResolutionPlanKey GetNativeResolutionPlanKey(
+		const std::optional<VRRenderScaleProfileSnapshot>& a_guardedNative) noexcept;
+	void RefreshRuntimeResolutionState(const std::optional<VRRenderScaleProfileSnapshot>& a_guardedNative);
+	void RefreshRuntimeResolutionPlan(const std::optional<VRRenderScaleProfileSnapshot>& a_guardedNative);
 	std::optional<VRRenderScaleRuntimeOptionsSnapshot> GetVRRenderScaleRuntimeOptions() const;
 	std::atomic<bool> vrRenderScaleStableRuntimeProfileAuthoritative{ false };
 	std::atomic<uint32_t> vrRenderScaleLastOutOfMemoryFailureFrame{ 0 };
@@ -4846,15 +4858,17 @@ private:
 		bool a_beginLoadProtection = false,
 		VRPostLoadCompositorHoldRoute a_route =
 			VRPostLoadCompositorHoldRoute::None,
-		uint64_t a_loadingSerial = 0);
+		uint64_t a_loadingSerial = 0,
+		uint64_t a_expectedIdleEpoch = 0);
 	void ArmVRRenderTransitionCompositorCover(
 		uint64_t a_loadingSerial,
 		const char* a_reason);
 	[[nodiscard]] bool IsVRPostLoadCompositorHoldOwnedByLoadingSerial(
 		uint64_t a_loadingSerial) const noexcept;
 	void NotifyVRPostLoadCompositorLoadingMenuOpened(uint64_t a_loadingSerial);
-	void NotifyVRPostLoadCompositorLoadingMenuClosed(uint64_t a_loadingSerial);
-	void CompleteVRLoadingMenuCloseOutsideLocks(uint64_t a_loadingSerial);
+	void NotifyVRPostLoadCompositorLoadingMenuClosed(
+		uint64_t a_loadingSerial, std::optional<uint32_t> a_closeFrame = std::nullopt);
+	void CompleteVRLoadingMenuCloseOutsideLocks(VRVendorRelatchPolicy::LoadingMenuClose a_close);
 	[[nodiscard]] static uint64_t GetVRPostLoadCompositorHoldSoftDeadlineMilliseconds(
 		VRPostLoadCompositorHoldRoute a_route) noexcept;
 	[[nodiscard]] static uint64_t GetVRPostLoadCompositorHoldHardDeadlineMilliseconds(

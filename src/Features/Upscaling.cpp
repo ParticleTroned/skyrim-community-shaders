@@ -1004,6 +1004,20 @@ namespace
 	std::atomic_uint64_t g_vrLoadingTransitionSerial{ 0 };
 	std::atomic_bool g_vrLoadingTransitionSerialOpen{ false };
 	std::mutex g_vrLoadingTransitionSerialMutex;
+	// Serialize loading owner changes with the Stabilizer profile handoff.
+	std::mutex g_vrStabilizerSyncHandoffMutex;
+	// The serial mutex owns these tuples. Frame atomics expose their status.
+	std::optional<VRVendorRelatchPolicy::StabilizerSyncOwner> g_vrPendingStabilizerSyncOwner;
+	struct VRStabilizerSyncCompletion
+	{
+		VRVendorRelatchPolicy::StabilizerSyncOwner owner;
+		VRVendorRelatchPolicy::StabilizerSyncOutcome outcome;
+	};
+	std::optional<VRStabilizerSyncCompletion> g_vrStabilizerSyncCompletion;
+	// Close-side dirtiness is serialized by perfModeRenderTargetRecreateQueueMutex.
+	VRVendorRelatchPolicy::LoadingMenuClose g_vrDeferredPostLoadFSRReset;
+	std::atomic_uint64_t g_vrRetainedPostLoadPresentationSerial{ 0 };
+	std::atomic_uint32_t g_vrRetainedPostLoadPresentationCloseFrame{ 0 };
 	std::atomic_uint32_t g_vrLoadingTransitionSourceCellFormID{ 0 };
 	std::atomic_uint32_t g_vrLoadingTransitionDestinationCellFormID{ 0 };
 	std::atomic_uint32_t g_vrLoadingTransitionDestinationObservationWorldFrame{ 0 };
@@ -1035,8 +1049,18 @@ namespace
 		return cell ? cell->GetFormID() : 0u;
 	}
 
+	void ClearVRFpsStabilizerPendingSyncLocked(Upscaling& a_upscaling)
+	{
+		g_vrPendingStabilizerSyncOwner.reset();
+		a_upscaling.pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
+	}
+
 	void CaptureVRLoadingTransitionSourceCell()
 	{
+		auto& upscaling = globals::features::upscaling;
+		ClearVRFpsStabilizerPendingSyncLocked(upscaling);
+		g_vrStabilizerSyncCompletion.reset();
+		upscaling.vrFpsStabilizerSyncResolvedFrame.store(0, std::memory_order_release);
 		const uint32_t sourceCellFormID =
 			VRVendorRelatchPolicy::SelectStabilizerSourceCell(
 				g_vrLastResolvedWorldCellFormID.load(std::memory_order_acquire),
@@ -1825,6 +1849,7 @@ namespace
 	bool IsLoadingMenuContextActive();
 	bool HasCompletedVRWorldFrameAfterLatestLoad(const State* a_state);
 	bool HasUnresolvedVRFpsStabilizerSyncForCurrentLoad(const Upscaling& a_upscaling);
+	bool HasTerminalVRFpsStabilizerFallbackForCurrentLoad();
 	bool IsStatsMenuContextActive();
 	bool IsDialogueMenuContextActive();
 	bool IsSkyrimMenuPresentationContextActive(RE::UI* a_ui);
@@ -1867,18 +1892,19 @@ namespace
 	}
 	constexpr uint32_t kVRSaveLoadTransitionTailFrames = 30;
 
-	uint64_t TryReconcileMissedVRLoadingMenuClose(Upscaling& a_upscaling)
+	VRVendorRelatchPolicy::LoadingMenuClose TryReconcileMissedVRLoadingMenuClose(Upscaling& a_upscaling)
 	{
 		if (g_vrLoadingMenuReconcileCandidateGeneration.load(
 				std::memory_order_acquire) == 0) {
-			return 0;
+			return {};
 		}
 
 		auto* state = globals::state;
 		auto* ui = globals::game::ui;
 		if (!state || !ui)
-			return 0;
+			return {};
 
+		const std::scoped_lock handoffLock(g_vrStabilizerSyncHandoffMutex);
 		const std::scoped_lock ownerLock(
 			g_vrLoadingMenuGateReconciliationMutex,
 			g_vrLoadingTransitionSerialMutex);
@@ -1890,7 +1916,7 @@ namespace
 			candidate.generation == 0 ||
 			publishedGeneration != candidate.generation) {
 			CancelVRLoadingMenuCloseReconciliationLocked();
-			return 0;
+			return {};
 		}
 		const uint64_t currentLoadingSerial =
 			g_vrLoadingTransitionSerial.load(std::memory_order_relaxed);
@@ -1932,7 +1958,7 @@ namespace
 			});
 		if (action == VRVendorRelatchPolicy::MissedLoadingMenuCloseAction::Disarm) {
 			CancelVRLoadingMenuCloseReconciliationLocked();
-			return 0;
+			return {};
 		}
 		if (stateMirrorOpen || uiMirrorOpen) {
 			candidate.physicalOpenObserved = true;
@@ -1940,23 +1966,23 @@ namespace
 			candidate.firstClosedCompletedWorldFrame =
 				std::numeric_limits<uint32_t>::max();
 			candidate.firstClosedWorldFrameRecorded = false;
-			return 0;
+			return {};
 		}
 
 		switch (action) {
 		case VRVendorRelatchPolicy::MissedLoadingMenuCloseAction::Disarm:
-			return 0;
+			return {};
 		case VRVendorRelatchPolicy::MissedLoadingMenuCloseAction::ResetClosedWorldFrame:
 			candidate.firstClosedCompletedWorldFrame =
 				std::numeric_limits<uint32_t>::max();
 			candidate.firstClosedWorldFrameRecorded = false;
-			return 0;
+			return {};
 		case VRVendorRelatchPolicy::MissedLoadingMenuCloseAction::RecordFirstClosedWorldFrame:
 			candidate.firstClosedCompletedWorldFrame = completedWorldFrame;
 			candidate.firstClosedWorldFrameRecorded = true;
-			return 0;
+			return {};
 		case VRVendorRelatchPolicy::MissedLoadingMenuCloseAction::Wait:
-			return 0;
+			return {};
 		case VRVendorRelatchPolicy::MissedLoadingMenuCloseAction::PublishClose:
 			break;
 		}
@@ -1971,7 +1997,7 @@ namespace
 			candidate.firstClosedCompletedWorldFrame =
 				std::numeric_limits<uint32_t>::max();
 			candidate.firstClosedWorldFrameRecorded = false;
-			return 0;
+			return {};
 		}
 
 		const uint64_t loadingSerial = candidate.loadingSerial;
@@ -1995,7 +2021,7 @@ namespace
 		// closed must also see the closed serial, retired candidate, and released
 		// work gate from this exact reconciliation transaction.
 		g_vrLoadingMenuOpenFromEvent.store(false, std::memory_order_release);
-		return loadingSerial;
+		return { loadingSerial, currentFrame };
 	}
 	constexpr uint32_t kVRMenuPresentationTailFrames = 30;
 	constexpr uint32_t kVRObservedMenuPresentationTailFrames = 3;
@@ -5925,18 +5951,6 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		       a_upscaling.perfMode.HasRestartRequiredChange();
 	}
 
-	uint32_t GetVRLoadingTransitionCloseElapsedFrames(const State* a_state)
-	{
-		if (!globals::game::isVR || !a_state)
-			return std::numeric_limits<uint32_t>::max();
-
-		const uint32_t closeFrame = g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire);
-		if (closeFrame == 0 || a_state->frameCount < closeFrame)
-			return std::numeric_limits<uint32_t>::max();
-
-		return a_state->frameCount - closeFrame;
-	}
-
 	bool IsSaveLoadTransitionContextActive(const State* a_state)
 	{
 		if (!a_state)
@@ -5991,6 +6005,16 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 
 	bool IsVRLoadingPresentationTailActive(const State* a_state)
 	{
+		const auto retainedCloseFrame = g_vrRetainedPostLoadPresentationCloseFrame.load(std::memory_order_acquire);
+		if (retainedCloseFrame != 0 &&
+			VRVendorRelatchPolicy::IsRetainedSaveLoadTail(
+				g_vrRetainedPostLoadPresentationSerial.load(std::memory_order_relaxed),
+				retainedCloseFrame,
+				g_vrLoadingTransitionSerial.load(std::memory_order_acquire),
+				g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire),
+				g_vrLoadingTransitionSerialOpen.load(std::memory_order_acquire))) {
+			return false;
+		}
 		return IsSaveLoadTransitionContextActive(a_state) ?
 		           IsLoadingTransitionTailActive(a_state) :
 		           IsCellTransitionTailActive(a_state, kVRCellTransitionPresentationTailFrames);
@@ -6162,6 +6186,9 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		if (IsLoadingMenuContextActive() && !resolvedDoorHandoff)
 			return true;
 
+		if (HasTerminalVRFpsStabilizerFallbackForCurrentLoad())
+			return false;
+
 		if (state && closeFrame != 0 && state->frameCount >= closeFrame && !resolvedDoorHandoff) {
 			return true;
 		}
@@ -6287,50 +6314,73 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		return IsVRRenderScaleRelatchSensitiveContextActive(a_state);
 	}
 
-	bool IsVRFpsStabilizerLoadSyncReady(const State* a_state)
+	VRVendorRelatchPolicy::StabilizerSyncOwner GetVRFpsStabilizerSyncOwnerLocked()
+	{
+		return {
+			{
+				g_vrLoadingTransitionSerial.load(std::memory_order_relaxed),
+				g_vrLoadingTransitionCloseFrame.load(std::memory_order_relaxed),
+			},
+			g_vrLoadingMenuEdgeGeneration,
+		};
+	}
+
+	std::optional<VRVendorRelatchPolicy::StabilizerSyncOwner> GetReadyVRFpsStabilizerSyncOwner(const State* a_state)
 	{
 		if (!a_state)
-			return false;
+			return std::nullopt;
 
+		VRVendorRelatchPolicy::StabilizerSyncOwner observed;
+		{
+			const std::scoped_lock serialLock(g_vrLoadingTransitionSerialMutex);
+			if (g_vrLoadingTransitionSerialOpen.load(std::memory_order_relaxed))
+				return std::nullopt;
+			observed = GetVRFpsStabilizerSyncOwnerLocked();
+		}
 		if (IsMainOrLoadingMenuContextActive())
-			return false;
+			return std::nullopt;
 
-		const bool completedWorldFrameAfterClose =
-			HasCompletedVRWorldFrameAfterLatestLoad(a_state);
-		const uint32_t sourceCellFormID =
-			g_vrLoadingTransitionSourceCellFormID.load(std::memory_order_acquire);
 		const uint32_t currentCellFormID = GetVRPlayerCellFormID();
+		const uint32_t worldFrame = a_state->lastCompletedWorldRenderFrame;
+		const uint32_t frame = a_state->frameCount;
+
+		std::unique_lock serialLock(g_vrLoadingTransitionSerialMutex);
+		const auto current = GetVRFpsStabilizerSyncOwnerLocked();
+		if (!VRVendorRelatchPolicy::MatchesStabilizerSyncDiscovery(
+				observed.close, observed.edge, current.close, current.edge,
+				g_vrLoadingTransitionSerialOpen.load(std::memory_order_relaxed))) {
+			return std::nullopt;
+		}
+
+		const bool hasWorldFrame = worldFrame != std::numeric_limits<uint32_t>::max();
+		const bool completedWorldFrameAfterClose =
+			hasWorldFrame && (observed.close.frame == 0 || worldFrame > observed.close.frame);
+		const uint32_t sourceCellFormID =
+			g_vrLoadingTransitionSourceCellFormID.load(std::memory_order_relaxed);
 		const bool destinationCellChanged =
 			sourceCellFormID != 0 &&
 			currentCellFormID != 0 &&
 			currentCellFormID != sourceCellFormID;
 
 		bool completedWorldFrameAfterDestinationObservation = false;
+		bool observedNewDestination = false;
 		if (destinationCellChanged) {
 			const uint32_t observedDestination =
-				g_vrLoadingTransitionDestinationCellFormID.load(std::memory_order_acquire);
+				g_vrLoadingTransitionDestinationCellFormID.load(std::memory_order_relaxed);
 			if (observedDestination != currentCellFormID) {
-				g_vrLoadingTransitionDestinationCellFormID.store(
-					currentCellFormID,
-					std::memory_order_release);
-				g_vrLoadingTransitionDestinationObservationWorldFrame.store(
-					a_state->lastCompletedWorldRenderFrame,
-					std::memory_order_release);
-				logger::debug(
-					"[Upscaling] VR FPS Stabilizer Sync observed destination cell {:08X} after source {:08X}.",
-					currentCellFormID,
-					sourceCellFormID);
+				// The open owner clears both fields under this same lock.
+				g_vrLoadingTransitionDestinationObservationWorldFrame.store(worldFrame, std::memory_order_release);
+				g_vrLoadingTransitionDestinationCellFormID.store(currentCellFormID, std::memory_order_release);
+				observedNewDestination = true;
 			} else {
 				const uint32_t observationWorldFrame =
-					g_vrLoadingTransitionDestinationObservationWorldFrame.load(std::memory_order_acquire);
+					g_vrLoadingTransitionDestinationObservationWorldFrame.load(std::memory_order_relaxed);
 				completedWorldFrameAfterDestinationObservation =
-					a_state->lastCompletedWorldRenderFrame != std::numeric_limits<uint32_t>::max() &&
-					a_state->lastCompletedWorldRenderFrame > observationWorldFrame;
+					hasWorldFrame && worldFrame > observationWorldFrame;
 			}
 		}
 
-		const uint32_t closeElapsedFrames = GetVRLoadingTransitionCloseElapsedFrames(a_state);
-		return VRVendorRelatchPolicy::IsStabilizerDestinationSyncReady({
+		const bool ready = VRVendorRelatchPolicy::IsStabilizerDestinationSyncReady({
 			.completedWorldFrameAfterClose = completedWorldFrameAfterClose,
 			.sourceCellKnown = sourceCellFormID != 0,
 			.currentCellKnown = currentCellFormID != 0,
@@ -6338,29 +6388,39 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 			.completedWorldFrameAfterDestinationObservation =
 				completedWorldFrameAfterDestinationObservation,
 			.identityFallbackElapsed =
-				closeElapsedFrames != std::numeric_limits<uint32_t>::max() &&
-				closeElapsedFrames >= kVRFpsStabilizerIdentitySyncFallbackFrames,
+				globals::game::isVR && observed.close.frame != 0 &&
+				frame >= observed.close.frame &&
+				frame - observed.close.frame >= kVRFpsStabilizerIdentitySyncFallbackFrames,
 		});
+		serialLock.unlock();
+		if (observedNewDestination) {
+			logger::debug(
+				"[Upscaling] VR FPS Stabilizer Sync observed destination cell {:08X} after source {:08X}.",
+				currentCellFormID,
+				sourceCellFormID);
+		}
+		return ready ? std::optional{ observed } : std::nullopt;
 	}
 
-	uint32_t GetVRFpsStabilizerCurrentSyncFrame(const State* a_state)
+	std::optional<VRVendorRelatchPolicy::StabilizerSyncOutcome> GetVRFpsStabilizerSyncOutcomeLocked(
+		VRVendorRelatchPolicy::StabilizerSyncOwner a_owner)
 	{
-		if (!IsVRFpsStabilizerLoadSyncReady(a_state))
-			return 0;
-
-		const uint32_t closeFrame = g_vrLoadingTransitionCloseFrame.load(std::memory_order_acquire);
-		if (closeFrame != 0)
-			return closeFrame;
-
-		return 1u;
+		if (g_vrStabilizerSyncCompletion &&
+			VRVendorRelatchPolicy::MatchesStabilizerSyncDiscovery(
+				a_owner.close, a_owner.edge,
+				g_vrStabilizerSyncCompletion->owner.close, g_vrStabilizerSyncCompletion->owner.edge, false)) {
+			return g_vrStabilizerSyncCompletion->outcome;
+		}
+		return std::nullopt;
 	}
 
-	void MarkVRFpsStabilizerSyncResolved(Upscaling& a_upscaling, uint32_t a_syncFrame)
+	bool HasTerminalVRFpsStabilizerFallbackForCurrentLoad()
 	{
-		if (a_syncFrame == 0)
-			return;
-
-		a_upscaling.vrFpsStabilizerSyncResolvedFrame.store(a_syncFrame, std::memory_order_release);
+		const std::scoped_lock serialLock(g_vrLoadingTransitionSerialMutex);
+		if (g_vrLoadingTransitionSerialOpen.load(std::memory_order_relaxed))
+			return false;
+		const auto outcome = GetVRFpsStabilizerSyncOutcomeLocked(GetVRFpsStabilizerSyncOwnerLocked());
+		return outcome && *outcome != VRVendorRelatchPolicy::StabilizerSyncOutcome::Resolved;
 	}
 
 	void QueueVRFpsStabilizerSyncForCurrentLoadIfNeeded(Upscaling& a_upscaling)
@@ -6371,17 +6431,8 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		if (a_upscaling.pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire) != 0)
 			return;
 
-		const auto* state = globals::state;
-		if (!IsVRFpsStabilizerLoadSyncReady(state))
-			return;
-
-		const uint32_t syncFrame = GetVRFpsStabilizerCurrentSyncFrame(state);
-		if (syncFrame == 0 ||
-			a_upscaling.vrFpsStabilizerSyncResolvedFrame.load(std::memory_order_acquire) == syncFrame) {
-			return;
-		}
-
-		a_upscaling.QueueVRFpsStabilizerLoadSync(syncFrame);
+		if (const auto owner = GetReadyVRFpsStabilizerSyncOwner(globals::state))
+			a_upscaling.QueueVRFpsStabilizerLoadSync(owner->close, owner->edge);
 	}
 
 	bool HasUnresolvedVRFpsStabilizerSyncForCurrentLoad(const Upscaling& a_upscaling)
@@ -6392,13 +6443,11 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		if (a_upscaling.pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire) != 0)
 			return true;
 
-		const auto* state = globals::state;
-		if (!IsVRFpsStabilizerLoadSyncReady(state))
+		const auto owner = GetReadyVRFpsStabilizerSyncOwner(globals::state);
+		if (!owner)
 			return false;
-
-		const uint32_t syncFrame = GetVRFpsStabilizerCurrentSyncFrame(state);
-		return syncFrame != 0 &&
-		       a_upscaling.vrFpsStabilizerSyncResolvedFrame.load(std::memory_order_acquire) != syncFrame;
+		const std::scoped_lock serialLock(g_vrLoadingTransitionSerialMutex);
+		return !GetVRFpsStabilizerSyncOutcomeLocked(*owner);
 	}
 
 	bool UsesVRRenderScaleStartupActivationProtection(
@@ -6451,7 +6500,13 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		if (a_upscaling.HasPendingVRUpscalingTransition())
 			return true;
 
-		return a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire);
+		if (a_upscaling.pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire))
+			return true;
+
+		// Native publication clears the queue before stereo proves the full-size
+		// contract. Do not recreate a reduced boot latch during that handoff.
+		return a_upscaling.vrNativeRestorePresentationGuardEpoch.load(std::memory_order_acquire) != 0 &&
+		       a_upscaling.IsVRNativeRestorePresentationGuardActive();
 	}
 
 	bool ShouldQueueDeferredVRRenderScaleActivation(const Upscaling& a_upscaling)
@@ -21143,7 +21198,10 @@ bool Upscaling::ApplyOpenCompositeUpscalingBlocker(bool a_forceRefresh)
 	settings.upscaleMethodNoDLSS = static_cast<uint>(UpscaleMethod::kNONE);
 	settings.renderScaleMode = 0;
 	settings.perfMode = 0;
-	pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
+	{
+		const std::scoped_lock serialLock(g_vrLoadingTransitionSerialMutex);
+		ClearVRFpsStabilizerPendingSyncLocked(*this);
+	}
 	const auto hasProviderNeutralRecoveryOwner = [&]() {
 		return HasLiveVRRenderScaleProviderNeutralRecoveryWorker() &&
 		       pendingPerfModeRenderTargetRecreateForcePhysical.load(
@@ -21731,12 +21789,38 @@ void Upscaling::DataLoaded()
 }
 
 void Upscaling::CompleteVRLoadingMenuCloseOutsideLocks(
-	uint64_t a_loadingSerial)
+	VRVendorRelatchPolicy::LoadingMenuClose a_close)
 {
-	NotifyVRPostLoadCompositorLoadingMenuClosed(a_loadingSerial);
-	QueueVendorRuntimeResetAfterLoadingMenu(*this);
+	NotifyVRPostLoadCompositorLoadingMenuClosed(a_close.serial, a_close.frame);
+	{
+		const std::scoped_lock queueLock(perfModeRenderTargetRecreateQueueMutex);
+		const std::scoped_lock serialLock(g_vrLoadingTransitionSerialMutex);
+		if (!a_close.Matches(
+				g_vrLoadingTransitionSerial.load(std::memory_order_relaxed),
+				g_vrLoadingTransitionCloseFrame.load(std::memory_order_relaxed),
+				g_vrLoadingTransitionSerialOpen.load(std::memory_order_relaxed))) {
+			return;
+		}
+		const bool alreadyRetained = VRVendorRelatchPolicy::IsRetainedSaveLoadTail(
+			g_vrRetainedPostLoadPresentationSerial.load(std::memory_order_relaxed),
+			g_vrRetainedPostLoadPresentationCloseFrame.load(std::memory_order_relaxed),
+			a_close.serial, a_close.frame, false);
+		if (!alreadyRetained) {
+			const bool canDeferReset =
+				postLoadRuntimeResetPending.load(std::memory_order_acquire) &&
+				GetConfiguredUpscaleMethodForTransition() == UpscaleMethod::kFSR &&
+				IsVRPostLoadCompositorHoldOwnedByLoadingSerial(a_close.serial) &&
+				static_cast<VRPostLoadCompositorHoldRoute>(
+					vrPostLoadCompositorHoldRoute.load(std::memory_order_acquire)) ==
+					VRPostLoadCompositorHoldRoute::InGameLoad;
+			if (canDeferReset)
+				g_vrDeferredPostLoadFSRReset = a_close;
+			else
+				QueueVendorRuntimeResetAfterLoadingMenu(*this);
+		}
+	}
 	if (globals::state && IsSaveLoadTransitionContextActive(globals::state))
-		QueueVRFpsStabilizerLoadSync(globals::state->frameCount);
+		QueueVRFpsStabilizerLoadSync(a_close);
 	if (globals::state &&
 		GetVRStartupLoadKind() == VRStartupLoadKind::NewGame &&
 		!g_vrRaceSexMenuOpenFromEvent.load(std::memory_order_acquire)) {
@@ -21849,7 +21933,10 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME) {
 		auto& upscaling = globals::features::upscaling;
 		uint64_t loadingSerial = 0;
+		uint32_t closeFrame = 0;
+		bool ownsClose = false;
 		{
+			const std::scoped_lock handoffLock(g_vrStabilizerSyncHandoffMutex);
 			// Publish the menu edge and its serial as one transaction. Release this
 			// gate before any compositor/controller call which may acquire the
 			// recreate queue; recovery cleanup can then take queue+gate+serial with
@@ -21857,7 +21944,10 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 			const std::scoped_lock loadingOwnerLock(
 				g_vrLoadingMenuGateReconciliationMutex,
 				g_vrLoadingTransitionSerialMutex);
-			AdvanceVRLoadingMenuEdgeGenerationLocked();
+			ownsClose = !a_event->opening &&
+			            g_vrLoadingTransitionSerialOpen.load(std::memory_order_relaxed);
+			if (a_event->opening || ownsClose)
+				AdvanceVRLoadingMenuEdgeGenerationLocked();
 			loadingSerial = a_event->opening ?
 			                    EnsureVRLoadingTransitionSerialOpenLocked() :
 			                    CaptureAndCloseVRLoadingTransitionSerialLocked();
@@ -21869,24 +21959,24 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 				g_vrLoadingTransitionCloseTickMs.store(0, std::memory_order_release);
 				g_vrLoadingTransitionTailEndFrame.store(0, std::memory_order_release);
 				ArmVRLoadingMenuCloseReconciliationLocked(loadingSerial);
+				ClearVRFpsStabilizerPendingSyncLocked(upscaling);
 				upscaling.ArmVRVendorWorkGate(
 					VRVendorWorkGateSource::LoadingMenu,
 					"LoadingMenu open");
-			} else if (globals::state) {
-				const uint32_t currentFrame =
-					std::max(globals::state->frameCount, 1u);
+			} else if (ownsClose && globals::state) {
+				closeFrame = std::max(globals::state->frameCount, 1u);
 				g_vrLoadingTransitionCloseFrame.store(
-					currentFrame,
+					closeFrame,
 					std::memory_order_release);
 				g_vrLoadingTransitionCloseTickMs.store(
 					::GetTickCount64(),
 					std::memory_order_release);
 				g_vrLoadingTransitionTailEndFrame.store(
-					currentFrame + kVRSaveLoadTransitionTailFrames,
+					closeFrame + kVRSaveLoadTransitionTailFrames,
 					std::memory_order_release);
 				if (IsBeforeFirstCompletedVRWorldFrame(globals::state)) {
 					g_vrStartupRaceSexFirstLoadCloseFrame.store(
-						currentFrame,
+						closeFrame,
 						std::memory_order_release);
 				}
 			}
@@ -21922,9 +22012,8 @@ RE::BSEventNotifyControl Upscaling::MenuOpenCloseEventHandler::ProcessEvent(
 				upscaling.ResetVRPostLoadCompositorHold();
 			}
 			ResetVRMenuPresentationTrackingState();
-			globals::features::upscaling.pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
-		} else {
-			upscaling.CompleteVRLoadingMenuCloseOutsideLocks(loadingSerial);
+		} else if (ownsClose) {
+			upscaling.CompleteVRLoadingMenuCloseOutsideLocks({ loadingSerial, closeFrame });
 		}
 	}
 
@@ -21974,6 +22063,7 @@ bool Upscaling::MenuOpenCloseEventHandler::Register()
 			"MainMenu already open at event registration");
 	}
 	{
+		const std::scoped_lock handoffLock(g_vrStabilizerSyncHandoffMutex);
 		// Registering first prevents a permanently missed event; serializing the
 		// subsequent level reconciliation with the event callback prevents the
 		// reverse race where a stale query clears a newly opened LoadingMenu owner.
@@ -22754,6 +22844,7 @@ void Upscaling::NotifyGamePreLoadStarted(bool a_initialProcessSaveLoad)
 	if (!globals::game::isVR || IsOpenCompositeUpscalingBlocked())
 		return;
 
+	g_vrRetainedPostLoadPresentationCloseFrame.store(0, std::memory_order_release);
 	const auto configuredMethod = GetConfiguredUpscaleMethodForTransition();
 	const bool awaitingStabilizerSync =
 		!IsVendorUpscalingMethod(configuredMethod) &&
@@ -23388,6 +23479,29 @@ std::optional<Upscaling::VRRenderScaleProfileSnapshot> Upscaling::GetStableVRRen
 		return std::nullopt;
 
 	return vrRenderScaleTransitionController.stable;
+}
+
+std::optional<Upscaling::VRRenderScaleProfileSnapshot> Upscaling::GetGuardedNativeStabilizationProfile() const
+{
+	if (!globals::game::isVR ||
+		vrNativeRestorePresentationGuardEpoch.load(std::memory_order_acquire) == 0 ||
+		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire))
+		return std::nullopt;
+
+	std::scoped_lock lock(vrRenderScaleTransitionControllerMutex);
+	const auto epoch = vrNativeRestorePresentationGuardEpoch.load(std::memory_order_acquire);
+	const auto& controller = vrRenderScaleTransitionController;
+	const auto& applied = controller.applied;
+	if (epoch == 0 || perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+		controller.state != VRRenderScaleTransitionState::Stabilizing ||
+		controller.targetEpoch != epoch || applied.transitionEpoch != epoch ||
+		!applied.valid || applied.active || applied.method != UpscaleMethod::kNONE ||
+		applied.displayEyeWidth == 0 || applied.displayEyeHeight == 0 ||
+		applied.renderEyeWidth != applied.displayEyeWidth ||
+		applied.renderEyeHeight != applied.displayEyeHeight)
+		return std::nullopt;
+
+	return applied;
 }
 
 std::optional<Upscaling::VRRenderScaleRuntimeOptionsSnapshot> Upscaling::GetVRRenderScaleRuntimeOptions() const
@@ -24151,21 +24265,42 @@ float Upscaling::ResolveRuntimeMipBias(bool a_temporal)
 
 void Upscaling::RefreshRuntimeResolutionState()
 {
+	RefreshRuntimeResolutionState(GetGuardedNativeStabilizationProfile());
+}
+
+VRVendorRelatchPolicy::NativeResolutionPlanKey Upscaling::GetNativeResolutionPlanKey(
+	const std::optional<VRRenderScaleProfileSnapshot>& a_guardedNative) noexcept
+{
+	if (!a_guardedNative)
+		return {};
+	return {
+		a_guardedNative->transitionEpoch,
+		a_guardedNative->contractGeneration,
+		a_guardedNative->displayEyeWidth,
+		a_guardedNative->displayEyeHeight,
+	};
+}
+
+void Upscaling::RefreshRuntimeResolutionState(
+	const std::optional<VRRenderScaleProfileSnapshot>& a_guardedNative)
+{
 	const auto requestedUpscaleMethod = GetConfiguredUpscaleMethodForTransition();
 	perfMode.UpdateRestartRequiredState(settings, requestedUpscaleMethod);
-	RefreshRuntimeResolutionPlan();
+	RefreshRuntimeResolutionPlan(a_guardedNative);
 	runtimeResolutionStateLastRefreshFrame = GetFrameScopedUpscalingWorkFrame();
 }
 
 void Upscaling::EnsureRuntimeResolutionStateCurrent()
 {
 	const uint32_t currentFrame = GetFrameScopedUpscalingWorkFrame();
-	if (currentFrame != std::numeric_limits<uint32_t>::max() &&
-		runtimeResolutionStateLastRefreshFrame == currentFrame) {
+	const auto guardedNative = GetGuardedNativeStabilizationProfile();
+	if (VRVendorRelatchPolicy::CanReuseRuntimeResolutionPlan(
+			runtimeResolutionStateLastRefreshFrame, currentFrame,
+			runtimeResolutionPlan.nativeStabilization, GetNativeResolutionPlanKey(guardedNative))) {
 		return;
 	}
 
-	RefreshRuntimeResolutionState();
+	RefreshRuntimeResolutionState(guardedNative);
 }
 
 void Upscaling::InvalidateFrameScopedUpscalingState()
@@ -24189,6 +24324,23 @@ void Upscaling::InvalidateSubmitTemporalSnapshot()
 	submitTemporalInputs.snapshot.Invalidate();
 	submitTemporalInputs.depth = nullptr;
 	submitTemporalInputs.motion = nullptr;
+}
+
+VRVendorRelatchPolicy::WorldResolutionPlanWitness Upscaling::BeginVRWorldResolutionObservation()
+{
+	const std::scoped_lock lock(submitTemporalInputsMutex);
+	vrCompletedWorldResolutionPlan = {};
+	return vrViewportResolutionPlan;
+}
+
+void Upscaling::CompleteVRWorldResolutionObservation(
+	VRVendorRelatchPolicy::WorldResolutionPlanWitness a_observation)
+{
+	const std::scoped_lock lock(submitTemporalInputsMutex);
+	if (a_observation == vrViewportResolutionPlan &&
+		a_observation.Matches(globals::state->frameCount, a_observation.nativePlan)) {
+		vrCompletedWorldResolutionPlan = a_observation;
+	}
 }
 
 void Upscaling::CaptureSubmitTemporalSnapshot()
@@ -24289,10 +24441,12 @@ void Upscaling::CaptureSubmitTemporalSnapshot()
 	submitTemporalInputs.motion.copy_from(motion);
 }
 
-void Upscaling::RefreshRuntimeResolutionPlan()
+void Upscaling::RefreshRuntimeResolutionPlan(
+	const std::optional<VRRenderScaleProfileSnapshot>& guardedNative)
 {
 	RuntimeResolutionPlan plan{};
-	plan.upscaleMethod = GetRuntimeUpscaleMethod();
+	plan.nativeStabilization = GetNativeResolutionPlanKey(guardedNative);
+	plan.upscaleMethod = guardedNative ? guardedNative->method : GetRuntimeUpscaleMethod();
 	plan.qualityMode = GetRuntimeQualityMode();
 	plan.vendorMethod = IsVendorUpscalingMethod(plan.upscaleMethod);
 	plan.knownMenuContextActive = IsKnownGameMenuContextActive();
@@ -24333,8 +24487,18 @@ void Upscaling::RefreshRuntimeResolutionPlan()
 		};
 	};
 
-	const bool vrRenderScaleLatched = IsVRRenderScaleModeLatched();
-	if (vrRenderScaleLatched) {
+	if (guardedNative) {
+		// Keep the newly applied native targets until the guard accepts stereo.
+		// The saved FSR preference and its restart state belong to the later replay.
+		const float2 nativeSize{
+			static_cast<float>(guardedNative->displayEyeWidth * 2u),
+			static_cast<float>(guardedNative->displayEyeHeight)
+		};
+		plan.trueHMDDisplaySize = nativeSize;
+		plan.engineRenderSize = nativeSize;
+		plan.finalOutputSize = nativeSize;
+		plan.perfModeRestartRequired = false;
+	} else if (IsVRRenderScaleModeLatched()) {
 		const float2 displaySize = perfMode.GetDisplayScreenSize();
 		const float2 renderSize = perfMode.GetRenderScreenSize();
 		if (displaySize.x > 0.0f && displaySize.y > 0.0f)
@@ -25291,6 +25455,7 @@ uint64_t Upscaling::CanBufferVRFpsStabilizerAPITransitionProfile(uint32_t a_bloc
 	// Serial selection and token publication are one transaction. Neither an
 	// event-driven open/close nor another API caller can change the door identity
 	// between these operations.
+	const std::scoped_lock handoffLock(g_vrStabilizerSyncHandoffMutex);
 	std::scoped_lock admissionLock(
 		g_vrLoadingTransitionSerialMutex,
 		vrFpsStabilizerAPIProfileAdmissionMutex);
@@ -25473,62 +25638,169 @@ bool Upscaling::IsVRUpscalingTransitionProfileNoOp(
 	       IsVRRenderScalePhysicalContractConverged(a_targetMethod, qualityMode);
 }
 
-void Upscaling::QueueVRFpsStabilizerLoadSync(uint32_t a_frame)
+void Upscaling::QueueVRFpsStabilizerLoadSync(
+	VRVendorRelatchPolicy::LoadingMenuClose a_close, std::optional<uint64_t> a_discoveryEdge)
 {
-	if (!IsVRFpsStabilizerSyncActive()) {
-		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
-		vrPostLoadCompositorHoldAwaitingSyncEpoch.store(0, std::memory_order_release);
-		if (IsVRInitialLoadPresentationProtectionActive() &&
-			!IsVRPostLoadCompositorHoldActive()) {
-			ResetVRPostLoadCompositorHold();
+	const bool syncActive = IsVRFpsStabilizerSyncActive();
+	std::unique_lock holdLock(vrPostLoadCompositorHoldMutex, std::defer_lock);
+	// Inactive sync can retire the hold, whose lock order is hold -> serial.
+	if (!syncActive)
+		holdLock.lock();
+	std::unique_lock serialLock(g_vrLoadingTransitionSerialMutex);
+	const auto current = GetVRFpsStabilizerSyncOwnerLocked();
+	const bool loadingOpen = g_vrLoadingTransitionSerialOpen.load(std::memory_order_relaxed);
+	const uint32_t frame = std::max(a_close.frame, 1u);
+	if (a_discoveryEdge) {
+		if (!VRVendorRelatchPolicy::MatchesStabilizerSyncDiscovery(
+				a_close, *a_discoveryEdge, current.close, current.edge, loadingOpen)) {
+			return;
+		}
+	} else if (!a_close.Matches(current.close.serial, current.close.frame, loadingOpen)) {
+		return;
+	}
+
+	if (syncActive &&
+		(GetVRFpsStabilizerSyncOutcomeLocked(current) ||
+			(g_vrPendingStabilizerSyncOwner &&
+				VRVendorRelatchPolicy::MatchesStabilizerSyncDiscovery(
+					g_vrPendingStabilizerSyncOwner->close, g_vrPendingStabilizerSyncOwner->edge,
+					current.close, current.edge, false)))) {
+		return;
+	}
+
+	if (!syncActive) {
+		ClearVRFpsStabilizerPendingSyncLocked(*this);
+		if (vrPostLoadCompositorHoldLoadingSerial.load(std::memory_order_relaxed) == current.close.serial) {
+			vrPostLoadCompositorHoldAwaitingSyncEpoch.store(0, std::memory_order_release);
+			if (IsVRInitialLoadPresentationProtectionActive() &&
+				!IsVRPostLoadCompositorHoldActive()) {
+				ResetVRPostLoadPresentationProtectionLocked();
+			}
 		}
 		return;
 	}
 
-	const uint32_t frame = std::max(a_frame, 1u);
+	g_vrPendingStabilizerSyncOwner = current;
 	pendingVRFpsStabilizerSyncFrame.store(frame, std::memory_order_release);
+	serialLock.unlock();
 	logger::debug("[Upscaling] VR FPS Stabilizer Sync queued after save-load menu close at frame {}.", frame);
 }
 
 void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 {
-	const uint32_t queuedFrame = pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire);
-	if (queuedFrame == 0)
+	if (pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire) == 0)
 		return;
 
-	if (!IsVRFpsStabilizerSyncActive()) {
-		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
-		vrPostLoadCompositorHoldAwaitingSyncEpoch.store(0, std::memory_order_release);
-		if (IsVRInitialLoadPresentationProtectionActive() &&
-			!IsVRPostLoadCompositorHoldActive()) {
-			ResetVRPostLoadCompositorHold();
+	std::optional<VRVendorRelatchPolicy::StabilizerSyncOwner> queued;
+	{
+		const std::scoped_lock serialLock(g_vrLoadingTransitionSerialMutex);
+		queued = g_vrPendingStabilizerSyncOwner;
+		if (!queued)
+			return;
+		const auto current = GetVRFpsStabilizerSyncOwnerLocked();
+		if (!VRVendorRelatchPolicy::MatchesStabilizerSyncDiscovery(
+				queued->close, queued->edge, current.close, current.edge,
+				g_vrLoadingTransitionSerialOpen.load(std::memory_order_relaxed))) {
+			ClearVRFpsStabilizerPendingSyncLocked(*this);
+			return;
 		}
-		return;
 	}
 
-	const auto* state = globals::state;
-	if (!IsVRFpsStabilizerLoadSyncReady(state))
+	const bool syncActive = IsVRFpsStabilizerSyncActive();
+	const auto ready = syncActive ? GetReadyVRFpsStabilizerSyncOwner(globals::state) : queued;
+	if (!ready)
 		return;
 
-	const uint64_t postLoadCompositorHoldSyncEpoch =
-		vrPostLoadCompositorHoldAwaitingSyncEpoch.exchange(
-			0,
-			std::memory_order_acq_rel);
-	const bool armPostLoadCompositorHoldAfterSync =
-		IsVRInitialLoadPresentationProtectionActive() &&
-		postLoadCompositorHoldSyncEpoch != 0 &&
-		postLoadCompositorHoldSyncEpoch ==
-			vrPostLoadCompositorHoldEpoch.load(std::memory_order_acquire);
+	// The handoff also owns profile application, which can acquire the serial
+	// and hold mutexes internally. The initial claim keeps their hold -> serial order.
+	const std::scoped_lock handoffLock(g_vrStabilizerSyncHandoffMutex);
+	uint64_t postLoadCompositorHoldSyncEpoch = 0;
+	{
+		const std::scoped_lock holdLock(vrPostLoadCompositorHoldMutex);
+		const std::scoped_lock serialLock(g_vrLoadingTransitionSerialMutex);
+		if (!g_vrPendingStabilizerSyncOwner ||
+			!VRVendorRelatchPolicy::CanClaimStabilizerSync(
+				*queued, *ready, *g_vrPendingStabilizerSyncOwner, GetVRFpsStabilizerSyncOwnerLocked(),
+				g_vrLoadingTransitionSerialOpen.load(std::memory_order_relaxed))) {
+			return;
+		}
+
+		const bool ownsHold =
+			vrPostLoadCompositorHoldLoadingSerial.load(std::memory_order_relaxed) == queued->close.serial;
+		if (!syncActive) {
+			ClearVRFpsStabilizerPendingSyncLocked(*this);
+			if (ownsHold) {
+				vrPostLoadCompositorHoldAwaitingSyncEpoch.store(0, std::memory_order_release);
+				if (IsVRInitialLoadPresentationProtectionActive() &&
+					!IsVRPostLoadCompositorHoldActive()) {
+					ResetVRPostLoadPresentationProtectionLocked();
+				}
+			}
+			return;
+		}
+
+		// Keep the exact request pending while its profile handoff is in progress.
+		const uint64_t awaiting =
+			vrPostLoadCompositorHoldAwaitingSyncEpoch.load(std::memory_order_relaxed);
+		if (ownsHold && IsVRInitialLoadPresentationProtectionActive() &&
+			awaiting == vrPostLoadCompositorHoldEpoch.load(std::memory_order_relaxed)) {
+			postLoadCompositorHoldSyncEpoch = awaiting;
+		}
+	}
+
+	using VRVendorRelatchPolicy::StabilizerSyncOutcome;
+	const auto finishSync = [&](StabilizerSyncOutcome a_outcome) {
+		const std::scoped_lock holdLock(vrPostLoadCompositorHoldMutex);
+		const std::scoped_lock serialLock(g_vrLoadingTransitionSerialMutex);
+		const auto current = GetVRFpsStabilizerSyncOwnerLocked();
+		if (!VRVendorRelatchPolicy::MatchesStabilizerSyncDiscovery(
+				queued->close, queued->edge, current.close, current.edge,
+				g_vrLoadingTransitionSerialOpen.load(std::memory_order_relaxed))) {
+			return false;
+		}
+		if (g_vrPendingStabilizerSyncOwner) {
+			if (!VRVendorRelatchPolicy::CanClaimStabilizerSync(
+					*queued, *ready, *g_vrPendingStabilizerSyncOwner, current, false)) {
+				return false;
+			}
+		} else if (a_outcome != StabilizerSyncOutcome::Refused) {
+			// A blocker may have already discarded the slot while rejecting.
+			return false;
+		}
+
+		g_vrStabilizerSyncCompletion = VRStabilizerSyncCompletion{ *queued, a_outcome };
+		if (a_outcome == StabilizerSyncOutcome::Resolved)
+			vrFpsStabilizerSyncResolvedFrame.store(std::max(queued->close.frame, 1u), std::memory_order_release);
+		ClearVRFpsStabilizerPendingSyncLocked(*this);
+		if (postLoadCompositorHoldSyncEpoch != 0 &&
+			postLoadCompositorHoldSyncEpoch == vrPostLoadCompositorHoldAwaitingSyncEpoch.load(std::memory_order_relaxed) &&
+			postLoadCompositorHoldSyncEpoch == vrPostLoadCompositorHoldEpoch.load(std::memory_order_relaxed) &&
+			queued->close.serial == vrPostLoadCompositorHoldLoadingSerial.load(std::memory_order_relaxed)) {
+			// On refusal the normal hold policy may now fall back without an
+			// awaiting-sync keepalive. Only successful sync arms a new hold.
+			vrPostLoadCompositorHoldAwaitingSyncEpoch.store(0, std::memory_order_release);
+		} else {
+			postLoadCompositorHoldSyncEpoch = 0;
+		}
+		return true;
+	};
+
+	const auto retireHoldIfOwned = [&]() {
+		if (postLoadCompositorHoldSyncEpoch == 0)
+			return;
+		const std::scoped_lock holdLock(vrPostLoadCompositorHoldMutex);
+		if (postLoadCompositorHoldSyncEpoch == vrPostLoadCompositorHoldEpoch.load(std::memory_order_relaxed) &&
+			queued->close.serial == vrPostLoadCompositorHoldLoadingSerial.load(std::memory_order_relaxed)) {
+			ResetVRPostLoadPresentationProtectionLocked();
+		}
+	};
 	const auto& profiles = GetVRFpsStabilizerSessionConfig();
 	const bool loadedInterior = Util::IsInterior();
 	const auto& profile = loadedInterior ? profiles.interior : profiles.exterior;
 	const char* profileName = loadedInterior ? "Interior" : "Exterior";
 	if (!profile.HasAnyUpscalingSetting()) {
-		pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
-		MarkVRFpsStabilizerSyncResolved(*this, queuedFrame);
-		RememberVRResolvedWorldCell();
-		if (armPostLoadCompositorHoldAfterSync)
-			ResetVRPostLoadCompositorHold();
+		if (finishSync(VRVendorRelatchPolicy::SelectStabilizerSyncOutcome(false, false, false)))
+			retireHoldIfOwned();
 		logger::warn("[Upscaling] VR FPS Stabilizer Sync found no {} upscaling profile in {}.", profileName, profiles.path.string());
 		return;
 	}
@@ -25538,42 +25810,41 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 
 	// API profile admission compares executable modes. The local load sync
 	// additionally reconciles the preference retained while native AA is active.
-	const bool settingsProfileMatches =
-		GetVRRenderScaleModePreference() == target.renderScaleModePreference &&
-		MatchesVRFpsStabilizerTransitionTarget(
-			currentMethod,
-			IsRenderScaleModeRequested(),
-			GetEffectiveUpscalingQualityMode(),
-			GetEffectiveDLSSPreset(),
-			target);
-	const auto controller = GetVRRenderScaleTransitionSnapshot();
-	const bool controllerProfileMatches = HasCurrentVRRenderScaleControllerTarget(
-		controller,
-		target.method,
-		target.renderScaleMode,
-		target.qualityMode,
-		target.dlssPreset,
-		std::nullopt);
-	const bool profileMatches =
-		!VRVendorRelatchPolicy::ShouldPublishStabilizerDestinationProfile(
+	const auto matchesProfile = [&]() {
+		const bool settingsProfileMatches =
+			GetVRRenderScaleModePreference() == target.renderScaleModePreference &&
+			MatchesVRFpsStabilizerTransitionTarget(
+				GetConfiguredUpscaleMethodForTransition(),
+				IsRenderScaleModeRequested(),
+				GetEffectiveUpscalingQualityMode(),
+				GetEffectiveDLSSPreset(),
+				target);
+		const bool controllerProfileMatches = HasCurrentVRRenderScaleControllerTarget(
+			GetVRRenderScaleTransitionSnapshot(),
+			target.method,
+			target.renderScaleMode,
+			target.qualityMode,
+			target.dlssPreset,
+			std::nullopt);
+		return !VRVendorRelatchPolicy::ShouldPublishStabilizerDestinationProfile(
 			settingsProfileMatches,
 			controllerProfileMatches);
+	};
 	const auto armPostLoadCompositorHoldIfEligible = [&]() {
-		if (!armPostLoadCompositorHoldAfterSync ||
-			postLoadCompositorHoldSyncEpoch !=
-				vrPostLoadCompositorHoldEpoch.load(std::memory_order_acquire)) {
+		if (postLoadCompositorHoldSyncEpoch == 0)
 			return;
-		}
 		if (!IsVendorUpscalingMethod(target.method)) {
-			ResetVRPostLoadCompositorHold();
-		} else if (!IsVRPostLoadCompositorHoldActive()) {
-			ArmVRPostLoadCompositorHold();
+			retireHoldIfOwned();
+		} else {
+			ArmVRPostLoadCompositorHold(
+				false, false, VRPostLoadCompositorHoldRoute::None,
+				queued->close.serial, postLoadCompositorHoldSyncEpoch);
 		}
 	};
-	pendingVRFpsStabilizerSyncFrame.store(0, std::memory_order_release);
-	MarkVRFpsStabilizerSyncResolved(*this, queuedFrame);
 
-	if (profileMatches) {
+	if (matchesProfile()) {
+		if (!finishSync(StabilizerSyncOutcome::Resolved))
+			return;
 		RememberVRResolvedWorldCell();
 		armPostLoadCompositorHoldIfEligible();
 		logger::debug(
@@ -25598,13 +25869,32 @@ void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()
 		target.dlssPreset,
 		BoolText(GetVRRenderScaleModePreference()),
 		BoolText(target.renderScaleModePreference));
-	ApplyCSMenuUpscalingTransition(
+	const auto result = ApplyCSMenuUpscalingTransition(
 		target.method,
 		target.renderScaleModePreference,
 		target.qualityMode,
 		target.dlssPreset,
 		"VR FPS Stabilizer save-load sync",
 		VRUpscalingTransitionOrigin::PostLoadSync);
+	const bool acceptedHandoff =
+		result.disposition == UpscalingTransitionApplyDisposition::AppliedSynchronously ||
+		((result.disposition == UpscalingTransitionApplyDisposition::Queued ||
+			 result.disposition == UpscalingTransitionApplyDisposition::Deferred ||
+			 result.disposition == UpscalingTransitionApplyDisposition::Coalesced) &&
+			result.requestID != 0 && result.transitionEpoch != 0);
+	const auto outcome = VRVendorRelatchPolicy::SelectStabilizerSyncOutcome(
+		true, result.disposition == UpscalingTransitionApplyDisposition::NoChange && matchesProfile(), acceptedHandoff);
+	if (!finishSync(outcome))
+		return;
+	if (outcome == StabilizerSyncOutcome::Refused) {
+		logger::warn(
+			"[Upscaling] VR FPS Stabilizer Sync could not apply {} profile for loading serial {}: {} ({}).",
+			profileName,
+			queued->close.serial,
+			magic_enum::enum_name(result.disposition),
+			magic_enum::enum_name(result.rejection));
+		return;
+	}
 	RememberVRResolvedWorldCell();
 	armPostLoadCompositorHoldIfEligible();
 }
@@ -36933,6 +37223,20 @@ bool Upscaling::PrepareVRNativeRestorePresentationObservation(
 		return reject(VRNativeRestorePreparationReject::StabilizerPending);
 	}
 
+	// Submit proves the plan used by rendering, so it must not rebuild a stale plan.
+	const auto nativePlanKey = GetNativeResolutionPlanKey(GetGuardedNativeStabilizationProfile());
+	{
+		const std::scoped_lock lock(submitTemporalInputsMutex);
+		if (!vrCompletedWorldResolutionPlan.Matches(state->frameCount, nativePlanKey))
+			return reject(VRNativeRestorePreparationReject::ResolutionPlan);
+	}
+	if (nativePlanKey != GetRuntimeResolutionPlan().nativeStabilization ||
+		(nativePlanKey.epoch != 0 &&
+			(nativePlanKey.epoch != applied.transitionEpoch ||
+				nativePlanKey.generation != applied.contractGeneration))) {
+		return reject(VRNativeRestorePreparationReject::ResolutionPlan);
+	}
+
 	const float2 nativeSize{
 		static_cast<float>(applied.displayEyeWidth * 2u),
 		static_cast<float>(applied.displayEyeHeight)
@@ -42170,6 +42474,85 @@ void Upscaling::RequestVRSubmitStageHistoryReset()
 	RequestHistoryReset();
 }
 
+bool Upscaling::TryRetainFSRForCompletedSaveLoad(
+	UpscaleMethod a_upscaleMethod, uint64_t a_recoveryEpoch)
+{
+	auto* state = globals::state;
+	if (a_upscaleMethod != UpscaleMethod::kFSR || a_recoveryEpoch == 0 || !state ||
+		!state->IsEngineSaveLoadKnownIdle() || state->pendingPostLoadRuntimeReset ||
+		IsMainMenuContextActive() || IsLoadingMenuContextActive() ||
+		IsNonLoadingVRMenuPresentationContextActive() ||
+		HasPendingVRUpscalingTransition() || perfMode.HasRestartRequiredChange() ||
+		pendingPerfModeRenderTargetRecreate.load(std::memory_order_acquire) ||
+		perfModeRenderTargetRecreateInProgress.load(std::memory_order_acquire) ||
+		vrRenderScalePostMutationSerializationEpoch.load(std::memory_order_acquire) != 0 ||
+		vrRenderScaleUnresolvedPhysicalMutationEpoch.load(std::memory_order_acquire) != 0 ||
+		submitStageVendorResumeFrame.load(std::memory_order_acquire) != 0 ||
+		IsSubmitStageDeviceLost() || HasPendingVRVendorRuntimeReset(*this, a_upscaleMethod) ||
+		HasPendingVRIntermediateTextureCleanup() || IsVRFpsStabilizerSyncActive()) {
+		return false;
+	}
+
+	const std::scoped_lock loadLock(
+		g_vrLoadingMenuGateReconciliationMutex, g_vrLoadingTransitionSerialMutex);
+	const auto loadSerial = g_vrLoadingTransitionSerial.load(std::memory_order_relaxed);
+	const auto closeFrame = g_vrLoadingTransitionCloseFrame.load(std::memory_order_relaxed);
+	const auto transition = GetVRRenderScaleTransitionSnapshot();
+	const auto& recovery = transition.postLoadRecovery;
+	const auto holdState = static_cast<VRPostLoadCompositorHoldState>(
+		vrPostLoadCompositorHoldState.load(std::memory_order_acquire));
+	if (!VRVendorRelatchPolicy::HasRetainedSaveLoadDestination({
+			.loadingSerial = loadSerial,
+			.recoveryLoadingSerial = recovery.loadingSerial,
+			.holdLoadingSerial = vrPostLoadCompositorHoldLoadingSerial.load(std::memory_order_acquire),
+			.closeFrame = closeFrame,
+			.recoveryStartFrame = recovery.startFrame,
+			.completedWorldFrame = state->lastCompletedWorldRenderFrame,
+			.currentFrame = state->frameCount,
+			.loadingOpen = g_vrLoadingTransitionSerialOpen.load(std::memory_order_relaxed) ||
+	                       IsLoadingMenuContextActive(),
+			.inGameLoadHold = (holdState == VRPostLoadCompositorHoldState::Armed ||
+								  holdState == VRPostLoadCompositorHoldState::Holding) &&
+	                          vrPostLoadCompositorHoldLoadingMenuClosed.load(std::memory_order_acquire) &&
+	                          static_cast<VRPostLoadCompositorHoldRoute>(
+								  vrPostLoadCompositorHoldRoute.load(std::memory_order_acquire)) ==
+	                              VRPostLoadCompositorHoldRoute::InGameLoad,
+		}) ||
+		!recovery.active || recovery.recoveryEpoch != a_recoveryEpoch ||
+		recovery.engineTargetCreateEntered ||
+		transition.state != VRRenderScaleTransitionState::Active) {
+		return false;
+	}
+
+	const auto boot = perfMode.GetBootSnapshot();
+	const auto& applied = transition.applied;
+	const auto& stable = transition.stable;
+	if (GetConfiguredUpscaleMethodForTransition() != a_upscaleMethod ||
+		!IsRenderScaleModeRequested() || !GetVRRenderScaleModeRequested() ||
+		GetEffectiveUpscalingQualityMode() != boot.qualityMode ||
+		applied.fsr4RuntimeEnabled != settings.fsr4RuntimeEnable ||
+		stable.transitionEpoch != applied.transitionEpoch ||
+		!IsVRRenderScaleAppliedVendorContractExact(transition, boot, a_upscaleMethod) ||
+		!HasTruthfulStableVRVendorResources(stable) ||
+		!IsVRRenderScalePhysicalContractConverged(a_upscaleMethod, boot.qualityMode) ||
+		!CanDispatchExistingVRVendorEvaluation(a_upscaleMethod)) {
+		return false;
+	}
+
+	// Evaluation uses the existing provider. The compositor hold still owns
+	// release and requires fresh, exact stereo outputs. Keep the game-entry
+	// lifecycle work gate while the save/load mutation grace remains active.
+	RequestHistoryReset();
+	g_vrDeferredPostLoadFSRReset = {};
+	postLoadRuntimeResetPending.store(false, std::memory_order_release);
+	g_vrRetainedPostLoadPresentationSerial.store(loadSerial, std::memory_order_relaxed);
+	g_vrRetainedPostLoadPresentationCloseFrame.store(closeFrame, std::memory_order_release);
+	logger::info(
+		"[VRRenderScale][PostLoad] Retained FSR provider after save load serial={} recoveryEpoch={} generation={} worldFrame={} frame={}",
+		loadSerial, a_recoveryEpoch, boot.generation, state->lastCompletedWorldRenderFrame, state->frameCount);
+	return true;
+}
+
 bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 {
 	if (!postLoadRuntimeResetPending.load(std::memory_order_acquire))
@@ -42187,8 +42570,22 @@ bool Upscaling::ApplyPendingPostLoadRuntimeReset(UpscaleMethod a_upscaleMethod)
 	const uint64_t recoveryEpoch = pendingPostLoadRuntimeResetEpoch.load(std::memory_order_acquire);
 
 	auto* state = globals::state;
-	if (IsSaveLoadMutationContextActive(state)) {
+	if (TryRetainFSRForCompletedSaveLoad(a_upscaleMethod, recoveryEpoch)) {
+		CompleteVRRenderScalePostLoadRecovery(recoveryEpoch, 0);
 		return true;
+	}
+	if (IsSaveLoadMutationContextActive(state))
+		return true;
+
+	const auto deferredClose = std::exchange(g_vrDeferredPostLoadFSRReset, {});
+	if (deferredClose.serial != 0) {
+		const std::scoped_lock serialLock(g_vrLoadingTransitionSerialMutex);
+		if (deferredClose.Matches(
+				g_vrLoadingTransitionSerial.load(std::memory_order_relaxed),
+				g_vrLoadingTransitionCloseFrame.load(std::memory_order_relaxed),
+				g_vrLoadingTransitionSerialOpen.load(std::memory_order_relaxed))) {
+			QueueVendorRuntimeResetAfterLoadingMenu(*this);
+		}
 	}
 
 	const bool renderScalePostLoadResetRelevant = IsVRRenderScalePostLoadResetRelevant(*this, a_upscaleMethod);
@@ -51937,16 +52334,19 @@ void Upscaling::ConfigureTAA()
 
 void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 {
-	if (const uint64_t reconciledLoadingSerial =
-			TryReconcileMissedVRLoadingMenuClose(*this);
-		reconciledLoadingSerial != 0) {
+	if (globals::game::isVR) {
+		const std::scoped_lock lock(submitTemporalInputsMutex);
+		vrViewportResolutionPlan = {};
+	}
+	if (const auto reconciledClose = TryReconcileMissedVRLoadingMenuClose(*this);
+		reconciledClose.serial != 0) {
 		NotifyVRMenuPresentationContextChange("reconciled-loading-menu-close");
 		// The synthetic close transaction has released gate+serial ownership. Run
 		// compositor/controller work only now, matching the authoritative event path.
 		logger::warn(
 			"[VRRenderScale][PostLoad] Reconciled a missed LoadingMenu close after two closed completed-world-frame samples. loadingSerial={}.",
-			reconciledLoadingSerial);
-		CompleteVRLoadingMenuCloseOutsideLocks(reconciledLoadingSerial);
+			reconciledClose.serial);
+		CompleteVRLoadingMenuCloseOutsideLocks(reconciledClose);
 	}
 	UpdateVRStartupMainMenuRenderState();
 
@@ -52037,8 +52437,6 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 		if (ApplyPendingPerfModeRenderTargetRecreate("ConfigureUpscaling"))
 			return;
 	}
-	auto upscaleMethod = GetRuntimeUpscaleMethod();
-
 	// Cache original TAA values for UI
 	projectionPosScaleX = a_viewport->projectionPosScaleX;
 	projectionPosScaleY = a_viewport->projectionPosScaleY;
@@ -52050,8 +52448,13 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	auto screenWidth = static_cast<int>(screenSize.x);
 	auto screenHeight = static_cast<int>(screenSize.y);
 
-	const bool vendorUpscalingMethod = IsVendorUpscalingMethod(upscaleMethod);
 	EnsureRuntimeResolutionStateCurrent();
+	if (globals::game::isVR) {
+		const std::scoped_lock lock(submitTemporalInputsMutex);
+		vrViewportResolutionPlan = { state->frameCount, runtimeResolutionPlan.nativeStabilization };
+	}
+	const auto upscaleMethod = runtimeResolutionPlan.upscaleMethod;
+	const bool vendorUpscalingMethod = runtimeResolutionPlan.vendorMethod;
 	auto applyFullResolutionPresentation = [&](UpscaleMethod a_upscaleMethod, const char* a_context, bool a_serviceResources = true) {
 		float2 presentationDisplaySize = runtimeResolutionPlan.trueHMDDisplaySize;
 		if (presentationDisplaySize.x <= 0.0f || presentationDisplaySize.y <= 0.0f)
@@ -54124,9 +54527,16 @@ bool Upscaling::ArmVRPostLoadCompositorHold(
 	bool a_awaitingStabilizerSync,
 	bool a_beginLoadProtection,
 	VRPostLoadCompositorHoldRoute a_route,
-	uint64_t a_loadingSerial)
+	uint64_t a_loadingSerial,
+	uint64_t a_expectedIdleEpoch)
 {
 	const std::scoped_lock holdLock(vrPostLoadCompositorHoldMutex);
+	if (a_expectedIdleEpoch != 0 &&
+		(a_expectedIdleEpoch != vrPostLoadCompositorHoldEpoch.load(std::memory_order_relaxed) ||
+			a_loadingSerial != vrPostLoadCompositorHoldLoadingSerial.load(std::memory_order_relaxed) ||
+			IsVRPostLoadCompositorHoldActive())) {
+		return false;
+	}
 	if (a_route == VRPostLoadCompositorHoldRoute::RenderTransition &&
 		static_cast<VRPostLoadCompositorHoldState>(
 			vrPostLoadCompositorHoldState.load(std::memory_order_acquire)) !=
@@ -54315,13 +54725,14 @@ void Upscaling::NotifyVRPostLoadCompositorLoadingMenuOpened(
 }
 
 void Upscaling::NotifyVRPostLoadCompositorLoadingMenuClosed(
-	uint64_t a_loadingSerial)
+	uint64_t a_loadingSerial, std::optional<uint32_t> a_closeFrame)
 {
 	const std::scoped_lock holdLock(vrPostLoadCompositorHoldMutex);
 	const std::scoped_lock serialLock(g_vrLoadingTransitionSerialMutex);
 	if (g_vrLoadingTransitionSerial.load(std::memory_order_relaxed) !=
 			a_loadingSerial ||
-		g_vrLoadingTransitionSerialOpen.load(std::memory_order_relaxed)) {
+		g_vrLoadingTransitionSerialOpen.load(std::memory_order_relaxed) ||
+		(a_closeFrame && *a_closeFrame != g_vrLoadingTransitionCloseFrame.load(std::memory_order_relaxed))) {
 		return;
 	}
 	const uint64_t ownedLoadingSerial =

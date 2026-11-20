@@ -9,6 +9,101 @@
 
 namespace VRVendorRelatchPolicy
 {
+	struct NativeResolutionPlanKey
+	{
+		std::uint64_t epoch = 0;
+		std::uint32_t generation = 0;
+		std::uint32_t displayEyeWidth = 0;
+		std::uint32_t displayEyeHeight = 0;
+
+		constexpr bool operator==(const NativeResolutionPlanKey&) const noexcept = default;
+	};
+
+	[[nodiscard]] constexpr bool CanReuseRuntimeResolutionPlan(
+		std::uint32_t a_cachedFrame, std::uint32_t a_currentFrame,
+		NativeResolutionPlanKey a_cachedNative, NativeResolutionPlanKey a_currentNative) noexcept
+	{
+		return a_currentFrame != std::numeric_limits<std::uint32_t>::max() &&
+		       a_cachedFrame == a_currentFrame && a_cachedNative == a_currentNative;
+	}
+
+	struct WorldResolutionPlanWitness
+	{
+		std::uint32_t frame = (std::numeric_limits<std::uint32_t>::max)();
+		NativeResolutionPlanKey nativePlan;
+
+		constexpr bool operator==(const WorldResolutionPlanWitness&) const noexcept = default;
+
+		[[nodiscard]] constexpr bool Matches(
+			std::uint32_t a_frame, NativeResolutionPlanKey a_plan) const noexcept
+		{
+			return CanReuseRuntimeResolutionPlan(frame, a_frame, nativePlan, a_plan);
+		}
+	};
+
+	struct LoadingMenuClose
+	{
+		std::uint64_t serial = 0;
+		std::uint32_t frame = 0;
+
+		[[nodiscard]] constexpr bool Matches(
+			std::uint64_t a_serial, std::uint32_t a_frame, bool a_open) const noexcept
+		{
+			return !a_open && serial != 0 && serial == a_serial && frame == a_frame;
+		}
+	};
+
+	struct StabilizerSyncOwner
+	{
+		LoadingMenuClose close;
+		std::uint64_t edge = 0;
+	};
+
+	[[nodiscard]] constexpr bool MatchesStabilizerSyncDiscovery(
+		LoadingMenuClose a_observedClose, std::uint64_t a_observedEdge,
+		LoadingMenuClose a_currentClose, std::uint64_t a_currentEdge, bool a_open) noexcept
+	{
+		// Startup may have no serial or close frame. Its edge still owns the observation.
+		return !a_open && a_observedEdge == a_currentEdge &&
+		       a_observedClose.serial == a_currentClose.serial &&
+		       a_observedClose.frame == a_currentClose.frame;
+	}
+
+	[[nodiscard]] constexpr bool CanClaimStabilizerSync(
+		StabilizerSyncOwner a_queued, StabilizerSyncOwner a_ready,
+		StabilizerSyncOwner a_pending, StabilizerSyncOwner a_current, bool a_open) noexcept
+	{
+		return MatchesStabilizerSyncDiscovery(a_queued.close, a_queued.edge, a_current.close, a_current.edge, a_open) &&
+		       MatchesStabilizerSyncDiscovery(a_queued.close, a_queued.edge, a_ready.close, a_ready.edge, false) &&
+		       MatchesStabilizerSyncDiscovery(a_queued.close, a_queued.edge, a_pending.close, a_pending.edge, false);
+	}
+
+	enum class StabilizerSyncOutcome : std::uint8_t
+	{
+		Resolved,
+		Refused,
+		NoProfile
+	};
+
+	[[nodiscard]] constexpr StabilizerSyncOutcome SelectStabilizerSyncOutcome(
+		bool a_hasProfile, bool a_profileMatches, bool a_handoffAccepted) noexcept
+	{
+		if (!a_hasProfile)
+			return StabilizerSyncOutcome::NoProfile;
+		return a_profileMatches || a_handoffAccepted ?
+		           StabilizerSyncOutcome::Resolved :
+		           StabilizerSyncOutcome::Refused;
+	}
+
+	[[nodiscard]] constexpr bool IsRetainedSaveLoadTail(
+		std::uint64_t a_retainedSerial, std::uint32_t a_retainedCloseFrame,
+		std::uint64_t a_currentSerial, std::uint32_t a_currentCloseFrame,
+		bool a_loadingOpen) noexcept
+	{
+		return !a_loadingOpen && a_retainedSerial != 0 && a_retainedCloseFrame != 0 &&
+		       a_retainedSerial == a_currentSerial && a_retainedCloseFrame == a_currentCloseFrame;
+	}
+
 	enum class PresentationRecoveryStage : std::uint8_t
 	{
 		None,
@@ -448,6 +543,33 @@ namespace VRVendorRelatchPolicy
 		       !a_state.upscalingTransitionPending &&
 		       !a_state.stabilizerSyncScheduled &&
 		       !a_state.stabilizerSyncUnresolved;
+	}
+
+	struct RetainedSaveLoadDestination
+	{
+		std::uint64_t loadingSerial = 0;
+		std::uint64_t recoveryLoadingSerial = 0;
+		std::uint64_t holdLoadingSerial = 0;
+		std::uint32_t closeFrame = 0;
+		std::uint32_t recoveryStartFrame = 0;
+		std::uint32_t completedWorldFrame = 0;
+		std::uint32_t currentFrame = 0;
+		bool loadingOpen = true;
+		bool inGameLoadHold = false;
+	};
+
+	[[nodiscard]] constexpr bool HasRetainedSaveLoadDestination(
+		const RetainedSaveLoadDestination& a_state) noexcept
+	{
+		return a_state.inGameLoadHold && !a_state.loadingOpen &&
+		       a_state.loadingSerial != 0 &&
+		       a_state.loadingSerial == a_state.recoveryLoadingSerial &&
+		       a_state.loadingSerial == a_state.holdLoadingSerial &&
+		       a_state.closeFrame != 0 && a_state.recoveryStartFrame != 0 &&
+		       a_state.completedWorldFrame > a_state.closeFrame &&
+		       a_state.completedWorldFrame > a_state.recoveryStartFrame &&
+		       a_state.completedWorldFrame <= a_state.currentFrame &&
+		       a_state.completedWorldFrame != (std::numeric_limits<std::uint32_t>::max)();
 	}
 
 	struct SerializedPresentationReadiness

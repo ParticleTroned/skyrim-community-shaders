@@ -991,7 +991,13 @@ void Deferred::Hooks::Main_RenderWorld::thunk(bool a1)
 	state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::InWorld);
 	state->inWorld = true;
 	state->lastWorldRenderFrame = state->frameCount;
+	auto& upscaling = globals::features::upscaling;
+	const auto resolutionPlan = globals::game::isVR ?
+	                                upscaling.BeginVRWorldResolutionObservation() :
+	                                VRVendorRelatchPolicy::WorldResolutionPlanWitness{};
 	func(a1);
+	if (globals::game::isVR)
+		upscaling.CompleteVRWorldResolutionObservation(resolutionPlan);
 	state->lastCompletedWorldRenderFrame = state->frameCount;
 	state->inWorld = false;
 	state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::InWorld);

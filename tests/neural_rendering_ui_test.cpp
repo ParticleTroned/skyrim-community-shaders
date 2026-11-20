@@ -2271,7 +2271,7 @@ int main()
 			upscaling.runtimeQualityMode = 3;
 			upscaling.renderScaleRequested = true;
 			Upscaling::VRFpsStabilizerProfile profile{ Upscaling::UpscaleMethod::kDLSS, 3, true };
-			for (const char* method : { "None", "TAA", "AMD FSR", "NVIDIA DLSS" }) {
+			for (const char* method : { "None", "TAA", "FSR", "NVIDIA DLSS" }) {
 				ImGui::Clear(method);
 				DrawVRFpsStabilizerUpscaleMethod(profile);
 				const bool blocked = enabled && mode == 2 && std::string_view(method) != "NVIDIA DLSS";

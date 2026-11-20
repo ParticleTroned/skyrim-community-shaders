@@ -23,12 +23,16 @@ includes both standard and Horizon Fix Water variants. Optional integrations
 still require their companion plugins. GitHub's source archives are for
 development, not installation.
 
-CSX bundles AMD FSR SDK 2.4.0 with FSR Upscaling 4.1.2. **AMD FSR runtime**
-lets the SDK select a compatible provider, including automatic driver upgrades,
-and displays the actual provider separately. Runtime availability is checked
-on the active device; it is not restricted by GPU model names. **AMD FSR3**
-remains an explicit selection. Existing FSR4 preferences select automatic
-runtime mode, while saved FSR3 choices remain unchanged.
+CSX bundles AMD FSR SDK 2.4.0 with FSR Upscaling 4.1.2. **FSR Automatic**
+lets the SDK select a compatible provider, including automatic driver upgrades.
+On supported AMD GPUs it can use FSR 4.1.2; on NVIDIA GPUs it normally uses
+FSR 3.1.6. **FSR 3.1.6** explicitly keeps that version selected. Upscaling
+and Performance Tuning show the active version, including host fallback and driver
+providers. Quality and Render Scale control resolution; frame generation is
+separate. Existing FSR4 preferences select Automatic, while saved FSR3
+choices remain unchanged. The saved `fsr4RuntimeEnable` key retains its
+meaning: `true` selects Automatic and `false` selects FSR 3.1.6. Stabilizer
+profiles inherit this selection from Upscaling.
 Runtime FSR3 and the independent FidelityFX-SDK-DX11 host implementation use
 version 3.1.6. Provider failures retain CSX's host fallback and session
 quarantine. Stereo contexts must report the same provider before dispatch.
@@ -36,7 +40,9 @@ quarantine. Stereo contexts must report the same provider before dispatch.
 The public upscaling API exposes `FSRRuntime::kAutomatic`; `kFSR4` retains the
 same ABI value as a compatibility alias. DevBench accepts `fsrRuntime: "auto"`
 and the legacy `"fsr4"` spelling. Neither guarantees a particular provider
-version. `communityshaders.fsr_temporal_tuning` status reports the active provider identity
+version. Performance results use the menu labels and retain their legacy
+`fsrRuntime` values for client compatibility.
+`communityshaders.fsr_temporal_tuning` status reports the active provider identity
 and runtime support checks independently of temporal tuning overrides.
 
 Depth of field controls are under **Adaptive Balance > Global > Depth of field**.

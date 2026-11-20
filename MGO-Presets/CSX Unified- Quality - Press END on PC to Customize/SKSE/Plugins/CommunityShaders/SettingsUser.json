@@ -78,7 +78,7 @@
   "Preset Compatibility": {
     "contractVersion": 1,
     "presetId": "csx-unified-quality",
-    "presetVersion": "d2026.11.19.2",
+    "presetVersion": "d2026.11.20.1",
     "target": {
       "runtime": "VR",
       "minimumVersion": "3.21",
@@ -86,7 +86,7 @@
     },
     "settingsContract": {
       "revision": 34,
-      "sourceTreeSha256": "7C6F44295E2E04F4DEACD752C8FD516E4ABB323B9BB0D7A903C93A18A39309C4"
+      "sourceTreeSha256": "EE5EE8838CC6597F6CFD4BFCAD20F0490DDF7F7DE0D147601AAC7721A43D6C1C"
     }
   },
   "Upscaling": {

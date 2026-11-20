@@ -86,6 +86,14 @@ struct FidelityFX
 	unsigned destroyCalls = 0;
 	void InvalidateFSRRelatchDrain() {}
 	static const char* GetHostFsrSdkLabel() { return "Host FSR3"; }
+	bool hostResourcesReady = true;
+	bool HasFSRResources() const { return hostResourcesReady; }
+	static const std::string& GetFsrSelectionLabel(bool automatic)
+	{
+		static const std::string label = "FSR 3.1.6";
+		static const std::string automaticLabel = "FSR Automatic";
+		return automatic ? automaticLabel : label;
+	}
 	void QuarantineRuntimeUpscalerForSession(const char*);
 	LifecycleResult ResolveRuntimeUpscalerLifecycleFailure(const char*)
 	{
@@ -99,12 +107,14 @@ struct FidelityFX
 		return cleanupResult;
 	}
 	std::string GetRuntimeUpscalerProviderName() const;
+	std::string GetActiveFsrLabel(bool) const;
 	LifecycleResult RecordRuntimeProviderResult(bool);
 	bool RequestTemporalTuning(const FSRTemporalTuningPolicy::Settings&);
 	TemporalTuningSnapshot GetTemporalTuningSnapshot() const;
 	LifecycleResult ConfigureTemporalTuningContexts(const TemporalTuningSnapshot&);
 };
 #include "temporal_provider_identity_under_test.h"
+#include "temporal_provider_label_format_under_test.h"
 #include "temporal_provider_name_under_test.h"
 #include "temporal_provider_result_under_test.h"
 #include "temporal_quarantine_under_test.h"
@@ -234,17 +244,48 @@ void TestProviderReporting()
 {
 	ResetProvider();
 	FidelityFX active;
+	Check(active.GetActiveFsrLabel(true) == "Pending FSR dispatch", "inactive FSR must not claim a selected version is active");
 	Check(active.RecordRuntimeProviderResult(true) == FidelityFX::LifecycleResult::Ready,
 		"reporting fixture must verify its runtime contexts");
 	Check(active.GetRuntimeUpscalerProviderName() == "FSR test", "verified provider must be reported");
+	Check(active.GetActiveFsrLabel(true) == "Pending FSR dispatch", "created contexts must not claim a dispatch");
+	active.temporalLastDispatchPath = FidelityFX::RuntimeUpscalerFramePath::kRuntimeFsr4;
+	Check(active.GetActiveFsrLabel(true) == "FSR 4.1.1", "automatic selection must report the provider version rather than its display name");
+	Check(active.GetActiveFsrLabel(false) == "FSR inactive", "inactive runtime selection must suppress a retained FSR provider");
+	for (const uint64_t provider : {
+			 (0xF5A5CA1Eull << 32) | FFX_UPSCALER_MAKE_VERSION(3, 1, 6),
+			 fsr412,
+			 (0xF5A5CA1Eull << 32) | 0x80000000ull | FFX_UPSCALER_MAKE_VERSION(5, 1, 1) }) {
+		ResetProvider(provider);
+		Check(active.RecordRuntimeProviderResult(true) == FidelityFX::LifecycleResult::Ready,
+			"reporting fixture must accept compatible automatic providers");
+		const auto expected = provider == fsr412              ? "FSR 4.1.2" :
+		                      (provider & 0x80000000ull) != 0 ? "FSR 5.1.1 (driver)" :
+		                                                        "FSR 3.1.6";
+		Check(active.GetActiveFsrLabel(true) == expected, "automatic reporting must decode FSR3, FSR4 and newer driver versions");
+	}
+	active.temporalTuningSnapshot.supportConfirmed = false;
+	Check(active.GetActiveFsrLabel(true) == "Pending FSR dispatch", "unconfirmed providers must not retain an active version");
+	active.temporalTuningSnapshot.supportConfirmed = true;
+	active.temporalTuningSnapshot.activeProviderId = 0xF5A5CA1E00000000ull;
+	Check(active.GetActiveFsrLabel(true) == "Unknown FSR version", "unversioned providers must not be displayed as Automatic or version zero");
+	active.temporalTuningSnapshot.activeProviderId = 0;
+	Check(active.GetActiveFsrLabel(true) == "Pending FSR dispatch", "missing identity must not report the requested version");
+	active.temporalLastDispatchPath = FidelityFX::RuntimeUpscalerFramePath::kHostFsr31;
+	Check(active.GetActiveFsrLabel(true) == "FSR 3.1.6", "host dispatch must report the bundled FSR version");
+	active.hostResourcesReady = false;
+	Check(active.GetActiveFsrLabel(true) == "Pending FSR dispatch", "retired or quarantined host contexts must not appear active");
+	active.hostResourcesReady = true;
 	active.temporalLastDispatchPath = FidelityFX::RuntimeUpscalerFramePath::kHostFsr31Fallback;
 	Check(active.GetRuntimeUpscalerProviderName().empty(), "a host fallback must not claim an active runtime provider");
+	Check(active.GetActiveFsrLabel(true) == "FSR 3.1.6 (fallback)", "host fallback must not retain the runtime version");
 	active.temporalLastDispatchPath = FidelityFX::RuntimeUpscalerFramePath::kRuntimeFsr4;
 	active.QuarantineRuntimeUpscalerForSession("test failure");
 	Check(active.GetRuntimeUpscalerProviderName().empty() && !active.GetTemporalTuningSnapshot().supportConfirmed &&
 			  !active.runtimeUpscalerSupportConfirmed && active.runtimeUpscalerSessionQuarantined &&
 			  active.GetTemporalTuningSnapshot().activeProviderId == 0 && active.GetTemporalTuningSnapshot().providerId != 0,
 		"quarantine must invalidate provider diagnostics even while retaining context handles");
+	Check(active.GetActiveFsrLabel(true) == "Pending FSR dispatch", "quarantine must not retain an active runtime version");
 	ResetProvider();
 }
 

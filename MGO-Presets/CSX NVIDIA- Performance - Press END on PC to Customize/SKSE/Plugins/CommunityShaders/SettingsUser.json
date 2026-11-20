@@ -88,7 +88,7 @@
         "frameGenerationMode": 1,
         "frameLimitMode": 1,
         "fsr4RuntimeEnable": false,
-        "fsr4RuntimeSelectionSchemaVersion": 0,
+        "fsr4RuntimeSelectionSchemaVersion": 2,
         "periphery_taa_center_area": 0.3,
         "periphery_taa_center_blend_feather": 0.05000000074505806,
         "periphery_taa_enable": false,

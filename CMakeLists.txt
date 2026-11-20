@@ -4615,6 +4615,7 @@ if(BUILD_CONTROLLER_TESTS)
         "${_fsr_temporal_test_dir}/temporal_provider_calls_under_test.h"
         "${_fsr_temporal_test_dir}/temporal_query_under_test.h"
         "${_fsr_temporal_test_dir}/temporal_provider_identity_under_test.h"
+        "${_fsr_temporal_test_dir}/temporal_provider_label_format_under_test.h"
         "${_fsr_temporal_test_dir}/temporal_quarantine_under_test.h"
         "${_fsr_temporal_test_dir}/temporal_provider_name_under_test.h"
         "${_fsr_temporal_test_dir}/temporal_provider_result_under_test.h"

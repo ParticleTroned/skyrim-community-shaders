@@ -208,6 +208,7 @@ foreach(_renderer_contract IN ITEMS
     "scan.controller.Poll(now, QuickScanReady(), CaptureQuickScanRenderConfiguration())"
     "BuildNvidiaUpscalingCostSweepCases"
     "BuildAmdUpscalingCostSweepCases"
+    "FidelityFX::GetFsrSelectionLabel(fsr4RuntimeEnabled)"
     "for (const bool fsr4RuntimeEnabled : { false, true })"
     "fidelityFX.IsRuntimeFsr4Available()"
     "GetDLSSPresetChoicesJson()"

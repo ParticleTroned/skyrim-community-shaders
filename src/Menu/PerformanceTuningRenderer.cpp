@@ -1557,7 +1557,7 @@ namespace
 				qualityName,
 				Upscaling::GetDLSSPresetName(dlssPreset));
 		} else if (isFSR) {
-			result.label = fmt::format("{} {}", fsr4RuntimeEnabled ? "FSR runtime" : "FSR3", qualityName);
+			result.label = fmt::format("{} {}", FidelityFX::GetFsrSelectionLabel(fsr4RuntimeEnabled), qualityName);
 		}
 
 		result.profile = baseState;
@@ -1813,7 +1813,7 @@ namespace
 					currentTime,
 					UpscalingCostSweepPhase::Failed,
 					fsr4ProviderFallback ?
-						"The automatic FSR runtime provider fell back before its measurement could complete." :
+						fmt::format("The {} provider fell back before its measurement could complete.", FidelityFX::GetFsrSelectionLabel(true)) :
 						"The active Upscaling profile changed outside the measurement protocol.");
 				return;
 			}

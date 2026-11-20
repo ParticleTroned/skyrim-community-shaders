@@ -1710,7 +1710,7 @@
         "reflexUseMarkersToOptimize": true,
         "foveatedRightEyeMaskOffsetY": 0.0,
         "upscaleMethod": 3,
-        "fsr4RuntimeSelectionSchemaVersion": 0,
+        "fsr4RuntimeSelectionSchemaVersion": 2,
         "antiLag2Enabled": false,
         "pipelineDiagnostics": false,
         "pipelineDiagnosticsStructured": false

@@ -308,9 +308,13 @@ public:
 	const std::string& GetRuntimeUpscalerLastFramePathLabel() const;
 	const std::string& GetConfiguredFsrPathLabel() const;
 	const std::string& GetDisplayedFsrPathLabel() const;
+	/** Returns the shared FSR selection label; explicit selection uses the bundled SDK version. */
+	static const std::string& GetFsrSelectionLabel(bool a_automatic);
 	static const std::string& GetHostFsrSdkLabel();
 	static const std::string& GetRuntimeUpscalerLabel(uint32_t a_version);
 	std::string GetRuntimeUpscalerProviderName() const;
+	/** Reports a dispatched version only while FSR is active and its provider remains usable. */
+	std::string GetActiveFsrLabel(bool a_fsrActive) const;
 	std::string GetRuntimeUpscalerRequestedVersionString() const;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	/** @brief Render-thread-only copy used to publish actual FSR path evidence under the controller lock. */

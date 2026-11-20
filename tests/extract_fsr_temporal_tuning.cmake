@@ -33,3 +33,4 @@ extract_between("${_fidelity}" "ffxReturnCode_t QueryFidelityFXProtected(" "bool
 extract_between("${_fidelity}" "bool RuntimeProviderMatchesVersion(" "void RuntimeFfxMessage(" "temporal_provider_identity_under_test.h")
 extract_between("${_fidelity}" "void FidelityFX::QuarantineRuntimeUpscalerForSession(" "FidelityFX::RuntimeUpscalerFramePath FidelityFX::GetRuntimeUpscalerProviderFramePath(" "temporal_quarantine_under_test.h")
 extract_between("${_fidelity}" "std::string FidelityFX::GetRuntimeUpscalerProviderName() const" "std::string FidelityFX::GetRuntimeUpscalerRequestedVersionString() const" "temporal_provider_name_under_test.h")
+extract_between("${_fidelity}" "std::string UpscalerVersionToString(" "const std::string& HostFsrFallbackLabel(" "temporal_provider_label_format_under_test.h")

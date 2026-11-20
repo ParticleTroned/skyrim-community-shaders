@@ -19,7 +19,7 @@
 namespace
 {
 	bool vrFpsStabilizerProfilesDirty = false;
-	constexpr std::array<const char*, 4> kVRFpsStabilizerMethodNames{ "None", "TAA", "AMD FSR", "NVIDIA DLSS" };
+	constexpr std::array<const char*, 4> kVRFpsStabilizerMethodNames{ "None", "TAA", "FSR", "NVIDIA DLSS" };
 	constexpr std::array<const char*, 7> kVRFpsStabilizerPresetNames{
 		"Native AA",
 		"Hoshipa",
@@ -133,6 +133,7 @@ namespace
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Select the profile's upscaling method. NR Before DLSS needs DLSS; turn NR off or change its mode for other methods.");
+			ImGui::TextUnformatted("FSR uses the fixed or Automatic selection saved in Upscaling. Profiles do not change the FSR version selection.");
 		}
 
 		return changed;

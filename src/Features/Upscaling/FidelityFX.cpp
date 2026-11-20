@@ -1097,6 +1097,13 @@ bool FidelityFX::IsRuntimeFsr4FailureLatched() const
 	return runtimeFsr4FailureLatched;
 }
 
+const std::string& FidelityFX::GetFsrSelectionLabel(bool a_automatic)
+{
+	static const std::string explicitLabel = std::format("FSR {}", UpscalerVersionToString(HostFsr3Version));
+	static const std::string automaticLabel = "FSR Automatic";
+	return a_automatic ? automaticLabel : explicitLabel;
+}
+
 const std::string& FidelityFX::GetHostFsrSdkLabel()
 {
 	static const std::string label = std::format("Host FSR3 SDK {}", UpscalerVersionToString(HostFsr3Version));
@@ -1106,12 +1113,11 @@ const std::string& FidelityFX::GetHostFsrSdkLabel()
 const std::string& FidelityFX::GetRuntimeUpscalerLabel(uint32_t a_version)
 {
 	static const std::string runtimeFsr3Label = std::format("Runtime FSR3 {} ({})", UpscalerVersionToString(RuntimeFsr3Version), RuntimeUpscalerDllNameUtf8);
-	static const std::string runtimeFsr4Label = "FSR runtime (automatic)";
 
 	if (a_version == RuntimeFsr3Version)
 		return runtimeFsr3Label;
 	if (a_version == RuntimeAutomaticVersion)
-		return runtimeFsr4Label;
+		return GetFsrSelectionLabel(true);
 
 	thread_local std::string fallbackLabel;
 	fallbackLabel = std::format("Runtime FSR {} ({})", UpscalerVersionToString(a_version), RuntimeUpscalerDllNameUtf8);
@@ -1175,6 +1181,34 @@ const std::string& FidelityFX::GetDisplayedFsrPathLabel() const
 std::string FidelityFX::GetRuntimeUpscalerProviderName() const
 {
 	return GetTemporalTuningSnapshot().providerName;
+}
+
+std::string FidelityFX::GetActiveFsrLabel(bool a_fsrActive) const
+{
+	if (!a_fsrActive)
+		return "FSR inactive";
+
+	const auto snapshot = GetTemporalTuningSnapshot();
+	switch (snapshot.lastDispatchPath) {
+	case RuntimeUpscalerFramePath::kHostFsr31:
+	case RuntimeUpscalerFramePath::kHostFsr31Fallback:
+		if (!HasFSRResources())
+			return PendingFsrDispatchLabel();
+		return GetFsrSelectionLabel(false) + (snapshot.lastDispatchPath == RuntimeUpscalerFramePath::kHostFsr31Fallback ? " (fallback)" : "");
+	case RuntimeUpscalerFramePath::kRuntimeFsr31:
+	case RuntimeUpscalerFramePath::kRuntimeFsr4:
+		if (snapshot.supportConfirmed && snapshot.activeProviderId != 0) {
+			const uint32_t version = static_cast<uint32_t>(snapshot.activeProviderId & 0x7FFFFFFFull);
+			if (version == RuntimeAutomaticVersion)
+				return "Unknown FSR version";
+			const bool driverProvider = (snapshot.activeProviderId & 0x80000000ull) != 0;
+			return std::format("FSR {}{}", UpscalerVersionToString(version), driverProvider ? " (driver)" : "");
+		}
+		[[fallthrough]];
+	case RuntimeUpscalerFramePath::kInactive:
+	default:
+		return PendingFsrDispatchLabel();
+	}
 }
 
 std::string FidelityFX::GetRuntimeUpscalerRequestedVersionString() const

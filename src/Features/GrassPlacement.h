@@ -2,6 +2,7 @@
 
 #include "GrassPlacementSettings.h"
 #include <array>
+#include <cstddef>
 #include <d3d11_1.h>
 #include <winrt/base.h>
 
@@ -34,11 +35,11 @@ namespace GrassPlacement
 	float BoundsPadding();
 	/** Establish neutral native constants even when optional instance hooks are unavailable. */
 	void PrepareNativeGeometry();
-	/** Reassert grass constants after native state without adding another state flush. */
+	/** Reassert constants only inside the owning grass draw, without another state flush. */
 	void ApplyNativeBinding(bool compute);
 	void BindNative(RE::BSGraphics::VertexBuffer* buffer);
 
-	/** Restore the borrowed vertex constant slot, including D3D11.1 buffer ranges. */
+	/** Own the borrowed vertex slot during a grass draw; restore its range and enclosing owner. */
 	class BindingScope
 	{
 	public:
@@ -51,6 +52,9 @@ namespace GrassPlacement
 		winrt::com_ptr<ID3D11DeviceContext> context;
 		winrt::com_ptr<ID3D11DeviceContext1> rangedContext;
 		winrt::com_ptr<ID3D11Buffer> previous;
+		ID3D11DeviceContext* previousContext = nullptr;
+		ID3D11Buffer* previousNative = nullptr;
+		size_t previousDepth = 0;
 		UINT first = 0, count = 0;
 	};
 

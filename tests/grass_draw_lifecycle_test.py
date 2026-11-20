@@ -1049,6 +1049,245 @@ def compile_fixture(driver: str, devbench: bool = False) -> subprocess.Completed
 
 
 class GrassDrawLifecycleTests(unittest.TestCase):
+    def test_placement_binding_ownership(self):
+        source = (ROOT / "src/Features/GrassPlacement.cpp").read_text(encoding="utf-8")
+        header = (ROOT / "src/Features/GrassPlacement.h").read_text(encoding="utf-8")
+        methods = "\n".join(block(source, signature) for signature in (
+            "BindingScope::BindingScope(", "BindingScope::~BindingScope(",
+            "void PrepareNativeGeometry(", "void ApplyNativeBinding(", "void BindNative("))
+        ownership = block(source, "bool OwnsBinding(") if "bool OwnsBinding(" in source else ""
+        driver = r'''
+#define BindingScope FixtureBindingScope
+#define PrepareNativeGeometry FixturePrepareNativeGeometry
+#define BindNative FixtureBindNative
+#include "grass_draw_lifecycle_fixture.h"
+#undef BindingScope
+#undef PrepareNativeGeometry
+#undef BindNative
+#define __uuidof(...) 0
+using ID3D11DeviceContext = FakeContext;
+using ID3D11DeviceContext1 = FakeContext;
+namespace globals::d3d { inline FakeContext* context = nullptr; }
+struct ConstantBuffer {
+    ID3D11Buffer buffer;
+    inline static unsigned allocations = 0, updates = 0;
+    inline static bool failUpload = false, failCreation = false;
+    inline static std::unordered_map<ID3D11Buffer*, std::array<float, 4>> contents;
+    ConstantBuffer(int, const char*) {
+        if (failCreation) throw std::runtime_error("Injected buffer creation failure");
+        ++allocations;
+    }
+    void Update(const std::array<float, 4>& data) {
+        if (failUpload) throw std::runtime_error("Injected upload failure");
+        contents[&buffer] = data;
+        ++updates;
+    }
+    ID3D11Buffer* CB() { return &buffer; }
+};
+int ConstantBufferDesc(int size) { return size; }
+unsigned failures = 0;
+void Require(bool condition, const char* message) {
+    if (!condition) { std::cerr << message << std::endl; ++failures; }
+}
+namespace GrassPlacement {
+CLASS;
+using VertexBuffer = RE::BSGraphics::VertexBuffer;
+constexpr UINT kVertexSlot = 10;
+NATIVE_CONSTANTS;
+struct Runtime {
+    winrt::com_ptr<ID3D11DeviceContext> nativeContext;
+    winrt::com_ptr<ID3D11DeviceContext1> nativeContext1;
+    std::vector<std::unique_ptr<NativeConstants>> nativeConstants;
+    size_t bindingDepth = 0;
+    bool bindingKnown = false;
+    ID3D11Buffer* boundNative = nullptr;
+    ID3D11DeviceContext* bindingContext = nullptr;
+    OWNERSHIP
+};
+Runtime& Get() { static Runtime value; return value; }
+void BindNative(VertexBuffer*);
+std::array<float, 2> configuredOffsets{};
+unsigned uploadFailures = 0;
+std::array<float, 2> GetOffsets(VertexBuffer*) { return configuredOffsets; }
+void Fail(const char*, const std::exception&) { ++uploadFailures; }
+METHODS
+}
+int main() {
+    using namespace GrassPlacement;
+    FakeContext context, other;
+    ID3D11Buffer bones, grassConstants;
+    RE::BSShader grass;
+    globals::state->currentShader = &grass;
+    globals::d3d::context = &context;
+    const FakeContext::ConstantBinding native{ &bones, 16, 240 };
+    context.vertexConstants[10] = native;
+    auto writes = context.vertexConstantWrites[10];
+    ApplyNativeBinding(false);
+    PrepareNativeGeometry();
+    BindNative(nullptr);
+    Require(context.vertexConstants[10] == native && context.vertexConstantWrites[10] == writes,
+        "Stale grass shader tracking outside an owned draw overwrote the native bones");
+    {
+        BindingScope outer;
+        PrepareNativeGeometry();
+        Require(!context.vertexConstants[10].buffer, "Owned grass must bind neutral offsets");
+        Get().boundNative = &grassConstants;
+        ApplyNativeBinding(false);
+        Require(context.vertexConstants[10].buffer == &grassConstants, "Owned grass constants were not reasserted");
+        {
+            BindingScope inner;
+            PrepareNativeGeometry();
+            Require(!context.vertexConstants[10].buffer, "Nested grass offsets were not applied");
+        }
+        ApplyNativeBinding(false);
+        Require(context.vertexConstants[10].buffer == &grassConstants, "Nested scope lost outer binding ownership");
+        context.vertexConstants[10] = native;
+        ApplyNativeBinding(true);
+        Require(context.vertexConstants[10] == native, "Compute flush borrowed vertex constants");
+        grass.shaderType = RE::BSShader::Type::DistantTree;
+        ApplyNativeBinding(false);
+        Require(context.vertexConstants[10] == native, "Non-grass shader borrowed vertex constants");
+        grass.shaderType = RE::BSShader::Type::Grass;
+        globals::state->selectedCustomPixelShaderType = RE::BSShader::Type::Lighting;
+        ApplyNativeBinding(false);
+        Require(context.vertexConstants[10] == native, "Native shader fallback borrowed vertex constants");
+        globals::state->selectedCustomPixelShaderType = RE::BSShader::Type::Grass;
+        other.vertexConstants[10] = native;
+        globals::d3d::context = &other;
+        {
+            BindingScope foreign;
+            PrepareNativeGeometry();
+            ApplyNativeBinding(false);
+            BindNative(nullptr);
+        }
+        Require(other.vertexConstantReads[10] == 0 && other.vertexConstantWrites[10] == 0,
+            "A different context inherited the active grass ownership");
+        globals::d3d::context = &context;
+        ApplyNativeBinding(false);
+        Require(context.vertexConstants[10].buffer == &grassConstants, "Inactive scope retired the outer owner");
+    }
+    Require(context.vertexConstants[10] == native, "Native bone buffer or range was not restored");
+    const auto reads = context.vertexConstantReads[10];
+    writes = context.vertexConstantWrites[10];
+    ApplyNativeBinding(false);
+    PrepareNativeGeometry();
+    BindNative(nullptr);
+    Require(context.vertexConstantWrites[10] == writes && context.vertexConstantReads[10] == reads,
+        "Retired grass scope added D3D work or overwrote native bones");
+    Require(ConstantBuffer::allocations == 0, "Neutral placement allocated a GPU constant buffer");
+    RE::BSGraphics::VertexBuffer instances{ &bones };
+    const std::array<float, 4> outerData{ -2, 3, 0, 0 }, innerData{ 5, -1, 0, 0 };
+    {
+        BindingScope outer;
+        configuredOffsets = { outerData[0], outerData[1] };
+        BindNative(&instances);
+        auto* outerBuffer = context.vertexConstants[10].buffer;
+        auto updates = ConstantBuffer::updates;
+        writes = context.vertexConstantWrites[10];
+        BindNative(&instances);
+        Require(ConstantBuffer::updates == updates && context.vertexConstantWrites[10] == writes,
+            "Repeated placement reuploaded or rebound identical offsets");
+        {
+            BindingScope inner;
+            configuredOffsets = { innerData[0], innerData[1] };
+            BindNative(&instances);
+            Require(context.vertexConstants[10].buffer != outerBuffer,
+                "Nested placement aliases the enclosing draw's GPU data");
+        }
+        Require(context.vertexConstants[10].buffer == outerBuffer && ConstantBuffer::contents[outerBuffer] == outerData,
+            "Nested placement overwrote the enclosing draw's offset data");
+        configuredOffsets = { outerData[0], outerData[1] };
+        context.vertexConstants[10] = native;
+        {
+            BindingScope inner;
+            PrepareNativeGeometry();
+        }
+        BindNative(&instances);
+        Require(context.vertexConstants[10].buffer == outerBuffer,
+            "Restored cache validity suppressed the required native-to-grass rebind");
+        try {
+            BindingScope inner;
+            configuredOffsets = { innerData[0], innerData[1] };
+            BindNative(&instances);
+            throw InjectedDrawFailure("nested draw failed");
+        } catch (const InjectedDrawFailure&) {}
+        Require(context.vertexConstants[10].buffer == outerBuffer && ConstantBuffer::contents[outerBuffer] == outerData,
+            "Nested unwind lost the enclosing placement data");
+        {
+            BindingScope inner;
+            ConstantBuffer::failUpload = true;
+            configuredOffsets = { 7, 8 };
+            BindNative(&instances);
+            ConstantBuffer::failUpload = false;
+            Require(!context.vertexConstants[10].buffer && uploadFailures == 1,
+                "Failed placement upload did not retain neutral native rendering");
+        }
+        Require(context.vertexConstants[10].buffer == outerBuffer && ConstantBuffer::contents[outerBuffer] == outerData,
+            "Failed nested upload corrupted the enclosing placement data");
+        {
+            BindingScope inner;
+            configuredOffsets = { innerData[0], innerData[1] };
+            BindNative(&instances);
+            auto* innerBuffer = context.vertexConstants[10].buffer;
+            {
+                BindingScope deepest;
+                ConstantBuffer::failCreation = true;
+                BindNative(&instances);
+                ConstantBuffer::failCreation = false;
+                Require(!context.vertexConstants[10].buffer && uploadFailures == 2,
+                    "Failed nested buffer creation did not retain neutral rendering");
+            }
+            Require(context.vertexConstants[10].buffer == innerBuffer && ConstantBuffer::contents[innerBuffer] == innerData,
+                "Failed buffer creation corrupted the enclosing placement cache");
+        }
+    }
+    Require(context.vertexConstants[10] == native, "Nonzero placement leaked into native skinning");
+    const auto allocations = ConstantBuffer::allocations, updates = ConstantBuffer::updates;
+    {
+        BindingScope outer;
+        configuredOffsets = { outerData[0], outerData[1] };
+        BindNative(&instances);
+        {
+            BindingScope inner;
+            configuredOffsets = { innerData[0], innerData[1] };
+            BindNative(&instances);
+        }
+    }
+    Require(ConstantBuffer::allocations == allocations && ConstantBuffer::updates == updates,
+        "Reused nesting depths allocated buffers or reuploaded identical placement data");
+    try {
+        BindingScope unwind;
+        PrepareNativeGeometry();
+        throw InjectedDrawFailure("draw failed");
+    } catch (const InjectedDrawFailure&) {}
+    Require(context.vertexConstants[10] == native, "Exception lost the native bone range");
+    context.interface1Available = false;
+    Get().nativeContext = nullptr;
+    const FakeContext::ConstantBinding whole{ &bones, 0, D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT };
+    context.vertexConstants[10] = whole;
+    {
+        BindingScope legacy;
+        PrepareNativeGeometry();
+    }
+    Require(context.vertexConstants[10] == whole, "D3D11.0 fallback lost the native bones");
+    globals::features::adaptiveBrightness.loaded = false;
+    writes = context.vertexConstantWrites[10];
+    {
+        BindingScope disabled;
+        PrepareNativeGeometry();
+        ApplyNativeBinding(false);
+        BindNative(nullptr);
+    }
+    Require(context.vertexConstantWrites[10] == writes, "Unloaded feature changed native bindings");
+    return failures ? 1 : 0;
+}
+'''.replace("CLASS", block(header, "class BindingScope")).replace(
+            "NATIVE_CONSTANTS", block(source, "struct NativeConstants")).replace("OWNERSHIP", ownership).replace("METHODS", methods)
+        for devbench in (False, True):
+            with self.subTest(devbench=devbench):
+                result = compile_fixture(driver, devbench)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_hiz_retained_allocation_failure(self):
         source = (ROOT / "src/Features/GrassOptimizations/GrassHiZ.cpp").read_text(encoding="utf-8")
         method = block(source, "bool GrassHiZ::Build(")

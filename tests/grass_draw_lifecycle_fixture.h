@@ -46,7 +46,14 @@ namespace winrt
 	struct com_ptr
 	{
 		T* pointer = nullptr;
+		void copy_from(T* value) { pointer = value; }
+		com_ptr& operator=(std::nullptr_t)
+		{
+			pointer = nullptr;
+			return *this;
+		}
 		T** put() { return &pointer; }
+		void** put_void() { return reinterpret_cast<void**>(&pointer); }
 		T* get() const { return pointer; }
 		T* operator->() const { return pointer; }
 		explicit operator bool() const { return pointer != nullptr; }
@@ -331,6 +338,8 @@ struct FakeContext
 	std::array<ConstantBinding, 14> vertexConstants{};
 	std::array<UINT, 14> vertexConstantReads{}, vertexConstantWrites{};
 	bool constantBufferOffsetting = true;
+	bool interface1Available = true;
+	void QueryInterface(int, void** result) { *result = interface1Available ? this : nullptr; }
 	FakeContext() { vertexConstants[13] = { &stereo, 0, 3 }; }
 	void BindVertexConstants(UINT slot, UINT size, ID3D11Buffer* const* buffers, const UINT* first, const UINT* count)
 	{
@@ -362,6 +371,10 @@ struct FakeContext
 				count[i] = binding.count;
 		}
 	}
+	void VSGetConstantBuffers(UINT slot, UINT size, ID3D11Buffer** buffers)
+	{
+		VSGetConstantBuffers1(slot, size, buffers, nullptr, nullptr);
+	}
 	void RSGetViewports(UINT* count, D3D11_VIEWPORT* viewport)
 	{
 		*count = 1;
@@ -385,6 +398,7 @@ namespace globals
 		};
 		uint32_t frameCount = 1, modifiedVertexDescriptor = 2, modifiedPixelDescriptor = 3;
 		RE::BSShader* currentShader = nullptr;
+		RE::BSShader::Type selectedCustomPixelShaderType = RE::BSShader::Type::Grass;
 		std::atomic_uint32_t frameCountAtomic{ 1 };
 		struct Permutation
 		{
@@ -570,27 +584,64 @@ public:
 
 namespace GrassPlacement
 {
+	inline FakeContext* bindingContext = nullptr;
 	struct BindingScope
 	{
-		FakeContext* context = globals::features::renderer->impl->context;
+		FakeContext* context = globals::features::adaptiveBrightness.loaded ? globals::features::renderer->impl->context : nullptr;
+		FakeContext* previousContext = bindingContext;
 		FakeContext::ConstantBinding previous = context ? context->vertexConstants[10] : FakeContext::ConstantBinding{};
-		~BindingScope()
+		BindingScope()
 		{
 			if (context)
+				bindingContext = context;
+		}
+		~BindingScope()
+		{
+			if (context) {
 				context->vertexConstants[10] = previous;
+				bindingContext = previousContext;
+			}
 		}
 	};
+	inline FakeContext* OwnedContext()
+	{
+		auto* context = globals::features::renderer->impl->context;
+		return context == bindingContext ? context : nullptr;
+	}
 	inline void PrepareNativeGeometry()
 	{
-		if (auto* context = globals::features::renderer->impl->context)
+		if (auto* context = OwnedContext())
 			context->VSSetConstantBuffers(10, 1, nullptr);
 	}
 	inline void BindNative(RE::BSGraphics::VertexBuffer*)
 	{
-		if (auto* context = globals::features::renderer->impl->context)
+		if (auto* context = OwnedContext())
 			context->VSSetConstantBuffers(10, 1, nullptr);
 	}
 }
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+namespace CSX::RenderMap
+{
+	struct Collector
+	{
+		struct ScopeGuard
+		{};
+	};
+	struct Runtime
+	{
+		bool IsCapturing() const { return false; }
+		void SetCpuFrame(uint32_t) {}
+		Collector::ScopeGuard EnterGeometry(int) { return {}; }
+	};
+	inline Runtime& GetRuntime()
+	{
+		static Runtime runtime;
+		return runtime;
+	}
+}
+inline int BuildRenderMapGeometryBoundary(RE::BSShader*, RE::BSRenderPass*, uint32_t, RE::BSShader::Type) { return 0; }
+#endif
 
 inline void globals::features::GrassFeature::PrepareGeometry(RE::BSRenderPass* pass, RE::BSShader* shader, uint32_t flags,
 	GrassRuntime::SetupGeometry setup, std::optional<uint32_t> windTimer)

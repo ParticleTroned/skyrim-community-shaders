@@ -67,6 +67,12 @@ namespace GrassPlacement
 			uint64_t revision = 0;
 			bool active = false;
 		};
+		struct NativeConstants
+		{
+			std::unique_ptr<ConstantBuffer> buffer;
+			std::array<float, 4> uploaded{};
+			bool uploadedValid = false;
+		};
 		struct Runtime
 		{
 			std::mutex mutex;
@@ -79,12 +85,18 @@ namespace GrassPlacement
 			bool active = false, enabled = false, boundsDirty = false;
 			float padding = 0;
 			std::atomic_bool hooksReady{ false }, failed{ false }, tracking{ false };
-			std::unique_ptr<ConstantBuffer> constants;
-			std::array<float, 4> uploaded{};
-			bool uploadedValid = false, bindingKnown = false;
+			std::vector<std::unique_ptr<NativeConstants>> nativeConstants;
+			size_t bindingDepth = 0;
+			bool bindingKnown = false;
 			ID3D11Buffer* boundNative = nullptr;
+			ID3D11DeviceContext* bindingContext = nullptr;
 			winrt::com_ptr<ID3D11DeviceContext> nativeContext;
 			winrt::com_ptr<ID3D11DeviceContext1> nativeContext1;
+			bool OwnsBinding(ID3D11DeviceContext* context) const noexcept
+			{
+				// Shader tracking can outlive the draw that borrows the native skinning slot.
+				return context && bindingContext == context;
+			}
 		};
 		Runtime& Get()
 		{
@@ -470,28 +482,32 @@ namespace GrassPlacement
 		if (!globals::features::adaptiveBrightness.loaded)
 			return;
 		auto& runtime = Get();
+		if (runtime.bindingContext && !runtime.OwnsBinding(globals::d3d::context))
+			return;
 		if (runtime.nativeContext.get() != globals::d3d::context) {
 			runtime.nativeContext.copy_from(globals::d3d::context);
 			runtime.nativeContext1 = nullptr;
-			runtime.constants.reset();
+			runtime.nativeConstants.clear();
 			runtime.boundNative = nullptr;
-			runtime.uploadedValid = false;
 			if (runtime.nativeContext)
 				runtime.nativeContext->QueryInterface(__uuidof(ID3D11DeviceContext1), runtime.nativeContext1.put_void());
 		}
 		context = runtime.nativeContext;
 		rangedContext = runtime.nativeContext1;
-		runtime.bindingKnown = false;
 		if (!context)
 			return;
 		if (rangedContext)
 			rangedContext->VSGetConstantBuffers1(kVertexSlot, 1, previous.put(), &first, &count);
 		else
 			context->VSGetConstantBuffers(kVertexSlot, 1, previous.put());
+		previousContext = runtime.bindingContext;
+		previousNative = runtime.boundNative;
+		previousDepth = runtime.bindingDepth++;
+		runtime.bindingContext = context.get();
+		runtime.bindingKnown = false;
 	}
 	BindingScope::~BindingScope()
 	{
-		Get().bindingKnown = false;
 		if (!context)
 			return;
 		auto* buffer = previous.get();
@@ -499,13 +515,21 @@ namespace GrassPlacement
 			rangedContext->VSSetConstantBuffers1(kVertexSlot, 1, &buffer, &first, &count);
 		else
 			context->VSSetConstantBuffers(kVertexSlot, 1, &buffer);
+		auto& runtime = Get();
+		runtime.bindingContext = previousContext;
+		runtime.boundNative = previousNative;
+		runtime.bindingDepth = previousDepth;
+		runtime.bindingKnown = false;
 	}
 
 	void PrepareNativeGeometry()
 	{
 		if (!globals::features::adaptiveBrightness.loaded || !globals::d3d::context)
 			return;
-		Get().bindingKnown = false;
+		auto& runtime = Get();
+		if (!runtime.OwnsBinding(globals::d3d::context))
+			return;
+		runtime.bindingKnown = false;
 		BindNative(nullptr);
 	}
 
@@ -517,6 +541,8 @@ namespace GrassPlacement
 			state->selectedCustomPixelShaderType != RE::BSShader::Type::Grass || !globals::d3d::context)
 			return;
 		auto& runtime = Get();
+		if (!runtime.OwnsBinding(globals::d3d::context))
+			return;
 		// Native state can overwrite borrowed constants; reassert them at the existing flush boundary.
 		globals::d3d::context->VSSetConstantBuffers(kVertexSlot, 1, &runtime.boundNative);
 		runtime.bindingKnown = true;
@@ -526,21 +552,28 @@ namespace GrassPlacement
 	{
 		auto& runtime = Get();
 		auto* context = globals::d3d::context;
-		if (!context)
+		if (!globals::features::adaptiveBrightness.loaded || !runtime.OwnsBinding(context))
 			return;
 		const auto offsets = buffer ? GetOffsets(buffer) : std::array<float, 2>{};
 		ID3D11Buffer* binding = nullptr;
 		try {
 			if (offsets[0] != 0 || offsets[1] != 0) {
-				if (!runtime.constants)
-					runtime.constants = std::make_unique<ConstantBuffer>(ConstantBufferDesc(16), "GrassPlacement::NativeOffsets");
+				if (runtime.nativeConstants.size() < runtime.bindingDepth)
+					runtime.nativeConstants.resize(runtime.bindingDepth);
+				auto& entry = runtime.nativeConstants[runtime.bindingDepth - 1];
+				if (!entry)
+					entry = std::make_unique<NativeConstants>();
+				auto& native = *entry;
+				// Nested draws must not overwrite an enclosing draw's live offset data.
+				if (!native.buffer)
+					native.buffer = std::make_unique<ConstantBuffer>(ConstantBufferDesc(16), "GrassPlacement::NativeOffsets");
 				const std::array<float, 4> data{ offsets[0], offsets[1], 0, 0 };
-				if (!runtime.uploadedValid || runtime.uploaded != data) {
-					runtime.constants->Update(data);
-					runtime.uploaded = data;
-					runtime.uploadedValid = true;
+				if (!native.uploadedValid || native.uploaded != data) {
+					native.buffer->Update(data);
+					native.uploaded = data;
+					native.uploadedValid = true;
 				}
-				binding = runtime.constants->CB();
+				binding = native.buffer->CB();
 			}
 		} catch (const std::exception& error) {
 			Fail("constant-buffer upload", error);

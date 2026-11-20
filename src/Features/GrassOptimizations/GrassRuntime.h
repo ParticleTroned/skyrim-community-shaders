@@ -8,6 +8,7 @@
 #include <SKSE/Impl/PCH.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -15,6 +16,19 @@
 
 namespace GrassRuntime
 {
+	/** Grass world-space offsets require the native translation-only shape transform. */
+	inline bool HasTranslationOnly(const RE::NiTransform& transform)
+	{
+		if (transform.scale != 1 || !std::isfinite(transform.translate.x) ||
+			!std::isfinite(transform.translate.y) || !std::isfinite(transform.translate.z))
+			return false;
+		for (int row = 0; row < 3; ++row)
+			for (int col = 0; col < 3; ++col)
+				if (transform.rotate.entry[row][col] != (row == col ? 1.0f : 0.0f))
+					return false;
+		return true;
+	}
+
 	/** @brief Retain a borrowed shape only while it is live; the caller excludes its deleting destructor. */
 	inline RE::NiPointer<RE::BSMultiStreamInstanceTriShape> TryRetainShape(RE::BSMultiStreamInstanceTriShape* shape)
 	{

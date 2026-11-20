@@ -22,7 +22,8 @@ cbuffer StereoParameters : register(b1)
 #endif
 struct Slice
 {
-	uint first, count, end, padding;
+	uint first, count, end;
+	float previousPlacementDelta;
 	float4 originFade;
 };
 ByteAddressBuffer Records : register(t0);
@@ -340,6 +341,7 @@ uint CullInstance(uint index, uint commonSlice, out uint sourceRecord, out uint 
 		GrassInstanceExtra extra;
 		extra.originFade = float4(slice.originFade.xyz, simple ? -fade : fade);
 		extra.wind = wind;
+		extra.previousPlacementDelta = slice.previousPlacementDelta;
 		extras[eye] = extra;
 		eyeMask |= 1u << eye;
 		Count(4 + tier);

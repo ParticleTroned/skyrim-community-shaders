@@ -5,6 +5,7 @@ struct GrassInstanceExtra
 {
 	float4 originFade;
 	float2 wind;
+	float previousPlacementDelta;
 };
 
 float2 UnpackGrassInstance(uint value) { return float2(f16tof32(value), f16tof32(value >> 16)); }

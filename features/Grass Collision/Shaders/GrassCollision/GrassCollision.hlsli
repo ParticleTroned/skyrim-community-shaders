@@ -46,7 +46,7 @@ namespace GrassCollision
 	}
 
 	void ApplyDeformation(VS_INPUT input, inout float3 currentPosition, inout float3 previousPosition,
-		float distance, out float3 bendAxis, out float bendAngle, out float compressionScale)
+		float distance, out float3 bendAxis, out float bendAngle, out float compressionScale, float previousRootOffset = 0)
 	{
 		bendAxis = float3(0, 1, 0);
 		bendAngle = 0;
@@ -59,14 +59,15 @@ namespace GrassCollision
 		float3 bladeUp = instanceUp * (abs(input.Position.z * (input.InstanceData4.y * ScaleMask.z + 1)) / max(normalizedHeight, 1e-4));
 		float bladeHeight = length(bladeUp);
 		float4 currentField, previousField;
-		SampleDeformation(input.InstanceData1.xyz, currentPosition - input.InstanceData1.xyz, previousPosition - input.InstanceData1.xyz,
-			World[0], PreviousWorld[0], distance, currentField, previousField);
+		float3 previousRoot = input.InstanceData1.xyz + float3(0, 0, previousRootOffset);
+		SampleDeformation(input.InstanceData1.xyz, currentPosition - input.InstanceData1.xyz, previousPosition - previousRoot,
+			World[0], PreviousWorld[0], distance, currentField, previousField, previousRootOffset);
 		currentPosition += CalculateDisplacement(currentPosition, input.InstanceData1.xyz, currentField, bendWeight,
 			CompressionWeight(normalizedHeight, bladeHeight, CompressionHeight, MaximumCompressibleGrassHeight),
 			CollisionStrength, MaximumBend, World[0], bendAxis, bendAngle, compressionScale);
 		float3 previousAxis;
 		float previousAngle, previousCompression;
-		previousPosition += CalculateDisplacement(previousPosition, input.InstanceData1.xyz, previousField, bendWeight,
+		previousPosition += CalculateDisplacement(previousPosition, previousRoot, previousField, bendWeight,
 			CompressionWeight(normalizedHeight, bladeHeight, PreviousCompressionHeight, PreviousMaximumCompressibleGrassHeight),
 			PreviousCollisionStrength, PreviousMaximumBend, PreviousWorld[0], previousAxis, previousAngle, previousCompression);
 	}

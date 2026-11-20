@@ -156,6 +156,7 @@ file_common_defines:
     RunGrass.hlsl:
         CSHADER: *id001
         PSHADER: &id004
+            - ADAPTIVE_BALANCE
             - CLOUD_SHADOWS
             - DYNAMIC_CUBEMAPS
             - GRASS_COLLISION

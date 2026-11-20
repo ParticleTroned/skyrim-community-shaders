@@ -81,56 +81,60 @@ namespace
 		for (bool vr : { false, true })
 			for (bool enhanced : { false, true })
 				for (bool depth : { false, true })
-					for (unsigned mode : { 0u, 1u, 2u }) {
-						const bool collision = mode != 0;
-						std::vector<D3D_SHADER_MACRO> defines{ { "VSHADER", "1" }, { "GRASS_OPTIMIZATIONS", "1" } };
-						if (vr)
-							defines.push_back({ "VR", "1" });
-						if (enhanced)
-							defines.push_back({ "GRASS_LIGHTING", "1" });
-						if (depth)
-							defines.push_back({ "RENDER_DEPTH", "1" });
-						if (collision)
-							defines.push_back({ "GRASS_COLLISION", "1" });
-						if (mode == 1)
-							defines.push_back({ "GRASS_COLLISION_BASIC", "1" });
-						auto bytecode = Compile(L"package/Shaders/RunGrass.hlsl", "vs_5_0", defines);
-						ComPtr<ID3D11ShaderReflection> reflection;
-						Check(D3DReflect(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
-						D3D11_SHADER_INPUT_BIND_DESC binding{};
-						Check(reflection->GetResourceBindingDescByName("GrassBatch", &binding));
-						Require(binding.BindPoint == 9, "Batch constants changed register");
-						if (collision) {
-							D3D11_SHADER_VARIABLE_DESC collisionDistance{};
-							Check(reflection->GetConstantBufferByName("GrassBatch")->GetVariableByName("GrassBatchCollisionDistance")->GetDesc(&collisionDistance));
-							Require(collisionDistance.StartOffset == 12 && collisionDistance.Size == sizeof(float), "Batch collision distance layout changed");
-						}
-						for (const auto& [name, slot] : std::array<std::pair<const char*, UINT>, 5>{ { { "GrassCollision::GrassCollisionPerFrame", 5 }, { "GrassCollision::Deformation", 100 }, { "GrassCollision::PreviousDeformation", 101 }, { "GrassCollision::ContactMotion", 102 }, { "GrassCollision::PreviousContactMotion", 103 } } }) {
-							const auto result = reflection->GetResourceBindingDescByName(name, &binding);
-							if (mode == 2 || (mode == 1 && slot == 5))
-								Require(SUCCEEDED(result) && binding.BindPoint == slot, "Collision resource changed register");
-							else
-								Require(FAILED(result), "Inactive collision backend retained a resource");
-						}
-						const auto basicTexture = reflection->GetResourceBindingDescByName("GrassCollision::Collision", &binding);
-						Require(mode == 1 ? SUCCEEDED(basicTexture) && binding.BindPoint == 100 : FAILED(basicTexture), "Basic field binding differs from the selected backend");
-						Check(reflection->GetResourceBindingDescByName("GrassInstanceExtras", &binding));
-						Require(binding.BindPoint == 2, "Batch fade changed register");
-						Check(reflection->GetResourceBindingDescByName("GrassSourceRecords", &binding));
-						Require(binding.BindPoint == 3, "Batch source records changed register");
-						Check(reflection->GetResourceBindingDescByName("GrassTextureNormalLength", &binding));
-						Require(binding.BindPoint == 4, "Grass texture classification changed register");
-						D3D11_SHADER_VARIABLE_DESC world{}, previous{};
-						ValidateWindLayout(reflection.Get(), "PerGeometry", vr);
-						auto geometry = reflection->GetConstantBufferByName("PerGeometry");
-						Check(geometry->GetVariableByName("World")->GetDesc(&world));
-						Check(geometry->GetVariableByName("PreviousWorld")->GetDesc(&previous));
-						Require(world.StartOffset == (vr ? 256u : 128u) && previous.StartOffset == (vr ? 384u : 192u), "Native geometry layout changed");
-						if (mode == 1) {
+					for (bool placement : { false, true })
+						for (unsigned mode : { 0u, 1u, 2u }) {
+							const bool collision = mode != 0;
+							std::vector<D3D_SHADER_MACRO> defines{ { "VSHADER", "1" }, { "GRASS_OPTIMIZATIONS", "1" } };
+							if (vr)
+								defines.push_back({ "VR", "1" });
+							if (enhanced)
+								defines.push_back({ "GRASS_LIGHTING", "1" });
+							if (depth)
+								defines.push_back({ "RENDER_DEPTH", "1" });
+							if (placement)
+								defines.push_back({ "ADAPTIVE_BALANCE", "1" });
+							if (collision)
+								defines.push_back({ "GRASS_COLLISION", "1" });
+							if (mode == 1)
+								defines.push_back({ "GRASS_COLLISION_BASIC", "1" });
+							auto bytecode = Compile(L"package/Shaders/RunGrass.hlsl", "vs_5_0", defines);
+							ComPtr<ID3D11ShaderReflection> reflection;
+							Check(D3DReflect(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
+							D3D11_SHADER_INPUT_BIND_DESC binding{};
+							Check(reflection->GetResourceBindingDescByName("GrassBatch", &binding));
+							Require(binding.BindPoint == 9, "Batch constants changed register");
+							const auto placementBinding = reflection->GetResourceBindingDescByName("GrassPlacement", &binding);
+							Require(placement ? SUCCEEDED(placementBinding) && binding.BindPoint == 10 : FAILED(placementBinding),
+								"Grass placement binding does not match the feature permutation");
+							if (collision) {
+								D3D11_SHADER_VARIABLE_DESC collisionDistance{};
+								Check(reflection->GetConstantBufferByName("GrassBatch")->GetVariableByName("GrassBatchCollisionDistance")->GetDesc(&collisionDistance));
+								Require(collisionDistance.StartOffset == 12 && collisionDistance.Size == sizeof(float), "Batch collision distance layout changed");
+							}
+							for (const auto& [name, slot] : std::array<std::pair<const char*, UINT>, 5>{ { { "GrassCollision::GrassCollisionPerFrame", 5 }, { "GrassCollision::Deformation", 100 }, { "GrassCollision::PreviousDeformation", 101 }, { "GrassCollision::ContactMotion", 102 }, { "GrassCollision::PreviousContactMotion", 103 } } }) {
+								const auto result = reflection->GetResourceBindingDescByName(name, &binding);
+								if (mode == 2 || (mode == 1 && slot == 5))
+									Require(SUCCEEDED(result) && binding.BindPoint == slot, "Collision resource changed register");
+								else
+									Require(FAILED(result), "Inactive collision backend retained a resource");
+							}
+							const auto basicTexture = reflection->GetResourceBindingDescByName("GrassCollision::Collision", &binding);
+							Require(mode == 1 ? SUCCEEDED(basicTexture) && binding.BindPoint == 100 : FAILED(basicTexture), "Basic field binding differs from the selected backend");
+							Check(reflection->GetResourceBindingDescByName("GrassInstanceExtras", &binding));
+							Require(binding.BindPoint == 2, "Batch fade changed register");
+							Check(reflection->GetResourceBindingDescByName("GrassSourceRecords", &binding));
+							Require(binding.BindPoint == 3, "Batch source records changed register");
+							Check(reflection->GetResourceBindingDescByName("GrassTextureNormalLength", &binding));
+							Require(binding.BindPoint == 4, "Grass texture classification changed register");
+							D3D11_SHADER_VARIABLE_DESC world{}, previous{};
+							ValidateWindLayout(reflection.Get(), "PerGeometry", vr);
+							auto geometry = reflection->GetConstantBufferByName("PerGeometry");
+							Check(geometry->GetVariableByName("World")->GetDesc(&world));
+							Check(geometry->GetVariableByName("PreviousWorld")->GetDesc(&previous));
+							Require(world.StartOffset == (vr ? 256u : 128u) && previous.StartOffset == (vr ? 384u : 192u), "Native geometry layout changed");
 							std::erase_if(defines, [](const auto& define) { return std::strcmp(define.Name, "GRASS_OPTIMIZATIONS") == 0; });
 							Compile(L"package/Shaders/RunGrass.hlsl", "vs_5_0", defines);
 						}
-					}
 	}
 
 #include "grass_active_depth_gpu.h"
@@ -219,7 +223,7 @@ int main()
 				Check(reflection->GetResourceBindingDescByName("Counters", &binding));
 				Require(binding.BindPoint == 3, "Diagnostic counter UAV changed slot");
 			}
-		std::cout << "32 grass vertex and 8 pixel variants, production diagnostic isolation, flat/VR visibility, sparse offsets, shared frusta, native wind, collision strength/history, collision bounds, and conservative SPD mip chains passed\n";
+		std::cout << "Grass vertex/pixel permutations, placement bindings, production diagnostic isolation, flat/VR visibility, sparse offsets, shared frusta, native wind, collision strength/history, collision bounds, and conservative SPD mip chains passed\n";
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

@@ -12,7 +12,7 @@ cbuffer NativeWorld : register(b0)
 #include "GrassCollision/GrassCollision.hlsli"
 struct Case
 {
-	float4 color, root, position, distance;
+	float4 color, root, position, distance, placement;
 };
 struct Result
 {
@@ -28,12 +28,13 @@ RWStructuredBuffer<Result> Results : register(u0);
 	input.InstanceData3.zw = Cases[id.x].distance.zw;
 	input.Position = Cases[id.x].position - Cases[id.x].root;
 	float3 initialPosition = Cases[id.x].root.xyz + float3(input.InstanceData2.z, input.InstanceData3.zw) * input.Position.z;
-	float3 current = initialPosition, previous = current;
+	float3 initialPrevious = initialPosition + float3(0, 0, Cases[id.x].placement.x);
+	float3 current = initialPosition, previous = initialPrevious;
 	float3 axis;
 	float angle, compression;
-	GrassCollision::ApplyDeformation(input, current, previous, Cases[id.x].distance.x, axis, angle, compression);
+	GrassCollision::ApplyDeformation(input, current, previous, Cases[id.x].distance.x, axis, angle, compression, Cases[id.x].placement.x);
 	Result output;
 	output.current = float4(current - initialPosition, GrassCollision::DeformNormal(float3(0, 0, 1), axis, angle, compression).z);
-	output.previous = float4(previous - initialPosition, 0);
+	output.previous = float4(previous - initialPrevious, 0);
 	Results[id.x] = output;
 }

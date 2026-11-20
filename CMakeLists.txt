@@ -2013,6 +2013,11 @@ if(BUILD_CONTROLLER_TESTS)
     target_compile_definitions(settings_ui_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
     set_tests_properties(SettingsUI PROPERTIES TIMEOUT 30)
 
+    add_controller_test(grass_placement_test GrassPlacement tests/grass_placement_test.cpp)
+    target_link_libraries(
+        grass_placement_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
     add_controller_test(grass_draw_batch_test GrassOptimizationPolicy tests/grass_draw_batch_test.cpp)
     add_controller_test(depth_pyramid_policy_test DepthPyramidPolicy tests/depth_pyramid_policy_test.cpp)
     add_controller_test(grass_pass_cache_test GrassPassCache tests/grass_pass_cache_test.cpp)

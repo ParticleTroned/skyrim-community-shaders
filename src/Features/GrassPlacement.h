@@ -1,0 +1,58 @@
+#pragma once
+
+#include "GrassPlacementSettings.h"
+#include <array>
+#include <d3d11_1.h>
+#include <winrt/base.h>
+
+namespace RE
+{
+	class BSMultiStreamInstanceTriShape;
+	namespace BSGraphics
+	{
+		struct VertexBuffer;
+	}
+}
+
+namespace GrassPlacement
+{
+	/** Publish attached-cell rules at the frame boundary; no engine lookup occurs in a shader or draw. */
+	void UpdateFrame();
+	void SetHooksReady(bool ready);
+	void RecordModel(RE::BSMultiStreamInstanceTriShape* shape, const char* path);
+	/** Observe attached groups under the native group lock and maintain conservative native bounds. */
+	void ObserveGroups(RE::BSMultiStreamInstanceTriShape* shape);
+	void RemoveShape(RE::BSMultiStreamInstanceTriShape* shape);
+	/** Restore native bounds before mutation; preserve surviving groups' temporal history. */
+	void BeforeGroupMutation(RE::BSMultiStreamInstanceTriShape* shape, uint32_t removed = UINT32_MAX);
+	/** Remove our envelope before native world-bound recomputation. */
+	void RestoreWorldBound(RE::BSMultiStreamInstanceTriShape* shape);
+	/** Reapply the bounded envelope after native world-bound recomputation. */
+	void UpdateWorldBound(RE::BSMultiStreamInstanceTriShape* shape);
+	/** The same current/previous offsets feed native draws and batched slices. */
+	std::array<float, 2> GetOffsets(RE::BSGraphics::VertexBuffer* buffer);
+	float BoundsPadding();
+	/** Establish neutral native constants even when optional instance hooks are unavailable. */
+	void PrepareNativeGeometry();
+	/** Reassert grass constants after native state without adding another state flush. */
+	void ApplyNativeBinding(bool compute);
+	void BindNative(RE::BSGraphics::VertexBuffer* buffer);
+
+	/** Restore the borrowed vertex constant slot, including D3D11.1 buffer ranges. */
+	class BindingScope
+	{
+	public:
+		BindingScope();
+		~BindingScope();
+		BindingScope(const BindingScope&) = delete;
+		BindingScope& operator=(const BindingScope&) = delete;
+
+	private:
+		winrt::com_ptr<ID3D11DeviceContext> context;
+		winrt::com_ptr<ID3D11DeviceContext1> rangedContext;
+		winrt::com_ptr<ID3D11Buffer> previous;
+		UINT first = 0, count = 0;
+	};
+
+	bool IsAvailable();
+}

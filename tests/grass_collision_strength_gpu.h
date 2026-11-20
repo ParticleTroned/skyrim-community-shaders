@@ -30,8 +30,9 @@ void RunGrassCollisionStrength(bool basic = false)
 		std::array<float, 4> root{ 0, 0, 0, 1 };
 		std::array<float, 4> position{ 0, 0, 30, 1 };
 		std::array<float, 4> distance{ 2048, 0, 0, 1 };
+		std::array<float, 4> placement{};
 	};
-	static_assert(sizeof(Case) == 64);
+	static_assert(sizeof(Case) == 80);
 	std::array<Case, 11> cases{};
 	cases[1].color[3] = 0;
 	cases[2].distance[0] = 0;
@@ -165,6 +166,29 @@ void RunGrassCollisionStrength(bool basic = false)
 			"Previous field or strength was not preserved");
 		const float normalZ = std::cos(angle) / std::max(scale, 1e-4f);
 		Require(std::abs(values[0][3] - normalZ / std::hypot(std::sin(angle), normalZ)) < .001f, "Deformed normal did not follow rotation/compression");
+	}
+	{
+		const auto original = cases[0];
+		const auto lower = dispatch(1, 1)[0];
+		cases[0].root[2] += 32;
+		cases[0].position[2] += 32;
+		context->UpdateSubresource(input.Get(), 0, nullptr, cases.data(), 0, 0);
+		const auto upper = dispatch(1, 1)[0];
+		for (const float delta : { -32.0f, 32.0f }) {
+			if (delta > 0)
+				cases[0] = original;
+			cases[0].placement[0] = delta;
+			context->UpdateSubresource(input.Get(), 0, nullptr, cases.data(), 0, 0);
+			const auto shifted = dispatch(1, 1)[0];
+			const auto& current = delta < 0 ? upper : lower;
+			const auto& previous = delta < 0 ? lower : upper;
+			for (size_t axis = 0; axis < 3; ++axis)
+				Require(std::abs(shifted[axis] - current[axis]) < .001f &&
+							std::abs(shifted[axis + 4] - previous[axis + 4]) < .001f,
+					"Placement changes sampled collision history at the wrong root or height");
+		}
+		cases[0] = original;
+		context->UpdateSubresource(input.Get(), 0, nullptr, cases.data(), 0, 0);
 	}
 	if (!basic) {
 		currentMotion = fieldTexture({ 0, 0, 240, 272 }, "GrassTest::BridgeContact");

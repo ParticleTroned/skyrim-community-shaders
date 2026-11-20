@@ -161,13 +161,19 @@ namespace GrassCollision
 	}
 
 	void ApplyDeformation(VS_INPUT input, inout float3 currentPosition, inout float3 previousPosition,
-		float distance, out float3 bendAxis, out float bendAngle, out float compressionScale)
+		float distance, out float3 bendAxis, out float bendAngle, out float compressionScale, float previousRootOffset = 0)
 	{
 		bendAxis = float3(0, 1, 0);
 		bendAngle = 0;
 		compressionScale = 1;
 		float3 displacement, previousDisplacement;
 		GetDisplacedPosition(input, currentPosition, displacement, previousDisplacement, distance);
+		if (previousRootOffset != 0) {
+			input.InstanceData1.z += previousRootOffset;
+			float3 unused;
+			// Both history channels share the current basic field's camera-relative coordinates.
+			GetDisplacedPosition(input, previousPosition, unused, previousDisplacement, distance);
+		}
 		currentPosition += displacement;
 		previousPosition += previousDisplacement;
 	}

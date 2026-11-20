@@ -157,6 +157,10 @@ template<> struct Relocation<const RE::NiRTTI*> {
     const RE::NiRTTI* get() const { return value; }
 }; }
 namespace GrassRuntime { struct GroupReadLock { GroupReadLock() {} ~GroupReadLock() {} }; }
+namespace GrassPlacement {
+    void BeforeGroupMutation(RE::BSMultiStreamInstanceTriShape*, uint32_t = UINT32_MAX) {}
+    void ObserveGroups(RE::BSMultiStreamInstanceTriShape*) {}
+}
 struct GrassBucketRenderer {
     struct Lifetime { uint64_t generation = 0; GrassPolicy::FadeHistory<RE::BSGraphics::VertexBuffer*> fadeHistory; };
     struct CachedGroup { uint32_t engineIndex; RE::BSGraphics::VertexBuffer* identity; };

@@ -7,6 +7,8 @@
 #include "CSEditor/EditorWindow.h"
 #include "Diagnostics/PerformanceCostExperiments.h"
 #include "Globals.h"
+#include "GrassOptimizations.h"
+#include "GrassOptimizations/GrassBucketRenderer.h"
 #include "InverseSquareLighting.h"
 #include "LocationContext.h"
 #include "SettingsMigrations.h"
@@ -17,6 +19,7 @@
 #include "Utils/Finite.h"
 #include "Utils/Form.h"
 #include "Utils/Game.h"
+#include "Utils/LocationLayers.h"
 #include "Utils/PointLightFlags.h"
 #include "Utils/RuntimeToggle.h"
 #include "Utils/StringUtils.h"
@@ -104,6 +107,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	bloomPresets,
 	water,
 	waterWind,
+	grassPlacement,
 	appearance)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -1728,15 +1732,18 @@ void AdaptiveBrightness::DrawProfileControls(
 	const char* a_tabBarID,
 	bool a_showAdvancedControls,
 	bool a_globalLayer,
-	bool a_allowEdits)
+	bool a_allowEdits,
+	bool a_locationLayer)
 {
 	ImGui::PushID(a_tabBarID);
 	const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
 	auto* storage = ImGui::GetStateStorage();
 	const auto selectionId = ImGui::GetID("AdjustmentGroup");
-	int selected = std::clamp(storage->GetInt(selectionId), 0, a_globalLayer ? 5 : 3);
-	constexpr const char* groups[] = { "Lighting", "Colour", "Bloom", "Water", "Depth of field", "Godrays" };
-	if (MenuUI::NavigationChoice("Adjust", &selected, groups, a_globalLayer ? 6 : 4))
+	int selected = std::clamp(storage->GetInt(selectionId), 0, a_globalLayer ? 6 : a_locationLayer ? 4 :
+																									 3);
+	const char* groups[] = { "Lighting", "Colour", "Bloom", "Water", "Grass Placement", "Depth of field", "Godrays" };
+	if (MenuUI::NavigationChoice("Adjust", &selected, groups, a_globalLayer ? 7 : a_locationLayer ? 5 :
+																									4))
 		storage->SetInt(selectionId, selected);
 	const auto disabled = Util::DisableGuard(!a_allowEdits);
 	switch (selected) {
@@ -1753,9 +1760,12 @@ void AdaptiveBrightness::DrawProfileControls(
 		DrawWaterSettings(a_profile, a_showAdvancedControls, a_globalLayer);
 		break;
 	case 4:
-		AdaptiveBalanceDepthOfField::DrawSettings();
+		DrawGrassPlacementSettings(a_profile.grassPlacement);
 		break;
 	case 5:
+		AdaptiveBalanceDepthOfField::DrawSettings();
+		break;
+	case 6:
 		DrawGodraySettings();
 		break;
 	}
@@ -2096,7 +2106,7 @@ void AdaptiveBrightness::DrawLocationOverrideProfileEditor(
 			"Legacy profile: replaces broader contextual layers to preserve its saved appearance.");
 	if (a_allowEdits) {
 		if (auto* editProfile = GetLocationOverrideEditProfile(a_locationOverride)) {
-			DrawProfileSettings(*editProfile, a_sectionTitle, a_showAdvancedControls, true);
+			DrawProfileSettings(*editProfile, a_sectionTitle, a_showAdvancedControls, true, true);
 
 			const bool saveEdit = ImGui::Button(a_saveLabel);
 			if (auto _tt = Util::HoverTooltipWrapper())
@@ -2106,8 +2116,10 @@ void AdaptiveBrightness::DrawLocationOverrideProfileEditor(
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text("Discard unsaved edits to this profile.");
 
-			if (saveEdit)
+			if (saveEdit) {
 				a_locationOverride.profile = *editProfile;
+				NotifyGrassPlacementChanged();
+			}
 			if (saveEdit || cancelEdit) {
 				if (a_closeWhenFinished)
 					ClearLocationOverrideSelection();
@@ -2117,7 +2129,7 @@ void AdaptiveBrightness::DrawLocationOverrideProfileEditor(
 		}
 	} else {
 		auto viewProfile = a_locationOverride.profile;
-		DrawProfileSettings(viewProfile, a_sectionTitle, a_showAdvancedControls, false);
+		DrawProfileSettings(viewProfile, a_sectionTitle, a_showAdvancedControls, false, true);
 		if (a_closeWhenFinished && ImGui::Button("Close"))
 			ClearLocationOverrideSelection();
 	}
@@ -2182,12 +2194,12 @@ void AdaptiveBrightness::DrawPresetShortcut(ContextProfileScope a_scope)
 	Util::AddTooltip("Open the shared Presets screen for this scope. Apply pending profile edits before exporting.");
 }
 
-void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const char* a_sectionTitle, bool a_showAdvancedControls, bool a_allowEdits)
+void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const char* a_sectionTitle, bool a_showAdvancedControls, bool a_allowEdits, bool a_locationLayer)
 {
 	ClampProfileSettings(a_profile);
 
 	MenuUI::SectionHeading(a_sectionTitle);
-	DrawProfileControls(a_profile, "##ProfileControlSections", a_showAdvancedControls, false, a_allowEdits);
+	DrawProfileControls(a_profile, "##ProfileControlSections", a_showAdvancedControls, false, a_allowEdits, a_locationLayer);
 	ClampProfileSettings(a_profile);
 }
 
@@ -2967,6 +2979,7 @@ bool AdaptiveBrightness::ImportGlobalPreset()
 	if (!ApplyBasePresetJson(importedJson, settings, globalPresetStatus))
 		return false;
 
+	NotifyGrassPlacementChanged();
 	ResetWaterWindSmoothing();
 	globalPresetStatus = std::format("Imported global preset from {}.", resolvedPath->filename().string());
 	return true;
@@ -3394,25 +3407,7 @@ const std::vector<const AdaptiveBrightness::LocationOverride*>& AdaptiveBrightne
 			layers.push_back(locationOverride);
 	};
 
-	std::vector<const RE::TESWorldSpace*> worldspaces;
-	for (auto* worldspace = forms.worldspace;
-		worldspace && worldspaces.size() < kMaxOverrideHierarchyDepth;
-		worldspace = worldspace->parentWorld) {
-		worldspaces.push_back(worldspace);
-	}
-	for (auto it = worldspaces.rbegin(); it != worldspaces.rend(); ++it)
-		appendLayer(*it);
-
-	std::vector<const RE::BGSLocation*> locations;
-	for (auto* location = forms.location;
-		location && locations.size() < kMaxOverrideHierarchyDepth;
-		location = location->parentLoc) {
-		locations.push_back(location);
-	}
-	for (auto it = locations.rbegin(); it != locations.rend(); ++it)
-		appendLayer(*it);
-
-	appendLayer(forms.cell);
+	Util::VisitLocationLayers(forms.worldspace, forms.location, forms.cell, appendLayer);
 	locationLayerCache.worldspaceFormID = worldspaceFormID;
 	locationLayerCache.locationFormID = locationFormID;
 	locationLayerCache.cellFormID = cellFormID;
@@ -3668,6 +3663,7 @@ void AdaptiveBrightness::NormalizeLocationOverrides()
 
 void AdaptiveBrightness::MarkLocationOverrideLookupDirty()
 {
+	NotifyGrassPlacementChanged();
 	locationOverrideLookupDirty = true;
 	locationLayerCache = {};
 }
@@ -4402,6 +4398,7 @@ struct AdaptiveBrightness::Hooks
 
 void AdaptiveBrightness::PostPostLoad()
 {
+	globals::features::grassOptimizations.GetRenderer().InstallHooks();
 	Hooks::Install();
 	AdaptiveBalanceDepthOfField::InstallHooks();
 }

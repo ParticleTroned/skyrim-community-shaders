@@ -44,7 +44,8 @@ void RunCullingShader(bool vr, bool reversed = false)
 		Record{ 0xb800, 0x3c003800, 0x3c00, 0, 0x3c000000, 0x3c000000, 0, 0 } };
 	struct Slice
 	{
-		UINT first, count, end, padding;
+		UINT first, count, end;
+		float previousPlacementDelta;
 		std::array<float, 4> origin;
 	};
 	const std::array<Slice, 3> slices{ Slice{}, Slice{ 0, 1, 1, 0, { 0, 0, 0, .125f } }, Slice{ 1, 2, 3, 0, { 0, 0, 0, .875f } } };
@@ -64,7 +65,7 @@ void RunCullingShader(bool vr, bool reversed = false)
 	auto table = makeBuffer(sizeof(slices), D3D11_BIND_SHADER_RESOURCE, sizeof(Slice), D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, slices.data(), "GrassTest::Slices");
 	std::vector<uint32_t> sentinel(capacity * eyes * 3, 0xdeadbeef);
 	auto output = makeBuffer(UINT(sentinel.size() * sizeof(uint32_t)), D3D11_BIND_UNORDERED_ACCESS, 0, D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, sentinel.data(), "GrassTest::Output");
-	auto extras = makeBuffer(capacity * eyes * 3 * 24, D3D11_BIND_UNORDERED_ACCESS, 24, D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, nullptr, "GrassTest::Extras");
+	auto extras = makeBuffer(capacity * eyes * 3 * 28, D3D11_BIND_UNORDERED_ACCESS, 28, D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, nullptr, "GrassTest::Extras");
 	std::array<uint32_t, 48> initialArguments;
 	initialArguments.fill(0xdeadbeef);
 	auto args = makeBuffer(sizeof(initialArguments), D3D11_BIND_UNORDERED_ACCESS, 0, D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS | D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS, initialArguments.data(), "GrassTest::Args");
@@ -88,7 +89,7 @@ void RunCullingShader(bool vr, bool reversed = false)
 			D3D11_UNORDERED_ACCESS_VIEW_DESC view{};
 			view.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
 			view.Format = i == 1 ? DXGI_FORMAT_UNKNOWN : DXGI_FORMAT_R32_TYPELESS;
-			view.Buffer.NumElements = desc.ByteWidth / (i == 1 ? 24 : 4);
+			view.Buffer.NumElements = desc.ByteWidth / (i == 1 ? 28 : 4);
 			view.Buffer.Flags = i == 1 ? 0 : D3D11_BUFFER_UAV_FLAG_RAW;
 			Check(device->CreateUnorderedAccessView(buffers[i], &view, views[i].ReleaseAndGetAddressOf()));
 			Util::SetResourceName(views[i].Get(), "GrassTest::Output%u UAV", i);
@@ -256,17 +257,44 @@ void RunCullingShader(bool vr, bool reversed = false)
 		for (UINT instance = 0; instance < 3; ++instance) {
 			const auto index = sourceIndex(compacted[eye * capacity + instance], records.size());
 			auto original = records.begin() + index;
-			const auto fade = std::bit_cast<float>(fades[(eye * capacity + instance) * 6 + 3]);
+			const auto fade = std::bit_cast<float>(fades[(eye * capacity + instance) * 7 + 3]);
 			Require(fade == (original == records.begin() ? .125f : .875f), "Sparse source fade changed");
 			const float x = original == records.begin() ? 0.0f : original == records.begin() + 1 ? 4.0f :
 			                                                                                       -.5f;
 			for (UINT time = 0; time < 2; ++time) {
 				const float angle = .4f * (x * -.0078125f + (time == 0 ? 4.25f : 3.75f));
 				const float scalar = (std::sin(3.14159265358979323846f * std::sin(angle)) + std::sin(6.28318530717958647692f * std::sin(angle))) * .3f + .2f * std::cos(3.14159265358979323846f * std::cos(angle));
-				Require(std::abs(std::bit_cast<float>(fades[(eye * capacity + instance) * 6 + 4 + time]) - scalar) < 1e-5f, "Precomputed wind differs from the native formula");
+				Require(std::abs(std::bit_cast<float>(fades[(eye * capacity + instance) * 7 + 4 + time]) - scalar) < 1e-5f, "Precomputed wind differs from the native formula");
 			}
 		}
 		Require(compacted[eye * capacity + 3] == 0xdeadbeef, "Dispatch wrote beyond survivor count");
+	}
+	{
+		auto placed = slices;
+		placed[1].origin[2] = -.25f;
+		placed[1].previousPlacementDelta = -.5f;
+		placed[2].origin[2] = .25f;
+		placed[2].previousPlacementDelta = -.75f;
+		context->UpdateSubresource(table.Get(), 0, nullptr, placed.data(), 0, 0);
+		const auto placedCounts = dispatch(false, false, false, false);
+		const auto placedIndices = read(output.Get()), placedExtras = read(extras.Get());
+		for (UINT eye = 0; eye < eyes; ++eye) {
+			Require(placedCounts[eye * 8 + 4] == 3, "Vertical placement dropped an unculled instance");
+			for (UINT instance = 0; instance < 3; ++instance) {
+				const auto slot = eye * capacity + instance;
+				const auto source = sourceIndex(placedIndices[slot], records.size());
+				const auto& expected = placed[source == 0 ? 1 : 2];
+				Require(std::bit_cast<float>(placedExtras[slot * 7 + 2]) == expected.origin[2] &&
+							std::bit_cast<float>(placedExtras[slot * 7 + 6]) == expected.previousPlacementDelta,
+					"Compaction mixed current/previous placement or detached it from its source");
+			}
+		}
+		for (auto& slice : placed) slice.origin[2] = -2;
+		context->UpdateSubresource(table.Get(), 0, nullptr, placed.data(), 0, 0);
+		const auto lowered = dispatch(true, false, false, false);
+		for (UINT eye = 0; eye < eyes; ++eye)
+			Require(lowered[eye * 8 + 4] == 0, "Frustum culling used unshifted grass bounds");
+		context->UpdateSubresource(table.Get(), 0, nullptr, slices.data(), 0, 0);
 	}
 	// The production entry must preserve both buckets across the second dispatch row.
 	{
@@ -308,7 +336,7 @@ void RunCullingShader(bool vr, bool reversed = false)
 		auto savedOutput = output, savedExtras = extras, savedArgs = args;
 		std::vector<uint32_t> poolSentinels(outputStride * 2, 0xdeadbeef);
 		output = makeBuffer(UINT(poolSentinels.size() * 4), D3D11_BIND_UNORDERED_ACCESS, 0, D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, poolSentinels.data(), "GrassTest::PoolOutput");
-		extras = makeBuffer(outputStride * 2 * 24, D3D11_BIND_UNORDERED_ACCESS, 24, D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, nullptr, "GrassTest::PoolExtras");
+		extras = makeBuffer(outputStride * 2 * 28, D3D11_BIND_UNORDERED_ACCESS, 28, D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, nullptr, "GrassTest::PoolExtras");
 		args = makeBuffer(384, D3D11_BIND_UNORDERED_ACCESS, 0, D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS | D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS, nullptr, "GrassTest::PoolArgs");
 		makeOutputViews();
 		const UINT zero[4]{};
@@ -333,7 +361,7 @@ void RunCullingShader(bool vr, bool reversed = false)
 					const auto index = sourceIndex(batchOutput[slot], pooledRecords.size());
 					Require(index >= bucket * 3 && index < (bucket + 1) * 3, "Combined dispatch read another bucket's records");
 					seen[index - bucket * 3] = true;
-					Require(std::bit_cast<float>(batchExtras[slot * 6 + 3]) == (index % 3 == 0 ? .125f : .875f), "Combined dispatch mixed instance extras");
+					Require(std::bit_cast<float>(batchExtras[slot * 7 + 3]) == (index % 3 == 0 ? .125f : .875f), "Combined dispatch mixed instance extras");
 				}
 				Require((seen[0] == (bucket == 0)) && seen[1] && seen[2] && batchOutput[bucket * outputStride + eye * capacity + (bucket ? 2u : 3u)] == 0xdeadbeef,
 					"Combined dispatch duplicated a source or overwrote its output range");
@@ -578,7 +606,7 @@ void RunCullingShader(bool vr, bool reversed = false)
 	fades = read(extras.Get());
 	for (UINT eye = 0; eye < eyes; ++eye)
 		for (UINT instance = 0; instance < 3; ++instance)
-			Require(std::bit_cast<float>(fades[(eye * capacity + instance) * 6 + 3]) < 0, "Simple shading flag lost fade magnitude");
+			Require(std::bit_cast<float>(fades[(eye * capacity + instance) * 7 + 3]) < 0, "Simple shading flag lost fade magnitude");
 	params.SetVariable("SimpleShadingPixelSize", 0.0f);
 	params.SetVariable("ModelBound", std::array<float, 4>{ 0, 0, 0, 1 });
 	values = dispatch(false, false, true, false);
@@ -627,13 +655,13 @@ void RunCullingShader(bool vr, bool reversed = false)
 	fades = read(extras.Get());
 	for (UINT eye = 0; eye < eyes; ++eye) {
 		Require(values[eye * 8 + 4] == 1 && sourceIndex(compacted[eye * capacity], records.size()) == 2, "Filtered slices lost their raw record offset");
-		Require(std::bit_cast<float>(fades[eye * capacity * 6 + 3]) == .625f, "Filtered slice lost its fade");
+		Require(std::bit_cast<float>(fades[eye * capacity * 7 + 3]) == .625f, "Filtered slice lost its fade");
 	}
 	{
 		const auto retainedOutput = output, retainedExtras = extras;
 		const UINT slots = eyes * 3;
 		output = makeBuffer((slots + 1) * 4, D3D11_BIND_UNORDERED_ACCESS, 0, D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, nullptr, "GrassTest::CandidateOutput");
-		extras = makeBuffer((slots + 1) * 24, D3D11_BIND_UNORDERED_ACCESS, 24, D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, nullptr, "GrassTest::CandidateExtras");
+		extras = makeBuffer((slots + 1) * 28, D3D11_BIND_UNORDERED_ACCESS, 28, D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, nullptr, "GrassTest::CandidateExtras");
 		makeOutputViews();
 		params.SetVariable("Capacity", 1u);
 		params.SetVariable("BandPixels", 0.0f);
@@ -659,9 +687,9 @@ void RunCullingShader(bool vr, bool reversed = false)
 					Require(values[slot * 8 + 4] == UINT(visible), "Candidate-sized output changed eye/LOD counts");
 					if (visible) {
 						Require(sourceIndex(compacted[slot], records.size()) == 2, "Source record index was limited by output capacity");
-						Require(std::bit_cast<float>(fades[slot * 6 + 3]) == .625f, "Candidate-sized output lost source fade");
+						Require(std::bit_cast<float>(fades[slot * 7 + 3]) == .625f, "Candidate-sized output lost source fade");
 					} else {
-						Require(compacted[slot] == 0xdeadbeef && fades[slot * 6 + 3] == 0xdeadbeef, "Candidate output overlapped an inactive eye/LOD bin");
+						Require(compacted[slot] == 0xdeadbeef && fades[slot * 7 + 3] == 0xdeadbeef, "Candidate output overlapped an inactive eye/LOD bin");
 					}
 				}
 				Require(compacted.back() == 0xdeadbeef && fades.back() == 0xdeadbeef, "Candidate-sized output exceeded its allocation");
@@ -710,7 +738,7 @@ void RunCullingShader(bool vr, bool reversed = false)
 		Util::SetResourceName(inputSRV.Get(), "GrassTest::PolicyInput SRV");
 		output = makeBuffer(population * eyes * 3 * 4, D3D11_BIND_UNORDERED_ACCESS, 0,
 			D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, nullptr, "GrassTest::PolicyOutput");
-		extras = makeBuffer(population * eyes * 3 * 24, D3D11_BIND_UNORDERED_ACCESS, 24,
+		extras = makeBuffer(population * eyes * 3 * 28, D3D11_BIND_UNORDERED_ACCESS, 28,
 			D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, nullptr, "GrassTest::PolicyExtras");
 		makeOutputViews();
 		const std::array<Slice, 3> policySlices{ Slice{}, Slice{ 0, population, population, 0, { 0, 0, 0, 1 } }, Slice{} };
@@ -733,7 +761,7 @@ void RunCullingShader(bool vr, bool reversed = false)
 					const UINT bin = tier * eyes + eye;
 					for (UINT i = 0; i < result[bin * 8 + 4]; ++i) {
 						const UINT offset = bin * population + i;
-						current.emplace_back(sourceIndex(ids[offset], population), extraValues[offset * 6 + 3]);
+						current.emplace_back(sourceIndex(ids[offset], population), extraValues[offset * 7 + 3]);
 					}
 				}
 				std::sort(current.begin(), current.end());
@@ -814,8 +842,8 @@ void RunCullingShader(bool vr, bool reversed = false)
 		Util::SetResourceName(inputSRV.Get(), "GrassTest::BoundaryInput SRV");
 		output = makeBuffer(outputSlots * 4, D3D11_BIND_UNORDERED_ACCESS, 0,
 			D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, nullptr, "GrassTest::BoundaryOutput");
-		std::vector<uint32_t> extraSentinels(outputSlots * 6, 0xdeadbeef);
-		extras = makeBuffer(outputSlots * 24, D3D11_BIND_UNORDERED_ACCESS, 24,
+		std::vector<uint32_t> extraSentinels(outputSlots * 7, 0xdeadbeef);
+		extras = makeBuffer(outputSlots * 28, D3D11_BIND_UNORDERED_ACCESS, 28,
 			D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, extraSentinels.data(), "GrassTest::BoundaryExtras");
 		makeOutputViews();
 		params.SetVariable("Capacity", outputCapacity);
@@ -869,18 +897,18 @@ void RunCullingShader(bool vr, bool reversed = false)
 							Require(record < instances && !seen[record], "Compaction duplicated a source or emitted an inactive lane");
 							seen[record] = true;
 							Require(tier != 3 || record % 3 == slot / eyes, "Compaction moved an instance to another LOD bin");
-							Require(std::bit_cast<float>(fades[offset * 6 + 3]) == (record < split ? .25f : .75f), "Compaction detached a record from its fade");
+							Require(std::bit_cast<float>(fades[offset * 7 + 3]) == (record < split ? .25f : .75f), "Compaction detached a record from its fade");
 							for (UINT axis = 0; axis < 3; ++axis)
-								Require(fades[offset * 6 + axis] == 0, "Compaction changed the source origin");
+								Require(fades[offset * 7 + axis] == 0, "Compaction changed the source origin");
 							for (UINT time = 0; time < 2; ++time) {
 								const float angle = .4f * (time == 0 ? 4.25f : 3.75f);
 								const float wind = (std::sin(3.14159265358979323846f * std::sin(angle)) + std::sin(6.28318530717958647692f * std::sin(angle))) * .3f + .2f * std::cos(3.14159265358979323846f * std::cos(angle));
-								Require(std::abs(std::bit_cast<float>(fades[offset * 6 + 4 + time]) - wind) < 1e-5f, "Compaction changed current or previous wind");
+								Require(std::abs(std::bit_cast<float>(fades[offset * 7 + 4 + time]) - wind) < 1e-5f, "Compaction changed current or previous wind");
 							}
 						}
 						if (expectedInstances < outputCapacity) {
 							const UINT guard = slot * outputCapacity + expectedInstances;
-							Require(compacted[guard] == 0xdeadbeef && fades[guard * 6] == 0xdeadbeef, "Compaction overwrote a bin canary");
+							Require(compacted[guard] == 0xdeadbeef && fades[guard * 7] == 0xdeadbeef, "Compaction overwrote a bin canary");
 						}
 					}
 					Require(compacted.back() == 0xdeadbeef && fades.back() == 0xdeadbeef, "Compaction exceeded output capacity");

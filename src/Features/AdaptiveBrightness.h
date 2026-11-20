@@ -1,5 +1,7 @@
 #pragma once
 
+#include "GrassPlacementSettings.h"
+
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -42,11 +44,12 @@ struct AdaptiveBrightness : Feature
 	virtual inline std::string GetShortName() override { return std::string(kFeatureShortName); }
 	virtual inline std::string GetDisplayName() override { return std::string(kFeatureDisplayName); }
 	virtual inline std::string_view GetShaderDefineName() override { return "ADAPTIVE_BALANCE"; }
-	std::string_view GetShaderCacheAbiVersion() override { return "2"; }
+	std::string_view GetShaderCacheAbiVersion() override { return "3"; }
 	virtual bool HasShaderDefine(RE::BSShader::Type a_shaderType) override
 	{
 		return a_shaderType == RE::BSShader::Type::Lighting ||
 		       a_shaderType == RE::BSShader::Type::Water ||
+		       a_shaderType == RE::BSShader::Type::Grass ||
 		       a_shaderType == RE::BSShader::Type::ImageSpace;
 	}
 	virtual inline bool IsCore() const override { return true; }
@@ -136,6 +139,7 @@ struct AdaptiveBrightness : Feature
 		Bloom::PresetSlots bloomPresets;
 		WaterAppearance::Profile water;
 		WaterWindSettings waterWind;
+		GrassPlacement::Settings grassPlacement;
 		AdaptiveBalanceAppearanceSettings appearance;
 
 		static ProfileSettings AdjustmentDefaults();
@@ -327,6 +331,7 @@ struct AdaptiveBrightness : Feature
 	int contextSectionLastDrawFrame = -1;
 	mutable std::unordered_map<std::string, std::size_t> locationOverrideLookup;
 	mutable LocationLayerCache locationLayerCache;
+	std::atomic_uint64_t grassPlacementRevision{ 1 };
 	mutable uint64_t locationOverrideLookupVersion = 0;
 	mutable bool locationOverrideLookupDirty = true;
 	mutable float smoothedWaterWindSpeed = 0.0f;
@@ -367,6 +372,14 @@ struct AdaptiveBrightness : Feature
 	/// Enables only Adaptive Balance adjustments; independent renderer features retain their state.
 	void SetEnabled(bool a_enabled);
 	bool IsRuntimeEnabled() const;
+	/** Invalidate the placement snapshot after publishing global or location edits. */
+	void NotifyGrassPlacementChanged() { grassPlacementRevision.fetch_add(1, std::memory_order_release); }
+	uint64_t GetGrassPlacementRevision() const { return grassPlacementRevision.load(std::memory_order_acquire); }
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Inspect or edit a global/location placement layer without persisting it. */
+	json GrassPlacementControls(const json& request);
+#endif
+	void DrawGrassPlacementSettings(GrassPlacement::Settings& placement);
 	/** Return smooth volumetric haze suppression, or zero while Adaptive Balance is bypassed. */
 	float GetEffectiveVolumetricClarity() const;
 	/** Compose context and profile godray tuning, or return neutral while disabled. */
@@ -435,13 +448,15 @@ struct AdaptiveBrightness : Feature
 		ProfileSettings& a_profile,
 		const char* a_sectionTitle = "Profile Values",
 		bool a_showAdvancedControls = true,
-		bool a_allowEdits = true);
+		bool a_allowEdits = true,
+		bool a_locationLayer = false);
 	void DrawProfileControls(
 		ProfileSettings& a_profile,
 		const char* a_tabBarID,
 		bool a_showAdvancedControls,
 		bool a_globalLayer,
-		bool a_allowEdits);
+		bool a_allowEdits,
+		bool a_locationLayer = false);
 	void DrawGlobalSettings(bool a_showAdvancedControls);
 	void DrawLightingSettings(ProfileSettings& a_profile, bool a_showAdvancedControls, bool a_globalLayer);
 	/// Draws whole-scene grading controls independent of detailed lighting adjustments.

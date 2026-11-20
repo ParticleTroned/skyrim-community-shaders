@@ -1,5 +1,6 @@
 #include "State.h"
 #include "Diagnostics/PerformanceCostExperiments.h"
+#include "Features/GrassPlacement.h"
 #include "Features/ReverseZ.h"
 #include "Features/UnifiedWater.h"
 #if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
@@ -940,6 +941,7 @@ void State::Reset()
 	CSX::Diagnostics::GpuCrash::Checkpoint("Frame::Reset");
 #endif
 	UpdateSaveLoadSafeMode();
+	GrassPlacement::UpdateFrame();
 	LODBlendRingFix::GetInstance().Update();
 
 	globals::shaderCache->TickActiveShaderCapture(globals::menu && globals::menu->IsEnabled);

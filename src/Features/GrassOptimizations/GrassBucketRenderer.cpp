@@ -1,9 +1,11 @@
 #include "GrassBucketRenderer.h"
 
 #include "Buffer.h"
+#include "Features/AdaptiveBrightness.h"
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
 #include "Features/GrassOptimizations.h"
+#include "Features/GrassPlacement.h"
 #include "Globals.h"
 #include "GpuPass.h"
 #include "GrassBucketPreparation.h"
@@ -154,7 +156,8 @@ namespace
 	};
 	struct Slice
 	{
-		uint32_t first, count, end, padding = 0;
+		uint32_t first, count, end;
+		float previousPlacementDelta = 0;
 		std::array<float, 4> originFade;
 	};
 	static_assert(sizeof(Slice) == 32);
@@ -449,16 +452,8 @@ namespace
 		return GrassPolicy::MeshAttributesValid(GrassPolicy::MeshStride(descriptor), fullPosition ? 16u : 8u,
 			desc.GetAttributeOffset(Vertex::VA_TEXCOORD0), desc.GetAttributeOffset(Vertex::VA_NORMAL), desc.GetAttributeOffset(Vertex::VA_COLOR));
 	}
-	bool Identity(const RE::NiTransform& transform)
-	{
-		if (transform.scale != 1 || !Finite(transform.translate))
-			return false;
-		for (int row = 0; row < 3; ++row)
-			for (int col = 0; col < 3; ++col)
-				if (transform.rotate.entry[row][col] != (row == col ? 1.0f : 0.0f))
-					return false;
-		return true;
-	}
+	bool Identity(const RE::NiTransform& transform) { return GrassRuntime::HasTranslationOnly(transform); }
+
 	bool CurrentContract(const Source& source)
 	{
 		if (!source.property || source.property->material != source.material || source.property->flags.underlying() != source.flags ||
@@ -652,6 +647,7 @@ namespace
 			auto& feature = globals::features::grassOptimizations;
 			auto& renderer = feature.GetRenderer();
 			try {
+				GrassPlacement::ObserveGroups(shape);
 				if (process && feature.loaded && feature.IsEnabled() && renderer.IsRenderingAvailable() &&
 					renderer.QueueVisible(shape, process, index))
 					return;
@@ -662,10 +658,21 @@ namespace
 		}
 		static inline REL::Relocation<decltype(thunk)> original;
 	};
+	struct PlacementBoundHook
+	{
+		static void thunk(RE::BSMultiStreamInstanceTriShape* shape)
+		{
+			GrassPlacement::RestoreWorldBound(shape);
+			original(shape);
+			GrassPlacement::UpdateWorldBound(shape);
+		}
+		static inline REL::Relocation<decltype(thunk)> original;
+	};
 	struct DestroyHook
 	{
 		static void* thunk(RE::BSMultiStreamInstanceTriShape* shape, uint32_t flags)
 		{
+			GrassPlacement::RemoveShape(shape);
 			globals::features::grassOptimizations.GetRenderer().RemoveShape(shape);
 			// Preserve the deleting destructor's allocation flags across the hook.
 			return original(shape, flags);
@@ -676,9 +683,11 @@ namespace
 	{
 		static void thunk(RE::BSMultiStreamInstanceTriShape* shape, uint32_t group)
 		{
+			GrassPlacement::BeforeGroupMutation(shape, group);
 			globals::features::grassOptimizations.GetRenderer().MarkGroupsChanged(shape, group);
 			original(shape, group);
 			globals::features::grassOptimizations.GetRenderer().MarkGroupsChanged(shape, group, false);
+			GrassPlacement::ObserveGroups(shape);
 		}
 		static inline REL::Relocation<decltype(thunk)> original;
 	};
@@ -686,10 +695,12 @@ namespace
 	{
 		static uint32_t thunk(RE::BSMultiStreamInstanceTriShape* shape, uint32_t count, uint16_t& data, uint32_t arg, float fade)
 		{
+			GrassPlacement::BeforeGroupMutation(shape);
 			globals::features::grassOptimizations.GetRenderer().MarkGroupsChanged(shape);
 			const auto group = original(shape, count, data, arg, fade);
 			globals::features::grassOptimizations.GetRenderer().MarkGroupsChanged(shape, group, false);
 			globals::features::grassOptimizations.GetRenderer().RecordGeneratedGroups(shape, { &group, 1 }, true);
+			GrassPlacement::ObserveGroups(shape);
 			return group;
 		}
 		static inline REL::Relocation<decltype(thunk)> original;
@@ -698,11 +709,13 @@ namespace
 	{
 		static void thunk(RE::BSMultiStreamInstanceTriShape* shape, RE::BSTArray<uint32_t>& instances)
 		{
+			GrassPlacement::BeforeGroupMutation(shape);
 			const auto previousCount = instances.size();
 			original(shape, instances);
 			if (instances.size() > previousCount)
 				globals::features::grassOptimizations.GetRenderer().RecordGeneratedGroups(shape,
 					{ instances.data() + previousCount, instances.size() - previousCount });
+			GrassPlacement::ObserveGroups(shape);
 		}
 		static inline REL::Relocation<decltype(thunk)> original;
 	};
@@ -713,8 +726,10 @@ namespace
 			uint32_t x, uint32_t y, uint64_t* key, RE::BSFixedString* path)
 		{
 			auto shape = original(manager, param, x, y, key, path);
-			if (shape && path)
+			if (shape && path) {
+				GrassPlacement::RecordModel(shape, path->c_str());
 				globals::features::grassOptimizations.GetRenderer().RecordModel(shape, path->c_str());
+			}
 			return shape;
 		}
 		static inline REL::Relocation<decltype(thunk)> original;
@@ -2322,7 +2337,7 @@ void GrassBucketRenderer::Impl::PrepareCullBuffers(uint32_t survivors, uint32_t 
 	CullBuffers replacement;
 	try {
 		replacement.output = RawBuffer(target * GrassPolicy::kSurvivorIndexBytes, D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_UNORDERED_ACCESS, 0, "GrassOptimizations::Compacted");
-		replacement.extras = Structured<std::array<float, 6>>(target, true, false, "GrassOptimizations::Extras");
+		replacement.extras = Structured<std::array<float, 7>>(target, true, false, "GrassOptimizations::Extras");
 		replacement.arguments = RawBuffer(args, D3D11_BIND_UNORDERED_ACCESS, D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS, "GrassOptimizations::IndirectArgs");
 	} catch (const std::exception& error) {
 		if (!buffers.output || buffers.capacity < survivors || buffers.argumentCapacity < argumentBytes)
@@ -2607,6 +2622,7 @@ bool GrassBucketRenderer::Impl::PrepareDrawShaders()
 void GrassBucketRenderer::Impl::CullSlices(const Bucket& bucket, float radius, uint32_t eyes, uint32_t& instances)
 {
 	frustumData = {};
+	const float placementPadding = GrassPlacement::BoundsPadding();
 	std::array<GrassFrustum::Planes, 2> planeSets{};
 	bool planesValid = geometryCPUValid;
 	for (uint32_t eye = 0; eye < eyes && planesValid; ++eye) {
@@ -2652,6 +2668,8 @@ void GrassBucketRenderer::Impl::CullSlices(const Bucket& bucket, float radius, u
 			rootsLo[axis] = run.lo[axis] + origin[axis];
 			rootsHi[axis] = run.hi[axis] + origin[axis];
 		}
+		rootsLo[2] -= placementPadding;
+		rootsHi[2] += placementPadding;
 		const float padding = GrassFrustum::DeformationPadding(world[0], rootsLo, rootsHi, reach, wind,
 			frameCollisionEnabled ? frameSettings.CollisionDistance : 0,
 			frameCollisionStrength);
@@ -2697,8 +2715,26 @@ void GrassBucketRenderer::Impl::CullSlices(const Bucket& bucket, float radius, u
 		}
 		const auto& source = bucket.sources[run.source];
 		const auto fade = source.groups[run.firstGroup].fade;
-		cullingSlices.push_back({ run.record, run.count, instances + run.count, 0, { source.origin.x, source.origin.y, source.origin.z, fade } });
-		instances += run.count;
+		if (placementPadding == 0) {
+			cullingSlices.push_back({ run.record, run.count, instances + run.count, 0, { source.origin.x, source.origin.y, source.origin.z, fade } });
+			instances += run.count;
+		} else {
+			uint32_t record = run.record;
+			for (size_t groupIndex = run.firstGroup; groupIndex <= run.lastGroup; ++groupIndex) {
+				const auto& group = source.groups[groupIndex];
+				const auto placement = GrassPlacement::GetOffsets(group.identity);
+				const std::array<float, 4> originFade{ source.origin.x, source.origin.y, source.origin.z + placement[0], fade };
+				const float delta = placement[1] - placement[0];
+				if (!cullingSlices.empty() && cullingSlices.back().first + cullingSlices.back().count == record &&
+					cullingSlices.back().originFade == originFade && cullingSlices.back().previousPlacementDelta == delta) {
+					cullingSlices.back().count += group.count;
+					cullingSlices.back().end += group.count;
+				} else
+					cullingSlices.push_back({ record, group.count, instances + group.count, delta, originFade });
+				record += group.count;
+				instances += group.count;
+			}
+		}
 	}
 }
 
@@ -3295,6 +3331,7 @@ void GrassBucketRenderer::DrawRenderPass(RE::BSRenderPass* pass, uint32_t techni
 		draw(pass, technique, alphaTest, flags);
 		return;
 	}
+	const GrassPlacement::BindingScope restorePlacement;
 	const bool restoreParameters = impl->context && impl->disabled;
 	winrt::com_ptr<ID3D11Buffer> previousParameters;
 	UINT previousFirst = 0, previousCount = 0;
@@ -3446,6 +3483,8 @@ void GrassBucketRenderer::DrawGroup(RE::BSGraphics::Renderer* renderer, RE::BSGr
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	globals::features::grassCollision.ObserveDrawBindings(false);
 #endif
+	if (globals::features::adaptiveBrightness.loaded)
+		GrassPlacement::BindNative(buffer);
 	originalDraw(renderer, mesh, firstTriangle, triangles, instances, descriptor, buffer);
 }
 
@@ -3481,6 +3520,7 @@ void GrassBucketRenderer::InstallHooks()
 	RemovedGroupHook::original = table.write_vfunc(REL::Relocate(0x3D, 0x3D, 0x3E), RemovedGroupHook::thunk);
 	GeneratedHook::original = table.write_vfunc(REL::Relocate(0x3A, 0x3A, 0x3B), GeneratedHook::thunk);
 	DestroyHook::original = table.write_vfunc(0, DestroyHook::thunk);
+	PlacementBoundHook::original = table.write_vfunc(REL::Relocate(0x2F, 0x2F, 0x30), PlacementBoundHook::thunk);
 	const std::array<uintptr_t, 3> modelCalls{
 		REL::RelocationID(15204, 15372).address() + REL::Relocate(0x2F5, 0x2F5, 0x2F5),
 		REL::RelocationID(15205, 15373).address() + REL::Relocate(0x62B, 0x597, 0x62B),
@@ -3509,6 +3549,7 @@ void GrassBucketRenderer::InstallHooks()
 	} else
 		logger::warn("Grass model tracking unavailable; retaining full meshes");
 	impl->installed = true;
+	GrassPlacement::SetHooksReady(valid);
 	logger::info("Installed native grass bucket hooks");
 }
 

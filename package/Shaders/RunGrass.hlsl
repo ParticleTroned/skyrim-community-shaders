@@ -163,6 +163,8 @@ cbuffer cb8 : register(b8)
 #		include "GrassOptimizations/GrassBatch.hlsli"
 #	endif
 
+#	include "Common/GrassPlacement.hlsli"
+
 float GetPerInstanceFade(VS_INPUT input)
 {
 #	ifdef GRASS_OPTIMIZATIONS
@@ -242,6 +244,14 @@ VS_OUTPUT main(VS_INPUT input)
 #		ifdef GRASS_OPTIMIZATIONS
 	LoadGrassBatchInstance(input.InstanceData1, input.InstanceData2, input.InstanceData3, input.InstanceData4);
 #		endif
+	float2 placement = GetGrassPlacementOffsets(
+#		ifdef GRASS_OPTIMIZATIONS
+		input.InstanceID
+#		else
+		0
+#		endif
+	);
+	input.InstanceData1.z += placement.x;
 	VS_OUTPUT vsout;
 
 	uint eyeIndex = Stereo::GetEyeIndexVS(
@@ -265,6 +275,7 @@ VS_OUTPUT main(VS_INPUT input)
 #		endif
 
 	float4 previousMsPosition = msPosition;
+	previousMsPosition.z += placement.y - placement.x;
 #		ifndef GRASS_COLLISION_BASIC
 	msPosition.xyz += windDisplacement;
 	previousMsPosition.xyz += previousWindDisplacement;
@@ -280,7 +291,7 @@ VS_OUTPUT main(VS_INPUT input)
 		collisionDistance = GrassBatchCollisionDistance;
 #			endif
 	GrassCollision::ApplyDeformation(collisionInput, msPosition.xyz, previousMsPosition.xyz,
-		collisionDistance, collisionAxis, collisionAngle, compressionScale);
+		collisionDistance, collisionAxis, collisionAngle, compressionScale, placement.y - placement.x);
 #			ifdef GRASS_COLLISION_BASIC
 	msPosition.xyz += windDisplacement;
 	previousMsPosition.xyz += previousWindDisplacement;
@@ -347,6 +358,14 @@ VS_OUTPUT main(VS_INPUT input)
 #		ifdef GRASS_OPTIMIZATIONS
 	LoadGrassBatchInstance(input.InstanceData1, input.InstanceData2, input.InstanceData3, input.InstanceData4);
 #		endif
+	float2 placement = GetGrassPlacementOffsets(
+#		ifdef GRASS_OPTIMIZATIONS
+		input.InstanceID
+#		else
+		0
+#		endif
+	);
+	input.InstanceData1.z += placement.x;
 	VS_OUTPUT vsout;
 
 	uint eyeIndex = Stereo::GetEyeIndexVS(
@@ -369,6 +388,7 @@ VS_OUTPUT main(VS_INPUT input)
 #		endif
 
 	float4 previousMsPosition = msPosition;
+	previousMsPosition.z += placement.y - placement.x;
 #		ifndef GRASS_COLLISION_BASIC
 	msPosition.xyz += windDisplacement;
 	previousMsPosition.xyz += previousWindDisplacement;
@@ -384,7 +404,7 @@ VS_OUTPUT main(VS_INPUT input)
 		collisionDistance = GrassBatchCollisionDistance;
 #			endif
 	GrassCollision::ApplyDeformation(collisionInput, msPosition.xyz, previousMsPosition.xyz,
-		collisionDistance, collisionAxis, collisionAngle, compressionScale);
+		collisionDistance, collisionAxis, collisionAngle, compressionScale, placement.y - placement.x);
 #			ifdef GRASS_COLLISION_BASIC
 	msPosition.xyz += windDisplacement;
 	previousMsPosition.xyz += previousWindDisplacement;

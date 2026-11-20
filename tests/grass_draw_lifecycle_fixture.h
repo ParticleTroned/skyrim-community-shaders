@@ -411,6 +411,10 @@ namespace globals
 			GrassBucketRenderer& GetRenderer() { return *renderer; }
 			void PrepareGeometry(RE::BSRenderPass*, RE::BSShader*, uint32_t, GrassRuntime::SetupGeometry, std::optional<uint32_t>);
 		} grassOptimizations;
+		inline struct AdaptiveBalance
+		{
+			bool loaded = true;
+		} adaptiveBrightness;
 		inline struct PBR
 		{
 			bool IsPBRGrassMaterial(void*) const { return false; }
@@ -563,6 +567,30 @@ public:
 	static void DrawGroup(RE::BSGraphics::Renderer*, RE::BSGraphics::TriShape*, uint32_t, uint32_t,
 		uint32_t, RE::BSGraphics::VertexDesc, RE::BSGraphics::VertexBuffer*);
 };
+
+namespace GrassPlacement
+{
+	struct BindingScope
+	{
+		FakeContext* context = globals::features::renderer->impl->context;
+		FakeContext::ConstantBinding previous = context ? context->vertexConstants[10] : FakeContext::ConstantBinding{};
+		~BindingScope()
+		{
+			if (context)
+				context->vertexConstants[10] = previous;
+		}
+	};
+	inline void PrepareNativeGeometry()
+	{
+		if (auto* context = globals::features::renderer->impl->context)
+			context->VSSetConstantBuffers(10, 1, nullptr);
+	}
+	inline void BindNative(RE::BSGraphics::VertexBuffer*)
+	{
+		if (auto* context = globals::features::renderer->impl->context)
+			context->VSSetConstantBuffers(10, 1, nullptr);
+	}
+}
 
 inline void globals::features::GrassFeature::PrepareGeometry(RE::BSRenderPass* pass, RE::BSShader* shader, uint32_t flags,
 	GrassRuntime::SetupGeometry setup, std::optional<uint32_t> windTimer)

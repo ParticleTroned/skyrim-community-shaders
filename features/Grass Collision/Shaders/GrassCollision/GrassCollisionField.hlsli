@@ -44,13 +44,13 @@ namespace GrassCollision
 	}
 
 	void SampleDeformation(float3 root, float3 currentReach, float3 previousReach, float4x4 world, float4x4 previousWorld, float distance,
-		out float4 current, out float4 previous)
+		out float4 current, out float4 previous, float previousRootOffset = 0)
 	{
 		current = previous = 0;
 		if (distance <= 0)
 			return;
 		float3 currentRoot = mul(world, float4(root, 1)).xyz;
-		float3 previousRoot = mul(previousWorld, float4(root, 1)).xyz;
+		float3 previousRoot = mul(previousWorld, float4(root + float3(0, 0, previousRootOffset), 1)).xyz;
 		float currentHeight = max(mul((float3x3)world, currentReach).z, 0);
 		float previousHeight = max(mul((float3x3)previousWorld, previousReach).z, 0);
 		bool valid;

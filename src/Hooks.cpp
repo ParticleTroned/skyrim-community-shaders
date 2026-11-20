@@ -56,6 +56,7 @@
 #include "Features/DynamicCubemaps.h"
 #include "Features/GrassOptimizations.h"
 #include "Features/GrassOptimizations/GrassBucketRenderer.h"
+#include "Features/GrassPlacement.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
 #include "Features/LightLimitFix/ShadowCulling.h"
@@ -1617,6 +1618,7 @@ namespace GrassExtensions
 		static void SetupNativeGeometry(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
 			func(shader, pass, renderFlags);
+			GrassPlacement::PrepareNativeGeometry();
 			const auto& grass = globals::features::grassOptimizations;
 			if (grass.loaded && grass.IsEnabled()) {
 				// Depth and color need the same sampler, including native fallback and batch re-preparation.
@@ -1688,7 +1690,7 @@ namespace GrassExtensions
 			state->selectedCustomPixelShaderType = RE::BSShader::Type::None;
 			const bool ready = func(shader, technique);
 			auto* cache = globals::shaderCache;
-			const bool needsCustomPair = globals::features::grassOptimizations.loaded ||
+			const bool needsCustomPair = globals::features::adaptiveBrightness.loaded || globals::features::grassOptimizations.loaded ||
 			                             (globals::features::truePBR.loaded && globals::features::grassLighting.loaded);
 			if (!ready || !needsCustomPair ||
 				!cache->IsEnabled() || !state->ShaderEnabled(RE::BSShader::Type::Grass))
@@ -1942,6 +1944,7 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 		func(isCompute);
 		globals::features::terrainBlending.OnSetDirtyStates(isCompute, callerRva);
 		globals::state->Draw(isCompute);
+		GrassPlacement::ApplyNativeBinding(isCompute);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (globals::features::upscaling.IsNeuralRenderingEnabled())
 			NeuralRendering::Color::ExposureCapture::Instance().ObserveGraphicsStateFlush(globals::d3d::context, isCompute);
@@ -1965,6 +1968,7 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 
 	phaseStartTicks = phaseEndTicks;
 	globals::state->Draw(isCompute);
+	GrassPlacement::ApplyNativeBinding(isCompute);
 	phaseEndTicks = ReadFrameDiagCounterTicks();
 	RecordCSFrameHookPhase(CSFrameHookPhase::StateDraw, frame, phaseEndTicks - phaseStartTicks);
 #ifdef DEVBENCH_BRIDGE_ENABLED

@@ -7,22 +7,34 @@
 namespace ShaderCompilationSchedulingPolicy
 {
 	inline constexpr std::int32_t kStartupCompilationCpuSharePercent = 75;
+	inline constexpr std::int32_t kMaximumCompilationCpuSharePercent = 90;
+	static_assert(kStartupCompilationCpuSharePercent > 0 &&
+				  kStartupCompilationCpuSharePercent <= kMaximumCompilationCpuSharePercent &&
+				  kMaximumCompilationCpuSharePercent < 100);
+
+	namespace detail
+	{
+		constexpr std::int32_t CalculateCpuShareThreadCount(
+			std::int32_t a_logicalThreadCount, std::int32_t a_cpuSharePercent) noexcept
+		{
+			const auto logicalThreadCount = std::max(a_logicalThreadCount, 1);
+			const auto workerCount = static_cast<std::int32_t>(
+				static_cast<std::int64_t>(logicalThreadCount) * a_cpuSharePercent / 100);
+			return std::max(workerCount, 1);
+		}
+	}
+
+	/** Caps workers at 90% of logical processors, with a one-worker minimum. */
+	[[nodiscard]] constexpr std::int32_t CalculateMaximumCompilationThreadCount(
+		std::int32_t a_logicalThreadCount) noexcept
+	{
+		return detail::CalculateCpuShareThreadCount(a_logicalThreadCount, kMaximumCompilationCpuSharePercent);
+	}
 
 	[[nodiscard]] constexpr std::int32_t CalculateDefaultCompilationThreadCount(
 		std::int32_t a_logicalThreadCount) noexcept
 	{
-		const auto logicalThreadCount = std::max(a_logicalThreadCount, 1);
-		// Split the percentage calculation so a corrupt or synthetic large input
-		// cannot overflow before the clamp. Real hardware counts are much smaller,
-		// but this keeps the policy total over its complete integer input domain.
-		const auto wholeHundreds = logicalThreadCount / 100;
-		const auto remainder = logicalThreadCount % 100;
-		const auto workerCount =
-			wholeHundreds * kStartupCompilationCpuSharePercent +
-			(remainder * kStartupCompilationCpuSharePercent) / 100;
-		return std::max(
-			workerCount,
-			1);
+		return detail::CalculateCpuShareThreadCount(a_logicalThreadCount, kStartupCompilationCpuSharePercent);
 	}
 
 	enum class ProcessPriorityBand

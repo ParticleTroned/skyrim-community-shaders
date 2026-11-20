@@ -4383,7 +4383,7 @@ namespace SIE
 
 	void ShaderCache::SetCompilationThreadLimits(int32_t normal, int32_t background)
 	{
-		const auto maximum = std::max(static_cast<int32_t>(std::thread::hardware_concurrency()), 1);
+		const auto maximum = std::max(static_cast<int32_t>(compilationPool.get_thread_count()), 1);
 		{
 			std::lock_guard lock(compilationSet.compilationMutex);
 			compilationThreadCount = std::clamp(normal, 1, maximum);

@@ -829,20 +829,17 @@ namespace SIE
 		}
 
 	private:
-		// Startup compilation uses most of the CPU while leaving enough logical processors
-		// free for the OS and foreground applications to remain responsive. Compiler workers
-		// run at process-aware cooperative priority until DataLoaded. Pool workers are
-		// restored to normal relative priority for constrained in-game recompiles.
-		// Management and file watcher run on dedicated jthreads, not pool slots.
-		// Background compilation defaults to half the highest-class logical processors.
+		// Pool capacity allows higher dispatch limits while retaining CPU headroom.
 		int32_t compilationThreadCount = GetDefaultCompilationThreadCount();
 		int32_t backgroundCompilationThreadCount = std::max(static_cast<int32_t>(Util::GetPerformanceCoreCount()) / 2, 1);
 
 	public:
-		/** Publishes both dispatch limits atomically with respect to ready workers. */
+		/** Clamps both dispatch limits to pool capacity and publishes them atomically to ready workers. */
 		void SetCompilationThreadLimits(int32_t normal, int32_t background);
 		std::pair<int32_t, int32_t> GetCompilationThreadLimits() const;
-		BS::thread_pool<> compilationPool{ static_cast<std::size_t>(compilationThreadCount) };
+		BS::thread_pool<> compilationPool{ static_cast<std::size_t>(
+			ShaderCompilationSchedulingPolicy::CalculateMaximumCompilationThreadCount(
+				static_cast<int32_t>(std::thread::hardware_concurrency()))) };
 		std::jthread managementJthread;  // dedicated thread for ManageCompilationSet (not in pool)
 		/** @brief Sets compilation mode and wakes the dispatcher; returns the previous mode. */
 		bool SetBackgroundCompilation(bool value);

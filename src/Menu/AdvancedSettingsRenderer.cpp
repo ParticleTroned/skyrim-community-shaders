@@ -19,6 +19,7 @@
 #include "Globals.h"
 #include "Menu.h"
 #include "ShaderCache.h"
+#include "ShaderCompilationSchedulingPolicy.h"
 #include "State.h"
 #include "Util.h"
 #include "Utils/Format.h"
@@ -147,9 +148,7 @@ void AdvancedSettingsRenderer::RenderShaderThreading()
 
 	Util::DrawSectionHeader("Threading");
 
-	// The pool is deliberately capped at the responsive startup default. Do not
-	// offer values above its actual worker count: they cannot increase throughput
-	// and previously made persisted settings misleading.
+	// Pool capacity enforces the same CPU headroom for both compilation modes.
 	const int32_t poolThreads = static_cast<int32_t>(shaderCache->compilationPool.get_thread_count());
 	const int32_t maxThreads = std::max(1, poolThreads);
 
@@ -159,12 +158,15 @@ void AdvancedSettingsRenderer::RenderShaderThreading()
 	Util::Widgets::SliderInt("Compiler Threads", &normalThreads, 1, maxThreads, "%d", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"How much processor capacity prepares shaders at startup. Higher values may finish sooner but leave less capacity for other programs.");
+			"Startup shader workers. Default: %d%% of logical processors. Maximum: %d%%, rounded down, with at least one worker. Higher values may finish sooner but leave less capacity for other programs.",
+			ShaderCompilationSchedulingPolicy::kStartupCompilationCpuSharePercent,
+			ShaderCompilationSchedulingPolicy::kMaximumCompilationCpuSharePercent);
 	}
 	Util::Widgets::SliderInt("Background Compiler Threads", &backgroundThreads, 1, maxThreads, "%d", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(
-			"Background compiler concurrency. Default: half the logical processors on the highest efficiency class (including SMT). More workers may increase frame-time variation.");
+			"Background shader workers. Default: half the logical processors on the highest efficiency class (including SMT). Maximum: %d%% of all logical processors, rounded down, with at least one worker. More workers may increase frame-time variation.",
+			ShaderCompilationSchedulingPolicy::kMaximumCompilationCpuSharePercent);
 	}
 
 	if (normalThreads != previousLimits.first || backgroundThreads != previousLimits.second)

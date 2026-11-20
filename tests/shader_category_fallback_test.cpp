@@ -1,6 +1,9 @@
 #include "Features/DetailMapsPolicy.h"
 #include "Utils/ShaderDescriptor.h"
 #include "reverse_z_test_stub.h"
+#ifdef DEVBENCH_BRIDGE_ENABLED
+#	include "RenderMap/Runtime.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -77,6 +80,12 @@ namespace RE
 		bool imageSpaceMapped = true;
 		std::vector<BSGraphics::PixelShader*> pixelShaders;
 	};
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	struct BSImagespaceShader : BSShader
+	{
+		const char* name = "";
+	};
+#endif
 }
 namespace REL
 {
@@ -358,6 +367,34 @@ enum class CSFrameHookPhase
 bool ShouldRecordCSFramePhaseDiag() { return false; }
 uint64_t ReadFrameDiagCounterTicks() { return 0; }
 void RecordCSFrameHookPhase(CSFrameHookPhase, uint32_t, uint64_t) {}
+#ifdef DEVBENCH_BRIDGE_ENABLED
+// The real Render Map collector stays idle while this fixture exercises shader selection.
+struct BoundStageSelection
+{
+	std::uintptr_t wrapper = 0;
+	std::uintptr_t d3dObject = 0;
+	std::uint32_t wrapperDescriptor = 0;
+	CSX::RenderMap::ShaderSelectionRoute route = CSX::RenderMap::ShaderSelectionRoute::kUnknown;
+};
+struct TechniqueSelectionContext
+{
+	BoundStageSelection vertex;
+	BoundStageSelection pixel;
+};
+struct TechniqueSelectionGuard
+{
+	explicit TechniqueSelectionGuard(TechniqueSelectionContext*) noexcept {}
+};
+template <class Shader>
+void CaptureStageSelection(Shader*, CSX::RenderMap::ShaderStage, CSX::RenderMap::ShaderSelectionRoute) noexcept
+{}
+std::string_view BoundedShaderString(const char* a_name) noexcept { return a_name ? a_name : ""; }
+std::string_view EffectiveShaderCompileSourceName(const RE::BSShader* a_shader) noexcept { return a_shader->fxpFilename; }
+bool GetShaderBytecodeIdentity(void*, std::uint64_t&, std::array<char, CSX::RenderMap::kSha256HexLength + 1>&) noexcept
+{
+	return false;
+}
+#endif
 namespace Hooks
 {
 #include "pixel_binding.h"

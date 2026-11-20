@@ -1,6 +1,7 @@
 #include "Utils/DeviceContextState.h"
 #include "Utils/VirtualFunctionHook.cpp"
 #include "d3d_resource_naming.h"
+#include "render_map_context_com_fixture.h"
 
 #include <cstring>
 #include <iostream>
@@ -11,7 +12,7 @@ namespace
 {
 	ID3D11DeviceContext* expectedContext = nullptr;
 	bool canonicalReceiver = true;
-	unsigned clears = 0, viewportSets = 0, viewportGets = 0;
+	unsigned clears = 0, viewportSets = 0, viewportGets = 0, stateSwaps = 0;
 
 	void Require(bool condition, const char* message)
 	{
@@ -52,12 +53,87 @@ namespace
 		static inline decltype(&Call) original = nullptr;
 	};
 
+	struct SwapStateHook
+	{
+		static void Call(ID3D11DeviceContext1* context, ID3DDeviceContextState* state, ID3DDeviceContextState** previous)
+		{
+			++stateSwaps;
+			original(context, state, previous);
+		}
+		static inline decltype(&Call) original = nullptr;
+	};
+
 	Util::DetourAttachResult RejectDetour(void**, void*) { return { ERROR_INVALID_BLOCK, true }; }
 	BOOL WINAPI RejectProtection(LPVOID, SIZE_T, DWORD, PDWORD)
 	{
 		SetLastError(ERROR_ACCESS_DENIED);
 		return FALSE;
 	}
+
+	struct ContextView : CSX::RenderMap::ContextHookFixture::Context
+	{
+		explicit ContextView(IUnknown* a_identity) : identity(a_identity) {}
+
+		HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** output) override
+		{
+			if (!output)
+				return E_POINTER;
+			*output = nullptr;
+			if (iid == __uuidof(IUnknown)) {
+				identity->AddRef();
+				*output = identity;
+			} else if (iid == __uuidof(ID3D11DeviceContext)) {
+				AddRef();
+				*output = static_cast<ID3D11DeviceContext*>(this);
+			} else if (iid == __uuidof(ID3D11DeviceContext1)) {
+				AddRef();
+				*output = static_cast<ID3D11DeviceContext1*>(this);
+			} else {
+				return E_NOINTERFACE;
+			}
+			return S_OK;
+		}
+
+		void STDMETHODCALLTYPE SwapDeviceContextState(ID3DDeviceContextState*, ID3DDeviceContextState** previous) override
+		{
+			if (previous)
+				*previous = nullptr;
+		}
+
+		IUnknown* identity;
+	};
+
+	void Context1FallbackHook(ID3D11DeviceContext1*, ID3DDeviceContextState*, ID3DDeviceContextState**) {}
+
+	void TestContext1FallbackIdentity()
+	{
+		winrt::com_ptr<ID3D11Device> device;
+		winrt::com_ptr<ID3D11DeviceContext> context;
+		winrt::check_hresult(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
+			D3D11_SDK_VERSION, device.put(), nullptr, context.put()));
+		auto identity = context.as<IUnknown>();
+		Util::RegisterDeviceContextStateForHooks(context.get());
+		winrt::com_ptr<ID3D11DeviceContext1> context1;
+		std::unique_ptr<Util::IsolatedDeviceContextState> isolated;
+		Require(Util::CreateIsolatedDeviceContextState(device.get(), context.get(), context1, isolated, "ContextHookTest::DistinctView"),
+			"Could not establish native isolation before Context1 fallback");
+
+		HookState hookState;
+		void* original = nullptr;
+		ContextView hooked(identity.get()), alternate(identity.get());
+		const auto result = CompleteContextHook(&hooked,
+			InstallHook(hookState, &hooked, 131, kContext1Slots, ContextSlots<kContext1Slots>, &original,
+				reinterpret_cast<void*>(Context1FallbackHook), RejectDetour, RejectProtection));
+		Require(result.error == NO_ERROR && result.method == Util::VirtualHookMethod::Clone && original,
+			"Expected a cloned Context1 hook on a distinct interface view");
+
+		auto* cached = isolated.get();
+		Require(!Util::CreateIsolatedDeviceContextState(device.get(), &alternate, context1, isolated, "Invalid") && isolated.get() == cached,
+			"Context1 fallback admitted new native state through a different view");
+		const Util::ScopedDeviceContextState guard(&alternate, cached);
+		Require(!guard, "Context1 fallback admitted a cached native state through a different view");
+	}
+
 	unsigned protectionCalls = 0;
 	DWORD tableProtection = 0;
 	BOOL WINAPI FailProtectionRestore(LPVOID address, SIZE_T size, DWORD protection, PDWORD previous)
@@ -84,7 +160,7 @@ namespace
 		Require(Util::CreateIsolatedDeviceContextState(device.get(), context.get(), context1, isolated, "ContextHookTest::BeforePublicationFailure"),
 			"Initial isolated state creation failed");
 		static auto& state = *new HookState;
-		const auto result = CompleteContextHook(context.get(), InstallHook(state, context.get(), 110, kContextSlots, ContextSlots,
+		const auto result = CompleteContextHook(context.get(), InstallHook(state, context.get(), 110, kContextSlots, ContextSlots<kContextSlots>,
 																   reinterpret_cast<void**>(&ClearStateHook::original), reinterpret_cast<void*>(ClearStateHook::Call), RejectDetour, FailProtectionRestore));
 		DWORD ignored = 0;
 		auto** table = *reinterpret_cast<void***>(context.get());
@@ -108,7 +184,7 @@ namespace
 		auto** original = reinterpret_cast<void**>(&Hook::original);
 		auto* hook = reinterpret_cast<void*>(Hook::Call);
 		const auto result = method == Util::VirtualHookMethod::Detour ? Util::InstallVirtualFunctionHook(context, Slot, original, hook) :
-		                                                                CompleteContextHook(context, InstallHook(state, context, Slot, kContextSlots, ContextSlots, original, hook,
+		                                                                CompleteContextHook(context, InstallHook(state, context, Slot, kContextSlots, ContextSlots<kContextSlots>, original, hook,
 																										 RejectDetour, method == Util::VirtualHookMethod::Clone ? RejectProtection : VirtualProtect));
 		Require(result.error == NO_ERROR, "Native context hook installation failed");
 		Require(result.method == method,
@@ -133,6 +209,12 @@ namespace
 		Install<95, GetViewportsHook>(context.get(), method);
 		Util::RegisterDeviceContextStateForHooks(context.get());
 		const bool swapsAllowed = method == Util::VirtualHookMethod::Detour;
+		if (swapsAllowed) {
+			const auto result = Util::InstallVirtualFunctionHook(context1.get(), 131,
+				reinterpret_cast<void**>(&SwapStateHook::original), reinterpret_cast<void*>(SwapStateHook::Call));
+			Require(result.error == NO_ERROR && result.method == Util::VirtualHookMethod::Detour,
+				"Context1 slot 131 failed to install through the native hook path");
+		}
 		auto* originalIsolated = isolated.get();
 		Require(Util::CreateIsolatedDeviceContextState(device.get(), context.get(), context1, isolated, "ContextHookTest::Replacement") == swapsAllowed,
 			"Context isolation did not follow the installed native hook method");
@@ -142,6 +224,7 @@ namespace
 			const unsigned setsBefore = viewportSets;
 			context->RSSetViewports(1, &sceneViewport);
 			Require(viewportSets == setsBefore + 1, "Scene viewport setter bypassed its hook");
+			const auto swapsBefore = stateSwaps;
 			{
 				Util::ScopedDeviceContextState guard(context1.get(), isolated.get());
 				Require(static_cast<bool>(guard) == swapsAllowed, "Previously created isolation ignored native hook compatibility");
@@ -151,6 +234,8 @@ namespace
 					context->RSSetViewports(1, &overlayViewport);
 				}
 			}
+			Require(stateSwaps == swapsBefore + (swapsAllowed ? 2u : 0u),
+				"Context1 hook did not observe the expected native state swaps");
 			D3D11_VIEWPORT restored{};
 			UINT count = 1;
 			const unsigned getsBefore = viewportGets;
@@ -171,6 +256,7 @@ int main(int argc, char** argv)
 	try {
 		const std::string_view mode = argc == 2 ? argv[1] : "detour";
 		if (argc == 2 && mode == "publication_failure") {
+			TestContext1FallbackIdentity();
 			TestPublishedHookFailure();
 			std::cout << "D3D11 published table-hook failure retained interception and disabled isolation\n";
 			return 0;

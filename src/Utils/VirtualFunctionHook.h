@@ -6,6 +6,7 @@
 
 struct ID3D11Device;
 struct ID3D11DeviceContext;
+struct ID3D11DeviceContext1;
 struct IDXGISwapChain;
 
 namespace Util
@@ -77,6 +78,8 @@ namespace Util
 	VirtualHookResult InstallVirtualFunctionHook(ID3D11Device* a_object, std::size_t a_slot, void** a_original, void* a_hook);
 	/** @copydoc InstallVirtualFunctionHook(ID3D11Device*, std::size_t, void**, void*) */
 	VirtualHookResult InstallVirtualFunctionHook(ID3D11DeviceContext* a_object, std::size_t a_slot, void** a_original, void* a_hook);
+	/** @copydoc InstallVirtualFunctionHook(ID3D11Device*, std::size_t, void**, void*) */
+	VirtualHookResult InstallVirtualFunctionHook(ID3D11DeviceContext1* a_object, std::size_t a_slot, void** a_original, void* a_hook);
 	/** @copydoc InstallVirtualFunctionHook(ID3D11Device*, std::size_t, void**, void*) */
 	VirtualHookResult InstallVirtualFunctionHook(IDXGISwapChain* a_object, std::size_t a_slot, void** a_original, void* a_hook);
 }

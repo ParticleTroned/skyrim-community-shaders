@@ -19,6 +19,7 @@ namespace
 {
 	constexpr std::size_t kDeviceSlots = 43;
 	constexpr std::size_t kContextSlots = 115;
+	constexpr std::size_t kContext1Slots = 134;
 	constexpr std::size_t kSwapChainSlots = 18;
 
 	struct DetourOperations
@@ -146,10 +147,11 @@ namespace
 		           0;
 	}
 
+	template <std::size_t BaseSlots>
 	std::size_t ContextSlots(void* a_object)
 	{
-		std::size_t slots = kContextSlots;
-		return IncludeInterfaceSlots<ID3D11DeviceContext1>(a_object, slots, 134) &&
+		std::size_t slots = BaseSlots;
+		return IncludeInterfaceSlots<ID3D11DeviceContext1>(a_object, slots, kContext1Slots) &&
 		               IncludeInterfaceSlots<ID3D11DeviceContext2>(a_object, slots, 144) &&
 		               IncludeInterfaceSlots<ID3D11DeviceContext3>(a_object, slots, 147) &&
 		               IncludeInterfaceSlots<ID3D11DeviceContext4>(a_object, slots, 149) ?
@@ -321,7 +323,12 @@ Util::VirtualHookResult Util::InstallVirtualFunctionHook(ID3D11Device* a_object,
 
 Util::VirtualHookResult Util::InstallVirtualFunctionHook(ID3D11DeviceContext* a_object, std::size_t a_slot, void** a_original, void* a_hook)
 {
-	return CompleteContextHook(a_object, InstallGraphicsHook(a_object, a_slot, kContextSlots, ContextSlots, a_original, a_hook));
+	return CompleteContextHook(a_object, InstallGraphicsHook(a_object, a_slot, kContextSlots, ContextSlots<kContextSlots>, a_original, a_hook));
+}
+
+Util::VirtualHookResult Util::InstallVirtualFunctionHook(ID3D11DeviceContext1* a_object, std::size_t a_slot, void** a_original, void* a_hook)
+{
+	return CompleteContextHook(a_object, InstallGraphicsHook(a_object, a_slot, kContext1Slots, ContextSlots<kContext1Slots>, a_original, a_hook));
 }
 
 Util::VirtualHookResult Util::InstallVirtualFunctionHook(IDXGISwapChain* a_object, std::size_t a_slot, void** a_original, void* a_hook)

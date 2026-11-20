@@ -229,6 +229,38 @@ namespace
 			}
 		}
 	}
+	void AllocationGrowthRecovery()
+	{
+		for (const bool reseed : { false, true }) {
+			for (std::ptrdiff_t failure = 0; failure < 10; ++failure) {
+				NativeQueue queue;
+				Cache cache;
+				const std::uintptr_t pending = reseed ? 16 : 3;
+				for (std::uintptr_t pass = 1; pass <= pending + 2; ++pass)
+					queue.links.emplace(pass, 0);
+				for (std::uintptr_t pass = 1; pass <= pending; ++pass) {
+					if (reseed)
+						queue.Append(pass);
+					else
+						queue.Guard(&cache, pass);
+				}
+				std::size_t failures{};
+				failAfter = failure;
+				const auto result = queue.Guard(&cache, pending + 1, false, &failures);
+				failAfter = -1;
+				Require(result.forwarded && queue.forwards == pending + 1, "Failed growth dropped or replayed the native append");
+				if (failure == 0)
+					Require(failures == 1, "Growth fault did not reach the membership cache");
+				for (std::uintptr_t group = 2; group <= MaximumCachedGroups + 2; ++group) {
+					NativeQueue other;
+					other.state.group = group;
+					Require(other.Guard(&cache, group).forwarded && !other.Guard(&cache, group).forwarded, "Failed bucket storage survived entry reuse");
+				}
+				Require(!queue.Guard(&cache, pending + 1).forwarded, "Recovery missed a pending duplicate");
+				Require(queue.Guard(&cache, pending + 2).forwarded && queue.Walk().size() == pending + 2, "Recovery damaged native membership");
+			}
+		}
+	}
 	void BoundsAndFailures()
 	{
 		NativeQueue queue;
@@ -262,6 +294,7 @@ int main()
 		WarmPath();
 		InterleavedQueues();
 		NativeAllocationFailures();
+		AllocationGrowthRecovery();
 		std::cout << "PASS alpha-list replay, lifetime, handoff, bounds and allocation fallbacks\n";
 		return 0;
 	} catch (const std::exception& error) {

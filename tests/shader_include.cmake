@@ -93,6 +93,13 @@ set_tests_properties(
 )
 
 add_d3d_shader_test(
+    projected_material_shader_test
+    ProjectedMaterialShader
+    tests/projected_material_shader_test.cpp
+)
+target_compile_definitions(projected_material_shader_test PRIVATE NOMINMAX)
+
+add_d3d_shader_test(
     foveated_blend_curve_shader_test
     FoveatedBlendCurveShader
     tests/foveated_blend_curve_shader_test.cpp

@@ -1560,6 +1560,8 @@ public:
 	struct VRRenderScalePresentationSnapshot
 	{
 		std::array<VRRenderScalePresentationEyeSnapshot, 2> eyes{};
+		// A queued replacement must retain stereo proof across fallback eye updates.
+		std::array<VRRenderScalePresentationEyeSnapshot, 2> lastBothEyesVendorEyes{};
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		// Preserve the last coherent vendor pair when an asynchronous status read
 		// lands between the two eye publications of the next compositor cycle.

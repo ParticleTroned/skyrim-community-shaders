@@ -4778,6 +4778,42 @@ if(BUILD_CONTROLLER_TESTS)
         OverlayPolicy
         tests/overlay_policy_test.cpp
     )
+    set(_stable_menu_test_dir "${CMAKE_CURRENT_BINARY_DIR}/vr_stable_menu_test")
+    set(_stable_menu_test_headers)
+    foreach(_part path snapshots proof observation)
+        list(
+            APPEND _stable_menu_test_headers
+            "${_stable_menu_test_dir}/vr_stable_menu_${_part}_under_test.h"
+        )
+    endforeach()
+    add_custom_command(
+        OUTPUT ${_stable_menu_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_stable_menu_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_vr_stable_menu_presentation.cmake"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            src/Features/Upscaling.h
+            tests/extract_vr_stable_menu_presentation.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    foreach(_variant IN ITEMS production devbench)
+        add_controller_test(vr_stable_menu_presentation_${_variant}_test VRStableMenuPresentation_${_variant} tests/vr_stable_menu_presentation_test.cpp)
+        target_sources(
+            vr_stable_menu_presentation_${_variant}_test
+            PRIVATE ${_stable_menu_test_headers}
+        )
+        target_include_directories(
+            vr_stable_menu_presentation_${_variant}_test
+            PRIVATE "${_stable_menu_test_dir}"
+        )
+    endforeach()
+    target_compile_definitions(
+        vr_stable_menu_presentation_devbench_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED=1
+    )
     include(tests/menu_frame_stability.cmake)
     include(tests/menu_resize.cmake)
     include(tests/ui_regressions.cmake)

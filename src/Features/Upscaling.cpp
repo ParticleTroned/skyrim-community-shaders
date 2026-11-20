@@ -1705,8 +1705,11 @@ namespace
 
 	bool HasExactVRRenderScaleStableStereoPresentation(
 		const Upscaling::VRRenderScaleProfileSnapshot& a_stable,
-		const Upscaling::VRRenderScalePresentationSnapshot& a_presentation)
+		const Upscaling::VRRenderScalePresentationSnapshot& a_presentation,
+		uintptr_t a_deviceIdentity,
+		uint64_t a_resourceRevision)
 	{
+		const auto& eyes = a_presentation.lastBothEyesVendorEyes;
 		if (!a_stable.valid ||
 			!a_stable.active ||
 			a_stable.transitionEpoch == 0 ||
@@ -1715,24 +1718,25 @@ namespace
 			a_stable.renderEyeHeight == 0 ||
 			a_stable.displayEyeWidth == 0 ||
 			a_stable.displayEyeHeight == 0 ||
+			a_deviceIdentity == 0 || a_resourceRevision == 0 ||
 			(a_stable.method != Upscaling::UpscaleMethod::kDLSS &&
 				a_stable.method != Upscaling::UpscaleMethod::kFSR) ||
-			a_presentation.lastBothEyesVendorCycle == 0 ||
-			a_presentation.lastBothEyesVendorFrame == 0) {
+			eyes[0].compositorCycleToken == 0 || eyes[0].frame == 0) {
 			return false;
 		}
 
 		// Generation identity and the packet's strong resource ownership are the
 		// durability proof. An age gate would recreate fixed-frame menu gaps.
-		for (const auto& eye : a_presentation.eyes) {
+		for (const auto& eye : eyes) {
 			if (!eye.valid ||
 				eye.path !=
 					Upscaling::VRRenderScalePresentationPath::VendorEvaluated ||
-				eye.frame != a_presentation.lastBothEyesVendorFrame ||
-				eye.compositorCycleToken !=
-					a_presentation.lastBothEyesVendorCycle ||
+				eye.frame != eyes[0].frame ||
+				eye.compositorCycleToken != eyes[0].compositorCycleToken ||
 				eye.transitionEpoch != a_stable.transitionEpoch ||
 				eye.contractGeneration != a_stable.contractGeneration ||
+				eye.deviceIdentity != a_deviceIdentity ||
+				eye.resourceRevision != a_resourceRevision ||
 				eye.method != a_stable.method ||
 				eye.inputWidth != a_stable.renderEyeWidth ||
 				eye.inputHeight != a_stable.renderEyeHeight ||
@@ -36484,7 +36488,9 @@ bool Upscaling::IsVRRenderScaleStablePresentationPacketCurrent(
 		current.stable.resources.contextCount != 2u ||
 		!HasExactVRRenderScaleStableStereoPresentation(
 			current.stable,
-			current.presentation) ||
+			current.presentation,
+			reinterpret_cast<uintptr_t>(a_packet.resources->device.get()),
+			a_packet.resources->revision) ||
 		a_packet.resources->intermediateGeneration !=
 			current.stable.contractGeneration) {
 		return false;
@@ -37709,7 +37715,6 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 			presentation.lastBothEyesVendorFrame = left.frame;
 			presentation.lastBothEyesVendorCycle = left.compositorCycleToken;
 		}
-#ifdef DEVBENCH_BRIDGE_ENABLED
 		const bool coherentVendorPair =
 			left.valid && right.valid && left.path == right.path &&
 			(left.path == VRRenderScalePresentationPath::VendorEvaluated ||
@@ -37719,12 +37724,18 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 			left.transitionEpoch == right.transitionEpoch &&
 			left.contractGeneration == right.contractGeneration &&
 			left.method == right.method &&
+			left.inputWidth == right.inputWidth && left.inputHeight == right.inputHeight &&
+			left.expectedInputWidth == right.expectedInputWidth && left.expectedInputHeight == right.expectedInputHeight &&
+			left.outputWidth == right.outputWidth && left.outputHeight == right.outputHeight &&
 			left.vendorBackend != VRRenderScaleBackendKind::None &&
 			left.vendorBackend == right.vendorBackend &&
 			left.deviceIdentity != 0 &&
 			left.deviceIdentity == right.deviceIdentity &&
 			left.resourceRevision != 0 &&
 			left.resourceRevision == right.resourceRevision;
+		if (coherentVendorPair && left.path == VRRenderScalePresentationPath::VendorEvaluated)
+			presentation.lastBothEyesVendorEyes = presentation.eyes;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		if (coherentVendorPair)
 			presentation.lastCoherentVendorEyes = presentation.eyes;
 #endif

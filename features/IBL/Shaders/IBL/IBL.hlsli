@@ -92,33 +92,24 @@ namespace ImageBasedLighting
 
 	float3 GetEnvIBLColor(float3 rayDir)
 	{
-		float3 color = 0.0;
-		[branch] if (SharedData::iblSettings.EnvIBLScale != 0.0)
-		{
-			float3 ratio = GetIBLRatio();
-			color = Color::Saturation(GetEnvIBL(rayDir), SharedData::iblSettings.EnvIBLSaturation) * SharedData::iblSettings.EnvIBLScale * ratio;
-		}
-		return color;
+		float3 ratio = GetIBLRatio();
+		return Color::Saturation(GetEnvIBL(rayDir), SharedData::iblSettings.EnvIBLSaturation) * SharedData::iblSettings.EnvIBLScale * ratio;
 	}
 
 	float3 GetSkyIBLColor(float3 rayDir)
 	{
-		float3 color = 0.0;
-		[branch] if (!SharedData::InInterior && SharedData::iblSettings.SkyIBLScale != 0.0)
-		{
-			color = Color::Saturation(GetSkyIBL(rayDir), SharedData::iblSettings.SkyIBLSaturation) * SharedData::iblSettings.SkyIBLScale;
+		if (SharedData::InInterior) {
+			return 0;
 		}
-		return color;
+		return Color::Saturation(GetSkyIBL(rayDir), SharedData::iblSettings.SkyIBLSaturation) * SharedData::iblSettings.SkyIBLScale;
 	}
 
 	float3 GetSkyIBLColorOccluded(float3 rayDir, float visibility)
 	{
-		float3 color = 0.0;
-		[branch] if (!SharedData::InInterior && SharedData::iblSettings.SkyIBLScale != 0.0)
-		{
-			color = Color::Saturation(GetSkyIBLOccluded(rayDir, visibility), SharedData::iblSettings.SkyIBLSaturation) * SharedData::iblSettings.SkyIBLScale;
+		if (SharedData::InInterior) {
+			return 0;
 		}
-		return color;
+		return Color::Saturation(GetSkyIBLOccluded(rayDir, visibility), SharedData::iblSettings.SkyIBLSaturation) * SharedData::iblSettings.SkyIBLScale;
 	}
 
 	// ============================================================================

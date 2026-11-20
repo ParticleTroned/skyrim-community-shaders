@@ -2409,7 +2409,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		discard;
 #	endif
 
-#	if defined(TERRAIN_VARIATION) && defined(LANDSCAPE)
+#	if defined(TERRAIN_VARIATION_MESH) || (defined(TERRAIN_VARIATION) && defined(LANDSCAPE))
 	InitializeTerrainStochasticGradients(uvOriginal_ddx, uvOriginal_ddy);
 #	endif
 
@@ -2420,7 +2420,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	                         (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::TVMeshVariation) != 0;
 	[branch] if (applyMeshTV)
 	{
-		InitializeTerrainStochasticGradients(uvOriginal_ddx, uvOriginal_ddy);
 		meshOffset = ComputeStochasticOffsetsMesh(uvOriginal);
 	}
 #		else

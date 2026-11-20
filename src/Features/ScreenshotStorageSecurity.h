@@ -6,9 +6,27 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace CSX::ScreenshotStorage
 {
+#ifdef CSX_SCREENSHOT_STORAGE_TESTING
+	using DirectoryCreationTestHook = void (*)(const std::filesystem::path&);
+	void SetDirectoryCreationTestHook(DirectoryCreationTestHook a_hook) noexcept;
+	void SetDestinationOpeningTestHook(DirectoryCreationTestHook a_hook) noexcept;
+	enum class CommittedWritePhase
+	{
+		BeforeWrite,
+		BeforeFlush,
+		BeforeRename,
+		AfterRename,
+		BeforeDescribe,
+		BeforeCleanup
+	};
+	using CommittedWriteTestHook = void (*)(CommittedWritePhase, void*);
+	void SetCommittedWriteTestHook(CommittedWriteTestHook a_hook) noexcept;
+#endif
+
 	struct CommittedArtifact
 	{
 		std::uint64_t bytes = 0;
@@ -38,6 +56,7 @@ namespace CSX::ScreenshotStorage
 
 	private:
 		explicit CommittedFile(void* a_handle, std::filesystem::path a_path);
+		static CommittedArtifact DescribeHandle(void* a_handle);
 		void Release() noexcept;
 
 		void* handle = nullptr;
@@ -51,9 +70,11 @@ namespace CSX::ScreenshotStorage
 	class DirectoryLease final
 	{
 	public:
+		/** Restricted destinations traverse from a retained root without reparse points. */
 		static std::shared_ptr<DirectoryLease> CreateExclusive(
 			const std::filesystem::path& a_destination,
-			std::string_view a_requestId);
+			std::string_view a_requestId,
+			const std::filesystem::path& a_approvedRoot = {});
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		/** Hold a host-selected directory without following a reparse point at its leaf. */
 		static std::shared_ptr<DirectoryLease> OpenOutputDirectory(const std::filesystem::path& a_directory);
@@ -65,6 +86,8 @@ namespace CSX::ScreenshotStorage
 		DirectoryLease& operator=(const DirectoryLease&) = delete;
 
 		const std::filesystem::path& Path() const noexcept { return path; }
+		/** Return the parent path obtained from the retained directory handle. */
+		const std::filesystem::path& Destination() const noexcept { return destination; }
 		void Verify() const;
 		void VerifyDirectChild(const std::filesystem::path& a_path) const;
 
@@ -83,5 +106,6 @@ namespace CSX::ScreenshotStorage
 		std::filesystem::path path;
 		std::string destinationIdentity;
 		std::string directoryIdentity;
+		std::vector<void*> protectedAncestors;
 	};
 }

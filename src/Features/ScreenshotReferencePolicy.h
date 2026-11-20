@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Utils/JsonCleanup.h"
+
 #include "Utils/StringUtils.h"
 #include <nlohmann/json.hpp>
 #include <stdexcept>
@@ -47,20 +49,25 @@ namespace CSX::Screenshot
 	inline nlohmann::json ReferenceCompletion(const nlohmann::json& receipt)
 	{
 		using json = nlohmann::json;
-		json event = { { "requestId", receipt.at("commandId") }, { "ok", false }, { "uiExcluded", false } };
+		json event = json::object();
+		const Util::JsonCleanupGuard cleanup(event);
+		Util::CopyJsonInto(event["requestId"], receipt.at("commandId"));
+		event["ok"] = false;
+		event["uiExcluded"] = false;
 		const auto& artifacts = receipt.at("artifacts");
 		const auto state = receipt.at("state").get<std::string>();
 		if ((state == "completed" || state == "completed_with_warnings") && artifacts.size() == 1 &&
 			artifacts.front().value("committed", false)) {
 			const auto& artifact = artifacts.front();
-			event.update(artifact);
-			event["width"] = artifact.at("actual").at("width");
-			event["height"] = artifact.at("actual").at("height");
+			for (auto it = artifact.begin(); it != artifact.end(); ++it)
+				Util::CopyJsonInto(event[it.key()], it.value());
+			Util::CopyJsonInto(event["width"], artifact.at("actual").at("width"));
+			Util::CopyJsonInto(event["height"], artifact.at("actual").at("height"));
 			event["ok"] = true;
 		} else {
-			const auto error = receipt.value("error", json(nullptr));
-			event["error"] = error.is_object() ? error.value("message", state) : state;
+			const auto error = receipt.find("error");
+			event["error"] = error != receipt.end() && error->is_object() ? error->value("message", state) : state;
 		}
-		return event;
+		return json(std::move(event));
 	}
 }

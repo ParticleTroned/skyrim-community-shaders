@@ -1,15 +1,116 @@
-#include "Features/ScreenshotStorageSecurity.h"
+// The fixtures share the production translation unit to inspect private path normalization.
+#include "Features/ScreenshotStorageSecurity.cpp"
 
 #include <Windows.h>
 
+#include <atomic>
+#include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <future>
+#include <iterator>
+#include <mutex>
 #include <stdexcept>
 
 namespace
 {
+	std::filesystem::path g_creationReplacement;
+	std::filesystem::path g_creationDisplaced;
+	std::atomic_bool g_creationHookCalled{ false };
+	std::mutex g_preparationMutex;
+	std::condition_variable g_preparationCondition;
+	bool g_preparationEntered = false;
+	bool g_preparationReleased = false;
+	std::filesystem::path g_destinationParent;
+	std::filesystem::path g_destinationDisplaced;
+	std::filesystem::path g_destinationOutside;
+	bool g_destinationHookCalled = false;
+	CSX::ScreenshotStorage::CommittedWritePhase g_writeFailurePhase{};
+	bool g_cleanupReadOnly = false;
+
+	void FailCommittedWrite(CSX::ScreenshotStorage::CommittedWritePhase a_phase, void* a_handle)
+	{
+		using Phase = CSX::ScreenshotStorage::CommittedWritePhase;
+		if (a_phase == Phase::BeforeCleanup && g_cleanupReadOnly) {
+			FILE_BASIC_INFO information{};
+			information.FileAttributes = FILE_ATTRIBUTE_READONLY;
+			if (!SetFileInformationByHandle(a_handle, FileBasicInfo, &information, sizeof(information)))
+				throw std::runtime_error("could not arm owned read-only cleanup refusal");
+		}
+		if (a_phase == g_writeFailurePhase)
+			throw std::runtime_error("injected committed artifact failure");
+	}
+
+	void CheckCommittedWriteFailures(const std::filesystem::path& a_root)
+	{
+		using namespace CSX::ScreenshotStorage;
+		using Phase = CommittedWritePhase;
+		const auto temporary = a_root / "failure.tmp";
+		const auto destination = a_root / "failure.json";
+		for (const bool replace : { false, true }) {
+			for (const auto phase : { Phase::BeforeWrite, Phase::BeforeFlush, Phase::BeforeRename, Phase::AfterRename, Phase::BeforeDescribe }) {
+				if (replace) {
+					std::ofstream old(destination);
+					old << "old";
+				}
+				g_writeFailurePhase = phase;
+				SetCommittedWriteTestHook(&FailCommittedWrite);
+				bool failed = false;
+				try {
+					(void)CommittedFile::WriteAtomically(temporary, destination, "new", 3, replace);
+				} catch (const std::exception& error) {
+					failed = std::string_view(error.what()) == "injected committed artifact failure";
+				}
+				SetCommittedWriteTestHook(nullptr);
+				const bool oldRetained = replace && (phase == Phase::BeforeWrite || phase == Phase::BeforeFlush || phase == Phase::BeforeRename);
+				if (!failed || std::filesystem::exists(temporary) || std::filesystem::exists(destination) != oldRetained)
+					throw std::runtime_error("failed publication lost same-handle cleanup custody");
+				if (oldRetained) {
+					std::string value;
+					{
+						std::ifstream old(destination);
+						old >> value;
+					}
+					if (value != "old")
+						throw std::runtime_error("pre-rename failure changed existing destination");
+					std::filesystem::remove(destination);
+				}
+			}
+		}
+		for (const bool replace : { false, true }) {
+			if (replace) {
+				std::ofstream old(destination);
+				old << "old";
+			}
+			g_writeFailurePhase = Phase::BeforeDescribe;
+			g_cleanupReadOnly = true;
+			SetCommittedWriteTestHook(&FailCommittedWrite);
+			bool cleanupReported = false;
+			bool originalRetained = false;
+			try {
+				(void)CommittedFile::WriteAtomically(temporary, destination, "new", 3, replace);
+			} catch (const std::exception& error) {
+				cleanupReported = std::string_view(error.what()).find("cleanup failed with Win32 error") != std::string_view::npos;
+				try {
+					std::rethrow_if_nested(error);
+				} catch (const std::exception& original) {
+					originalRetained = std::string_view(original.what()) == "injected committed artifact failure";
+				}
+			}
+			SetCommittedWriteTestHook(nullptr);
+			g_cleanupReadOnly = false;
+			if (!SetFileAttributesW(destination.c_str(), FILE_ATTRIBUTE_NORMAL))
+				throw std::runtime_error("could not restore owned cleanup-refusal fixture");
+			std::filesystem::remove(destination);
+			if (!cleanupReported || !originalRetained)
+				throw std::runtime_error("cleanup refusal hid either retained file or original failure");
+		}
+	}
+
 	bool IsLeaseConflict(DWORD a_error)
 	{
 		return a_error == ERROR_SHARING_VIOLATION || a_error == ERROR_ACCESS_DENIED;
@@ -24,6 +125,39 @@ namespace
 		}
 		throw std::runtime_error(a_message);
 	}
+
+	void AttemptCreationSubstitution(const std::filesystem::path& a_created)
+	{
+		g_creationHookCalled.store(true, std::memory_order_release);
+		if (MoveFileExW(a_created.c_str(), g_creationDisplaced.c_str(), 0) ||
+			!IsLeaseConflict(GetLastError())) {
+			throw std::runtime_error("atomically created sequence directory could be displaced before adoption");
+		}
+		if (MoveFileExW(
+				g_creationReplacement.c_str(), a_created.c_str(), MOVEFILE_REPLACE_EXISTING) ||
+			!IsLeaseConflict(GetLastError())) {
+			throw std::runtime_error("replacement directory could be installed before lease adoption");
+		}
+	}
+
+	void BlockStoragePreparation(const std::filesystem::path&)
+	{
+		std::unique_lock lock(g_preparationMutex);
+		g_preparationEntered = true;
+		g_preparationCondition.notify_all();
+		g_preparationCondition.wait(lock, [] { return g_preparationReleased; });
+	}
+
+	void SubstituteDestinationParent(const std::filesystem::path&)
+	{
+		g_destinationHookCalled = true;
+		if (!MoveFileExW(g_destinationParent.c_str(), g_destinationDisplaced.c_str(), 0))
+			throw std::runtime_error("could not displace the destination parent race fixture");
+		const auto command = std::format(L"cmd.exe /d /c mklink /J \"{}\" \"{}\" >nul",
+			g_destinationParent.native(), g_destinationOutside.native());
+		if (_wsystem(command.c_str()) != 0)
+			throw std::runtime_error("could not install the destination parent substitution fixture");
+	}
 }
 
 inline void RunScreenshotStorageSecurityTests()
@@ -31,6 +165,8 @@ inline void RunScreenshotStorageSecurityTests()
 	using CSX::ScreenshotStorage::CommittedFile;
 	using CSX::ScreenshotStorage::DirectoryLease;
 	using CSX::ScreenshotStorage::NormalizeFinalPath;
+	using CSX::ScreenshotStorage::SetDestinationOpeningTestHook;
+	using CSX::ScreenshotStorage::SetDirectoryCreationTestHook;
 	if (NormalizeFinalPath(LR"(\\?\UNC\server\share\folder)") !=
 			std::filesystem::path(LR"(\\server\share\folder)") ||
 		NormalizeFinalPath(LR"(\\?\C:\folder)") !=
@@ -40,7 +176,75 @@ inline void RunScreenshotStorageSecurityTests()
 	const auto root = std::filesystem::temp_directory_path() /
 	                  std::format("csx-screenshot-storage-{}-{}", GetCurrentProcessId(), GetTickCount64());
 	std::filesystem::create_directories(root);
+	std::string phase = "injected commit failures";
 	try {
+		CheckCommittedWriteFailures(root);
+		phase = "restricted destination";
+		const auto approved = root / "approved";
+		std::filesystem::create_directories(approved);
+		const auto nested = approved / "stable" / "parent";
+		auto restricted = DirectoryLease::CreateExclusive(nested, "restricted", approved);
+		if (restricted->Destination() != nested || restricted->Path().parent_path() != nested)
+			throw std::runtime_error("restricted destination receipt did not bind the actual retained parent");
+		for (const auto& protectedPath : { approved, nested.parent_path(), nested }) {
+			if (MoveFileExW(protectedPath.c_str(), (root / "displaced-protected").c_str(), 0) ||
+				!IsLeaseConflict(GetLastError()))
+				throw std::runtime_error("approved ancestry could be displaced during publication");
+			const HANDLE writer = CreateFileW(protectedPath.c_str(), GENERIC_WRITE,
+				FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+				FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+			if (writer != INVALID_HANDLE_VALUE) {
+				CloseHandle(writer);
+				throw std::runtime_error("approved ancestry allowed reparse mutation during publication");
+			}
+		}
+		restricted->Verify();
+		const auto restrictedArtifact = restricted->Path() / "restricted.bmp";
+		const auto restrictedCommit = CommittedFile::WriteAtomically(
+			restrictedArtifact.native() + L".tmp", restrictedArtifact, "abc", 3, false);
+		if (restrictedCommit.bytes != 3 ||
+			restrictedCommit.sha256 != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+			throw std::runtime_error("restricted ancestry prevented atomic artifact publication");
+		restricted->Verify();
+		restricted.reset();
+		phase = "destination parent substitution";
+		g_destinationParent = approved / "substituted";
+		g_destinationDisplaced = approved / "original-parent";
+		g_destinationOutside = root / "outside";
+		std::filesystem::create_directories(g_destinationParent);
+		std::filesystem::create_directories(g_destinationOutside);
+		const auto outsideSentinel = g_destinationOutside / "sentinel.txt";
+		{
+			std::ofstream sentinel(outsideSentinel, std::ios::binary);
+			sentinel << "outside-owned";
+		}
+		g_destinationHookCalled = false;
+		SetDestinationOpeningTestHook(&SubstituteDestinationParent);
+		ExpectFailure([&] {
+			DirectoryLease::CreateExclusive(g_destinationParent / "inner", "parent-race", approved);
+		},
+			"a substituted intermediate parent escaped its approved root");
+		SetDestinationOpeningTestHook(nullptr);
+		if (!g_destinationHookCalled || !std::filesystem::exists(g_destinationDisplaced) ||
+			std::filesystem::exists(g_destinationOutside / "inner") ||
+			std::filesystem::exists(g_destinationOutside / "CS_sequence_parent-race"))
+			throw std::runtime_error("parent substitution created storage outside the approved root");
+		std::ifstream sentinel(outsideSentinel, std::ios::binary);
+		const std::string sentinelBytes((std::istreambuf_iterator<char>(sentinel)), {});
+		if (sentinelBytes != "outside-owned")
+			throw std::runtime_error("parent substitution changed outside-owned contents");
+		sentinel.close();
+		if (!RemoveDirectoryW(g_destinationParent.c_str()))
+			throw std::runtime_error("could not retire the parent substitution junction fixture");
+		ExpectFailure([&] {
+			DirectoryLease::CreateExclusive(g_destinationOutside, "outside-rejected", approved);
+		},
+			"an explicitly outside destination passed restricted containment");
+		if (std::filesystem::exists(g_destinationOutside / "CS_sequence_outside-rejected"))
+			throw std::runtime_error("restricted containment failure created a sequence");
+		auto absolute = DirectoryLease::CreateExclusive(g_destinationOutside, "absolute-permitted");
+		absolute->Verify();
+		absolute.reset();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		{
 			auto output = DirectoryLease::OpenOutputDirectory(root / "provider");
@@ -70,6 +274,7 @@ inline void RunScreenshotStorageSecurityTests()
 		const auto atomicPath = directory->Path() / "atomic.bmp";
 		const auto atomicTemporary = directory->Path() / "atomic.bmp.tmp";
 		const std::string atomicBytes = "producer-owned";
+		phase = "ordinary atomic publication";
 		const auto atomicDescription = CommittedFile::WriteAtomically(
 			atomicTemporary, atomicPath, atomicBytes.data(), atomicBytes.size(), false);
 		if (atomicDescription.bytes != atomicBytes.size() ||
@@ -81,6 +286,7 @@ inline void RunScreenshotStorageSecurityTests()
 		for (int index = 0; index < 64; ++index) {
 			const auto repeatedPath = directory->Path() /
 			                          (std::wstring(index % 24, L'x') + std::format(L"-publication-{}-\u6c34.png", index));
+			phase = std::format("Unicode publication {} ({} UTF-16 path units with temporary suffix)", index, repeatedPath.native().size() + 4);
 			const auto repeated = CommittedFile::WriteAtomically(
 				repeatedPath.native() + L".tmp", repeatedPath,
 				atomicBytes.data(), atomicBytes.size(), false);
@@ -106,6 +312,7 @@ inline void RunScreenshotStorageSecurityTests()
 			"an existing final artifact was replaced without authority");
 		if (std::filesystem::exists(directory->Path() / "collision.tmp"))
 			throw std::runtime_error("failed no-replace commit left its temporary path behind");
+		phase = "atomic replacement";
 		const auto replaced = CommittedFile::WriteAtomically(
 			atomicTemporary, atomicPath, "abc", 3, true);
 		const auto reopenedReplacement = CommittedFile::Open(atomicPath).Describe();
@@ -151,7 +358,59 @@ inline void RunScreenshotStorageSecurityTests()
 				"a directory was accepted as a committed regular artifact");
 		}
 		directory.reset();
-
+		g_creationReplacement = root / "attacker-replacement";
+		g_creationDisplaced = root / "attacker-displaced";
+		phase = "directory creation custody";
+		std::filesystem::create_directories(g_creationReplacement);
+		const auto replacementSentinel = g_creationReplacement / "sentinel.txt";
+		{
+			std::ofstream replacementSentinelStream(replacementSentinel, std::ios::binary);
+			replacementSentinelStream << "attacker-owned";
+		}
+		g_creationHookCalled.store(false, std::memory_order_release);
+		SetDirectoryCreationTestHook(&AttemptCreationSubstitution);
+		auto atomicDirectory = DirectoryLease::CreateExclusive(root, "atomic-creation");
+		SetDirectoryCreationTestHook(nullptr);
+		if (!g_creationHookCalled.load(std::memory_order_acquire) ||
+			!std::filesystem::exists(replacementSentinel) ||
+			std::filesystem::exists(atomicDirectory->Path() / "sentinel.txt") ||
+			std::filesystem::exists(g_creationDisplaced)) {
+			throw std::runtime_error("directory creation custody adopted or changed attacker-owned contents");
+		}
+		atomicDirectory.reset();
+		g_preparationEntered = false;
+		g_preparationReleased = false;
+		SetDirectoryCreationTestHook(&BlockStoragePreparation);
+		auto preparation = std::async(std::launch::async, [&] {
+			return DirectoryLease::CreateExclusive(root, "asynchronous-preparation");
+		});
+		{
+			std::unique_lock lock(g_preparationMutex);
+			if (!g_preparationCondition.wait_for(lock, std::chrono::seconds(2), [] {
+					return g_preparationEntered;
+				})) {
+				g_preparationReleased = true;
+				lock.unlock();
+				g_preparationCondition.notify_all();
+				preparation.wait();
+				throw std::runtime_error("storage preparation did not reach its controlled boundary");
+			}
+		}
+		std::atomic_uint32_t callerProgress{ 0 };
+		++callerProgress;
+		if (preparation.wait_for(std::chrono::milliseconds(0)) != std::future_status::timeout ||
+			callerProgress.load() != 1) {
+			throw std::runtime_error("a blocked storage boundary also blocked caller progress");
+		}
+		{
+			std::lock_guard lock(g_preparationMutex);
+			g_preparationReleased = true;
+		}
+		g_preparationCondition.notify_all();
+		auto asynchronouslyPrepared = preparation.get();
+		SetDirectoryCreationTestHook(nullptr);
+		asynchronouslyPrepared->Verify();
+		asynchronouslyPrepared.reset();
 		const auto junctionTarget = root / "junction-target";
 		const auto junctionPath = root / "CS_sequence_junction-request";
 		std::filesystem::create_directories(junctionTarget);
@@ -167,9 +426,18 @@ inline void RunScreenshotStorageSecurityTests()
 		ExpectFailure([&] { DirectoryLease::OpenOutputDirectory(junctionPath); }, "provider output followed a leaf junction");
 #endif
 		RemoveDirectoryW(junctionPath.c_str());
-
 		std::filesystem::remove_all(root);
 	} catch (...) {
+		std::fprintf(stderr, "Storage fixture failed in %s\n", phase.c_str());
+		CSX::ScreenshotStorage::SetCommittedWriteTestHook(nullptr);
+		g_cleanupReadOnly = false;
+		SetDirectoryCreationTestHook(nullptr);
+		SetDestinationOpeningTestHook(nullptr);
+		{
+			std::lock_guard lock(g_preparationMutex);
+			g_preparationReleased = true;
+		}
+		g_preparationCondition.notify_all();
 		std::error_code ignored;
 		std::filesystem::remove_all(root, ignored);
 		throw;

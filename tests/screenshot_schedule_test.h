@@ -31,13 +31,35 @@ inline void RunScreenshotScheduleTests()
 	auto fixture = [&](ScreenshotApi& api) -> ScreenshotApi::SequenceRecord& {
 		api.sequences.clear();
 		api.requests.clear();
+		api.requests["parent"].requestId = "parent";
+		api.requests["parent"].kind = "sequence";
+		api.sequenceOrder.clear();
 		api.sequenceOrder.push_back("parent");
 		auto& sequence = api.sequences["parent"];
 		sequence.inFlight = 0;
+		sequence.frameCount = 100;
+		sequence.directoryLease = std::make_shared<ScreenshotApi::SequenceRecord::Lease>();
 		sequence.activeChildRequestId.clear();
 		sequence.clock.Observe(100, epoch, false, 0, 0);
 		return sequence;
 	};
+	ScreenshotApi preparing;
+	auto& waiting = fixture(preparing);
+	waiting.clock = {};
+	waiting.preparationPending = true;
+	waiting.startDelayFrames = 2;
+	require(preparing.UpdateSequenceClocksLocked(99, epoch).empty() && !waiting.clock.started &&
+				!preparing.PrepareDueFrameLocked(99, epoch),
+		"pending preparation consumed a cadence slot");
+	waiting.preparationPending = false;
+	globals::game::testUI.paused = true;
+	require(preparing.UpdateSequenceClocksLocked(100, epoch + 1s).empty() && !waiting.clock.started,
+		"paused observation started a prepared sequence");
+	globals::game::testUI.paused = false;
+	preparing.UpdateSequenceClocksLocked(101, epoch + 2s);
+	require(waiting.clock.started && waiting.clock.nextFrame == 103,
+		"first unpaused observation did not start the prepared sequence");
+
 	ScreenshotApi slowEncoder;
 	auto& slow = fixture(slowEncoder);
 	const auto first = slowEncoder.PrepareDueFrameLocked(100, epoch);
@@ -64,9 +86,12 @@ inline void RunScreenshotScheduleTests()
 	auto& gapSequence = fixture(gap);
 	gapSequence.frameCount = 10000;
 	gap.sequenceOrder.push_back("ready");
+	gap.requests["ready"].requestId = "ready";
+	gap.requests["ready"].kind = "sequence";
 	auto& ready = gap.sequences["ready"];
 	ready.requestId = "ready";
 	ready.inFlight = 0;
+	ready.directoryLease = std::make_shared<ScreenshotApi::SequenceRecord::Lease>();
 	ready.activeChildRequestId.clear();
 	ready.clock.Observe(10000, epoch + 10s, false, 0, 0);
 	require(!gap.PrepareDueFrameLocked(10000, epoch + 10s) &&

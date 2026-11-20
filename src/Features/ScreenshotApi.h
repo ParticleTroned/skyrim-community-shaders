@@ -8,13 +8,16 @@
 #endif
 #include "Features/ScreenshotSequencePolicy.h"
 #include "Features/ScreenshotStorageSecurity.h"
+#include "ScreenshotManifestAdmission.h"
 #include "ScreenshotManifestSnapshot.h"
 #include "ScreenshotNeuralDiagnostics.h"
+#include "ScreenshotWorkerThread.h"
 
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <exception>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -72,6 +75,7 @@ public:
 	void OnSourceTerminal(std::string_view a_requestId, std::string_view a_state, std::string_view a_error = {});
 	void OnFeatureDisabled(std::string_view a_reason);
 	void BeginShutdown(std::string_view a_reason);
+	/** Drain both independent I/O lanes until the caller deadline; false does not cancel active filesystem calls. */
 	bool DrainForShutdown(std::chrono::milliseconds a_timeout);
 
 	json BuildStatus(const ScreenshotFeature& a_feature) const;
@@ -79,6 +83,12 @@ public:
 	bool IsSequenceRecording() const;
 
 private:
+#ifdef CSX_SCREENSHOT_FINALIZATION_TESTING
+	friend struct ScreenshotFinalizationTest;
+	struct FinalizationTestTag
+	{};
+	explicit ScreenshotApi(FinalizationTestTag);
+#endif
 	struct RequestRecord
 	{
 		std::string requestId;
@@ -95,6 +105,12 @@ private:
 		uint64_t eventIndex = 0;
 		std::string acceptedUtc;
 		std::string terminalUtc;
+		std::string failureState = "failed";
+		std::string partialFailureState = "failed_partial";
+		std::exception_ptr completionFailure;
+		std::exception_ptr finalizationFailure;
+		std::exception_ptr finalizationJournalFailure;
+		std::exception_ptr referenceNotificationFailure;
 		json requested = json::object();
 		json effective = json::object();
 		json artifacts = json::array();
@@ -106,7 +122,8 @@ private:
 		json errors = json::array();
 		json error = nullptr;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		std::function<void(const json&)> completion;
+		std::function<void(const json&)> referenceCompletion;
+		uint64_t referenceNotificationOrder = 0;
 #endif
 		bool acknowledged = false;
 		bool cancelRequested = false;
@@ -139,6 +156,7 @@ private:
 		ScreenshotBurst::Plan burst;
 		ScreenshotBurst::Continuity continuity;
 		json burstSource = nullptr;
+		uint64_t providerRunId = 0;
 		std::shared_ptr<const CSX::Screenshot::ProviderBurst> providerBurst;
 		json providerPublication = json::object();
 		std::chrono::steady_clock::time_point lastProviderProgress{};
@@ -156,7 +174,10 @@ private:
 		std::string failurePolicy = "continue";
 		bool stopRequested = false;
 		bool cancelRequested = false;
+		bool preparationPending = false;
 		bool finalizing = false;
+		std::exception_ptr manifestAdmissionFailure;
+		std::exception_ptr manifestReportingFailure;
 		bool frameManifest = true;
 		std::string activeChildRequestId;
 		std::size_t nextCheckpointChildCount = 10;
@@ -171,20 +192,31 @@ private:
 		json packaging = json::object();
 	};
 
-	struct ManifestJob
+	struct DirectoryPreparationJob
 	{
 		std::string requestId;
-		uint64_t generation = 0;
-		bool final = false;
-		std::filesystem::path destination;
-		std::filesystem::path partialPath;
-		std::shared_ptr<CSX::ScreenshotStorage::DirectoryLease> directoryLease;
-		json header = json::object();
-		std::shared_ptr<const ManifestChildNode> children;
+		json capture = json::object();
+		std::filesystem::path configuredDirectory;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		std::shared_ptr<const CSX::Screenshot::ProviderBurst> providerBurst;
+		std::optional<CSX::Screenshot::ProviderBurst> provider;
 #endif
+		bool cancelled = false;
 	};
+
+	struct DirectoryPreparationResult
+	{
+		std::string requestId;
+		bool success = false;
+		bool cancelled = false;
+		json capture = json::object();
+		std::shared_ptr<CSX::ScreenshotStorage::DirectoryLease> directoryLease;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		std::shared_ptr<const CSX::Screenshot::ProviderBurst> provider;
+#endif
+		std::string error;
+	};
+
+	using ManifestJob = CSX::Screenshot::ManifestJob;
 
 	struct ManifestResult
 	{
@@ -200,12 +232,24 @@ private:
 		std::string error;
 	};
 
+	struct PreparationWorkerState
+	{
+		std::mutex mutex;
+		std::condition_variable condition;
+		std::deque<DirectoryPreparationJob> preparationJobs;
+		std::deque<DirectoryPreparationResult> preparationResults;
+		std::size_t outstanding = 0;
+		bool stopRequested = false;
+		bool exited = false;
+	};
+
 	struct ManifestWorkerState
 	{
 		std::mutex mutex;
 		std::condition_variable condition;
 		std::deque<ManifestJob> jobs;
 		std::deque<std::shared_ptr<const ManifestChildNode>> retiredChildren;
+		std::unordered_map<std::string, SequenceRecord> retiredSequences;
 		std::deque<ManifestResult> results;
 		std::size_t outstanding = 0;
 		bool stopRequested = false;
@@ -231,12 +275,13 @@ private:
 	};
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	struct CaptureNotification
+	uint64_t nextReferenceNotificationOrder = 1;
+	struct ReferenceNotification
 	{
 		std::function<void(const json&)> completion;
 		json receipt;
 	};
-	std::vector<CaptureNotification> captureNotifications;
+	std::vector<ReferenceNotification> providerProgress;
 	uint64_t nextProviderRunId = 1;
 #endif
 	json DispatchRequest(ScreenshotFeature& a_feature, const json& a_request
@@ -246,7 +291,7 @@ private:
 #endif
 	);
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	void DrainCaptureNotifications();
+	void DrainReferenceNotifications();
 #endif
 	CSX::Api::ServiceFoundation service;
 	mutable std::mutex mutex;
@@ -263,11 +308,13 @@ private:
 	uint64_t failedArtifacts = 0;
 	bool acceptingRequests = true;
 	std::shared_ptr<ManifestWorkerState> manifestWorkerState;
-	std::thread manifestWorker;
+	std::shared_ptr<PreparationWorkerState> preparationWorkerState;
+	std::unique_ptr<CSX::Screenshot::WorkerThread<ManifestWorkerState>> manifestWorker;
+	std::unique_ptr<CSX::Screenshot::WorkerThread<PreparationWorkerState>> preparationWorker;
 
 	static constexpr uint32_t kContractMajor = 1;
-	static constexpr uint32_t kContractMinor = 0;
-	static constexpr uint32_t kSchemaRevision = 1;
+	static constexpr uint32_t kContractMinor = 1;
+	static constexpr uint32_t kSchemaRevision = 2;
 	static constexpr std::size_t kMaximumRequests = 256;
 	static constexpr std::size_t kMaximumEvents = 4096;
 	static constexpr std::size_t kMaximumCommands = 1024;
@@ -316,13 +363,19 @@ private:
 	void AppendEventLocked(RequestRecord& a_record, std::string_view a_type, json a_payload = json::object());
 	void TrimLocked();
 	std::size_t CountPendingOperationsLocked() const;
-	void FinishSequenceChildLocked(RequestRecord& a_child);
+	/** Retire consumed completion input even when optional reporting cannot allocate. */
+	void FailRequestCompletionLocked(RequestRecord& a_record, std::exception_ptr a_failure) noexcept;
+	void FinishSequenceChildLocked(RequestRecord& a_child) noexcept;
 	void FinishSourceLocked(RequestRecord& a_record, std::string_view a_state, std::string_view a_error);
 	void TryFinalizeSequenceLocked(SequenceRecord& a_sequence);
 	void FinalizeSequenceLocked(SequenceRecord& a_sequence, const ManifestResult* a_manifestResult);
+	/** Commit failure and release storage without allocating failure diagnostics. */
+	void FailSequenceFinalizationLocked(SequenceRecord& a_sequence, std::exception_ptr a_failure) noexcept;
 	void QueueSequenceManifestLocked(SequenceRecord& a_sequence, bool a_final);
-	void DrainManifestResultsLocked();
+	void DrainWorkerResultsLocked();
 	static void ManifestWorkerLoop(std::shared_ptr<ManifestWorkerState> a_state);
+	static void PreparationWorkerLoop(std::shared_ptr<PreparationWorkerState> a_state);
+	bool CanAdmitPreparationLocked() const;
 	/** Accounts for a bounded number of missed slots before admitting a capture. */
 	std::optional<DueFrame> PrepareDueFrameLocked(uint64_t a_engineFrame, std::chrono::steady_clock::time_point a_now);
 	DueFrame CreateSequenceFrameLocked(SequenceRecord& a_sequence, uint64_t a_engineFrame, std::chrono::steady_clock::time_point a_now);
@@ -332,10 +385,12 @@ private:
 	void RequeueDispatchLocked(DispatchEntry a_entry, bool a_manual);
 	bool RemoveQueuedDispatchLocked(std::string_view a_requestId);
 	void MarkSequenceCancellationLocked(SequenceRecord& a_sequence);
+	void CancelQueuedPreparationLocked(std::string_view a_requestId);
 	void CancelQueuedDispatchesLocked(std::string_view a_code, std::string_view a_reason);
 
 	static std::filesystem::path ResolveDestinationDirectory(
-		const ScreenshotFeature& a_feature,
 		const json& a_capture,
-		bool a_sequence = false);
+		const std::filesystem::path& a_configuredDirectory,
+		bool a_sequence = false,
+		std::filesystem::path* a_approvedRoot = nullptr);
 };

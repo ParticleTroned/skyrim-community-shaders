@@ -58,6 +58,11 @@ namespace CSX::Api
 			std::string_view a_field = {},
 			std::string_view a_requestId = {}) const;
 
+		/** Publish an event and its ID together; failed insertion consumes neither. */
+#ifdef CSX_SCREENSHOT_FINALIZATION_TESTING
+		using EventAllocationTestHook = void (*)(std::string_view);
+		static void SetEventAllocationTestHook(EventAllocationTestHook a_hook) noexcept { eventAllocationTestHook = a_hook; }
+#endif
 		uint64_t AppendEvent(
 			std::string_view a_requestId,
 			uint64_t a_eventIndex,
@@ -78,6 +83,9 @@ namespace CSX::Api
 		static std::string Canonicalize(const json& a_value);
 
 	private:
+#ifdef CSX_SCREENSHOT_FINALIZATION_TESTING
+		inline static thread_local EventAllocationTestHook eventAllocationTestHook = nullptr;
+#endif
 		struct CommandKey
 		{
 			std::string clientId;

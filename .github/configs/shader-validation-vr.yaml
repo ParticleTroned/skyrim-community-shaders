@@ -1,7 +1,7 @@
-captured_shader_variants: 3631
+captured_shader_variants: 6379
 # Inventory includes normalized Lighting keys and explicit feature variants.
-# The captured count retains source provenance.
-normalized_shader_variants: 3198
+# Captured requests combine 3631 historical and 2748 current VR trace entries.
+normalized_shader_variants: 3268
 common_defines:
     - D3DCOMPILE_DEBUG
     - D3DCOMPILE_SKIP_OPTIMIZATION
@@ -13878,6 +13878,405 @@ shaders:
                         - ENVMAP
                         - FUR_SHELLS
                         - FUR_SHELLS_DEPTH
+                  - entry: Lighting:Pixel:4001
+                    defines:
+                        - DETAIL_MAPS
+                  - entry: Lighting:Pixel:4003
+                    defines:
+                        - DETAIL_MAPS
+                        - SKINNED
+                  - entry: Lighting:Pixel:4011
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                  - entry: Lighting:Pixel:4013
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - SKINNED
+                  - entry: Lighting:Pixel:C001
+                    defines:
+                        - DETAIL_MAPS
+                        - PROJECTED_UV
+                  - entry: Lighting:Pixel:C011
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - PROJECTED_UV
+                  - entry: Lighting:Pixel:14001
+                    defines:
+                        - ANISO_LIGHTING
+                        - DETAIL_MAPS
+                  - entry: Lighting:Pixel:14003
+                    defines:
+                        - ANISO_LIGHTING
+                        - DETAIL_MAPS
+                        - SKINNED
+                  - entry: Lighting:Pixel:14011
+                    defines:
+                        - ANISO_LIGHTING
+                        - DEFERRED
+                        - DETAIL_MAPS
+                  - entry: Lighting:Pixel:14013
+                    defines:
+                        - ANISO_LIGHTING
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - SKINNED
+                  - entry: Lighting:Pixel:1C001
+                    defines:
+                        - ANISO_LIGHTING
+                        - DETAIL_MAPS
+                        - PROJECTED_UV
+                  - entry: Lighting:Pixel:1C011
+                    defines:
+                        - ANISO_LIGHTING
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - PROJECTED_UV
+                  - entry: Lighting:Pixel:104001
+                    defines:
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                  - entry: Lighting:Pixel:104003
+                    defines:
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - SKINNED
+                  - entry: Lighting:Pixel:104011
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                  - entry: Lighting:Pixel:104013
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - SKINNED
+                  - entry: Lighting:Pixel:10C001
+                    defines:
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - PROJECTED_UV
+                  - entry: Lighting:Pixel:10C011
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - PROJECTED_UV
+                  - entry: Lighting:Pixel:114001
+                    defines:
+                        - ANISO_LIGHTING
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                  - entry: Lighting:Pixel:114003
+                    defines:
+                        - ANISO_LIGHTING
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - SKINNED
+                  - entry: Lighting:Pixel:114011
+                    defines:
+                        - ANISO_LIGHTING
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                  - entry: Lighting:Pixel:114013
+                    defines:
+                        - ANISO_LIGHTING
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - SKINNED
+                  - entry: Lighting:Pixel:11C001
+                    defines:
+                        - ANISO_LIGHTING
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - PROJECTED_UV
+                  - entry: Lighting:Pixel:11C011
+                    defines:
+                        - ANISO_LIGHTING
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - PROJECTED_UV
+                  - entry: Lighting:Pixel:1004001
+                    defines:
+                        - DETAIL_MAPS
+                        - ENVMAP
+                  - entry: Lighting:Pixel:1004003
+                    defines:
+                        - DETAIL_MAPS
+                        - ENVMAP
+                        - SKINNED
+                  - entry: Lighting:Pixel:1004011
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - ENVMAP
+                  - entry: Lighting:Pixel:1004013
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - ENVMAP
+                        - SKINNED
+                  - entry: Lighting:Pixel:100C001
+                    defines:
+                        - DETAIL_MAPS
+                        - ENVMAP
+                        - PROJECTED_UV
+                  - entry: Lighting:Pixel:100C011
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - ENVMAP
+                        - PROJECTED_UV
+                  - entry: Lighting:Pixel:1014001
+                    defines:
+                        - ANISO_LIGHTING
+                        - DETAIL_MAPS
+                        - ENVMAP
+                  - entry: Lighting:Pixel:1014011
+                    defines:
+                        - ANISO_LIGHTING
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - ENVMAP
+                  - entry: Lighting:Pixel:1104001
+                    defines:
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - ENVMAP
+                  - entry: Lighting:Pixel:1104003
+                    defines:
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - ENVMAP
+                        - SKINNED
+                  - entry: Lighting:Pixel:1104011
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - ENVMAP
+                  - entry: Lighting:Pixel:1104013
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - ENVMAP
+                        - SKINNED
+                  - entry: Lighting:Pixel:110C001
+                    defines:
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - ENVMAP
+                        - PROJECTED_UV
+                  - entry: Lighting:Pixel:110C011
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - ENVMAP
+                        - PROJECTED_UV
+                  - entry: Lighting:Pixel:1114001
+                    defines:
+                        - ANISO_LIGHTING
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - ENVMAP
+                  - entry: Lighting:Pixel:1114003
+                    defines:
+                        - ANISO_LIGHTING
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - ENVMAP
+                        - SKINNED
+                  - entry: Lighting:Pixel:1114011
+                    defines:
+                        - ANISO_LIGHTING
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - ENVMAP
+                  - entry: Lighting:Pixel:1114013
+                    defines:
+                        - ANISO_LIGHTING
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - ENVMAP
+                        - SKINNED
+                  - entry: Lighting:Pixel:3004001
+                    defines:
+                        - DETAIL_MAPS
+                        - PARALLAX
+                  - entry: Lighting:Pixel:3004011
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - PARALLAX
+                  - entry: Lighting:Pixel:3104001
+                    defines:
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - PARALLAX
+                  - entry: Lighting:Pixel:3104011
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - PARALLAX
+                  - entry: Lighting:Pixel:B004001
+                    defines:
+                        - DETAIL_MAPS
+                        - ENVMAP
+                        - MULTI_LAYER_PARALLAX
+                  - entry: Lighting:Pixel:B004003
+                    defines:
+                        - DETAIL_MAPS
+                        - ENVMAP
+                        - MULTI_LAYER_PARALLAX
+                        - SKINNED
+                  - entry: Lighting:Pixel:B004011
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - ENVMAP
+                        - MULTI_LAYER_PARALLAX
+                  - entry: Lighting:Pixel:B004013
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - ENVMAP
+                        - MULTI_LAYER_PARALLAX
+                        - SKINNED
+                  - entry: Lighting:Pixel:B104001
+                    defines:
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - ENVMAP
+                        - MULTI_LAYER_PARALLAX
+                  - entry: Lighting:Pixel:B104003
+                    defines:
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - ENVMAP
+                        - MULTI_LAYER_PARALLAX
+                        - SKINNED
+                  - entry: Lighting:Pixel:B104011
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - ENVMAP
+                        - MULTI_LAYER_PARALLAX
+                  - entry: Lighting:Pixel:B104013
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - ENVMAP
+                        - MULTI_LAYER_PARALLAX
+                        - SKINNED
+                  - entry: Lighting:Pixel:C004001
+                    defines:
+                        - DETAIL_MAPS
+                        - TREE_ANIM
+                  - entry: Lighting:Pixel:C004003
+                    defines:
+                        - DETAIL_MAPS
+                        - SKINNED
+                        - TREE_ANIM
+                  - entry: Lighting:Pixel:C004011
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - TREE_ANIM
+                  - entry: Lighting:Pixel:C004013
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - SKINNED
+                        - TREE_ANIM
+                  - entry: Lighting:Pixel:C00C001
+                    defines:
+                        - DETAIL_MAPS
+                        - PROJECTED_UV
+                        - TREE_ANIM
+                  - entry: Lighting:Pixel:C00C011
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - PROJECTED_UV
+                        - TREE_ANIM
+                  - entry: Lighting:Pixel:C104001
+                    defines:
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - TREE_ANIM
+                  - entry: Lighting:Pixel:C104003
+                    defines:
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - SKINNED
+                        - TREE_ANIM
+                  - entry: Lighting:Pixel:C104011
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - TREE_ANIM
+                  - entry: Lighting:Pixel:C104013
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - SKINNED
+                        - TREE_ANIM
+                  - entry: Lighting:Pixel:C10C001
+                    defines:
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - PROJECTED_UV
+                        - TREE_ANIM
+                  - entry: Lighting:Pixel:C10C011
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - PROJECTED_UV
+                        - TREE_ANIM
+                  - entry: Lighting:Pixel:E00C001
+                    defines:
+                        - DETAIL_MAPS
+                        - MULTI_INDEX
+                        - PROJECTED_UV
+                        - SPARKLE
+                  - entry: Lighting:Pixel:E00C011
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - MULTI_INDEX
+                        - PROJECTED_UV
+                        - SPARKLE
+                  - entry: Lighting:Pixel:E10C001
+                    defines:
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - MULTI_INDEX
+                        - PROJECTED_UV
+                        - SPARKLE
+                  - entry: Lighting:Pixel:E10C011
+                    defines:
+                        - DEFERRED
+                        - DETAIL_MAPS
+                        - DO_ALPHA_TEST
+                        - MULTI_INDEX
+                        - PROJECTED_UV
+                        - SPARKLE
           VSHADER:
               common_defines:
                   - CLOUD_SHADOWS
@@ -14142,6 +14541,8 @@ shaders:
                   - VR
                   - WATER_EFFECTS
                   - SNOW_COVER
+                  - ADAPTIVE_BALANCE
+                  - PBR_GRASS=1
               entries:
                   - entry: Grass:Pixel:10007
                     defines: *id015
@@ -14175,6 +14576,8 @@ shaders:
                   - VSHADER
                   - WATER_EFFECTS
                   - SNOW_COVER
+                  - ADAPTIVE_BALANCE
+                  - PBR_GRASS=1
               entries:
                   - entry: Grass:Vertex:10007
                     defines: *id015

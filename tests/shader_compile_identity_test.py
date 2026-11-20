@@ -206,7 +206,13 @@ class ShaderCompileIdentityTests(unittest.TestCase):
                 # The preserved capture predates SnowCover's three shader families.
                 if source in {"Lighting.hlsl", "RunGrass.hlsl", "DistantTree.hlsl"}:
                     defines.append("SNOW_COVER=")
-                captured = compile_task_defines([(source, stages[stage], f"{family}:{stage}:{descriptor}", defines)])
+                captured_config = {"shaders": [{"file": source, "configs": {stages[stage]: {
+                    "entries": [{"entry": f"{family}:{stage}:{descriptor}", "defines": defines}],
+                }}}]}
+                # Historical Effect requests use material bits now ignored by stage lookup.
+                BUILDER.normalize_effect_stage_variants(captured_config, REPO)
+                request = captured_config["shaders"][0]["configs"][stages[stage]]["entries"][0]
+                captured = compile_task_defines([(source, stages[stage], request["entry"], request["defines"])])
                 for key, expected in captured.items():
                     with self.subTest(source=source, stage=stage, descriptor=descriptor):
                         self.assertIn(key, generated)
@@ -237,8 +243,6 @@ class ShaderCompileIdentityTests(unittest.TestCase):
                     for token in macros.split()
                     if token not in {"D3DCOMPILE_DEBUG", "D3DCOMPILE_SKIP_OPTIMIZATION"}
                 ]
-                # Keep the captured requests intact while applying the current feature scope.
-                defines.append("SNOW_COVER=")
                 captured = compile_task_defines([(source, stages[stage], f"{family}:{stage}:{descriptor}", defines)])
                 for key, expected in captured.items():
                     with self.subTest(stage=stage, descriptor=descriptor):
@@ -296,7 +300,7 @@ class ShaderCompileIdentityTests(unittest.TestCase):
                 additional_excluded_defines=frozenset({"HORIZON_FIX"}),
             )
             generated = compile_task_defines(parse_shader_configs(str(filtered)))
-            self.assertEqual(len(fixture["requests"]), 73)
+            self.assertEqual(len(fixture["requests"]), 98)
             for request in fixture["requests"]:
                 descriptor = request["descriptor"]
                 expected = compile_task_defines([(

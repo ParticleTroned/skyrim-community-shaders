@@ -137,7 +137,7 @@ namespace CSX::Screenshot
 		using json = nlohmann::json;
 		const auto& provider = receipt.at("captureProvider");
 		const auto& counts = receipt.at("counts");
-		const bool done = !receipt.at("terminalUtc").is_null();
+		const bool done = provider.value("done", !receipt.at("terminalUtc").is_null());
 		const auto state = receipt.at("state").get<std::string>();
 		const bool committed = provider.value("committed", false);
 		const bool ok = done && committed && counts.at("written").get<uint32_t>() != 0 &&

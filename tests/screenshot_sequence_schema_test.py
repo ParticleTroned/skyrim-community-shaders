@@ -28,6 +28,8 @@ def check_framing_requests(root: pathlib.Path) -> None:
         {"view": "framed_combined", "resolution": "native"},
         {"view": "framed_right", "width": 2560, "height": 1440},
         {"view": "framed_right", "resolution": "4k", "width": 3840, "height": 2160},
+        {"view": "framed_right", "resolution": "4k", "width": 3840.0, "height": 2160.0},
+        {"view": "framed_right", "width": 2560.0, "height": 1440.0},
         {"view": "left_eye"},
     ):
         request["capture"]["outputs"] = [output]
@@ -35,6 +37,10 @@ def check_framing_requests(root: pathlib.Path) -> None:
     for output in (
         {"view": "framed_left", "resolution": "native", "width": 3840},
         {"view": "framed_right", "width": 3840, "height": 1440},
+        {"view": "framed_right", "width": 3840.0, "height": 1440.0},
+        {"view": "framed_right", "width": 2560.0, "height": 2160.0},
+        {"view": "framed_right", "width": 3840.5, "height": 2160.0},
+        {"view": "framed_right", "width": 3840.0, "height": "2160"},
         {"view": "framed_right", "resolution": "4k", "width": 2560},
         {"view": "left_eye", "resolution": "4k"},
     ):

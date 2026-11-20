@@ -5193,6 +5193,19 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE nlohmann_json::nlohmann_json
     )
     add_test(NAME ApiServiceFoundation COMMAND api_service_foundation_test)
+    add_controller_test(
+        screenshot_manifest_admission_test
+        ScreenshotManifestAdmission
+        tests/screenshot_manifest_admission_test.cpp
+    )
+    target_sources(
+        screenshot_manifest_admission_test
+        PRIVATE src/Api/ServiceFoundation.cpp
+    )
+    target_link_libraries(
+        screenshot_manifest_admission_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
     set_tests_properties(
         ApiServiceFoundation
         PROPERTIES LABELS "ControllerTests"
@@ -5388,6 +5401,8 @@ if(BUILD_CONTROLLER_TESTS)
     )
     add_custom_command(
         OUTPUT "${_screenshot_dispatch_test_header}"
+        BYPRODUCTS
+            "${_screenshot_dispatch_test_dir}/screenshot_burst_preparation_under_test.h"
         COMMAND
             "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
             "-DOUTPUT_DIRECTORY=${_screenshot_dispatch_test_dir}" -P
@@ -5413,7 +5428,81 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE nlohmann_json::nlohmann_json
     )
     add_test(NAME ScreenshotDispatch COMMAND screenshot_dispatch_test)
+
+    add_executable(
+        screenshot_storage_security_test
+        EXCLUDE_FROM_ALL
+        tests/screenshot_storage_security_test.cpp
+    )
+    target_compile_features(screenshot_storage_security_test PRIVATE cxx_std_23)
+    target_compile_definitions(
+        screenshot_storage_security_test
+        PRIVATE CSX_SCREENSHOT_STORAGE_TESTING NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+    target_include_directories(
+        screenshot_storage_security_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(screenshot_storage_security_test PRIVATE bcrypt)
+    add_test(
+        NAME ScreenshotStorageSecurity
+        COMMAND screenshot_storage_security_test
+    )
+    set_tests_properties(
+        ScreenshotStorageSecurity
+        PROPERTIES LABELS "ControllerTests"
+    )
     set_tests_properties(ScreenshotDispatch PROPERTIES LABELS "ControllerTests")
+
+    set(_screenshot_finalization_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/screenshot-finalization"
+    )
+    set(_screenshot_finalization_test_header
+        "${_screenshot_finalization_test_dir}/screenshot_finalization_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_screenshot_finalization_test_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_screenshot_finalization_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_screenshot_finalization.cmake"
+        DEPENDS
+            src/Features/ScreenshotApi.cpp
+            tests/extract_screenshot_finalization.cmake
+        VERBATIM
+    )
+    add_executable(
+        screenshot_finalization_test
+        EXCLUDE_FROM_ALL
+        tests/screenshot_finalization_test.cpp
+        src/Api/ServiceFoundation.cpp
+        src/Features/ScreenshotStorageSecurity.cpp
+        "${_screenshot_finalization_test_header}"
+    )
+    target_compile_features(screenshot_finalization_test PRIVATE cxx_std_23)
+    target_compile_definitions(
+        screenshot_finalization_test
+        PRIVATE
+            CSX_SCREENSHOT_FINALIZATION_TESTING
+            DEVBENCH_BRIDGE_ENABLED
+            NOMINMAX
+            WIN32_LEAN_AND_MEAN
+    )
+    target_include_directories(
+        screenshot_finalization_test
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/src"
+            "${_screenshot_finalization_test_dir}"
+    )
+    target_link_libraries(
+        screenshot_finalization_test
+        PRIVATE nlohmann_json::nlohmann_json bcrypt
+    )
+    add_test(NAME ScreenshotFinalization COMMAND screenshot_finalization_test)
+    set_tests_properties(
+        ScreenshotFinalization
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     set(_skylighting_lifecycle_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/skylighting-lifecycle"

@@ -1,4 +1,5 @@
 #include "Api/ServiceFoundation.h"
+#include "Utils/JsonCleanup.h"
 
 #include <algorithm>
 #include <atomic>
@@ -200,17 +201,31 @@ namespace CSX::Api
 
 	uint64_t ServiceFoundation::AppendEvent(std::string_view a_requestId, uint64_t a_eventIndex, std::string_view a_type, json a_payload)
 	{
+		const Util::JsonCleanupGuard payloadCleanup(a_payload);
+#ifdef CSX_SCREENSHOT_FINALIZATION_TESTING
+		if (eventAllocationTestHook)
+			eventAllocationTestHook(a_type);
+#endif
+		json event = json::object();
+		const Util::JsonCleanupGuard eventCleanup(event);
+		event["eventId"] = 0ull;
+		event["eventIndex"] = a_eventIndex;
+		event["requestId"] = a_requestId;
+		event["type"] = a_type;
+		event["timestampUtc"] = nullptr;
+		// Allocate the destination slot before transferring structured payload ownership.
+		event["payload"].swap(a_payload);
 		std::lock_guard lock(mutex);
-		const uint64_t eventId = nextEventId++;
-		events.push_back({
-			{ "eventId", eventId },
-			{ "eventIndex", a_eventIndex },
-			{ "requestId", a_requestId },
-			{ "type", a_type },
-			{ "timestampUtc", TimestampUtc() },
-			{ "payload", std::move(a_payload) },
-		});
 		TrimLocked(std::chrono::steady_clock::now());
+		const uint64_t eventId = nextEventId;
+		event.at("eventId") = eventId;
+		event.at("timestampUtc") = TimestampUtc();
+		events.push_back(std::move(event));
+		++nextEventId;
+		while (events.size() > limits.maximumEvents) {
+			Util::ClearJsonWithoutAllocation(events.front());
+			events.pop_front();
+		}
 		return eventId;
 	}
 
@@ -283,16 +298,22 @@ namespace CSX::Api
 
 	void ServiceFoundation::TrimLocked(std::chrono::steady_clock::time_point a_now)
 	{
-		while (!events.empty() && events.front().value("eventId", 0ull) <= acknowledgedEventId)
+		while (!events.empty() && events.front().value("eventId", 0ull) <= acknowledgedEventId) {
+			Util::ClearJsonWithoutAllocation(events.front());
 			events.pop_front();
-		while (events.size() > limits.maximumEvents)
+		}
+		while (events.size() > limits.maximumEvents) {
+			Util::ClearJsonWithoutAllocation(events.front());
 			events.pop_front();
+		}
 
 		for (auto position = commandOrder.begin(); position != commandOrder.end();) {
 			const auto found = commands.find(*position);
 			if (found == commands.end() || (found->second.completed && a_now - found->second.createdAt >= limits.commandRetention)) {
-				if (found != commands.end())
+				if (found != commands.end()) {
+					Util::ClearJsonWithoutAllocation(found->second.response);
 					commands.erase(found);
+				}
 				position = commandOrder.erase(position);
 			} else {
 				++position;
@@ -302,6 +323,8 @@ namespace CSX::Api
 			const auto found = commands.find(commandOrder.front());
 			if (found != commands.end() && !found->second.completed)
 				break;
+			if (found != commands.end())
+				Util::ClearJsonWithoutAllocation(found->second.response);
 			commands.erase(commandOrder.front());
 			commandOrder.pop_front();
 		}

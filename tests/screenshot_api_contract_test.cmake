@@ -65,6 +65,34 @@ foreach(_legacy IN ITEMS
 endforeach()
 
 file(READ "${PROJECT_ROOT}/src/Features/ScreenshotApi.cpp" _implementation)
+file(READ "${PROJECT_ROOT}/src/Features/ScreenshotManifestAdmission.h" _admission)
+file(READ "${PROJECT_ROOT}/src/Features/ScreenshotStorageSecurity.cpp" _storage)
+foreach(_required_admission_consumer IN ITEMS
+    "CSX::Screenshot::AdmitManifestJob(*state, a_sequence, std::move(job), service,"
+    "CSX::Screenshot::AppendRequestEvent(service, a_record, a_type, std::move(a_payload))"
+    ".generation = a_sequence.manifestGeneration + 1"
+)
+    string(FIND "${_implementation}" "${_required_admission_consumer}" _position)
+    if(_position EQUAL -1)
+        message(FATAL_ERROR "Screenshot publication bypasses shared admission: ${_required_admission_consumer}")
+    endif()
+endforeach()
+foreach(_required_rollback IN ITEMS
+    "a_sequence.manifestGeneration = previousGeneration"
+    "a_sequence.finalManifestGeneration = previousFinalGeneration"
+    "--a_state.outstanding"
+    "a_state.jobs.pop_back()"
+)
+    string(FIND "${_admission}" "${_required_rollback}" _position)
+    if(_position EQUAL -1)
+        message(FATAL_ERROR "Screenshot failed admission lost rollback: ${_required_rollback}")
+    endif()
+endforeach()
+string(FIND "${_storage}" "return DescribeHandle(file.Get())" _owned_description)
+string(FIND "${_storage}" "CommittedFile committed(file.Release()" _released_description)
+if(_owned_description EQUAL -1 OR NOT _released_description EQUAL -1)
+    message(FATAL_ERROR "Screenshot integrity description lost producer cleanup handle")
+endif()
 foreach(_action IN ITEMS
     capabilities status settings_get settings_validate settings_apply capture
     sequence_start sequence_stop request_get request_list request_cancel
@@ -77,12 +105,13 @@ foreach(_action IN ITEMS
 endforeach()
 
 foreach(_event IN ITEMS
-    request.accepted source.waiting source.acquired source.timeout source.fallback artifact.queued
-    artifact.encoding artifact.written artifact.failed sequence.frame_scheduled
-    sequence.frame_dropped sequence.stop_requested sequence.finalizing
+	request.accepted source.waiting source.acquired source.timeout source.fallback artifact.queued
+	artifact.encoding artifact.written artifact.failed sequence.frame_scheduled
+	sequence.frame_dropped sequence.preparing sequence.prepared sequence.started
+	sequence.preparation_failed sequence.stop_requested sequence.finalizing
     packaging.queued packaging.completed packaging.failed request.terminal
 )
-    string(FIND "${_implementation}" "\"${_event}\"" _event_position)
+    string(FIND "${_implementation}\n${_admission}" "\"${_event}\"" _event_position)
     if(_event_position EQUAL -1)
         message(FATAL_ERROR "Screenshot API event is not implemented: ${_event}")
     endif()
@@ -96,7 +125,10 @@ foreach(_required_contract_text IN ITEMS
 	screenshotEye frameCaptureEye frameCaptureUsePng a_sequenceSettings
 	effectiveSequence RelativeContainedArtifactPath relativeSequencePath
 	DirectoryLease::CreateExclusive directoryLease VerifyDirectChild
+	"resolvedDirectory, result.requestId, approvedRoot"
+	"Util::PathToUtf8(result.directoryLease->Destination())"
 	SelectSettingsCaptureSource sequence.effective a_sequence.effective
+	DirectoryPreparationJob preparationJobs preparationResults preparationPending
 )
     string(FIND "${_implementation}" "${_required_contract_text}" _contract_position)
     if(_contract_position EQUAL -1)
@@ -104,10 +136,42 @@ foreach(_required_contract_text IN ITEMS
     endif()
 endforeach()
 
+file(READ "${PROJECT_ROOT}/src/Features/ScreenshotStorageSecurity.cpp" _storage)
+foreach(_required_root_custody IN ITEMS
+    "OpenApprovedDestination(a_approvedRoot, a_destination)"
+    "CreateDirectoryRelative(chain.back().Get(), component.native(), false)"
+    "FILE_OPEN_REPARSE_POINT" "a_exclusive ? FILE_CREATE : FILE_OPEN_IF"
+    "lease->protectedAncestors[index] = ancestors[index].Release()"
+)
+    string(FIND "${_storage}" "${_required_root_custody}" _root_custody_position)
+    if(_root_custody_position EQUAL -1)
+        message(FATAL_ERROR "Restricted sequence storage is missing root custody: ${_required_root_custody}")
+    endif()
+endforeach()
+
+string(FIND "${_implementation}" "if (action == \"sequence_start\")" _sequence_start_position)
+string(FIND "${_implementation}" "if (action == \"sequence_stop\"" _sequence_stop_position)
+if(_sequence_start_position EQUAL -1 OR _sequence_stop_position LESS _sequence_start_position)
+    message(FATAL_ERROR "Sequence admission implementation could not be isolated")
+endif()
+math(EXPR _sequence_admission_length "${_sequence_stop_position} - ${_sequence_start_position}")
+string(SUBSTRING "${_implementation}" ${_sequence_start_position} ${_sequence_admission_length} _sequence_admission)
+foreach(_blocking_storage_call IN ITEMS ResolveDestinationDirectory DirectoryLease::CreateExclusive)
+    string(FIND "${_sequence_admission}" "${_blocking_storage_call}" _blocking_storage_position)
+    if(NOT _blocking_storage_position EQUAL -1)
+        message(FATAL_ERROR "Sequence admission performs blocking storage work: ${_blocking_storage_call}")
+    endif()
+endforeach()
+
 string(FIND "${_implementation}" "result.artifact = DescribeCommittedArtifact(job.destination, committed);" _manifest_describe_position)
-string(FIND "${_implementation}" "result.success = true;" _manifest_success_position)
 string(FIND "${_implementation}" "integrityError" _integrity_warning_position)
-if(_manifest_describe_position EQUAL -1 OR _manifest_success_position LESS _manifest_describe_position OR
+if(NOT _manifest_describe_position EQUAL -1)
+    string(SUBSTRING "${_implementation}" ${_manifest_describe_position} -1 _manifest_publication_tail)
+    string(FIND "${_manifest_publication_tail}" "result.success = true;" _manifest_success_position)
+else()
+    set(_manifest_success_position -1)
+endif()
+if(_manifest_describe_position EQUAL -1 OR _manifest_success_position EQUAL -1 OR
    NOT _integrity_warning_position EQUAL -1)
     message(FATAL_ERROR "Manifest publication must fail closed when same-handle integrity metadata cannot be produced")
 endif()
@@ -243,3 +307,48 @@ if(_load_api_listener EQUAL -1 OR _load_skse_listener EQUAL -1 OR _load_api_list
 endif()
 
 message(STATUS "Screenshot API contract, schemas, goldens, migration, actions, and journal events are coherent")
+
+file(READ "${PROJECT_ROOT}/src/Features/ScreenshotApi.h" _finalization_header)
+file(READ "${PROJECT_ROOT}/tests/screenshot_finalization_test.cpp" _finalization_fixture)
+file(READ "${PROJECT_ROOT}/tests/extract_screenshot_finalization.cmake" _finalization_extractor)
+file(READ "${PROJECT_ROOT}/CMakeLists.txt" _finalization_targets)
+foreach(_finalization_text IN ITEMS
+    "void ScreenshotApi::FailSequenceFinalizationLocked"
+    "record.state.swap(a_sequence.written == 0 ? record.failureState : record.partialFailureState)"
+    "a_sequence.directoryLease.reset();"
+    "a_sequence.manifestAdmissionFailure = failure;"
+    "a_sequence.manifestReportingFailure = std::current_exception();"
+    "ready.back().completion = std::move(next->referenceCompletion);"
+)
+    string(FIND "${_implementation}" "${_finalization_text}" _found)
+    if(_found EQUAL -1)
+        message(FATAL_ERROR "Screenshot mandatory finalization boundary missing: ${_finalization_text}")
+    endif()
+endforeach()
+foreach(_method IN ITEMS
+    AppendEventLocked TransitionLocked MakeReceipt CountPendingOperationsLocked
+    TryFinalizeSequenceLocked FailSequenceFinalizationLocked FinalizeSequenceLocked
+    QueueSequenceManifestLocked DrainReferenceNotifications
+)
+    string(FIND "${_finalization_extractor}" "ScreenshotApi::${_method}(" _found)
+    if(_found EQUAL -1)
+        message(FATAL_ERROR "Finalization fixture does not select production ${_method}")
+    endif()
+endforeach()
+foreach(_fixture_text IN ITEMS
+    "#include \"Features/ScreenshotApi.h\""
+    "#include \"screenshot_finalization_under_test.h\""
+    "DirectoryLease::CreateExclusive"
+    "RejectedFinalization(\"packaging.queued\", \"packaging.failed\""
+    "test.api->CountPendingOperationsLocked() == 0"
+    "test.Record().referenceNotificationFailure"
+)
+    string(FIND "${_finalization_fixture}" "${_fixture_text}" _found)
+    if(_found EQUAL -1)
+        message(FATAL_ERROR "Production finalization fixture case missing: ${_fixture_text}")
+    endif()
+endforeach()
+string(FIND "${_finalization_targets}" "add_test(NAME ScreenshotFinalization COMMAND screenshot_finalization_test)" _found)
+if(_found EQUAL -1)
+    message(FATAL_ERROR "Production finalization fixture is not registered")
+endif()

@@ -226,8 +226,8 @@ namespace GrassPolicy
 		float FarLODMaxDensity = 0.2f;
 		float FarLODCoverageBias = 1.0f;
 		bool ProportionalDensityFade = false;
-		bool EnableOcclusionCulling = false;
-		bool RefineHiZ = false;
+		bool EnableOcclusionCulling = true;
+		bool RefineHiZ = true;
 		float OcclusionBias = 0.001f;  // Relative view-distance margin; 0.001 means 0.1%.
 
 		bool Valid() const

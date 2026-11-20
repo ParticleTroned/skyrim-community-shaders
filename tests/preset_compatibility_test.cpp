@@ -1,3 +1,4 @@
+#include "Features/GrassPlacementSettings.h"
 #include "Features/LightLimitFix/ShadowCullingPolicy.h"
 #include "Features/SeasonalWeatherConfig.h"
 #include "PresetCompatibility.h"
@@ -67,7 +68,6 @@ int main(int argc, char** argv)
 		VerifySeasonalSettings(preset);
 		const auto& marker = preset.at("Preset Compatibility");
 		assert(marker.at("contractVersion") == policy.at("presetCompatibility").at("contractVersion"));
-		assert(marker.at("presetVersion") == policy.at("packageVersion"));
 		assert(marker.at("target") == policy.at("presetCompatibility").at("target"));
 		assert(marker.at("settingsContract").at("revision") == PresetCompatibility::kSettingsContractRevision);
 		std::ifstream metadataInput(entry.path() / "meta.ini");
@@ -110,7 +110,9 @@ int main(int argc, char** argv)
 		std::ifstream input(path);
 		assert(input.is_open());
 		const auto preset = nlohmann::json::parse(input);
+		assert(preset.at("Adaptive Balance").at("globalProfile").at("grassPlacement").get<GrassPlacement::Settings>() == GrassPlacement::Settings{});
 		// Archived vendor presets retain the fingerprint of their source snapshot.
+		assert(preset.at("Preset Compatibility").at("presetVersion") == policy.at("packageVersion"));
 		assert(preset.at("Preset Compatibility").at("settingsContract").at("sourceTreeSha256") ==
 			   policy.at("runtimeSettingsContract").at("sourceTreeSha256"));
 		assert(preset.at("VR").at("WandAimPitchTrimDegrees") == -26.0);

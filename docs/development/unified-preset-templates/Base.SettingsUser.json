@@ -542,6 +542,10 @@
     "dayStartHour": 9.0,
     "enabled": true,
     "globalProfile": {
+      "grassPlacement": {
+        "verticalOffset": 0.0,
+        "modelOffsets": {}
+      },
       "advanced": true,
       "ambientMult": 1.0,
       "bloom": {
@@ -2394,8 +2398,8 @@
     "EnableFarLOD": true,
     "EnableMeshLOD": false,
     "EnableMidLOD": true,
-    "EnableOcclusionCulling": false,
-    "RefineHiZ": false,
+    "EnableOcclusionCulling": true,
+    "RefineHiZ": true,
     "Enabled": true,
     "FarLODCoverageBias": 1.0,
     "FarLODMaxDensity": 0.20000000298023224,

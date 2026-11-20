@@ -137,8 +137,10 @@ bool Hidden(float2 lo, float2 hi, float nearest, uint eye, out uint reason, out 
 	bool hidden = DepthOrder::IsBehindWithBias(nearest, farthest, margin);
 	[branch] if (!hidden && GrassParameter(RefineHiZ) && mip >= 2)
 	{
-		// Keep resource indices valid for inactive lanes in a divergent wave.
-		uint fineMip = mip - min(mip, 2u);
+		// Divergent lanes must query a mip inside the bound texture view.
+		uint baseWidth, baseHeight, baseLevels;
+		DepthPyramid.GetDimensions(0, baseWidth, baseHeight, baseLevels);
+		uint fineMip = min(mip - min(mip, 2u), max(baseLevels, 1u) - 1u);
 		uint fineWidth, fineHeight, fineLevels;
 		DepthPyramid.GetDimensions(fineMip, fineWidth, fineHeight, fineLevels);
 		int eyeFirst = int(eye * (fineWidth / GrassParameter(EyeCount)));

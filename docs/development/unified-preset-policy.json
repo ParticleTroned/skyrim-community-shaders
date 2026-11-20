@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.11.20.1",
+    "packageVersion": "d2026.11.20.2",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "3712A856A1D25CA546BA8068583BE8482258ADBBB52B3F1BBEF22EA56552B9C8"
+        "sha256": "21F24D0D8AB1861167394204F83A490124E3A709C7DF7E0735417639DBAEA031"
     },
     "runtimeSettingsContract": {
         "revision": 34,
-        "sourceTreeSha256": "EE5EE8838CC6597F6CFD4BFCAD20F0490DDF7F7DE0D147601AAC7721A43D6C1C",
+        "sourceTreeSha256": "7F8A47A6FF062C93CB5071FD533657A1D0C7DEEF20F13FFCE2C7500E7BB0EF5B",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -32,6 +32,7 @@
                 "src/Features/DetailMapsConfig.h",
                 "src/Features/FoveatedCommon.h",
                 "src/Features/GrassOptimizations/GrassPolicy.h",
+                "src/Features/GrassPlacementSettings.h",
                 "src/Features/LightLimitFix/ShadowCullingPolicy.h",
                 "src/Features/SeasonalWeatherConfig.cpp",
                 "src/Features/SeasonalWeatherConfig.h",
@@ -107,6 +108,7 @@
             "src/Features/GrassOptimizations.cpp",
             "src/Features/GrassOptimizations.h",
             "src/Features/GrassOptimizations/GrassPolicy.h",
+            "src/Features/GrassPlacementSettings.h",
             "src/Features/HairSpecular.cpp",
             "src/Features/HairSpecular.h",
             "src/Features/HorizonFix.h",
@@ -463,7 +465,8 @@
         { "path": ["Screen Space GI", "EnableVanillaSSAO"], "value": false },
         { "path": ["Texture Streaming", "Enabled"], "value": true },
         { "path": ["Grass Optimizations", "Enabled"], "value": true },
-        { "path": ["Grass Optimizations", "EnableOcclusionCulling"], "value": false },
+        { "path": ["Grass Optimizations", "EnableOcclusionCulling"], "value": true },
+        { "path": ["Grass Optimizations", "RefineHiZ"], "value": true },
         {
             "path": ["Neural Rendering", "rendering", "neuralCharacterHumansEnabled"],
             "value": true
@@ -509,8 +512,8 @@
         },
         {
             "path": ["VR", "EnableDepthBufferCullingInterior"],
-            "value": false,
-            "reason": "retain the conservative interior policy"
+            "value": true,
+            "reason": "enable native depth culling in interiors"
         },
         { "path": ["VR", "EnableDragToReposition"], "value": false },
         { "path": ["VR", "EnableLightingFoveation"], "value": true },
@@ -731,7 +734,8 @@
         { "path": ["Screen Space GI", "EnableVanillaSSAO"], "value": false },
         { "path": ["Texture Streaming", "Enabled"], "value": true },
         { "path": ["Grass Optimizations", "Enabled"], "value": true },
-        { "path": ["Grass Optimizations", "EnableOcclusionCulling"], "value": false },
+        { "path": ["Grass Optimizations", "EnableOcclusionCulling"], "value": true },
+        { "path": ["Grass Optimizations", "RefineHiZ"], "value": true },
         {
             "path": ["Neural Rendering", "rendering", "neuralCharacterHumansEnabled"],
             "value": true
@@ -757,7 +761,7 @@
         { "path": ["Upscaling", "pipelineDiagnostics"], "value": false },
         { "path": ["Upscaling", "pipelineDiagnosticsStructured"], "value": false },
         { "path": ["VR", "EnableDepthBufferCullingExterior"], "value": true },
-        { "path": ["VR", "EnableDepthBufferCullingInterior"], "value": false },
+        { "path": ["VR", "EnableDepthBufferCullingInterior"], "value": true },
         { "path": ["VR", "EnableDragToReposition"], "value": false },
         { "path": ["VR", "EnableLightingFoveation"], "value": true },
         { "path": ["VR", "EnableLightingFoveationHardCutoff"], "value": false },
@@ -803,7 +807,7 @@
             ["Volumetric Lighting", "GodrayShaftIntensity"]
         ],
         "requiredValues": [
-            { "path": ["Grass Optimizations", "RefineHiZ"], "value": false },
+            { "path": ["Grass Optimizations", "RefineHiZ"], "value": true },
             { "path": ["Upscaling", "antiLag2Enabled"], "value": false },
             { "path": ["Light Limit Fix", "SkipRedundantLightAttach"], "value": true },
             { "path": ["Grass Optimizations", "FarLODOptimization"], "value": false },

@@ -225,7 +225,7 @@ void RunCullingShader(bool vr, bool reversed = false)
 		for (UINT slot = 0; slot < 6; ++slot) {
 			const UINT expectedIndices = slot < 3 * eyes ? indexCounts[slot / eyes] : 0;
 			if (values[slot * 8 + 3] != expectedIndices)
-				throw std::runtime_error("Indirect index count at dispatch " + std::to_string(dispatchOrdinal) + ", slot " + std::to_string(slot) + ": expected " + std::to_string(expectedIndices) + ", got " + std::to_string(values[slot * 8 + 3]));
+				throw std::runtime_error("Indirect index count at dispatch " + std::to_string(dispatchOrdinal) + ", slot " + std::to_string(slot) + ": expected " + std::to_string(expectedIndices) + ", got " + std::to_string(values[slot * 8 + 3]) + ", device status " + std::to_string(device->GetDeviceRemovedReason()));
 			for (UINT word = 0; word < 8; ++word)
 				if (word != 3 && word != 4)
 					Require(values[slot * 8 + word] == 0, "Indirect draw offsets or padding were not reset");
@@ -295,6 +295,7 @@ void RunCullingShader(bool vr, bool reversed = false)
 		for (UINT eye = 0; eye < eyes; ++eye)
 			Require(lowered[eye * 8 + 4] == 0, "Frustum culling used unshifted grass bounds");
 		context->UpdateSubresource(table.Get(), 0, nullptr, slices.data(), 0, 0);
+		dispatch(false, false, false, false);
 	}
 	// The production entry must preserve both buckets across the second dispatch row.
 	{

@@ -18,8 +18,8 @@ int main()
 	for (const auto* path : { "../leaf.nif", "c:\\leaf.nif", "\\leaf.nif", "grass//leaf.nif", "grass/./leaf.nif", "leaf.dds", "grass/leaf?.nif", "grass /leaf.nif", "grass./leaf.nif" })
 		Require(ModelKey(path).empty(), "Unsafe model path accepted");
 	Require(Clamp(std::numeric_limits<float>::infinity()) == 0 && Clamp(-100) == -32, "Invalid offset handling");
-	Settings global{ -2, { { "grass\\leaf.nif", -3 } } };
-	Layer location{ { -1, { { "grass\\leaf.nif", -4 } } } };
+	Settings global{ -2, { { "grass\\leaf.nif", -3.0f } } };
+	Layer location{ { -1, { { "grass\\leaf.nif", -4.0f } } } };
 	std::array<const Layer*, 1> locationLayers{ &location };
 	Require(Resolve(global, locationLayers, "grass\\leaf.nif") == -10 && Resolve(global, locationLayers, "grass\\tall.nif") == -3,
 		"Mesh corrections affected unrelated grass");

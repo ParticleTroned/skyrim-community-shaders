@@ -78,7 +78,7 @@
   "Preset Compatibility": {
     "contractVersion": 1,
     "presetId": "csx-unified-performance",
-    "presetVersion": "d2026.11.20.1",
+    "presetVersion": "d2026.11.20.2",
     "target": {
       "runtime": "VR",
       "minimumVersion": "3.21",
@@ -86,7 +86,7 @@
     },
     "settingsContract": {
       "revision": 34,
-      "sourceTreeSha256": "EE5EE8838CC6597F6CFD4BFCAD20F0490DDF7F7DE0D147601AAC7721A43D6C1C"
+      "sourceTreeSha256": "7F8A47A6FF062C93CB5071FD533657A1D0C7DEEF20F13FFCE2C7500E7BB0EF5B"
     }
   },
   "Upscaling": {
@@ -290,7 +290,7 @@
   "VR": {
     "DepthCullingLegacyMode": false,
     "EnableDepthBufferCullingExterior": true,
-    "EnableDepthBufferCullingInterior": false,
+    "EnableDepthBufferCullingInterior": true,
     "EnableDragToReposition": false,
     "EnableDynamicCubemapFoveation": true,
     "EnableDynamicCubemapVisibilityThrottle": true,
@@ -556,6 +556,10 @@
     "dayStartHour": 6.0,
     "enabled": true,
     "globalProfile": {
+      "grassPlacement": {
+        "verticalOffset": 0.0,
+        "modelOffsets": {}
+      },
       "advanced": true,
       "ambientMult": 1.0,
       "bloom": {
@@ -2408,8 +2412,8 @@
     "EnableFarLOD": true,
     "EnableMeshLOD": false,
     "EnableMidLOD": true,
-    "EnableOcclusionCulling": false,
-    "RefineHiZ": false,
+    "EnableOcclusionCulling": true,
+    "RefineHiZ": true,
     "Enabled": true,
     "FarLODCoverageBias": 1.0,
     "FarLODMaxDensity": 0.20000000298023224,

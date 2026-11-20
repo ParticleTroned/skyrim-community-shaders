@@ -3898,11 +3898,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	DirectContext dirLightContext;
 	DirectLightingOutput dirLightOutput;
 #	if defined(TRUE_PBR)
-	DirectLightingSurface directSurface = CreateDirectLightingSurface(worldNormal.xyz, coatWorldNormal, vertexNormal.xyz, refractedViewDirection, viewDirection);
-	dirLightContext = CreateDirectLightingContext(directSurface, refractedDirLightDirection, DirLightDirection, dirLightColor * dirLightColorMultiplier, dirDetailedShadow * parallaxShadow, dirSoftShadow);
+	dirLightContext = CreateDirectLightingContext(worldNormal.xyz, coatWorldNormal, vertexNormal.xyz, refractedViewDirection, viewDirection, refractedDirLightDirection, DirLightDirection, dirLightColor * dirLightColorMultiplier, dirDetailedShadow * parallaxShadow, dirSoftShadow);
 #	else
-	DirectLightingSurface directSurface = CreateDirectLightingSurface(worldNormal.xyz, vertexNormal.xyz, viewDirection);
-	dirLightContext = CreateDirectLightingContext(directSurface, DirLightDirection, dirLightColor * dirLightColorMultiplier, dirDetailedShadow * parallaxShadow, dirSoftShadow);
+	dirLightContext = CreateDirectLightingContext(worldNormal.xyz, vertexNormal.xyz, viewDirection, DirLightDirection, dirLightColor * dirLightColorMultiplier, dirDetailedShadow * parallaxShadow, dirSoftShadow);
 #		if defined(CS_HAIR_SHADING)
 	if (SharedData::hairSpecularSettings.Enabled) {
 		dirLightContext.hairShadow = 1.0;
@@ -3977,10 +3975,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 					refractedLightDirection = -refract(-normalizedLightDirection, coatWorldNormal, eta);
 			}
 #				endif
-			pointLightContext = CreateDirectLightingContext(directSurface, refractedLightDirection, normalizedLightDirection, lightColor, lightShadow, lightShadow);
+			pointLightContext = CreateDirectLightingContext(worldNormal.xyz, coatWorldNormal, vertexNormal.xyz, refractedViewDirection, viewDirection, refractedLightDirection, normalizedLightDirection, lightColor, lightShadow, lightShadow);
 		}
 #			else
-		pointLightContext = CreateDirectLightingContext(directSurface, normalizedLightDirection, lightColor, lightShadow, lightShadow);
+		pointLightContext = CreateDirectLightingContext(worldNormal.xyz, vertexNormal.xyz, viewDirection, normalizedLightDirection, lightColor, lightShadow, lightShadow);
 #				if defined(CS_HAIR_SHADING)
 		if (SharedData::hairSpecularSettings.Enabled) {
 			pointLightContext.hairShadow = 1.0;
@@ -4160,9 +4158,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		DirectLightingOutput pointLightOutput;
 		float pointLightShadow = lightShadow * parallaxShadow * contactShadow;
 #			if defined(TRUE_PBR)
-		pointLightContext = CreateDirectLightingContext(directSurface, refractedLightDirection, normalizedLightDirection, lightColor, pointLightShadow, pointLightShadow);
+		pointLightContext = CreateDirectLightingContext(worldNormal.xyz, coatWorldNormal, vertexNormal.xyz, refractedViewDirection, viewDirection, refractedLightDirection, normalizedLightDirection, lightColor, pointLightShadow, pointLightShadow);
 #			else
-		pointLightContext = CreateDirectLightingContext(directSurface, normalizedLightDirection, lightColor, pointLightShadow, pointLightShadow);
+		pointLightContext = CreateDirectLightingContext(worldNormal.xyz, vertexNormal.xyz, viewDirection, normalizedLightDirection, lightColor, pointLightShadow, pointLightShadow);
 #				if defined(CS_HAIR_SHADING)
 		if (SharedData::hairSpecularSettings.Enabled) {
 			pointLightContext.hairShadow = 1.0;

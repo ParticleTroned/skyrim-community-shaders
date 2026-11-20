@@ -208,8 +208,7 @@ PS_OUTPUT RenderPBRGrass(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 	DirectLightingOutput totalLighting = (DirectLightingOutput)0;
-	DirectLightingSurface directSurface = CreateDirectLightingSurface(normal, normal, vertexNormal, viewDirection, viewDirection);
-	DirectContext dirContext = CreateDirectLightingContext(directSurface,
+	DirectContext dirContext = CreateDirectLightingContext(normal, normal, vertexNormal, viewDirection, viewDirection,
 		SharedData::DirLightDirection.xyz, SharedData::DirLightDirection.xyz, dirLightColor, dirDetailedShadow, dirSoftShadow);
 	DirectLightingOutput dirOutput;
 	GrassPBR::GetDirectLight(dirOutput, dirContext, material, pbrDetail);
@@ -246,7 +245,7 @@ PS_OUTPUT RenderPBRGrass(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				if (light.lightFlags & LightLimitFix::LightFlags::Shadow)
 					lightShadow = shadowColor[light.shadowLightIndex];
 				float3 lightDirection = lightVector / max(lightDist, EPSILON_DIVISION);
-				DirectContext pointContext = CreateDirectLightingContext(directSurface,
+				DirectContext pointContext = CreateDirectLightingContext(normal, normal, vertexNormal, viewDirection, viewDirection,
 					lightDirection, lightDirection, lightColor, lightShadow, lightShadow);
 				DirectLightingOutput pointOutput;
 				GrassPBR::GetDirectLight(pointOutput, pointContext, material, pbrDetail);

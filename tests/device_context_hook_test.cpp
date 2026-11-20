@@ -6,12 +6,13 @@
 #include <iostream>
 #include <stdexcept>
 #include <string_view>
+#include <type_traits>
 
 namespace
 {
 	ID3D11DeviceContext* expectedContext = nullptr;
 	bool canonicalReceiver = true;
-	unsigned clears = 0, viewportSets = 0, viewportGets = 0;
+	unsigned clears = 0, viewportSets = 0, viewportGets = 0, stateSwaps = 0;
 
 	void Require(bool condition, const char* message)
 	{
@@ -48,6 +49,17 @@ namespace
 			canonicalReceiver &= context == expectedContext;
 			++viewportGets;
 			original(context, count, viewports);
+		}
+		static inline decltype(&Call) original = nullptr;
+	};
+
+	struct SwapStateHook
+	{
+		static void Call(ID3D11DeviceContext1* context, ID3DDeviceContextState* state, ID3DDeviceContextState** previous)
+		{
+			canonicalReceiver &= context == expectedContext;
+			++stateSwaps;
+			original(context, state, previous);
 		}
 		static inline decltype(&Call) original = nullptr;
 	};
@@ -100,15 +112,16 @@ namespace
 		Require(!guard, "Published table-hook failure admitted a cached isolated state");
 	}
 
-	template <unsigned Slot, class Hook>
-	void Install(ID3D11DeviceContext* context, Util::VirtualHookMethod method)
+	template <unsigned Slot, class Hook, class Interface>
+	void Install(Interface* context, Util::VirtualHookMethod method)
 	{
 		// Hook storage must outlive every native table that can still reference it.
 		static auto& state = *new HookState;
 		auto** original = reinterpret_cast<void**>(&Hook::original);
 		auto* hook = reinterpret_cast<void*>(Hook::Call);
+		const auto slots = std::is_same_v<Interface, ID3D11DeviceContext1> ? kContext1Slots : kContextSlots;
 		const auto result = method == Util::VirtualHookMethod::Detour ? Util::InstallVirtualFunctionHook(context, Slot, original, hook) :
-		                                                                CompleteContextHook(context, InstallHook(state, context, Slot, kContextSlots, ContextSlots, original, hook,
+		                                                                CompleteContextHook(context, InstallHook(state, context, Slot, slots, ContextSlots, original, hook,
 																										 RejectDetour, method == Util::VirtualHookMethod::Clone ? RejectProtection : VirtualProtect));
 		Require(result.error == NO_ERROR, "Native context hook installation failed");
 		Require(result.method == method,
@@ -131,6 +144,15 @@ namespace
 		Install<110, ClearStateHook>(context.get(), method);
 		Install<44, SetViewportsHook>(context.get(), method);
 		Install<95, GetViewportsHook>(context.get(), method);
+		void* rejectedOriginal = nullptr;
+		Require(Util::InstallVirtualFunctionHook(context.get(), 131, &rejectedOriginal, reinterpret_cast<void*>(SwapStateHook::Call)).error == ERROR_INVALID_PARAMETER,
+			"Base context accepted an extended interface slot");
+		Require(Util::InstallVirtualFunctionHook(context1.get(), 134, &rejectedOriginal, reinterpret_cast<void*>(SwapStateHook::Call)).error == ERROR_INVALID_PARAMETER && !rejectedOriginal,
+			"Extended context accepted a slot beyond its interface");
+		Install<131, SwapStateHook>(context1.get(), method);
+		const auto originalSwap = SwapStateHook::original;
+		Install<131, SwapStateHook>(context1.get(), method);
+		Require(SwapStateHook::original == originalSwap, "Repeated extended context installation replaced its original target");
 		Util::RegisterDeviceContextStateForHooks(context.get());
 		const bool swapsAllowed = method == Util::VirtualHookMethod::Detour;
 		auto* originalIsolated = isolated.get();
@@ -163,6 +185,12 @@ namespace
 			Require(clears == clearsBefore + 1, "Restored ClearState bypassed its hook");
 			Require(canonicalReceiver, "Native dispatch changed the context identity seen by hooks");
 		}
+		// Native state swaps can replace dispatch tables, so exercise them after scene interception.
+		const unsigned swapsBefore = stateSwaps;
+		winrt::com_ptr<ID3DDeviceContextState> previous;
+		context1->SwapDeviceContextState(isolated->native.get(), previous.put());
+		context1->SwapDeviceContextState(previous.get(), nullptr);
+		Require(stateSwaps == swapsBefore + 2 && canonicalReceiver, "Extended context state swaps bypassed their hook");
 	}
 }
 

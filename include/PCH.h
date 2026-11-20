@@ -4,8 +4,10 @@
 #include <new>
 #include <cstdio>
 #include <exception>
+#include <format>
 #include <source_location>
 #include <string_view>
+#include <typeinfo>
 void* operator new[](size_t size, const char* pName, int flags, unsigned debugFlags, const char* file, int line);
 void* operator new[](size_t size, size_t alignment, size_t alignmentOffset, const char* pName, int flags,
 	unsigned debugFlags, const char* file, int line);
@@ -107,8 +109,10 @@ namespace stl
 		const auto result = Util::InstallVirtualFunctionHook(target, idx,
 			reinterpret_cast<PVOID*>(&T::func), reinterpret_cast<PVOID>(T::thunk));
 		if (result.error != NO_ERROR) {
-			SKSE::log::critical("[Hooks] Failed to install graphics slot {} (error {}, Detours {})", idx, result.error, result.detourError);
-			stl::report_and_fail("A required graphics hook could not be installed. See CSX.log.");
+			SKSE::log::critical("[Hooks] Failed to install graphics slot {} (error {}, Detours {}, hook {})", idx, result.error, result.detourError, typeid(T).name());
+			const auto message = std::format("A required graphics hook could not be installed.\n\nHook: {}\nSlot: {}\nError: {} (Detours: {})\n\nSee CSX.log for details.",
+				typeid(T).name(), idx, result.error, result.detourError);
+			stl::report_and_fail(message);
 		}
 		if (result.detourError != NO_ERROR)
 			SKSE::log::warn("[Hooks] Detours failed for graphics slot {} (error {}); using {}", idx, result.detourError,

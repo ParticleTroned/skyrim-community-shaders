@@ -53,8 +53,17 @@ namespace Util
 	namespace detail
 	{
 		inline winrt::com_ptr<ID3D11DeviceContext> registeredStateContext;
+		inline winrt::com_ptr<IUnknown> registeredStateIdentity;
 		inline bool contextStateIsolationAvailable = false;
 		inline bool useManualContextState = false;
+
+		inline winrt::com_ptr<IUnknown> QueryContextIdentity(ID3D11DeviceContext* context)
+		{
+			winrt::com_ptr<IUnknown> identity;
+			if (context && SUCCEEDED(context->QueryInterface(__uuidof(IUnknown), identity.put_void())))
+				return identity;
+			return {};
+		}
 
 		inline bool IsContextStateAvailable(ID3D11DeviceContext* context)
 		{
@@ -62,9 +71,8 @@ namespace Util
 				return true;
 			if (context == registeredStateContext.get())
 				return false;
-			winrt::com_ptr<ID3D11DeviceContext> canonical;
-			return SUCCEEDED(context->QueryInterface(__uuidof(ID3D11DeviceContext), canonical.put_void())) &&
-			       canonical.get() != registeredStateContext.get();
+			const auto identity = QueryContextIdentity(context);
+			return identity && registeredStateIdentity && identity.get() != registeredStateIdentity.get();
 		}
 	}
 
@@ -166,14 +174,26 @@ namespace Util
 	{
 		if (!context || detail::registeredStateContext.get() == context)
 			return;
+		auto identity = detail::QueryContextIdentity(context);
+		const bool sameContext = identity && identity.get() == detail::registeredStateIdentity.get();
 		detail::registeredStateContext.copy_from(context);
-		detail::contextStateIsolationAvailable = true;
+		detail::registeredStateIdentity = std::move(identity);
+		if (!sameContext)
+			detail::contextStateIsolationAvailable = true;
 	}
 
 	/** Disables swaps that would invalidate native table hooks; existing isolated states also become unusable. */
 	inline void DisableDeviceContextStateIsolation(ID3D11DeviceContext* context)
 	{
-		if (context == detail::registeredStateContext.get())
+		if (!context || !detail::registeredStateContext || !detail::contextStateIsolationAvailable)
+			return;
+		if (context == detail::registeredStateContext.get()) {
+			detail::contextStateIsolationAvailable = false;
+			return;
+		}
+		// Only IUnknown identity is shared by every interface view of the context.
+		const auto identity = detail::QueryContextIdentity(context);
+		if (identity && identity.get() == detail::registeredStateIdentity.get())
 			detail::contextStateIsolationAvailable = false;
 	}
 }

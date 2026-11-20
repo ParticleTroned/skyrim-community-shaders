@@ -328,14 +328,7 @@ Util::VirtualHookResult Util::InstallVirtualFunctionHook(ID3D11DeviceContext* a_
 
 Util::VirtualHookResult Util::InstallVirtualFunctionHook(ID3D11DeviceContext1* a_object, std::size_t a_slot, void** a_original, void* a_hook)
 {
-	const auto result = InstallGraphicsHook(a_object, a_slot, kContext1Slots, ContextSlots<kContext1Slots>, a_original, a_hook);
-	if (a_object && result.method != VirtualHookMethod::Detour) {
-		// A Context1 interface can have a different address from the registered base context.
-		winrt::com_ptr<ID3D11DeviceContext> baseContext;
-		if (SUCCEEDED(a_object->QueryInterface(__uuidof(ID3D11DeviceContext), baseContext.put_void())))
-			DisableDeviceContextStateIsolation(baseContext.get());
-	}
-	return CompleteContextHook(a_object, result);
+	return CompleteContextHook(a_object, InstallGraphicsHook(a_object, a_slot, kContext1Slots, ContextSlots<kContext1Slots>, a_original, a_hook));
 }
 
 Util::VirtualHookResult Util::InstallVirtualFunctionHook(IDXGISwapChain* a_object, std::size_t a_slot, void** a_original, void* a_hook)

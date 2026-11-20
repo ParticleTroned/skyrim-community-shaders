@@ -1,3 +1,5 @@
+#include "Common/Finite.hlsli"
+
 // Identical raw pairs or positive x == y at every texel prove a scalar ratio.
 // The host validates one visible mip and non-border, non-comparison sampling.
 Texture2D<float4> EngineAverage : register(t0);
@@ -7,17 +9,17 @@ float4 ExposureValue(float2 average)
 {
 	float ratio = 1.0;
 	float validity = 0.0;
-	if (all(isfinite(average)) && all(average >= 0.0)) {
+	if (all(Finite::IsFinite(average)) && all(average >= 0.0)) {
 		if (average.x == 0.0 || average.y == 0.0) {
 			// ISHDR leaves input unchanged here; distinguish this from a measured 1.
 			validity = 2.0;
 		} else {
 			ratio = average.x == average.y ? 1.0 : average.y / average.x;
-			if (isfinite(ratio) && ratio >= (1.0 / 256.0) && ratio <= 256.0)
+			if (Finite::IsFinite(ratio) && ratio >= (1.0 / 256.0) && ratio <= 256.0)
 				validity = 1.0;
 		}
 	}
-	return float4(average, isfinite(ratio) ? ratio : 1.0, validity);
+	return float4(average, Finite::IsFinite(ratio) ? ratio : 1.0, validity);
 }
 
 [numthreads(1, 1, 1)] void main(uint3 id : SV_DispatchThreadID) {
@@ -38,7 +40,7 @@ float4 ExposureValue(float2 average)
 			if (x >= width || y >= height)
 				continue;
 			float2 value = EngineAverage.Load(int3(x, y, 0)).xy;
-			finite = finite && all(isfinite(value));
+			finite = finite && all(Finite::IsFinite(value));
 			uniformValues = uniformValues && all(value == first);
 			unitRatio = unitRatio && value.x > 0.0 && value.x == value.y;
 			ExposureSnapshot[uint2(1 + y * width + x, 0)] = ExposureValue(value);

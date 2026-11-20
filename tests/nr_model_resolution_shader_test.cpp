@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -157,7 +158,7 @@ ID3D11DeviceChild* Util::CompileShader(const wchar_t* path,
 	if (!code) {
 		Microsoft::WRL::ComPtr<ID3DBlob> errors;
 		const auto compilationResult = D3DCompileFromFile(shaderPath.c_str(), defines.data(), &includes,
-			entry, target, D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS, 0, &code, &errors);
+			entry, target, D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &errors);
 		if (errors)
 			std::cerr << static_cast<const char*>(errors->GetBufferPointer());
 		D3D11ShaderTest::Check(compilationResult);
@@ -2818,6 +2819,7 @@ namespace
 		adapter.ReleaseUnscaledSlots(args);
 		Require(adapter.RetainedBytes(0) == 0 && adapter.RetainedBytes(1) == 0, "100% retained downscaling caches");
 	}
+#include "nr_finite_shader_checks.h"
 #include "nr_peripheral_shader_checks.h"
 }
 
@@ -2837,6 +2839,7 @@ int main()
 		static_assert(NeuralRendering::Color::Work::AllocationExtent(wide)[1] == 384);
 		for (bool vr : { false, true }) {
 			AdapterCompiler::vr = vr;
+			CheckFiniteClassification(device.Get(), context.Get(), vr);
 			for (bool reversed : { false, true }) {
 				const std::array<D3D_SHADER_MACRO, 1> depthDefines{ D3D_SHADER_MACRO{ "REVERSE_Z", "1" } };
 				Shader donorShader(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl",
@@ -2901,6 +2904,11 @@ int main()
 				CheckSelectedAdapter(device.Get(), context.Get(), vr);
 				Shader prepare(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionPrepareCS.hlsl", vr);
 				Shader reconstruct(device.Get(), L"features/Neural Rendering/Shaders/Upscaling/NeuralRendering/ModelResolutionReconstructCS.hlsl", vr);
+				CheckNonFiniteReconstruction(device.Get(), context.Get(), reconstruct);
+				CheckFusedNonFiniteReconstruction(device.Get(), context.Get(), vr);
+				CheckHalfReconstructionBoundaries(device.Get(), context.Get(), reconstruct);
+				if (!guided)
+					CheckPreparationOverflow(device.Get(), context.Get(), prepare);
 				for (bool mask : { false, true })
 					CheckPrepare(device.Get(), context.Get(), prepare, mask);
 				for (bool fullScale : { false, true })

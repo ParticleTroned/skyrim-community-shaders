@@ -27,7 +27,7 @@ bool ReadResidual(int2 coordinate, uint4 bounds, out float3 residual, out float3
 	original = ProxyColor.Load(int3(coordinate, 0)).rgb;
 	float3 neural = ProxyNeural.Load(int3(coordinate, 0)).rgb;
 	residual = neural - original;
-	return all(isfinite(original)) && all(isfinite(neural)) && all(isfinite(residual));
+	return all(Finite::IsFinite(original)) && all(Finite::IsFinite(neural)) && all(Finite::IsFinite(residual));
 }
 
 bool BilinearResidual(float2 position, uint4 bounds, out float3 residual, out float3 proxy)
@@ -123,6 +123,10 @@ float CentralWeight(float2 uv)
 		return;
 	}
 #endif
+	if (!all(Finite::IsFinite(source))) {
+		Result[pixel] = source;
+		return;
+	}
 #ifdef NR_PERIPHERAL_COMPRESSION
 	float2 position = PeripheralForward((float2(pixel) + 0.5) / float2(SourceSize)) * float2(ModelSize) - 0.5;
 #else
@@ -147,15 +151,15 @@ float CentralWeight(float2 uv)
 	valid = BilinearResidual(position, bounds, residual, proxy);
 #endif
 #ifdef NR_PERIPHERAL_COMPRESSION
-	valid = valid && all(isfinite(proxy));
+	valid = valid && all(Finite::IsFinite(proxy));
 	residual = TransferCompressedResidual(source.rgb, proxy, residual);
 #endif
 	// Reconstruct only the matched change; the original image retains its fine detail.
 	precise float3 candidate = source.rgb + residual * weight;
-	valid = valid && all(isfinite(candidate));
+	valid = valid && all(Finite::IsFinite(candidate));
 #if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NR_WHOLE_PIXEL_REJECTION)
 	if (OutputFormat == 1u)
-		valid = valid && all(abs(candidate) <= 65504.0);
+		valid = valid && all(abs(candidate) <= Finite::kMaximumHalf);
 	else if (OutputFormat == 2u)
 		valid = valid && all(candidate >= 0.0) && all(candidate <= float3(65024.0, 65024.0, 64512.0));
 	else if (OutputFormat == 3u)
@@ -163,7 +167,7 @@ float CentralWeight(float2 uv)
 #endif
 	// Finite channel overflow saturates continuously; corrupt samples still retain the original pixel.
 	if (OutputFormat == 1u)
-		candidate = clamp(candidate, -65504.0, 65504.0);
+		candidate = clamp(candidate, -Finite::kMaximumHalf, Finite::kMaximumHalf);
 	else if (OutputFormat == 2u)
 		candidate = clamp(candidate, 0.0, float3(65024.0, 65024.0, 64512.0));
 	else if (OutputFormat == 3u)

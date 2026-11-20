@@ -1,6 +1,8 @@
 #ifndef CSX_NR_COLOR_COMMON
 #define CSX_NR_COLOR_COMMON
 
+#include "Common/Finite.hlsli"
+
 cbuffer NRColorCB : register(b0)
 {
 	uint2 RegionOffset;
@@ -53,10 +55,10 @@ bool EffectiveExposure(out float exposure)
 		float4 captured = ExposureSnapshot.Load(int3(0, 0, 0));
 		// A GPU snapshot must contain a valid ratio, not the zero-input unit
 		// fallback. Missing/stale capture is explicitly invalid, never "1 known".
-		valid = all(isfinite(captured)) && all(captured.xyz > 0.0) && captured.w == 1.0;
+		valid = all(Finite::IsFinite(captured)) && all(captured.xyz > 0.0) && captured.w == 1.0;
 		exposure *= captured.z;
 	}
-	return valid && isfinite(exposure) && exposure >= (1.0 / 256.0) && exposure <= 256.0;
+	return valid && Finite::IsFinite(exposure) && exposure >= (1.0 / 256.0) && exposure <= 256.0;
 }
 
 #ifdef NR_NVIDIA_REFERENCE
@@ -66,7 +68,7 @@ bool EffectiveExposure(out float exposure)
 bool ForwardColor(float3 source, out float3 prepared)
 {
 	prepared = source;
-	if (!all(isfinite(source)))
+	if (!all(Finite::IsFinite(source)))
 		return false;
 	if (ColorTransform == 0)
 		return true;
@@ -74,25 +76,25 @@ bool ForwardColor(float3 source, out float3 prepared)
 	if (any(source < 0.0) || !EffectiveExposure(exposure))
 		return false;
 	prepared = source * exposure;
-	if (!all(isfinite(prepared)))
+	if (!all(Finite::IsFinite(prepared)))
 		return false;
 #ifdef NR_NVIDIA_REFERENCE
 	if (ColorTransform == 3) {
 		prepared = pow(ReferenceTone(prepared), 1.0 / 2.2);
-		return all(isfinite(prepared));
+		return all(Finite::IsFinite(prepared));
 	}
 #endif
 	float maximum = Maximum3(prepared);
 	if (ColorTransform == 2)
 		prepared *= ProxyForwardScale(maximum);
 	prepared = EncodeSRGB3(prepared);
-	return all(isfinite(prepared));
+	return all(Finite::IsFinite(prepared));
 }
 
 bool InverseColor(float3 model, out float3 source)
 {
 	source = model;
-	if (!all(isfinite(model)))
+	if (!all(Finite::IsFinite(model)))
 		return false;
 	if (ColorTransform == 0)
 		return true;
@@ -106,24 +108,24 @@ bool InverseColor(float3 model, out float3 source)
 	source = DecodeSRGB3(model);
 	if (ColorTransform == 2) {
 		float maximum = Maximum3(source);
-		if (!all(isfinite(source)) || maximum * ProxyLogScale >= 128.0)
+		if (!all(Finite::IsFinite(source)) || maximum * ProxyLogScale >= 128.0)
 			return false;
 		source *= ProxyInverseScale(maximum);
 	}
 	source /= exposure;
-	return all(isfinite(source));
+	return all(Finite::IsFinite(source));
 }
 // FP32-finite results may still overflow a packed/half UAV or silently clamp
 // on UNORM storage. Reject those edits before the store; do not change exposure.
 bool RepresentableRGB(float3 value)
 {
-	if (!all(isfinite(value)))
+	if (!all(Finite::IsFinite(value)))
 		return false;
 	uint storage = ControlFlags & 0x300u;
 	if (storage == 0x100u)
 		return all(value >= 0.0) && all(value <= float3(65024.0, 65024.0, 64512.0));
 	if (storage == 0x200u)
-		return all(abs(value) <= 65504.0);
+		return all(abs(value) <= Finite::kMaximumHalf);
 	if (storage == 0x300u)
 		return all(value >= 0.0) && all(value <= 1.0);
 	return true;
@@ -138,7 +140,7 @@ bool ReconstructCandidate(float3 baseline, float3 prepared, float3 neural, out f
 #ifdef NR_NVIDIA_REFERENCE
 	if (ColorTransform == 3) {
 		float exposure;
-		if (!ForwardColor(baseline, check) || !EffectiveExposure(exposure) || !all(isfinite(prepared)) || !all(isfinite(neural)))
+		if (!ForwardColor(baseline, check) || !EffectiveExposure(exposure) || !all(Finite::IsFinite(prepared)) || !all(Finite::IsFinite(neural)))
 			return false;
 		float3 exposed = baseline * exposure;
 		float3 tone = ReferenceTone(exposed);

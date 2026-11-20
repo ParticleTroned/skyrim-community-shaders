@@ -1,3 +1,5 @@
+#include "Common/Finite.hlsli"
+
 struct PackedCropTile
 {
 	uint4 source;

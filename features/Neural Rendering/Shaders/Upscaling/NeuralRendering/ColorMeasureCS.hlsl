@@ -23,7 +23,7 @@ groupshared float2 invalidCodecs[256];
 		float3 b = Baseline.Load(int3(p, 0)).rgb;
 		float3 n = Neural.Load(int3(RegionOffset + p, 0)).rgb;
 		float3 r = Result.Load(int3(p, 0)).rgb;
-		bool bv = all(isfinite(b)), nv = all(isfinite(n)), rv = all(isfinite(r));
+		bool bv = all(Finite::IsFinite(b)), nv = all(Finite::IsFinite(n)), rv = all(Finite::IsFinite(r));
 		float3 ignored;
 		invalid.x += ForwardColor(b, ignored) ? 0.0 : 1.0;
 		invalid.y += ReconstructCandidate(b, Prepared.Load(int3(RegionOffset + p, 0)).rgb, n, ignored) ? 0.0 : 1.0;

@@ -21,7 +21,7 @@ bool GuidedResidual(float2 position, uint4 bounds, float3 reference, out float3 
 	valid = ReadResidual(base + int2(1, 1), bounds, r11, p11) && valid;
 	residual = lerp(lerp(r00, r10, phase.x), lerp(r01, r11, phase.x), phase.y);
 	proxy = lerp(lerp(p00, p10, phase.x), lerp(p01, p11, phase.x), phase.y);
-	if (!valid || !all(isfinite(reference)))
+	if (!valid || !all(Finite::IsFinite(reference)))
 		return valid;
 	// One shared magnitude keeps signed HDR distances bounded and invariant to common exposure changes.
 	const float3 magnitude = max(abs(reference), max(max(abs(p00), abs(p10)), max(abs(p01), abs(p11))));
@@ -33,13 +33,13 @@ bool GuidedResidual(float2 position, uint4 bounds, float3 reference, out float3 
 	const float4 weights = spatial * float4(GuideSimilarity(normalized, p00 / scale), GuideSimilarity(normalized, p10 / scale),
 										 GuideSimilarity(normalized, p01 / scale), GuideSimilarity(normalized, p11 / scale));
 	const float normalization = dot(weights, 1.0);
-	if (!all(isfinite(weights)) || any(weights < 0.0) || !isfinite(normalization) || normalization <= 1e-6)
+	if (!all(Finite::IsFinite(weights)) || any(weights < 0.0) || !Finite::IsFinite(normalization) || normalization <= 1e-6)
 		return true;
 	const float3 guided = (weights.x * r00 + weights.y * r10 + weights.z * r01 + weights.w * r11) / normalization;
 	const float3 guidedProxy = (weights.x * p00 + weights.y * p10 + weights.z * p01 + weights.w * p11) / normalization;
-	bool validGuided = all(isfinite(guided));
+	bool validGuided = all(Finite::IsFinite(guided));
 #ifdef NR_PERIPHERAL_COMPRESSION
-	validGuided = validGuided && all(isfinite(guidedProxy));
+	validGuided = validGuided && all(Finite::IsFinite(guidedProxy));
 #endif
 	// Invalid optional guidance retains the valid bilinear estimate.
 	if (validGuided) {

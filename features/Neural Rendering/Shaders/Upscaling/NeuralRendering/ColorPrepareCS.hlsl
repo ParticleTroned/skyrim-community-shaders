@@ -9,5 +9,5 @@ RWTexture2D<float4> Prepared : register(u0);
 	// Missing/invalid captured exposure is excluded again in reconstruction and
 	// counted in diagnostics; black is finite input, not a guessed colour space.
 	bool valid = ForwardColor(original.rgb, value);
-	Prepared[RegionOffset + id.xy] = float4(valid ? value : 0.0, isfinite(original.a) ? original.a : 0.0);
+	Prepared[RegionOffset + id.xy] = float4(valid ? value : 0.0, Finite::IsFinite(original.a) ? original.a : 0.0);
 }

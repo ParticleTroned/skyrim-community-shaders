@@ -102,9 +102,9 @@ GuideDonor EmptyGuideDonor()
 void ConsiderGuide(uint2 source, inout GuideDonor donor)
 {
 	float depth = InputDepth.Load(int3(source, 0));
-	if (isfinite(depth) && depth >= 0.0 && depth <= 1.0 && (!donor.found || DepthOrder::IsNearer(depth, donor.depth))) {
+	if (Finite::IsFinite(depth) && depth >= 0.0 && depth <= 1.0 && (!donor.found || DepthOrder::IsNearer(depth, donor.depth))) {
 		float2 velocity = InputMotion.Load(int3(source, 0));
-		if (all(isfinite(velocity))) {
+		if (all(Finite::IsFinite(velocity))) {
 			donor.depth = depth;
 			donor.motion = velocity;
 #ifdef NR_PERIPHERAL_COMPRESSION
@@ -125,9 +125,9 @@ float2 GuideMotion(GuideDonor donor, uint2 pixel, uint2 guideSize, uint2 modelGu
 	anchor = PeripheralInverse((float2(pixel) + 0.5) / float2(modelGuideSize));
 #	endif
 	atlasMotion = PeripheralForward(anchor + atlasMotion) - PeripheralForward(anchor);
-	atlasMotion = all(isfinite(atlasMotion)) ? atlasMotion : 0.0;
 #endif
-	return atlasMotion;
+	// Private guides can retain an FP16 source carrier after normalization.
+	return all(Finite::IsFinite(atlasMotion)) && all(abs(atlasMotion) <= Finite::kMaximumHalf) ? atlasMotion : 0.0;
 }
 
 void PrepareColor(uint2 id, bool sharedGuides)
@@ -172,11 +172,11 @@ void PrepareColor(uint2 id, bool sharedGuides)
 			if (sharedGuides)
 				ConsiderGuide(source, donor);
 			float4 value = InputColor.Load(int3(source, 0));
-			color += (all(isfinite(value)) ? value : 0.0) * weight;
+			color += (all(Finite::IsFinite(value)) ? value : 0.0) * weight;
 			area += weight;
 			if (HasMask != 0u) {
 				float selection = InputMask.Load(int3(source, 0));
-				mask = max(mask, isfinite(selection) ? saturate(selection) : 0.0);
+				mask = max(mask, Finite::IsFinite(selection) ? saturate(selection) : 0.0);
 			}
 		}
 	}
@@ -184,7 +184,8 @@ void PrepareColor(uint2 id, bool sharedGuides)
 		ProxyDepth[pixel] = donor.depth;
 		ProxyMotion[pixel] = GuideMotion(donor, pixel, SourceSize, ModelSize);
 	}
-	ProxyColor[pixel] = area > 0.0 ? color / area : 0.0;
+	const float4 prepared = area > 0.0 ? color / area : 0.0;
+	ProxyColor[pixel] = all(Finite::IsFinite(prepared)) ? prepared : 0.0;
 	if (HasMask != 0u)
 		ProxyMask[pixel] = mask;
 }

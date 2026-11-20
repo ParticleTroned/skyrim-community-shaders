@@ -2,18 +2,18 @@
 #define __VOLUMETRIC_LIGHTING_DEPENDENCY_HLSL__
 
 #include "Common/Color.hlsli"
+#include "Common/Finite.hlsli"
 
 namespace VolumetricLighting
 {
-	static const float kColorChannelMax = 65504.0;
+	static const float kColorChannelMax = Finite::kMaximumHalf;
 	static const float kTuningEpsilon = 0.0001;
 	static const float kSaturationMax = 4.0;
 	static const float kOpacityMax = 2.0;
 
 	bool IsFinite(float value)
 	{
-		// Inspect the input bits before FXC can fold finite checks into a clamp.
-		return (asuint(value) & 0x7f800000) != 0x7f800000;
+		return Finite::IsFinite(value);
 	}
 
 	float3 SanitizeColor(float3 color)

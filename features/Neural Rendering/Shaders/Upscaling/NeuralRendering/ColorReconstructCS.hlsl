@@ -36,7 +36,7 @@ float3 RoundPreserveSourceForStorage(float3 value)
 	if (any(local >= RegionSize))
 		return;
 	float4 baseline = Baseline.Load(int3(local, 0));
-	if (!all(isfinite(baseline))) {
+	if (!all(Finite::IsFinite(baseline))) {
 		Result[local] = 0.0;
 		return;
 	}
@@ -92,7 +92,7 @@ float3 RoundPreserveSourceForStorage(float3 value)
 	float baseY = Luminance(baseWorking), neuralY = Luminance(neuralWorking);
 	float3 preserved = baseline.rgb;
 	if (DetailStrength > 0.0 && baseY > 1e-5 && neuralY > 1e-5 &&
-		all(baseWorking >= 0.0) && all(neuralWorking >= 0.0) && all(isfinite(baseWorking)) && all(isfinite(neuralWorking))) {
+		all(baseWorking >= 0.0) && all(neuralWorking >= 0.0) && all(Finite::IsFinite(baseWorking)) && all(Finite::IsFinite(neuralWorking))) {
 		float residual = (log2(neuralY) - log2(baseY));
 		float acceptedResidual = residual;
 		// Zero preservation uses only the current residual, including resolved Neural Lighting.
@@ -108,7 +108,7 @@ float3 RoundPreserveSourceForStorage(float3 value)
 					float3 b = ToWorking(Baseline.Load(int3(p, 0)).rgb);
 					float3 n = ToWorking(Candidate(p, Baseline.Load(int3(p, 0)).rgb));
 					float by = Luminance(b), ny = Luminance(n);
-					if (by > 1e-5 && ny > 1e-5 && all(b >= 0.0) && all(n >= 0.0) && all(isfinite(b)) && all(isfinite(n))) {
+					if (by > 1e-5 && ny > 1e-5 && all(b >= 0.0) && all(n >= 0.0) && all(Finite::IsFinite(b)) && all(Finite::IsFinite(n))) {
 						float distance = abs((log2(by) - log2(baseY)));
 						float weight = exp2(-4.0 * distance) * ((x == 0 && y == 0) ? 4.0 : 1.0);
 						weightedResidual += weight * (log2(ny) - log2(by));

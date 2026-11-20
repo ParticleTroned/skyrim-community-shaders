@@ -49,13 +49,13 @@ static Texture Make(ID3D11Device* device, UINT size, Pixel value, DXGI_FORMAT fo
 	Check(device->CreateUnorderedAccessView(t.resource.Get(), nullptr, &t.uav));
 	return t;
 }
-static ComPtr<ID3D11ComputeShader> Compile(ID3D11Device* d, const std::filesystem::path& path)
+static ComPtr<ID3D11ComputeShader> Compile(ID3D11Device* d, const std::filesystem::path& path, UINT flags)
 {
 	ComPtr<ID3DBlob> bytes, errors;
 	PackageIncludes includes(path.parent_path().parent_path().parent_path(),
 		std::filesystem::path(__FILE__).parent_path().parent_path().parent_path() / "package/Shaders");
 	auto hr = D3DCompileFromFile(path.c_str(), nullptr, &includes, "main", "cs_5_0",
-		D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_IEEE_STRICTNESS, 0, &bytes, &errors);
+		flags, 0, &bytes, &errors);
 	if (errors)
 		std::fprintf(stderr, "%.*s\n", static_cast<int>(errors->GetBufferSize()), static_cast<const char*>(errors->GetBufferPointer()));
 	Check(hr);
@@ -191,9 +191,8 @@ static void VerifyFinalizedBindings(ID3D11Device* d, ID3D11DeviceContext* c, ID3
 	Require(!missing.average && !missing.shader);
 	Require(ExposureDrawRejection(reinterpret_cast<std::uintptr_t>(pixelShader.Get()), 0, 0));
 }
-int main(int argc, char** argv)
+static void CheckExposureShaders(const std::filesystem::path& folder, UINT flags)
 {
-	Require(argc == 2);
 	D3D11_SAMPLER_DESC sampler{};
 	sampler.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
 	sampler.AddressU = sampler.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
@@ -214,12 +213,11 @@ int main(int argc, char** argv)
 	ComPtr<ID3D11DeviceContext> c;
 	const D3D_FEATURE_LEVEL level = D3D_FEATURE_LEVEL_11_0;
 	Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, &level, 1, D3D11_SDK_VERSION, &d, nullptr, &c));
-	const std::filesystem::path folder(argv[1]);
-	auto capture = Compile(d.Get(), folder / "ColorExposureCS.hlsl");
+	auto capture = Compile(d.Get(), folder / "ColorExposureCS.hlsl", flags);
 	VerifyFinalizedBindings(d.Get(), c.Get(), capture.Get());
-	auto prepare = Compile(d.Get(), folder / "ColorPrepareCS.hlsl");
-	auto reconstruct = Compile(d.Get(), folder / "ColorReconstructCS.hlsl");
-	auto measure = Compile(d.Get(), folder / "ColorMeasureCS.hlsl");
+	auto prepare = Compile(d.Get(), folder / "ColorPrepareCS.hlsl", flags);
+	auto reconstruct = Compile(d.Get(), folder / "ColorReconstructCS.hlsl", flags);
+	auto measure = Compile(d.Get(), folder / "ColorMeasureCS.hlsl", flags);
 	auto average = Make(d.Get(), 1, { 2, 0.5f, 0, 0 });
 	auto exposure = Make(d.Get(), kExposureSnapshotPixels, {}, DXGI_FORMAT_R32G32B32A32_FLOAT, 1);
 	Dispatch(c.Get(), capture.Get(), { average.srv.Get() }, exposure.uav.Get());
@@ -438,5 +436,12 @@ int main(int argc, char** argv)
 	v = statistics();
 	Require(v[17] == 64);
 	std::puts("Exposure/codec/storage/t4/A-B/measurement WARP checks passed; engine hooks and NGX are not exercised.");
+}
+
+int main(int argc, char** argv)
+{
+	Require(argc == 2);
+	for (const auto mode : { D3DCOMPILE_IEEE_STRICTNESS, D3DCOMPILE_OPTIMIZATION_LEVEL3 })
+		CheckExposureShaders(std::filesystem::path(argv[1]), D3DCOMPILE_ENABLE_STRICTNESS | mode);
 	return 0;
 }

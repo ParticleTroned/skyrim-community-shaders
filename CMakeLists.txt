@@ -1726,6 +1726,18 @@ if(BUILD_CONTROLLER_TESTS)
         NvidiaPipelineContract
         PROPERTIES LABELS "ControllerTests"
     )
+    add_test(
+        NAME StreamlineCompatibleHeaders
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/Testing/StreamlineCompatibleHeaders"
+            "-DTEST_GENERATOR=${CMAKE_GENERATOR}" -P
+            "${PROJECT_SOURCE_DIR}/tests/streamline_compatible_headers_test.cmake"
+    )
+    set_tests_properties(
+        StreamlineCompatibleHeaders
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_test(
         NAME BuildProvenance

@@ -30,12 +30,13 @@ namespace LightLimitFixDetail::ShadowCulling
 		bool sun = true, torch = true, actors = true, interiorTorches = true;
 		float sunDistanceMeters = DefaultSunDistanceMeters, torchDistanceMeters = DefaultTorchDistanceMeters, actorDistanceMeters = DefaultActorDistanceMeters;
 		bool smallActorParts = true;
+		bool skipFlameEnclosure = true;
 		float actorPartDistanceMeters = DefaultActorPartDistanceMeters, actorPartReturnDistanceMeters = DefaultActorPartReturnDistanceMeters;
 		float actorPartRadiusCentimeters = DefaultActorPartRadiusCentimeters;
 		bool operator==(const Settings&) const = default;
 		/** Any zero part slider disables the policy without losing its checkbox preference. */
 		[[nodiscard]] bool ActorPartsEnabled() const noexcept { return smallActorParts && actorPartDistanceMeters > 0 && actorPartReturnDistanceMeters > 0 && actorPartRadiusCentimeters > 0; }
-		[[nodiscard]] bool Active() const noexcept { return sun || torch || actors || ActorPartsEnabled(); }
+		[[nodiscard]] bool Active() const noexcept { return sun || torch || actors || ActorPartsEnabled() || skipFlameEnclosure; }
 	};
 	inline void Validate(const Settings& value)
 	{
@@ -58,11 +59,12 @@ namespace LightLimitFixDetail::ShadowCulling
 		if (legacy && (value.contains("sunDistanceMeters") || value.contains("torchDistanceMeters")))
 			throw std::invalid_argument("Use either legacy minimumDistanceMeters or separate sun/torch distances");
 		for (const auto& [name, field] : value.items()) {
-			bool* flag = name == "sun" ? &result.sun : name == "torch"       ? &result.torch :
-			                                       name == "actors"          ? &result.actors :
-			                                       name == "interiorTorches" ? &result.interiorTorches :
-			                                       name == "smallActorParts" ? &result.smallActorParts :
-			                                                                   nullptr;
+			bool* flag = name == "sun" ? &result.sun : name == "torch"          ? &result.torch :
+			                                       name == "actors"             ? &result.actors :
+			                                       name == "interiorTorches"    ? &result.interiorTorches :
+			                                       name == "smallActorParts"    ? &result.smallActorParts :
+			                                       name == "skipFlameEnclosure" ? &result.skipFlameEnclosure :
+			                                                                      nullptr;
 			if (flag) {
 				if (!field.is_boolean())
 					throw std::invalid_argument(name + " must be boolean");
@@ -110,7 +112,7 @@ namespace LightLimitFixDetail::ShadowCulling
 	{
 		value = { { "sun", settings.sun }, { "torch", settings.torch }, { "actors", settings.actors }, { "interiorTorches", settings.interiorTorches },
 			{ "sunDistanceMeters", settings.sunDistanceMeters }, { "torchDistanceMeters", settings.torchDistanceMeters }, { "actorDistanceMeters", settings.actorDistanceMeters },
-			{ "smallActorParts", settings.smallActorParts }, { "actorPartDistanceMeters", settings.actorPartDistanceMeters },
+			{ "skipFlameEnclosure", settings.skipFlameEnclosure }, { "smallActorParts", settings.smallActorParts }, { "actorPartDistanceMeters", settings.actorPartDistanceMeters },
 			{ "actorPartReturnDistanceMeters", settings.actorPartReturnDistanceMeters }, { "actorPartRadiusCentimeters", settings.actorPartRadiusCentimeters } };
 	}
 	inline void from_json(const nlohmann::json& value, Settings& settings) { settings = Parse(value, {}, true); }

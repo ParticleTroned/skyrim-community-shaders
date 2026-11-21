@@ -92,7 +92,10 @@ class Source:
             while j < len(self.tokens) and self.tokens[j] not in ("{", ";", "(", "=", ",", ">"):
                 j += 1
             if j in self.pairs and self.tokens[j] == "{":
-                self.scopes.append((j, self.pairs[j], self.tokens[i + 1]))
+                name = self.tokens[i + 1]
+                if token == "namespace" and all(t == "::" or IDENTIFIER.fullmatch(t) for t in self.tokens[i + 1:j]):
+                    name = "".join(self.tokens[i + 1:j])
+                self.scopes.append((j, self.pairs[j], name))
         self.functions = self.find_functions()
         self.constants = {}
         for i in range(1, len(self.tokens) - 2):

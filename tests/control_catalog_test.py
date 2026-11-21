@@ -23,6 +23,17 @@ void Sample::DrawSettings() {
 
 
 class CatalogTests(unittest.TestCase):
+    def test_qualified_namespace_helper_preserves_section(self):
+        entries = extract('''
+if (page.Is("shadows")) Detail::Shadows::DrawSettings();
+''', '''
+namespace Detail::Shadows {
+void DrawSettings() { Util::Widgets::Checkbox("Skip a light's own flame holder", &v); }
+}
+''')
+        self.assertEqual([(e["section"], e["label"]) for e in entries],
+                         [("shadows", "Skip a light's own flame holder")])
+
     def test_unvisited_tabs_and_helper_labels(self):
         entries = extract('''
 if (page.Is("first")) { Helper("Strength##one"); }

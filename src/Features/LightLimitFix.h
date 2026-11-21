@@ -320,6 +320,7 @@ public:
 		settings.ShadowCulling.torch = a_enabled && defaults.ShadowCulling.torch;
 		settings.ShadowCulling.actors = a_enabled && defaults.ShadowCulling.actors;
 		settings.ShadowCulling.smallActorParts = a_enabled && defaults.ShadowCulling.smallActorParts;
+		settings.ShadowCulling.skipFlameEnclosure = a_enabled && defaults.ShadowCulling.skipFlameEnclosure;
 		settings.SkipRedundantLightAttach = a_enabled && defaults.SkipRedundantLightAttach;
 		LightLimitFixDetail::LightAttach::Invalidate();
 	}
@@ -349,13 +350,14 @@ public:
 			settings.ShadowCulling.torch = defaults.ShadowCulling.torch;
 			settings.ShadowCulling.actors = defaults.ShadowCulling.actors;
 			settings.ShadowCulling.smallActorParts = defaults.ShadowCulling.smallActorParts;
+			settings.ShadowCulling.skipFlameEnclosure = defaults.ShadowCulling.skipFlameEnclosure;
 			return;
 		}
 
 		settings.EnableParticleLights = false;
 		SetContactShadowsEnabled(false);
 		settings.EnableParticleContactShadows = false;
-		settings.ShadowCulling.sun = settings.ShadowCulling.torch = settings.ShadowCulling.actors = settings.ShadowCulling.smallActorParts = false;
+		settings.ShadowCulling.sun = settings.ShadowCulling.torch = settings.ShadowCulling.actors = settings.ShadowCulling.smallActorParts = settings.ShadowCulling.skipFlameEnclosure = false;
 	}
 	virtual json CapturePerformanceCostMeasurementState() const override
 	{

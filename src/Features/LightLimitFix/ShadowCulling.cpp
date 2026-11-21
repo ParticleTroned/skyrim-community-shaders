@@ -52,7 +52,7 @@ namespace LightLimitFixDetail::ShadowCulling
 		AppendFunction appendOriginal = nullptr;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		std::atomic_uint64_t sunSkipped{ 0 }, torchSkipped{ 0 }, actorSkipped{ 0 }, pointDrawsTested{ 0 };
-		std::atomic_uint64_t actorPartDrawsSkipped{ 0 };
+		std::atomic_uint64_t actorPartDrawsSkipped{ 0 }, flameHolderDrawsSkipped{ 0 };
 #endif
 		struct Caster
 		{
@@ -124,6 +124,12 @@ namespace LightLimitFixDetail::ShadowCulling
 			return captured.actorPartHistory->Beyond(caster.actorReference->GetHandle().native_handle(),
 				{ position.x, position.y, position.z }, captured.eyes, captured.eyeCount, captured.sampledAt, captured.frame);
 		}
+		bool MatchesPointLight(const Camera& matched)
+		{
+			const auto* light = matched.pointOwner.get();
+			return light && light->light && light->light.get() == matched.pointSource.get() &&
+			       light->worldTranslate == matched.lightPosition && light->light->GetLightRuntimeData().radius.x == matched.lightRadius;
+		}
 		bool Skip(const Snapshot& captured, const Camera& matched, RE::BSGeometry& geometry, bool actorPart = false)
 		{
 			Demand demand;
@@ -148,13 +154,8 @@ namespace LightLimitFixDetail::ShadowCulling
 			const std::array<double, 3> center{ geometry.worldBound.center.x, geometry.worldBound.center.y, geometry.worldBound.center.z };
 			if (!BoundsMayCull(captured.settings, demand, center, captured.eyes))
 				return false;
-			if (matched.pass == Pass::Point) {
-				const auto* light = matched.pointOwner.get();
-				if (!light || light->light.get() != matched.pointSource.get() ||
-					light->worldTranslate != matched.lightPosition || !light->light ||
-					light->light->GetLightRuntimeData().radius.x != matched.lightRadius)
-					return false;
-			}
+			if (matched.pass == Pass::Point && !MatchesPointLight(matched))
+				return false;
 			if (!actorPart)
 				caster = Classify(geometry);
 			demand.actor = caster.actor;
@@ -217,6 +218,8 @@ namespace LightLimitFixDetail::ShadowCulling
 			demand.dynamic = false;
 			// Keep the bounded camera order intact, including first-match identity semantics.
 			return std::any_of(captured.cameras.begin(), captured.cameras.begin() + captured.cameraCount, [&](const Camera& camera) {
+				if (camera.pass == Pass::Point && captured.settings.skipFlameEnclosure)
+					return true;
 				demand.pass = camera.pass;
 				demand.cascade = camera.cascade;
 				demand.actorPart = true;
@@ -306,6 +309,13 @@ namespace LightLimitFixDetail::ShadowCulling
 		if (!sun)
 			pointDrawsTested.fetch_add(1, std::memory_order_relaxed);
 #endif
+		if (!sun && captured->settings.skipFlameEnclosure && MatchesPointLight(*camera) &&
+			ShouldSkipFlameHolder(*DrawScope::FlameHolder(), *camera->pointOwner.get(), *pass->geometry)) {
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			flameHolderDrawsSkipped.fetch_add(1, std::memory_order_relaxed);
+#endif
+			return true;
+		}
 		return (!sun && Skip(*captured, *camera, *pass->geometry)) ||
 		       (captured->settings.ActorPartsEnabled() && Skip(*captured, *camera, *pass->geometry, true));
 	}
@@ -416,6 +426,9 @@ namespace LightLimitFixDetail::ShadowCulling
 		Util::Widgets::SliderFloat("Torch shadow distance", &settings.torchDistanceMeters, MinimumDistanceMeters, MaximumDistanceMeters, "%.0f m");
 		Util::AddTooltip("Minimum distance from the caster's bound. Default: 15 m. Light magnification and an additional stereo movement margin can retain more shadows.");
 		ImGui::Spacing();
+		Util::Widgets::Checkbox("Skip a light's own flame holder", &settings.skipFlameEnclosure);
+		Util::AddTooltip("Prevent small holders around or directly beneath their own flame from blocking its light. On by default, indoors and outdoors, independently of distance culling. Only the same non-actor placed object's holder shadow is omitted; other lights and larger fixtures retain it. Disable if a modded fixture loses a wanted shadow.");
+		ImGui::Spacing();
 		Util::Widgets::Checkbox("Distant NPC shadows", &settings.actors);
 		Util::AddTooltip("Also omit distant NPC shadows. Characters and their texture detail stay visible.");
 		Util::Widgets::SliderFloat("NPC distance", &settings.actorDistanceMeters, MinimumDistanceMeters, MaximumDistanceMeters, "%.0f m");
@@ -452,6 +465,7 @@ namespace LightLimitFixDetail::ShadowCulling
 		result["torchSkipped"] = torchSkipped.load();
 		result["pointDrawsTested"] = pointDrawsTested.load();
 		result["actorPartDrawsSkipped"] = actorPartDrawsSkipped.load();
+		result["flameHolderDrawsSkipped"] = flameHolderDrawsSkipped.load();
 		result["npcSkipped"] = actorSkipped.load();
 #endif
 		return result;

@@ -13,12 +13,13 @@ set(_shadow_culling_draw_headers
     "${_shadow_culling_draw_dir}/shadow_culling_draw.h"
     "${_shadow_culling_draw_dir}/shadow_culling_history.h"
     "${_shadow_culling_draw_dir}/shadow_culling_capture.h"
-    "${_shadow_culling_draw_dir}/shadow_culling_update.h")
+    "${_shadow_culling_draw_dir}/shadow_culling_update.h"
+    "${_shadow_culling_draw_dir}/flame_holder_under_test.h")
 add_custom_command(OUTPUT ${_shadow_culling_draw_headers}
     COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
         "-DOUTPUT_DIRECTORY=${_shadow_culling_draw_dir}" -P
         "${PROJECT_SOURCE_DIR}/tests/extract_shadow_culling_draw.cmake"
-    DEPENDS src/Features/LightLimitFix/ShadowCulling.cpp tests/extract_source_region.cmake
+    DEPENDS src/Features/LightLimitFix/ShadowCulling.cpp src/Features/LightLimitFix/FlameHolderShadow.cpp tests/extract_source_region.cmake
         tests/extract_shadow_culling_draw.cmake VERBATIM)
 add_custom_target(shadow_culling_draw_sources DEPENDS ${_shadow_culling_draw_headers})
 foreach(_shadow_draw_variant IN ITEMS plain devbench)
@@ -31,6 +32,13 @@ foreach(_shadow_draw_variant IN ITEMS plain devbench)
     endif()
 endforeach()
 target_compile_definitions(shadow_culling_draw_devbench_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
+add_controller_test(flame_holder_shadow_test FlameHolderShadow tests/flame_holder_shadow_test.cpp)
+add_dependencies(flame_holder_shadow_test shadow_culling_draw_sources)
+target_include_directories(flame_holder_shadow_test PRIVATE "${_shadow_culling_draw_dir}")
+target_compile_definitions(flame_holder_shadow_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+if(MSVC)
+    target_compile_options(flame_holder_shadow_test PRIVATE "$<$<CONFIG:Release>:/fp:fast>")
+endif()
 add_controller_test(shadow_culling_caster_test ShadowCullingCaster tests/shadow_culling_caster_test.cpp)
 add_dependencies(shadow_culling_caster_test shadow_culling_draw_sources)
 target_include_directories(shadow_culling_caster_test PRIVATE "${_shadow_culling_draw_dir}")

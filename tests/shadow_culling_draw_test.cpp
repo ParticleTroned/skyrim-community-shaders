@@ -50,8 +50,9 @@ namespace RE
 		NiPoint3 GetPosition() const { return position; }
 		Handle GetHandle() const { return handle; }
 	};
-	struct NiLight
+	class NiLight
 	{
+	public:
 		struct Data
 		{
 			NiPoint3 radius;
@@ -64,8 +65,9 @@ namespace RE
 		NiPointer<NiLight> light;
 		NiPoint3 worldTranslate;
 	};
-	struct BSGeometry
+	class BSGeometry
 	{
+	public:
 		struct
 		{
 			NiPoint3 center;
@@ -129,6 +131,13 @@ namespace LightLimitFixDetail::ShadowCulling
 	Caster Classify(const RE::BSGeometry& geometry)
 	{
 		return { geometry.actor, geometry.dynamic, geometry.protectedGeometry, geometry.actorRoot, geometry.actor ? geometry.actorReference : nullptr };
+	}
+	bool flameHolderMatches = false;
+	unsigned flameHolderCalls = 0;
+	bool ShouldSkipFlameHolder(FlameHolderContext&, RE::BSShadowLight&, const RE::BSGeometry&) noexcept
+	{
+		++flameHolderCalls;
+		return flameHolderMatches;
 	}
 #include "shadow_culling_collection.h"
 #include "shadow_culling_draw.h"
@@ -284,7 +293,7 @@ void CheckActorPartDraws()
 	RE::BSRenderPass pass{ &shader, &geometry };
 	const auto technique = VRShadowBatch::kUtilityTechniqueStart + VRShadowBatch::kRenderShadowmap;
 	C::Snapshot desired;
-	desired.settings.sun = desired.settings.torch = desired.settings.actors = desired.settings.smallActorParts = false;
+	desired.settings.sun = desired.settings.torch = desired.settings.actors = desired.settings.smallActorParts = desired.settings.skipFlameEnclosure = false;
 	desired.sunIdentity = &sun;
 	desired.eyeCount = 2;
 	desired.sunSine = 1;
@@ -446,9 +455,52 @@ void CheckActorPartDraws()
 	C::active = false;
 }
 
+void CheckFlameHolderDraws()
+{
+	RE::NiCamera camera;
+	RE::NiLight source{ { { 1000, 0, 0 } } };
+	RE::BSShadowLight light{ { &source }, {} };
+	RE::BSGeometry geometry{ { {}, 5 } };
+	RE::BSShader shader;
+	RE::BSRenderPass pass{ &shader, &geometry };
+	auto captured = std::make_shared<C::Snapshot>();
+	captured->sampledAt = clockMs;
+	captured->eyeCount = 2;
+	captured->cameraCount = 1;
+	captured->settings.sun = captured->settings.torch = captured->settings.actors = captured->settings.smallActorParts = false;
+	captured->settings.interiorTorches = false;
+	captured->interior = true;
+	captured->cameras[0] = { { &camera }, { &light }, { &source }, C::Pass::Point, 0, {}, 1000 };
+	C::snapshot.Publish(captured);
+	C::active = C::flameHolderMatches = true;
+	const auto technique = VRShadowBatch::kUtilityTechniqueStart + VRShadowBatch::kRenderShadowmap;
+	C::flameHolderCalls = 0;
+	Require(!C::SkipShadowDraw(&pass, technique) && C::flameHolderCalls == 0);
+	{
+		const C::DrawScope scope{ &light };
+		Require(C::SkipShadowDraw(&pass, technique) && C::flameHolderCalls == 1);
+		for (const bool shadowLights : { false, true }) {
+			(shadowLights ? pass.numShadowLights : pass.numLights) = 1;
+			Require(!C::SkipShadowDraw(&pass, technique) && C::flameHolderCalls == 1);
+			pass.numLights = pass.numShadowLights = 0;
+		}
+		light.worldTranslate.x = 1;
+		Require(!C::SkipShadowDraw(&pass, technique) && C::flameHolderCalls == 1);
+		light.worldTranslate.x = 0;
+		auto disabled = std::make_shared<C::Snapshot>(*captured);
+		disabled->settings.skipFlameEnclosure = false;
+		C::snapshot.Publish(disabled);
+		Require(!C::SkipShadowDraw(&pass, technique) && C::flameHolderCalls == 1);
+	}
+	C::flameHolderMatches = false;
+	C::active = false;
+	C::snapshot.Publish({});
+}
+
 int main()
 {
 	try {
+		CheckFlameHolderDraws();
 		CheckActorPartHistory();
 		CheckExistingActorPolicy();
 		CheckActorPartDraws();

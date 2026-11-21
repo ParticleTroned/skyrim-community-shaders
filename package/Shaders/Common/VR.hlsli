@@ -7,7 +7,7 @@
 #		define VR_FP_Z 18.0
 #	endif
 
-#	if defined(VSHADER)
+#	if defined(VSHADER) || defined(GEOMETRYSHADER)
 #		include "Common/Math.hlsli"
 #	endif  // VSHADER
 
@@ -274,7 +274,7 @@ namespace Stereo
 
 #endif  // PSHADER
 
-#ifdef VSHADER
+#if defined(VSHADER) || defined(GEOMETRYSHADER)
 	struct VR_OUTPUT
 	{
 		float4 VRPosition;

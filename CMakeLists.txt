@@ -3255,6 +3255,14 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE spdlog::spdlog windowsapp.lib
     )
     set_tests_properties(DownsampleStereoShader PROPERTIES TIMEOUT 0)
+    add_d3d_shader_test(paraboloid_shadow_test ParaboloidShadow tests/paraboloid_shadow_test.cpp)
+    target_sources(paraboloid_shadow_test PRIVATE src/Utils/ShaderInclude.cpp)
+    target_link_libraries(
+        paraboloid_shadow_test
+        PRIVATE spdlog::spdlog windowsapp.lib
+    )
+    set_tests_properties(ParaboloidShadow PROPERTIES TIMEOUT 0)
+
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_depth.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/vanilla_ssao.cmake")
     add_d3d_shader_test(

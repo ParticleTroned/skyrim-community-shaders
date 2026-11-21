@@ -173,6 +173,13 @@ struct TestContext
 		++binds;
 	}
 };
+namespace ParaboloidShadow
+{
+	void BindVertexShader(TestContext* context, ID3D11VertexShader* vertex)
+	{
+		context->VSSetShader(vertex, nullptr, 0);
+	}
+}
 namespace SIE
 {
 	struct ShaderCache;

@@ -11,6 +11,7 @@
 #include "ShaderCacheDisablePolicy.h"
 #include "ShaderFileWatcher.h"
 #include "Util.h"
+#include "Utils/ParaboloidShadow.h"
 
 #include <algorithm>
 #include <atomic>
@@ -3484,7 +3485,7 @@ namespace SIE
 		if (ShouldUseAsyncCompilation() && (a_lookup != VertexShaderLookup::Draw || !globals::features::reverseZ.IsActive())) {
 			compilationSet.Add({ ShaderClass::Vertex, shader, descriptor, precompile });
 		} else {
-			return MakeAndAddVertexShader(shader, descriptor);
+			return MakeAndAddVertexShader(shader, descriptor, std::nullopt, a_lookup != VertexShaderLookup::Draw);
 		}
 
 		return nullptr;
@@ -5729,8 +5730,39 @@ namespace SIE
 		return !modifiedShaderMap.empty() && modifiedShaderMap.contains(a_type) && modifiedShaderMap.at(a_type) > a_current;
 	}
 
+	namespace
+	{
+		winrt::com_ptr<ID3D11GeometryShader> PrepareParaboloidClip(const RE::BSShader& shader, uint32_t descriptor)
+		{
+			if (shader.shaderType.get() != RE::BSShader::Type::Utility)
+				return {};
+			std::array<D3D_SHADER_MACRO, 64> macros{};
+			SShaderCache::GetShaderDefines(shader, descriptor, std::span{ macros });
+			std::vector<std::pair<const char*, const char*>> defines;
+			bool paraboloid = false;
+			for (const auto& macro : macros) {
+				if (!macro.Name)
+					break;
+				const std::string_view name = macro.Name;
+				// Aliased descriptor bits and non-shadow output layouts must not acquire this stage.
+				if (name == "LOD_LANDSCAPE" || name == "STENCIL_ABOVE_WATER" || name.starts_with("RENDER_SHADOWMASK"))
+					return {};
+				paraboloid |= name == "RENDER_SHADOWMAP_PB";
+				defines.emplace_back(macro.Name, macro.Definition);
+			}
+			if (!paraboloid)
+				return {};
+			winrt::com_ptr<ID3D11GeometryShader> geometry;
+			const auto path = SShaderCache::GetShaderPath(shader.fxpFilename);
+			geometry.attach(static_cast<ID3D11GeometryShader*>(Util::CompileShader(path.c_str(), defines, "gs_5_0")));
+			if (!geometry)
+				logger::warn("Utility {:X}: paraboloid clip preparation failed; preserving native projection until shader reload", descriptor);
+			return geometry;
+		}
+	}
+
 	RE::BSGraphics::VertexShader* ShaderCache::MakeAndAddVertexShader(const RE::BSShader& shader,
-		uint32_t descriptor, std::optional<uint64_t> a_taskGeneration)
+		uint32_t descriptor, std::optional<uint64_t> a_taskGeneration, bool a_prepareAuxiliary)
 	{
 		if (!a_taskGeneration)
 			a_taskGeneration = compilationSet.LiveGeneration(shader.shaderType.get());
@@ -5754,6 +5786,10 @@ namespace SIE
 			}
 			Util::SetResourceName(driverShader.get(), "ShaderCache::Vertex %u:%X",
 				static_cast<unsigned>(shader.shaderType.get()), descriptor);
+			// Only startup, explicit compilation and existing worker tasks prepare the companion.
+			const auto clip = a_prepareAuxiliary ? PrepareParaboloidClip(shader, descriptor) : winrt::com_ptr<ID3D11GeometryShader>{};
+			if (clip && FAILED(ParaboloidShadow::Attach(*driverShader.get(), clip.get())))
+				logger::warn("Utility {:X}: could not attach prepared paraboloid clip shader", descriptor);
 
 			std::lock_guard lockGuard(vertexShadersMutex);
 			if (IsTaskStale(a_taskGeneration, shader.shaderType.get())) {
@@ -5766,8 +5802,12 @@ namespace SIE
 
 			// A draw and a warm-up may share one blob; preserve the published wrapper's lifetime.
 			auto& typeCache = vertexShaders[static_cast<size_t>(shader.shaderType.get())];
-			if (const auto existing = typeCache.find(descriptor); existing != typeCache.end())
+			if (const auto existing = typeCache.find(descriptor); existing != typeCache.end()) {
+				auto* vertex = reinterpret_cast<ID3D11VertexShader*>(existing->second->shader);
+				if (clip && !ParaboloidShadow::Retain(vertex) && FAILED(ParaboloidShadow::Attach(*vertex, clip.get())))
+					logger::warn("Utility {:X}: could not attach prepared paraboloid clip shader", descriptor);
 				return existing->second.get();
+			}
 			auto& entry = typeCache[descriptor];
 			entry = std::move(newShader);
 			entry->shader = reinterpret_cast<decltype(entry->shader)>(driverShader.detach());
@@ -6648,7 +6688,7 @@ namespace SIE
 		ZoneText(GetString().c_str(), GetString().size());
 
 		if (shaderClass == ShaderClass::Vertex) {
-			ShaderCache::Instance().MakeAndAddVertexShader(shader, descriptor, GetGeneration());
+			ShaderCache::Instance().MakeAndAddVertexShader(shader, descriptor, GetGeneration(), true);
 		} else if (shaderClass == ShaderClass::Pixel) {
 			ShaderCache::Instance().MakeAndAddPixelShader(shader, descriptor, GetGeneration());
 		} else if (shaderClass == ShaderClass::Compute) {

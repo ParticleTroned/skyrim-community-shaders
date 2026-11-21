@@ -55,7 +55,7 @@ extract_between("${_pbr}" "auto* boundShader = *globals::game::currentPixelShade
 extract_between("${_header}" "enum class LightingShaderTechniques"
     "enum class EffectShaderFlags" "lighting_flags.h")
 extract_between("${_header}" "enum class EffectShaderFlags"
-    "// Shader blocking data" "effect_flags.h")
+    "enum class UtilityShaderFlags" "effect_flags.h")
 extract_between("${_cache}" "void ShaderCache::PrewarmDeferredPixelShaders("
     "RE::BSGraphics::PixelShader* ShaderCache::GetPixelShader(" "pixel_prewarm.h")
 extract_between("${_pbr}" "void TruePBR::GenerateShaderPermutations("

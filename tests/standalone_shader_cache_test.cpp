@@ -473,6 +473,24 @@ int main()
 	cache.enabled = true;
 	assert(!Util::CompileShader(nullptr, defines, "ps_5_0"));
 	assert(!Util::CompileShader(L"Data/Shaders/test.hlsl", defines, "unsupported"));
+	Write("Data/Shaders/geometry.hlsl", R"(
+#ifndef GEOMETRYSHADER
+#error Missing geometry stage define
+#endif
+struct Vertex { float4 position : SV_POSITION; };
+[maxvertexcount(3)]
+void main(triangle Vertex vertices[3], inout TriangleStream<Vertex> output) {
+    for (uint i = 0; i < 3; ++i) output.Append(vertices[i]);
+}
+)");
+	const auto geometryCompiles = compilerCalls;
+	winrt::com_ptr<ID3D11DeviceChild> geometry;
+	geometry.attach(Util::CompileShader(L"Data/Shaders/geometry.hlsl", defines, "gs_5_0"));
+	assert(geometry && geometry.try_as<ID3D11GeometryShader>());
+	assert(compilerCalls == geometryCompiles + 1);
+	geometry = nullptr;
+	geometry.attach(Util::CompileShader(L"Data/Shaders/geometry.hlsl", defines, "gs_5_0"));
+	assert(geometry && compilerCalls == geometryCompiles + 1);
 	Write("Data/Shaders/test.hlsl", "not a valid shader");
 	assert(!Util::CompileShader(L"Data/Shaders/test.hlsl", defines, "ps_5_0"));
 	std::filesystem::remove("Data/Shaders/test.hlsl");

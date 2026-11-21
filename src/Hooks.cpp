@@ -12,6 +12,7 @@
 #include "Features/TerrainSeams.h"
 
 #include "Utils/CharacterCategoryAuthoring.h"
+#include "Utils/ParaboloidShadow.h"
 
 #include "ShaderTools/BSShaderHooks.h"
 #include "Utils/D3DContextProtection.h"
@@ -1338,7 +1339,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 			}
 		} else {
 			state->settingCustomShader = true;
-			globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
+			ParaboloidShadow::BindVertexShader(globals::d3d::context, reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader));
 			*globals::game::currentVertexShader = vertexShader;
 			globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
 			*globals::game::currentPixelShader = pixelShader;
@@ -1723,7 +1724,7 @@ namespace GrassExtensions
 				return false;
 			if (vertex && pixel) {
 				// Native setup must address the reflected constants of the bound grass pair.
-				globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertex->shader), nullptr, 0);
+				ParaboloidShadow::BindVertexShader(globals::d3d::context, reinterpret_cast<ID3D11VertexShader*>(vertex->shader));
 				globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixel->shader), nullptr, 0);
 				state->selectedCustomPixelShaderType = RE::BSShader::Type::Grass;
 				*globals::game::currentVertexShader = vertex;
@@ -1737,7 +1738,7 @@ namespace GrassExtensions
 				}
 				auto* nativeVertex = *globals::game::currentVertexShader;
 				auto* nativePixel = *globals::game::currentPixelShader;
-				globals::d3d::context->VSSetShader(nativeVertex ? reinterpret_cast<ID3D11VertexShader*>(nativeVertex->shader) : nullptr, nullptr, 0);
+				ParaboloidShadow::BindVertexShader(globals::d3d::context, nativeVertex ? reinterpret_cast<ID3D11VertexShader*>(nativeVertex->shader) : nullptr);
 				globals::d3d::context->PSSetShader(nativePixel ? reinterpret_cast<ID3D11PixelShader*>(nativePixel->shader) : nullptr, nullptr, 0);
 				state->selectedCustomPixelShaderType = RE::BSShader::Type::None;
 			}
@@ -2019,6 +2020,7 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 		globals::features::terrainBlending.OnSetDirtyStates(isCompute, callerRva);
 		globals::state->Draw(isCompute);
 		GrassPlacement::ApplyNativeBinding(isCompute);
+		ParaboloidShadow::Scope::SyncConstants(isCompute);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (globals::features::upscaling.IsNeuralRenderingEnabled())
 			NeuralRendering::Color::ExposureCapture::Instance().ObserveGraphicsStateFlush(globals::d3d::context, isCompute);
@@ -2043,6 +2045,7 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 	phaseStartTicks = phaseEndTicks;
 	globals::state->Draw(isCompute);
 	GrassPlacement::ApplyNativeBinding(isCompute);
+	ParaboloidShadow::Scope::SyncConstants(isCompute);
 	phaseEndTicks = ReadFrameDiagCounterTicks();
 	RecordCSFrameHookPhase(CSFrameHookPhase::StateDraw, frame, phaseEndTicks - phaseStartTicks);
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -2639,7 +2642,7 @@ namespace Hooks
 							CaptureStageSelection(vertexShader, CSX::RenderMap::ShaderStage::kVertex,
 								CSX::RenderMap::ShaderSelectionRoute::kCSXCache);
 #endif
-							globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
+							ParaboloidShadow::BindVertexShader(globals::d3d::context, reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader));
 							state->techniqueShaderSelection.vertex = vertexShader;
 							state->techniqueShaderSelection.vertexDescriptor = state->modifiedVertexDescriptor;
 							*globals::game::currentVertexShader = a_vertexShader;
@@ -2658,7 +2661,7 @@ namespace Hooks
 								 CSX::RenderMap::ShaderSelectionRoute::kMissing);
 #endif
 			*globals::game::currentVertexShader = a_vertexShader;
-			globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(a_vertexShader->shader), NULL, NULL);
+			ParaboloidShadow::BindVertexShader(globals::d3d::context, reinterpret_cast<ID3D11VertexShader*>(a_vertexShader->shader));
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};

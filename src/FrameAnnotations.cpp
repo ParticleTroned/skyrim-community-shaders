@@ -16,6 +16,7 @@
 #include "State.h"
 #include "Util.h"
 #include "Utils/D3D.h"
+#include "Utils/ParaboloidShadow.h"
 
 #pragma comment(lib, "dxguid.lib")
 
@@ -248,6 +249,7 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
+			const ParaboloidShadow::Scope clipScope{ globals::d3d::context, false };
 			const LightLimitFixDetail::ShadowCulling::DrawScope shadowScope{
 				LightLimitFixDetail::ShadowCulling::NeedsSunDrawScope() ? light : nullptr
 			};
@@ -269,6 +271,7 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
+			const ParaboloidShadow::Scope clipScope{ globals::d3d::context, false };
 			const LightLimitFixDetail::ShadowCulling::DrawScope shadowScope{ light };
 			const bool annotate = globals::state->frameAnnotations;
 			if (annotate)
@@ -287,6 +290,7 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
+			const ParaboloidShadow::Scope clipScope{ globals::d3d::context, true };
 			const LightLimitFixDetail::ShadowCulling::DrawScope shadowScope{ light };
 			const bool annotate = globals::state->frameAnnotations;
 			if (annotate)

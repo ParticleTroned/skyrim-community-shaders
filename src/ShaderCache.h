@@ -761,7 +761,7 @@ namespace SIE
 			uint32_t descriptor);
 
 		RE::BSGraphics::VertexShader* MakeAndAddVertexShader(const RE::BSShader& shader,
-			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
+			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt, bool a_prepareAuxiliary = false);
 		RE::BSGraphics::PixelShader* MakeAndAddPixelShader(const RE::BSShader& shader,
 			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
 		RE::BSGraphics::ComputeShader* MakeAndAddComputeShader(const RE::BSShader& shader,

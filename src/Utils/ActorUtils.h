@@ -47,6 +47,11 @@ namespace Util
 	void ForEachLoadedActor(const std::function<void(RE::Actor*)>& a_callback);
 	/** Visits geometry beneath a loaded scene root. */
 	void ForEachGeometry(RE::NiAVObject* a_root, const std::function<void(RE::BSGeometry*)>& a_callback);
+	/** Visits collisions in native order, retaining visited objects and skipping missing child storage.
+	 *  Callers must supply a live root; reference retention does not synchronize native scenegraph mutation.
+	 *  The callback borrows each collision object and may return kStop to end the entire walk.
+	 */
+	RE::BSVisit::BSVisitControl TraverseCollision(RE::NiAVObject* a_root, const std::function<RE::BSVisit::BSVisitControl(RE::bhkNiCollisionObject*)>& a_callback);
 	/** Visits distinct first- and third-person geometry roots. */
 	void ForEachActorGeometry(RE::Actor* a_actor, const std::function<void(RE::BSGeometry*)>& a_callback);
 
@@ -94,7 +99,7 @@ namespace Util
 		if (auto root = actor->Get3D(false)) {
 			bool found = false;
 			RE::NiPoint3 ragdollCenter;
-			RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
+			TraverseCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
 				float radius = 0.0f;
 				RE::NiPoint3 centerPos;
 				if (Util::GetShapeBound(a_object, centerPos, radius)) {

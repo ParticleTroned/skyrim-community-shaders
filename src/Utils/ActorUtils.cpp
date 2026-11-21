@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <limits>
+#include <utility>
 
 namespace
 {
@@ -186,6 +188,41 @@ namespace Util
 			a_callback(a_geometry);
 			return RE::BSVisit::BSVisitControl::kContinue;
 		});
+	}
+
+	namespace
+	{
+		RE::BSVisit::BSVisitControl TraverseCollisionNode(RE::NiPointer<RE::NiAVObject> a_object, const std::function<RE::BSVisit::BSVisitControl(RE::bhkNiCollisionObject*)>& a_callback)
+		{
+			using Control = RE::BSVisit::BSVisitControl;
+			if (const auto collision = a_object->collisionObject) {
+				if (a_callback(static_cast<RE::bhkNiCollisionObject*>(collision.get())) == Control::kStop)
+					return Control::kStop;
+			}
+			if (auto* node = a_object->AsNode()) {
+				const auto& children = node->GetChildren();
+				const auto* storage = children.begin();
+				const auto capacity = children.capacity();
+				if (!storage)
+					return Control::kContinue;
+				for (std::uint32_t index = 0; index < capacity; ++index) {
+					// Revalidate after callbacks; retained nodes do not pin their child-array storage.
+					if (children.begin() != storage || index >= children.capacity())
+						break;
+					auto child = storage[index];
+					if (child && TraverseCollisionNode(std::move(child), a_callback) == Control::kStop)
+						return Control::kStop;
+				}
+			}
+			return Control::kContinue;
+		}
+	}
+
+	RE::BSVisit::BSVisitControl TraverseCollision(RE::NiAVObject* a_root, const std::function<RE::BSVisit::BSVisitControl(RE::bhkNiCollisionObject*)>& a_callback)
+	{
+		if (!a_root || !a_callback)
+			return RE::BSVisit::BSVisitControl::kContinue;
+		return TraverseCollisionNode(RE::NiPointer<RE::NiAVObject>(a_root), a_callback);
 	}
 
 	void ForEachActorGeometry(RE::Actor* a_actor, const std::function<void(RE::BSGeometry*)>& a_callback)

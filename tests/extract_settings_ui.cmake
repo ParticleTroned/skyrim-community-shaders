@@ -164,6 +164,13 @@ string(FIND "${source}" "namespace MenuUI" start)
 string(SUBSTRING "${source}" ${start} -1 body)
 file(WRITE "${OUTPUT_DIRECTORY}/settings_global_actions_under_test.h" "${body}")
 
+file(READ "${PROJECT_ROOT}/src/State.cpp" source)
+extract_between("${source}" "\tstd::vector<std::string> SaveUserOverrides(" "\tstd::string JoinSettingLayerNames(" "feature_settings_save_under_test.h")
+file(READ "${OUTPUT_DIRECTORY}/feature_settings_save_under_test.h" overrides)
+extract_between("${source}" "bool State::Save(ConfigMode" "bool State::ValidateCache(" "feature_settings_save_under_test.h")
+file(READ "${OUTPUT_DIRECTORY}/feature_settings_save_under_test.h" save)
+file(WRITE "${OUTPUT_DIRECTORY}/feature_settings_save_under_test.h" "${overrides}\n${save}")
+
 file(READ "${PROJECT_ROOT}/src/Menu/AdaptiveBalancePresets.cpp" source)
 string(FIND "${source}" "namespace MenuUI::AdaptiveBalancePresets" start)
 string(SUBSTRING "${source}" ${start} -1 body)

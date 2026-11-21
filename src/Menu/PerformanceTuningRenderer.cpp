@@ -1020,11 +1020,7 @@ namespace
 	{
 		if (const char* reason = feature->GetPerformanceToggleBlockReason())
 			return reason;
-		auto* sceneSettings = SceneSettingsManager::GetSingleton();
-		const auto name = feature->GetShortName();
-		if (sceneSettings->HasActiveSettingsForFeature(name) && !sceneSettings->IsFeaturePaused(name))
-			return "Pause this feature's scene-specific settings before toggling or measuring it.";
-		return nullptr;
+		return PerformanceTuningRenderer::GetFeatureSceneControlBlockReason(feature);
 	}
 
 	PerformanceQuickScan::RenderConfiguration CaptureQuickScanRenderConfiguration()
@@ -2824,6 +2820,24 @@ namespace
 
 }
 
+const char* PerformanceTuningRenderer::GetFeatureSceneControlBlockReason(Feature* a_feature)
+{
+	if (!a_feature)
+		return "Feature is unavailable.";
+	auto* sceneSettings = SceneSettingsManager::GetSingleton();
+	const auto name = a_feature->GetShortName();
+	if (sceneSettings->HasActiveSettingsForFeature(name) && !sceneSettings->IsFeaturePaused(name))
+		return "Pause this feature's scene-specific settings before changing or measuring it.";
+	return nullptr;
+}
+
+bool PerformanceTuningRenderer::ApplyFeatureSettingsTransaction(const std::vector<Feature*>& a_features, const std::function<bool()>& a_apply, bool a_replaceToggleHistory)
+{
+	const bool applied = PerformanceTuningController::ApplyTransaction(a_features, g_disabledFeatureConfigurations, a_apply, a_replaceToggleHistory);
+	NotifyFeatureSettingsChanged(&globals::features::upscaling);
+	return applied;
+}
+
 void PerformanceTuningRenderer::RenderFeatureEnabledControl(Feature* a_feature, const char* a_tooltip)
 {
 	const bool supported = a_feature->SupportsPerformanceCostMeasurement();
@@ -2840,7 +2854,7 @@ void PerformanceTuningRenderer::RenderFeatureEnabledControl(Feature* a_feature, 
 	if (!ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled))
 		return;
 	const char* tooltip = reason ? reason : busy   ? "Wait for the current measurement to finish." :
-	                                    !supported ? "Change startup in Advanced > Startup, save settings and restart to enable or disable this feature." :
+	                                    !supported ? "Change startup in Settings > Startup, save settings and restart to enable or disable this feature." :
 	                                                 a_tooltip;
 	std::string featureHelp;
 	if (!tooltip) {

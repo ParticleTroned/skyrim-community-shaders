@@ -23,6 +23,8 @@ using json = nlohmann::json;
 #include "Utils/SunGlareBindings.h"
 #include <Hooks.h>
 
+struct Feature;
+
 class State
 {
 public:
@@ -189,9 +191,8 @@ public:
 		ConfigMode a_configMode = ConfigMode::USER,
 		bool a_allowReload = true,
 		SettingsApplyMode a_applyMode = SettingsApplyMode::Runtime);
-	// Returns true only when the main settings file and every required
-	// persistence layer have been saved successfully.
-	bool Save(ConfigMode a_configMode = ConfigMode::USER);
+	/** Saves the requested scope, preserving other sections; false if any persistence layer fails. */
+	bool Save(ConfigMode a_configMode = ConfigMode::USER, Feature* a_feature = nullptr);
 	/** Applies installed defaults in memory, preserving saved files and the dirty baseline. */
 	bool RestoreDefaultSettings(std::string& a_error);
 

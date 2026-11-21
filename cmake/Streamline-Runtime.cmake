@@ -116,6 +116,8 @@ include("${CMAKE_CURRENT_LIST_DIR}/StreamlineRuntimeFiles.cmake")
 foreach(_relative_path IN LISTS STREAMLINE_OFFICIAL_RUNTIME_PATHS)
     stage_streamline_runtime("${_relative_path}")
 endforeach()
+csx_stage_runtime_notice(STREAMLINE "${STREAMLINE_RUNTIME_DIRECTORY}"
+    "${CMAKE_CURRENT_LIST_DIR}/../extern/nvapi/License.txt" nvapi.license.txt)
 
 if(BUILD_CONTROLLER_TESTS)
     add_test(NAME NrReleasePayload COMMAND "${CMAKE_COMMAND}"

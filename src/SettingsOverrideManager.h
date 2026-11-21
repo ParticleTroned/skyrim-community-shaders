@@ -170,10 +170,11 @@ public:
 	 * @param featureName The short name of the feature (or "Global")
 	 * @param currentSettings Current settings to compare and potentially save
 	 * @param overrideSettings The base override settings (after all overrides applied)
+	 * @param a_section Optional root section to replace, preserving other saved overrides
 	 * @return True when the desired user override state was persisted, including
 	 *         when no override delta exists and any obsolete user file was removed
 	 */
-	bool SaveUserOverride(const std::string& featureName, const json& currentSettings, const json& overrideSettings);
+	bool SaveUserOverride(const std::string& featureName, const json& currentSettings, const json& overrideSettings, const std::string& a_section = {});
 
 	/**
 	 * @brief Checks if a feature has user modifications on top of overrides

@@ -3,6 +3,7 @@
 #include "Menu.h"
 #include "SettingsActions.h"
 #include "Utils/UI.h"
+#include <array>
 
 class MenuHeaderRenderer
 {
@@ -40,6 +41,7 @@ private:
 	static void DrawActionButton(const ActionIcon& icon, ImVec2 minimum, ImVec2 maximum, float iconInset = 0);
 	static void DrawActionIcon(ImDrawList* a_draw, const ActionIcon& a_icon, ImVec2 a_min, ImVec2 a_max, ImU32 a_tint);
 	static std::vector<ActionIcon> BuildActionIcons(bool canShowIcons, const Menu::UIIcons& uiIcons);
+	static std::array<ActionIcon, 2> NavigationIcons();
 	static void RenderDockedIcons(const std::vector<ActionIcon>& actionIcons, float uiScale);
 	static void RenderSteamVRDockHandle(ImGuiID dockSpaceId);
 	static void RenderStableHeader(const std::string& title, bool showLogo, const std::vector<ActionIcon>& actionIcons, float uiScale, const Menu::UIIcons& uiIcons, bool showSteamVRDockHandle = false, ImGuiID steamVRDockSpaceId = 0);

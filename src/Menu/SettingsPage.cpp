@@ -5,6 +5,7 @@
 #include "Menu.h"
 #include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/ProfilingRenderer.h"
+#include "Menu/SettingsNavigation.h"
 #include "Menu/SettingsSearch.h"
 #include "Utils/UI.h"
 #include <algorithm>
@@ -135,6 +136,11 @@ namespace MenuUI
 
 	bool SettingsPage::Select(const char* a_page, const char* a_section)
 	{
+		const auto location = SettingsNavigation::Resolve(a_page, a_section);
+		a_page = location.page.data();
+		a_section = location.section.data();
+		if (!SettingsNavigation::SectionAvailable(a_page, a_section, globals::game::isVR))
+			return false;
 		std::scoped_lock lock(navigationMutex);
 		auto& state = navigation[a_page];
 		if ((std::string_view(a_section) == "profiling" && ProfilingRenderer::GetProfilingDisabledReason()) ||
@@ -161,6 +167,9 @@ namespace MenuUI
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	bool SettingsPage::Navigate(const char* a_page, const char* a_section)
 	{
+		const auto location = SettingsNavigation::Resolve(a_page, a_section);
+		a_page = location.page.data();
+		a_section = location.section.data();
 		std::scoped_lock lock(navigationMutex);
 		const auto page = navigation.find(a_page);
 		if (page == navigation.end() || (std::string_view(a_section) != "overview" &&
@@ -194,7 +203,7 @@ namespace MenuUI
 		a_id = pageId.c_str();
 		const bool measurementAvailable = activeFeature ? activeFeature->SupportsPerformanceCostMeasurement() : pageId != "PerformanceTuning";
 		const bool profilingAvailable = activeFeature ? ProfilingRenderer::CanProfileFeature(pageId) : pageId != "Profiling" && pageId != "PerformanceTuning";
-		if (activeFeature || (pageId != "Home" && pageId != "General" && pageId != "Advanced")) {
+		if (activeFeature || (pageId != "Home" && pageId != "Settings" && pageId != "Advanced" && pageId != "Performance" && pageId != "DevTools")) {
 			Section performance{ "performance", "Performance", "Measures in-game frame times and FPS with the current feature settings.", "Measure current settings", measurementAvailable, false, nullptr, "Performance tuning" };
 			Section profiling{ "profiling", "Profiling", "Choose CPU, GPU or Off to inspect timings.", "Live CPU and GPU timings", profilingAvailable, false };
 			profiling.disabledReason = ProfilingRenderer::GetProfilingDisabledReason();

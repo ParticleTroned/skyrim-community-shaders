@@ -1,4 +1,5 @@
 #include "Menu/SettingsPage.h"
+#include "Menu/SettingsTabRenderer.h"
 // RenderDoc feature implementation providing in-application graphics debugging capabilities
 #include "Features/RenderDoc.h"
 
@@ -179,6 +180,7 @@ void RenderDoc::DrawSettings()
 		// Capture Control Section
 		{
 			if (page.Is("capture")) {
+				SettingsTabRenderer::RenderCaptureShortcuts();
 				const auto disabled = Util::DisableGuard(!captureReady);
 				MenuUI::SectionHeading("Capture settings");
 

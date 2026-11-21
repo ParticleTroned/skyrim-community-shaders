@@ -27,6 +27,8 @@
 #	include "Globals.h"
 #	include "Menu.h"
 #	include "Menu/SettingsPage.h"
+#	include "Menu/SettingsActions.h"
+#	include "Menu/SettingsNavigation.h"
 #	include "Menu/SettingsSearch.h"
 #	include "Menu/FeatureListRenderer.h"
 #	include "Menu/ExternalSettingsPage.h"
@@ -1103,6 +1105,26 @@ namespace
 				return { { "ok", true }, { "action", action }, { "persisted", false }, { "skySyncWorldspaces", skySync.GetWorldspaceStatus() } };
 			});
 		}
+		if (action == "feature_settings") {
+			const auto featureName = a_args.value("feature", std::string{});
+			const auto operation = a_args.value("settingsOperation", std::string{});
+			if (featureName.empty() || (operation != "save" && operation != "load" && operation != "defaults"))
+				return { { "ok", false }, { "error", "feature and settingsOperation (save, load or defaults) are required." } };
+			return RunOnMainThread([featureName, operation]() -> json {
+				if (!globals::menu || !globals::state)
+					return { { "ok", false }, { "error", "CSX settings are unavailable." } };
+				const auto features = Feature::GetFeatureList();
+				const auto found = std::ranges::find_if(features, [&](Feature* feature) { return feature->GetShortName() == featureName; });
+				if (found == features.end())
+					return { { "ok", false }, { "error", "Unknown CSX feature." } };
+				const auto settingsAction = operation == "save" ? MenuUI::GlobalSettingsAction::Save :
+				                            operation == "load" ? MenuUI::GlobalSettingsAction::Load :
+				                                                  MenuUI::GlobalSettingsAction::RestoreDefaults;
+				const bool accepted = MenuUI::InvokeFeatureSettingsAction(settingsAction, *found);
+				return { { "ok", accepted }, { "feature", featureName }, { "settingsOperation", operation },
+					{ "saved", accepted && operation == "save" }, { "message", MenuUI::GetFeatureSettingsFeedback(*found).message } };
+			});
+		}
 		if (action == "restore_defaults") {
 			return RunOnMainThread([]() -> json {
 				std::string error;
@@ -1182,6 +1204,11 @@ namespace
 			const auto featureName = a_args.value("feature", std::string{});
 			const auto tab = a_args.value("tab", std::string("overview"));
 			return RunOnMainThread([action, featureName, tab, ratio]() -> json {
+				const auto location = MenuUI::SettingsNavigation::Resolve(featureName, tab);
+				const std::string page(location.page), section(location.section);
+				const bool relocated = page != featureName;
+				if (action != "ui_status" && !MenuUI::SettingsNavigation::SectionAvailable(page, section, globals::game::isVR))
+					return { { "ok", false }, { "error", "This section is available only in VR." } };
 				if (action != "ui_status" && PerformanceTuningRenderer::HasActiveMeasurements())
 					return { { "ok", false }, { "error", "Finish or cancel the performance comparison before navigating." } };
 				if (action != "ui_status" && ImGui::GetCurrentContext() &&
@@ -1189,22 +1216,28 @@ namespace
 					return { { "ok", false }, { "error", "Finish or cancel the open dialog before navigating." } };
 				if (!globals::menu)
 					return { { "ok", false }, { "error", "CSX menu unavailable" } };
-				if (action == "scroll" && (!globals::menu->IsEnabled || !MenuUI::DevBenchViewport::Scroll(featureName, tab, ratio)))
+				if (action == "scroll" && (!globals::menu->IsEnabled || !MenuUI::DevBenchViewport::Scroll(page, section, ratio)))
 					return { { "ok", false }, { "error", "Open the target page and tab, then query ui_status for a fresh viewport with no pending scroll." } };
 				if (action == "open_feature") {
 					const auto features = FeatureListRenderer::GetMenuFeatures();
-					const auto found = std::ranges::find_if(features, [&](Feature* feature) { return feature->GetShortName() == featureName; });
-					const auto builtIn = FeatureListRenderer::GetBuiltInPageMenuEntryId(featureName);
+					const auto found = std::ranges::find_if(features, [&](Feature* feature) { return feature->GetShortName() == page; });
+					const auto builtIn = FeatureListRenderer::GetBuiltInPageMenuEntryId(page);
 					if (builtIn.empty() && (found == features.end() || !(*found)->IsInMenu() || (*found)->IsHiddenFromUserView() ||
-											   (!dynamic_cast<MenuUI::ExternalSettingsPage*>(*found) && (!(*found)->loaded || globals::state->IsFeatureDisabled(featureName)))))
+											   (!dynamic_cast<MenuUI::ExternalSettingsPage*>(*found) && (!(*found)->loaded || globals::state->IsFeatureDisabled(page)))))
 						return { { "ok", false }, { "error", "Unknown or unavailable feature" } };
-					if (!MenuUI::SettingsPage::Select(featureName.c_str(), "overview"))
+					if (!MenuUI::SettingsPage::Select(page.c_str(), location.sectionMoved ? section.c_str() : "overview"))
 						return { { "ok", false }, { "error", "Save or discard the unsaved INI draft before opening this overview." } };
-					globals::menu->SelectFeatureMenu(builtIn.empty() ? featureName : builtIn);
+					globals::menu->SelectFeatureMenu(builtIn.empty() ? page : builtIn);
 					globals::menu->OpenMenu();
-				} else if (action == "select_tab" && !MenuUI::SettingsPage::Navigate(featureName.c_str(), tab.c_str())) {
-					return { { "ok", false }, { "error", "Unavailable or disabled tab, or unsaved INI draft. Enable profiling on the main Profiling page for feature timing views; save or discard INI drafts. Query ui_status for tab availability." } };
+				} else if (action == "select_tab" && !(location.sectionMoved ? MenuUI::SettingsPage::Select(page.c_str(), section.c_str()) : MenuUI::SettingsPage::Navigate(page.c_str(), section.c_str()))) {
+					return { { "ok", false }, { "error", "Unavailable or disabled tab, or unsaved INI draft. Enable profiling in Performance > Profiling for feature timing views; save or discard INI drafts. Query ui_status for tab availability." } };
 				}
+				if (action == "select_tab" && relocated) {
+					const auto builtIn = FeatureListRenderer::GetBuiltInPageMenuEntryId(page);
+					globals::menu->SelectFeatureMenu(builtIn.empty() ? page : builtIn);
+					globals::menu->OpenMenu();
+				}
+
 				return { { "ok", true }, { "action", action }, { "menuOpen", globals::menu->IsEnabled }, { "viewport", MenuUI::DevBenchViewport::Describe(globals::menu->IsEnabled) }, { "pages", MenuUI::SettingsPage::Describe() }, { "unsaved", globals::menu->HasUnsavedSettings() }, { "sidebarVisible", FeatureListRenderer::IsSidebarVisible() },
 					{ "adaptiveBalancePresets", AdaptiveBalancePresetUIStatus() } };
 			});
@@ -1214,7 +1247,7 @@ namespace
 			return {
 				{ "error", "unknown action" },
 				{ "action", action },
-				{ "supported", json::array({ "status", "search_settings", "reveal_setting", "search_status", "grass_placement", "reset_adaptive_balance_dof", "configure_grass_collision", "grass_telemetry", "set_grass_collision_strength", "open", "open_vr_fov", "set_fov_enabled", "set_fov_blend_curve", "close", "screenshot", "set_path", "set_layout_unlocked", "reset_menu_layout", "set_menu_placement", "set_wand_settings", "texture_stats", "set_depth_culling_settings", "set_depth_culling_legacy_mode", "set_depth_culling_telemetry_enabled", "reset_depth_culling_telemetry", "set_adaptive_balance_enabled", "set_adaptive_balance_visuals", "set_adaptive_balance_dof", "set_foliage_lighting_enabled", "set_terrain_variation_mesh_enabled", "set_pbr_grass_enabled", "set_pbr_grass_diagnostics_enabled", "set_truepbr_verbose_json_logging", "set_dynamic_cubemap_resolution", "request_dynamic_cubemap_refresh", "prepare_coc", "prepare_tuning", "set_motion_adaptive_sharpening", "set_parallax_strength", "set_sky_sync_sunlight", "set_sky_sync_disabled_worldspaces", "set_grass_optimizations_enabled", "set_grass_optimizations_settings", "set_grass_background_preparation_enabled", "set_grass_culling_controls", "set_grass_hiz_enabled", "set_grass_optimizations_diagnostics_enabled", "ui_status", "open_feature", "select_tab", "set_sidebar_visible", "scroll", "restore_defaults", "set_adaptive_balance_preset_ui" }) },
+				{ "supported", json::array({ "feature_settings", "status", "search_settings", "reveal_setting", "search_status", "grass_placement", "reset_adaptive_balance_dof", "configure_grass_collision", "grass_telemetry", "set_grass_collision_strength", "open", "open_vr_fov", "set_fov_enabled", "set_fov_blend_curve", "close", "screenshot", "set_path", "set_layout_unlocked", "reset_menu_layout", "set_menu_placement", "set_wand_settings", "texture_stats", "set_depth_culling_settings", "set_depth_culling_legacy_mode", "set_depth_culling_telemetry_enabled", "reset_depth_culling_telemetry", "set_adaptive_balance_enabled", "set_adaptive_balance_visuals", "set_adaptive_balance_dof", "set_foliage_lighting_enabled", "set_terrain_variation_mesh_enabled", "set_pbr_grass_enabled", "set_pbr_grass_diagnostics_enabled", "set_truepbr_verbose_json_logging", "set_dynamic_cubemap_resolution", "request_dynamic_cubemap_refresh", "prepare_coc", "prepare_tuning", "set_motion_adaptive_sharpening", "set_parallax_strength", "set_sky_sync_sunlight", "set_sky_sync_disabled_worldspaces", "set_grass_optimizations_enabled", "set_grass_optimizations_settings", "set_grass_background_preparation_enabled", "set_grass_culling_controls", "set_grass_hiz_enabled", "set_grass_optimizations_diagnostics_enabled", "ui_status", "open_feature", "select_tab", "set_sidebar_visible", "scroll", "restore_defaults", "set_adaptive_balance_preset_ui" }) },
 			};
 		}
 		const std::string path = a_args.value("path", std::string());
@@ -1872,6 +1905,12 @@ namespace MenuDevBenchBridge
 				{ "type", "boolean" }, { "description", "Independently bypass bloom enhancement while retaining every layer and editable preset. Default true; Adaptive Balance must also be enabled." }
 			};
 			document["inputSchema"]["properties"]["action"]["enum"].push_back("reset_adaptive_balance_dof");
+			document["inputSchema"]["properties"]["action"]["enum"].push_back("feature_settings");
+			document["inputSchema"]["properties"]["settingsOperation"] = { { "type", "string" }, { "enum", { "save", "load", "defaults" } }, { "description", "Required with feature_settings and a feature short name. Save persists only that feature; load restores its last saved session baseline; defaults applies its native defaults in memory. Uses the same availability and ownership guards as the feature footer." } };
+			document["inputSchema"]["properties"]["feature"]["description"] = "Feature short name or built-in page ID: Home, Settings, DevTools, Performance, Profiling or PerformanceTuning. Query ui_status for registered sections.";
+			document["description"] = document["description"].get<std::string>() +
+			                          " Performance links to the existing Profiling, PerformanceTuning and PerformanceOverlay pages. DevTools contains shader tools, diagnostics, testing and a link to the existing RenderDoc page. Settings contains interface preferences, startup controls and VR-only vr_menu, vr_controls and desktop. Legacy General, Advanced and moved VR interface routes resolve to their new hosts. Screenshot remains directly accessible. Existing feature overview cards, tabs and controls retain their navigation.";
+
 			document["inputSchema"]["properties"]["dofSection"] = { { "type", "string" }, { "enum", { "scene", "underwater" } } };
 			document["description"] = document["description"].get<std::string>() +
 			                          " set_adaptive_balance_visuals accepts bloomEnabled and bloom (preset, reset, profile). Preset selection preserves edits per slot; reset restores only the selected slot. Appearance includes independent light-subtype, material and atmosphere saturation/gamma offsets, scene and ambient gamma, fog saturation and overall volumetric intensity/saturation. Gamma offsets add across profile layers with neutral 0 and bounds -1..1; saturation multiplies with neutral 1 and bounds 0..2. Volumetric intensity is 0..5 and scales haze and shafts together before lens flares. New appearance controls require lightingAdvanced and preserve object previews. reset_adaptive_balance_dof requires dofSection scene or underwater, an unlocked section and live data; it replaces both values and baseline with live values without persisting.";

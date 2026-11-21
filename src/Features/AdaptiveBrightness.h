@@ -53,7 +53,7 @@ struct AdaptiveBrightness : Feature
 		       a_shaderType == RE::BSShader::Type::ImageSpace;
 	}
 	virtual inline bool IsCore() const override { return true; }
-	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
+	virtual std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {

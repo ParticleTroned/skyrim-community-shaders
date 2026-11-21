@@ -3,7 +3,10 @@
 #include "SettingsPage.h"
 #include "Utils/WinApi.h"
 
+#include <cmath>
+#include <cstring>
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include "Feature.h"
 #include "Globals.h"
@@ -22,43 +25,57 @@
 namespace
 {
 	constexpr float FORK_NOTICE_OFFSET_LINES = 1.15f;
-	constexpr float FORK_NOTICE_ITALIC_SLANT = 0.18f;
 
 	float CenteredTextX(float windowWidth, float textWidth)
 	{
 		return std::max(0.0f, (windowWidth - textWidth) * 0.5f);
 	}
 
+	void DrawCenteredText(const char* text, float left, float width, const ImVec4& color, bool italic = false)
+	{
+		const float slant = italic ? ImGui::GetTextLineHeight() * .18f : 0;
+		const float wrapWidth = std::max(1.0f, width - slant);
+		ImGui::PushTextWrapPos(-1);
+		const SKSE::stl::scope_exit restoreWrap([] { ImGui::PopTextWrapPos(); });
+		auto* draw = ImGui::GetWindowDrawList();
+		const int start = draw->VtxBuffer.Size;
+		const float top = ImGui::GetCursorScreenPos().y;
+		const float localTop = ImGui::GetCursorPosY();
+		const char* end = text + std::strlen(text);
+		int row = 0;
+		for (const char* line = text; line < end; ++row) {
+			const char* paragraphEnd = std::find(line, end, '\n');
+			const char* lineEnd = ImGui::GetFont()->CalcWordWrapPosition(ImGui::GetFontSize(), line, paragraphEnd, wrapWidth);
+			if (lineEnd == line && line < paragraphEnd) {
+				unsigned int character;
+				lineEnd += std::max(1, ImTextCharFromUtf8(&character, line, paragraphEnd));
+			}
+			const auto size = ImGui::CalcTextSize(line, lineEnd, false);
+			ImGui::SetCursorPos({ left + CenteredTextX(width, size.x + slant), localTop + row * ImGui::GetTextLineHeight() });
+			ImGui::TextColored(color, "%.*s", static_cast<int>(lineEnd - line), line);
+			line = lineEnd;
+			while (line < paragraphEnd && (*line == ' ' || *line == '\t'))
+				++line;
+			if (line == paragraphEnd && line < end)
+				++line;
+		}
+		if (italic) {
+			const float height = ImGui::GetTextLineHeight();
+			for (int i = start; i < draw->VtxBuffer.Size; ++i) {
+				auto& vertex = draw->VtxBuffer[i];
+				vertex.pos.x += (height - std::fmod(std::max(0.0f, vertex.pos.y - top), height)) * .18f;
+			}
+		}
+	}
+
 	void DrawCenteredTextColored(const char* text, float windowWidth, const ImVec4& color)
 	{
-		const ImVec2 textSize = ImGui::CalcTextSize(text);
-		ImGui::SetCursorPosX(CenteredTextX(windowWidth, textSize.x));
-		ImGui::TextColored(color, "%s", text);
+		DrawCenteredText(text, ImGui::GetStyle().WindowPadding.x, windowWidth - ImGui::GetStyle().WindowPadding.x * 2, color);
 	}
 
 	void DrawCenteredItalicTextLine(const char* text, float windowWidth, const ImVec4& color)
 	{
-		const ImVec2 textSize = ImGui::CalcTextSize(text);
-		const float lineHeight = ImGui::GetTextLineHeight();
-		const float lineHeightWithSpacing = ImGui::GetTextLineHeightWithSpacing();
-		const float slantWidth = lineHeight * FORK_NOTICE_ITALIC_SLANT;
-		const float localX = CenteredTextX(windowWidth, textSize.x + slantWidth);
-		const float localY = ImGui::GetCursorPosY();
-
-		ImGui::SetCursorPosX(localX);
-		const ImVec2 textPos = ImGui::GetCursorScreenPos();
-		ImDrawList* drawList = ImGui::GetWindowDrawList();
-		const int vtxStart = drawList->VtxBuffer.Size;
-		drawList->AddText(textPos, ImGui::GetColorU32(color), text);
-		const int vtxEnd = drawList->VtxBuffer.Size;
-
-		const float lineBottom = textPos.y + lineHeight;
-		for (int i = vtxStart; i < vtxEnd; ++i) {
-			ImDrawVert& vtx = drawList->VtxBuffer[i];
-			vtx.pos.x += (lineBottom - vtx.pos.y) * FORK_NOTICE_ITALIC_SLANT;
-		}
-
-		ImGui::SetCursorPosY(localY + lineHeightWithSpacing);
+		DrawCenteredText(text, ImGui::GetStyle().WindowPadding.x, windowWidth - ImGui::GetStyle().WindowPadding.x * 2, color, true);
 	}
 
 	void DrawCenteredItalicTextBlock(std::initializer_list<const char*> lines, float windowWidth, const ImVec4& color)
@@ -160,9 +177,9 @@ void HomePageRenderer::RenderWelcomeSection()
 
 	// Intro text - centered line-by-line so the fork notice remains visually aligned.
 	DrawCenteredItalicTextBlock({
-									"This is an unofficial fork of Community Shaders restoring Particle Lights.",
+									"This is an unofficial fork of Community Shaders focussed on VR, performance and customisability.",
 									"Not affiliated with or endorsed by the Community Shaders team",
-									"- Visit their Discord to get the Original and support their outstanding efforts -",
+									"\xE2\x80\x93 Visit their Discord to get the Original and support their efforts \xE2\x80\x93",
 								},
 		windowSize.x, forkNoticeColor);
 
@@ -275,11 +292,10 @@ void HomePageRenderer::RenderWelcomeSection()
 	feedback.Draw();
 
 	ImGui::Spacing();
-	MenuUI::SectionHeading("Third-party technologies");
-	ImGui::TextWrapped("%s",
-		"Includes NVIDIA DLSS / NGX and NVIDIA Reflex technology. "
-		"NVIDIA GeForce RTX is a trademark of NVIDIA Corporation.");
-	MenuUI::DetailNote("NVIDIA components retain their own license terms, included under Shaders/Upscaling/Streamline.");
+	DrawCenteredTextColored("Third-party technologies", windowSize.x, forkNoticeColor);
+	DrawCenteredTextColored("Includes NVIDIA DLSS / NGX and NVIDIA Reflex technology. NVIDIA GeForce RTX is a trademark of NVIDIA Corporation.", windowSize.x, forkNoticeColor);
+	DrawCenteredTextColored("Includes AMD FidelityFX Super Resolution (FSR) and AMD Radeon Anti-Lag 2 technology. AMD, FidelityFX and Radeon are trademarks of Advanced Micro Devices, Inc.", windowSize.x, forkNoticeColor);
+	DrawCenteredTextColored("NVIDIA and AMD components retain their own licences. Licence files and third-party notices are included with their components.", windowSize.x, Util::Color::SecondaryText());
 
 	// Pop the style var we pushed at the start
 	ImGui::PopStyleVar();
@@ -622,7 +638,7 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 	ImGui::Spacing();
 
 	// "You can change this later" text - wrapped and centered
-	const char* laterText = "You can change this later in General > Keybindings.";
+	const char* laterText = "You can change this later in Settings > Controls.";
 	float laterWidth = ImGui::CalcTextSize(laterText).x;
 	if (laterWidth > windowWidth - 40.0f * uiScale) {
 		// Text is too wide, use wrapped text with centering

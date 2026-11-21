@@ -197,6 +197,13 @@ public:
 	virtual void RestoreDefaultSettings() override;
 
 	virtual void DrawSettings() override;
+	/** Draw runtime-gated interface controls without depending on VR rendering enablement. */
+	static void DrawMenuInterfaceSettings();
+	static void DrawControlInterfaceSettings();
+	static void DrawDesktopInterfaceSettings();
+	static void DrawInterfaceDiagnostics();
+	/** Keep controller recording attached to the Settings control panel that opened it. */
+	void DrawComboRecordingPopup();
 	/** Queue navigation to the FOV tab; return false when VR settings are unavailable. */
 	bool OpenFovSettings();
 	virtual bool HasPerformanceSettings() const override { return true; }
@@ -211,7 +218,7 @@ public:
 	virtual json CapturePerformanceCostMeasurementState() const override;
 	virtual void RestorePerformanceCostMeasurementState(const json& a_state) override;
 
-	virtual std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
+	virtual std::string_view GetCategory() const override { return FeatureCategories::kDisplay; }
 
 	//=============================================================================
 	// OVERLAY FEATURE OVERRIDES
@@ -234,6 +241,8 @@ public:
 	 */
 	struct Settings
 	{
+		/** Compare authored values without serialization or normalization. */
+		bool operator==(const Settings&) const = default;
 		static constexpr uint32_t kButtonBY = 1;
 		static constexpr uint32_t kButtonGrip = 2;
 		static constexpr uint32_t kButtonXA = 7;
@@ -883,4 +892,7 @@ public:
 	bool PrepareInSceneOverlaySubmitTexture(vr::EVREye eye, const vr::Texture_t* inputTexture, const vr::VRTextureBounds_t* bounds, vr::Texture_t& outputTexture);
 	bool InstallSubmitHook(bool a_enableProcessing = true);
 	bool GetGripPressed(bool isLeft, bool isRight) const;
+
+private:
+	void DrawComboRecordingContents();
 };

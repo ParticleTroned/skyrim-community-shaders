@@ -89,7 +89,7 @@ namespace
 {
 	static constexpr std::array<std::string_view, 0> kForcedDisableAtBootFeatures{};
 
-	std::vector<std::string> SaveUserOverrides(const json& a_settings)
+	std::vector<std::string> SaveUserOverrides(const json& a_settings, Feature* a_feature = nullptr)
 	{
 		std::vector<std::string> failedLayers;
 		auto overrideManager = SettingsOverrideManager::GetSingleton();
@@ -97,6 +97,8 @@ namespace
 			return failedLayers;
 
 		for (auto* feature : Feature::GetFeatureList()) {
+			if (a_feature && feature != a_feature)
+				continue;
 			std::string featureName = "<unknown>";
 			try {
 				featureName = feature->GetShortName();
@@ -128,7 +130,7 @@ namespace
 		try {
 			const auto globalOverrideSettings =
 				overrideManager->GetMergedOverrideSettings("Global", json::object());
-			if (!overrideManager->SaveUserOverride("Global", a_settings, globalOverrideSettings))
+			if (!overrideManager->SaveUserOverride("Global", a_settings, globalOverrideSettings, a_feature ? a_feature->GetName() : ""))
 				failedLayers.emplace_back("Global");
 		} catch (const std::exception& e) {
 			logger::warn("Failed to save global user overrides: {}", e.what());
@@ -1752,7 +1754,7 @@ void State::LoadFromJson(
 	}
 }
 
-bool State::Save(ConfigMode a_configMode)
+bool State::Save(ConfigMode a_configMode, Feature* a_feature)
 {
 	const auto configPath = GetConfigPath(a_configMode);
 	const auto configName = configPath.filename().string();
@@ -1762,6 +1764,9 @@ bool State::Save(ConfigMode a_configMode)
 			globals::menu->ReportSettingsSaveResult(false, std::move(a_userMessage));
 		return false;
 	};
+	if (a_feature && (a_configMode != ConfigMode::USER || !a_feature->loaded || !a_feature->HasFeatureSettings() ||
+						 IsPersistentMutationBlocked() || PerformanceTuningRenderer::HasActiveMeasurements() || !globals::menu->PrepareSettingsMutation()))
+		return reportFailure("Feature settings save is unavailable", "Feature settings could not be saved while unavailable or busy.");
 	if (a_configMode == ConfigMode::USER) {
 		const auto compatibility = PresetCompatibility::GetPublished();
 		if (!compatibility.ShouldApply()) {
@@ -1796,7 +1801,13 @@ bool State::Save(ConfigMode a_configMode)
 	}
 
 	try {
-		SaveToJson(settings, a_configMode == ConfigMode::DEFAULT);
+		if (a_feature) {
+			const auto activeVariables = WeatherManager::GetSingleton()->GetActiveVariablesForFeature(a_feature->GetShortName());
+			WeatherVariables::GlobalWeatherRegistry::GetSingleton()->SerializeFeatureUserSettings(
+				a_feature->GetShortName(), activeVariables, [&] { a_feature->Save(settings); });
+		} else {
+			SaveToJson(settings, a_configMode == ConfigMode::DEFAULT);
+		}
 	} catch (const std::exception& e) {
 		return reportFailure(
 			std::format("Failed to collect settings for {}: {}", configPath.string(), e.what()),
@@ -1817,7 +1828,7 @@ bool State::Save(ConfigMode a_configMode)
 	if (a_configMode == ConfigMode::USER) {
 		std::vector<std::string> postSaveFailures;
 		for (auto* feature : Feature::GetFeatureList()) {
-			if (!feature->loaded)
+			if (!feature->loaded || (a_feature && feature != a_feature))
 				continue;
 			try {
 				feature->OnSettingsSaved();
@@ -1830,7 +1841,7 @@ bool State::Save(ConfigMode a_configMode)
 			}
 		}
 
-		const auto overrideFailures = SaveUserOverrides(settings);
+		const auto overrideFailures = SaveUserOverrides(settings, a_feature);
 		if (!postSaveFailures.empty() || !overrideFailures.empty()) {
 			std::string failureDetails;
 			if (!overrideFailures.empty())
@@ -1851,7 +1862,10 @@ bool State::Save(ConfigMode a_configMode)
 		}
 
 		if (globals::menu) {
-			globals::menu->ResetSettingsDirtyState();
+			if (a_feature)
+				globals::menu->AcceptCurrentFeatureSettingsAsClean(a_feature->GetName());
+			else
+				globals::menu->ResetSettingsDirtyState();
 			globals::menu->ReportSettingsSaveResult(
 				true,
 				std::format("Settings saved successfully to {}.", configName));

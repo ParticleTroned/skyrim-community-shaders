@@ -1,11 +1,6 @@
 #pragma once
 
-#include "Utils/Input.h"
 #include <functional>
-#include <vector>
-
-// Forward declarations
-class Menu;
 
 class SettingsTabRenderer
 {
@@ -16,16 +11,15 @@ public:
 		bool& settingToggleKey;
 		bool& settingsEffectsToggle;
 		bool& settingNeuralRenderingToggleKey;
-		bool& settingSkipCompilationKey;
 		bool& settingOverlayToggleKey;
-		bool& settingShaderBlockPrevKey;  // Debug: shader block previous key
-		bool& settingShaderBlockNextKey;  // Debug: shader block next key
-		bool& settingCSEditorToggleKey;   // CS Editor toggle key
-		bool& settingScreenshotKey;       // Screenshot capture key
 	};
 
-	static void RenderGeneralSettings(
-		SettingsState& state);
+	static void RenderGeneralSettings(SettingsState& state, const std::function<void()>& drawStartup);
+	/** Draw shared shader configuration inside Dev Tools. */
+	static void RenderShaderSettings();
+	/** Draw developer-owned shortcuts at their tool's point of use. */
+	static void RenderDeveloperShortcuts();
+	static void RenderCaptureShortcuts();
 
 private:
 	static void RenderShadersTab();

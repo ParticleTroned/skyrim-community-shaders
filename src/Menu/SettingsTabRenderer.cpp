@@ -223,19 +223,28 @@ namespace
 	}
 }
 
-void SettingsTabRenderer::RenderGeneralSettings(SettingsState& state)
+void SettingsTabRenderer::RenderGeneralSettings(SettingsState& state, const std::function<void()>& drawStartup)
 {
-	MenuUI::SettingsPage page("General", {
-											 { "shaders", "Shaders", "Choose shader behaviour and compilation first.", "Shader and compilation behavior", true, true, "Choose system behavior" },
-											 { "hotkeys", "Hotkeys", "Choose keyboard shortcuts.", "Keyboard shortcuts", true, true, nullptr },
-											 { "behaviour", "Behaviour", "Choose how the menu opens and responds.", "Opening, focus and interaction", true, true, "Choose interaction and appearance" },
-											 { "themes", "Theme", "Choose the overall appearance first.", "Overall appearance", true, true, nullptr },
-											 { "fonts", "Fonts", "Refine text size and font choices.", "Font families and sizes", true, true, "Refine readability" },
-											 { "layout", "Layout", "Refine spacing, shape and menu layout.", "Spacing, shape and placement", true, true, nullptr },
-											 { "colours", "Colours", "Refine the selected theme colours.", "Theme palette", true, true, "Refine the palette" },
-										 });
-	if (page.Is("shaders"))
-		RenderShadersTab();
+	MenuUI::SettingsPage page("Settings", {
+											  { "hotkeys", "Controls", "Choose keyboard shortcuts.", "Keyboard shortcuts", true, true, nullptr },
+											  { "vr_menu", "VR Menu", "Choose headset menu placement and size.", "Headset placement and presentation", globals::game::isVR },
+											  { "vr_controls", "VR Controls", "Choose controller navigation and shortcuts.", "Controller bindings and pointer response", globals::game::isVR },
+											  { "desktop", "Desktop Mirror", "Choose VR desktop presentation and focus.", "Desktop mirror and window behaviour", globals::game::isVR },
+											  { "startup", "Startup", "Choose which features load when the game starts.", "Features loaded at startup" },
+											  { "behaviour", "Behaviour", "Choose how the menu opens and responds.", "Opening, focus and interaction", true, true, "Choose interaction and appearance" },
+											  { "themes", "Theme", "Choose the overall appearance first.", "Overall appearance", true, true, nullptr },
+											  { "fonts", "Fonts", "Refine text size and font choices.", "Font families and sizes", true, true, "Refine readability" },
+											  { "layout", "Layout", "Refine spacing, shape and menu layout.", "Spacing, shape and placement", true, true, nullptr },
+											  { "colours", "Colours", "Refine the selected theme colours.", "Theme palette", true, true, "Refine the palette" },
+										  });
+	if (page.Is("vr_menu"))
+		VR::DrawMenuInterfaceSettings();
+	if (page.Is("vr_controls"))
+		VR::DrawControlInterfaceSettings();
+	if (page.Is("desktop"))
+		VR::DrawDesktopInterfaceSettings();
+	if (page.Is("startup") && drawStartup)
+		drawStartup();
 	if (page.Is("hotkeys"))
 		RenderKeybindingsTab(state);
 	if (page.Is("behaviour"))
@@ -248,6 +257,33 @@ void SettingsTabRenderer::RenderGeneralSettings(SettingsState& state)
 		RenderStylingTab();
 	if (page.Is("colours"))
 		RenderColorsTab();
+}
+
+void SettingsTabRenderer::RenderShaderSettings()
+{
+	RenderShadersTab();
+	MenuUI::SectionHeading("Cache actions");
+	auto& menuSettings = globals::menu->GetSettings();
+	bool skipConfirmation = menuSettings.SkipClearCacheConfirmation;
+	if (Util::Widgets::Checkbox("Skip Clear Cache Confirmation", &skipConfirmation)) {
+		menuSettings.SkipClearCacheConfirmation = skipConfirmation;
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("Clear the shader cache immediately without confirmation.");
+	}
+
+	bool smartClearDefault = menuSettings.SmartClearShaderCacheDefault;
+	if (Util::Widgets::Checkbox("Smart Clear by Default", &smartClearDefault)) {
+		menuSettings.SmartClearShaderCacheDefault = smartClearDefault;
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::TextWrapped(
+			"Checked: click clears current-scene shaders; Shift-click clears all. Unchecked reverses these actions. Useful for controller-only VR.");
+	}
+
+	MenuUI::SectionHeading("Compilation shortcut");
+	auto& menu = *globals::menu;
+	Util::InputComboWidget("Skip Compilation Key:", menu.GetSettings().SkipCompilationKey, menu.settingSkipCompilationKey, "Change##skip");
 }
 
 void SettingsTabRenderer::RenderShadersTab()
@@ -396,13 +432,7 @@ void SettingsTabRenderer::RenderKeybindingsTab(
 		"Neural Rendering Toggle Key:", settings.NeuralRenderingToggleKey,
 		state.settingNeuralRenderingToggleKey, "Change##NeuralRenderingToggle");
 	if (auto tooltip = Util::HoverTooltipWrapper())
-		ImGui::TextUnformatted("Toggle NR without losing settings. Off removes NR rendering cost. Requires the NR DLL; unbound by default. Controller bindings: VR > Controls > Controller shortcuts.");
-
-	Util::InputComboWidget(
-		"Skip Compilation Key:",
-		settings.SkipCompilationKey,
-		state.settingSkipCompilationKey,
-		"Change##skip");
+		ImGui::TextUnformatted("Toggle NR without losing settings. Off removes NR rendering cost. Requires the NR DLL; unbound by default. Controller bindings: Settings > VR Controls > Controller shortcuts.");
 
 	Util::InputComboWidget(
 		"Overlay Toggle Key:",
@@ -411,27 +441,10 @@ void SettingsTabRenderer::RenderKeybindingsTab(
 		"Change##OverlayToggle");
 	ImGui::TextWrapped("Shows or hides overlay windows enabled by individual features. Default key: F10.");
 
-	Util::InputComboWidget(
-		"CS Editor Toggle Key:",
-		settings.CSEditorToggleKey,
-		state.settingCSEditorToggleKey,
-		"Change##CSEditorToggle");
-
-	Util::InputComboWidget(
-		"Screenshot Key:",
-		settings.ScreenshotKey,
-		state.settingScreenshotKey,
-		"Change##Screenshot");
-
 	ImGui::Separator();
 	ImGui::TextUnformatted("Hardcoded Bindings");
 	DrawReadOnlyKeybinding("Reset Menu:", "Ctrl+Shift+End",
 		"Reopen and restore menu geometry, sidebar, zoom and font sizing, including headset placement. Works while the menu is closed or locked.");
-	ImGui::TextWrapped("RenderDoc captures graphics frames for debugging. Requires loaded RenderDoc capture support.");
-	DrawReadOnlyKeybinding(
-		"RenderDoc Capture:",
-		"F12 / Print Screen",
-		"Captures the configured frame count. These capture hotkeys are fixed and cannot be changed here.");
 }
 
 void SettingsTabRenderer::RenderBehaviorTab()
@@ -486,25 +499,6 @@ void SettingsTabRenderer::RenderBehaviorTab()
 	Util::Widgets::SliderFloat("Tooltip Hover Delay", &themeSettings.TooltipHoverDelay, 0.0f, 2.0f, "%.2f s", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted("Hover delay in seconds before a tooltip appears.");
-	}
-
-	// Skip confirmation when clearing shader cache (UI behavior, not a shader setting).
-	auto& menuSettings = globals::menu->GetSettings();
-	bool skipConfirmation = menuSettings.SkipClearCacheConfirmation;
-	if (Util::Widgets::Checkbox("Skip Clear Cache Confirmation", &skipConfirmation)) {
-		menuSettings.SkipClearCacheConfirmation = skipConfirmation;
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("Clear the shader cache immediately without confirmation.");
-	}
-
-	bool smartClearDefault = menuSettings.SmartClearShaderCacheDefault;
-	if (Util::Widgets::Checkbox("Smart Clear by Default", &smartClearDefault)) {
-		menuSettings.SmartClearShaderCacheDefault = smartClearDefault;
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextWrapped(
-			"Checked: click clears current-scene shaders; Shift-click clears all. Unchecked reverses these actions. Useful for controller-only VR.");
 	}
 
 	SeparatorTextWithFont("Visual Effects", Menu::FontRole::Subheading);
@@ -1283,4 +1277,23 @@ void SettingsTabRenderer::RenderColorsTab()
 		}
 		ImGui::TreePop();
 	}
+}
+
+void SettingsTabRenderer::RenderCaptureShortcuts()
+{
+	ImGui::TextWrapped("RenderDoc captures graphics frames for debugging. Requires loaded RenderDoc capture support.");
+	DrawReadOnlyKeybinding(
+		"RenderDoc Capture:",
+		"F12 / Print Screen",
+		"Captures the configured frame count. These capture hotkeys are fixed and cannot be changed here.");
+}
+
+void SettingsTabRenderer::RenderDeveloperShortcuts()
+{
+	auto& menu = *globals::menu;
+	auto& settings = menu.GetSettings();
+	MenuUI::SectionHeading("Developer shortcuts");
+	Util::InputComboWidget("CSX Editor Toggle Key:", settings.CSEditorToggleKey, menu.settingCSEditorToggleKey, "Change##CSEditorToggle");
+	Util::InputComboWidget("Shader Block Previous Key:", settings.ShaderBlockPrevKey, menu.settingShaderBlockPrevKey, "Change##shaderPrev");
+	Util::InputComboWidget("Shader Block Next Key:", settings.ShaderBlockNextKey, menu.settingShaderBlockNextKey, "Change##shaderNext");
 }

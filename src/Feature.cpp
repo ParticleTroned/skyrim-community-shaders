@@ -609,6 +609,6 @@ void Feature::DrawSettings()
 			MenuUI::DetailNote(benefit.c_str());
 		MenuUI::DetailNote(SupportsPerformanceCostMeasurement() ?
 							   "No further tuning. Use Enabled in the header to control this feature." :
-							   "No further tuning. Change the startup setting in Advanced > Startup, save settings and restart.");
+							   "No further tuning. Change the startup setting in Settings > Startup, save settings and restart.");
 	}
 }

@@ -60,6 +60,10 @@ namespace Util
 		auto line = [&](float x1, float y1, float x2, float y2) { draw->AddLine(point(x1, y1), point(x2, y2), color, thickness); };
 		auto rectangle = [&](float x1, float y1, float x2, float y2) { draw->AddRect(point(x1, y1), point(x2, y2), color, size * .06f, 0, thickness); };
 		switch (glyph) {
+		case ActionGlyph::Search:
+			draw->AddCircle(ImLerp(minimum, maximum, .42f), (maximum.x - minimum.x) * .25f, color, 0, 1.5f);
+			draw->AddLine(ImLerp(minimum, maximum, .62f), ImLerp(minimum, maximum, .9f), color, 1.5f);
+			break;
 		case ActionGlyph::Home:
 			draw->PathLineTo(point(.2f, .45f));
 			draw->PathLineTo(point(.5f, .12f));
@@ -1105,7 +1109,7 @@ namespace Util
 		return m_shouldDraw;
 	}
 
-	bool DrawCategoryHeader(const char* categoryName, bool& isExpanded, int categoryCount)
+	bool DrawCategoryHeader(const char* categoryName, bool& isExpanded, int categoryCount, bool canCollapse)
 	{
 		// Get the appropriate icon for this category
 		ID3D11ShaderResourceView* categoryIcon = nullptr;
@@ -1140,9 +1144,10 @@ namespace Util
 		ImGui::PushID(categoryName);
 		const SKSE::stl::scope_exit popId([] { ImGui::PopID(); });
 		const bool clicked = ImGui::Selectable("##CategoryHeader", false, ImGuiSelectableFlags_None, { width, height });
-		if (clicked)
+		if (clicked && canCollapse)
 			isExpanded = !isExpanded;
-		Util::AddTooltip(isExpanded ? "Hide the features in this category." : "Show the features in this category.");
+		Util::AddTooltip(!canCollapse ? "This category stays expanded." : isExpanded ? "Hide the features in this category." :
+																					   "Show the features in this category.");
 		auto* draw = ImGui::GetWindowDrawList();
 		const auto color = ImGui::GetColorU32(ImGuiCol_Text);
 		const float y = origin.y + (height - font) * .5f;
@@ -1153,7 +1158,11 @@ namespace Util
 		draw->AddText({ origin.x + font * 1.9f, y }, color, categoryName);
 		draw->PopClipRect();
 		const auto count = std::to_string(categoryCount);
-		draw->AddText({ right - font * 1.6f, y }, ImGui::GetColorU32(Util::Color::SecondaryText()), count.c_str());
+		const float countX = right - font * .8f - ImGui::CalcTextSize(count.c_str()).x;
+		const float lineStart = origin.x + font * 2.3f + ImGui::CalcTextSize(categoryName).x;
+		if (lineStart < countX - font * .4f)
+			draw->AddLine({ lineStart, y + font * .5f }, { countX - font * .4f, y + font * .5f }, ImGui::GetColorU32(ImGuiCol_Border));
+		draw->AddText({ countX, y }, ImGui::GetColorU32(Util::Color::SecondaryText()), count.c_str());
 		const ImVec2 centre{ right, y + font * .5f };
 		const float r = font * .2f;
 		if (isExpanded) {

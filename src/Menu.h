@@ -139,6 +139,8 @@ public:
 	bool PrepareSettingsMutation() { return EnsureSettingsDirtyBaseline(); }
 	void ResetSettingsDirtyState();
 	void AcceptCurrentFeatureSettingsAsClean(const std::string& a_featureSettingsName);
+	/** Copies this session's last successfully loaded or saved feature values. */
+	bool CopySavedFeatureSettings(const std::string& a_name, json& a_settings);
 	void ReportSettingsSaveResult(bool a_success, std::string a_message);
 	void ClearSettingsSaveResult();
 	const std::string& GetSettingsSaveMessage() const { return settingsSaveMessage; }

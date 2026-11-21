@@ -16,6 +16,8 @@ public:
 	/** Explicit sidebar choice takes precedence over automatic hover hiding. */
 	static void SetSidebarVisible(bool a_visible);
 	static bool IsSidebarVisible();
+	/** Toggle the existing feature search from the header. */
+	static void ToggleSearch();
 	/** Return an existing built-in menu entry ID without queuing navigation. */
 	static std::string GetBuiltInPageMenuEntryId(const std::string& a_page);
 	/** Resume the user's automatic visibility preference. */

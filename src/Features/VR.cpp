@@ -9,6 +9,7 @@
 #include "Menu/Fonts.h"
 #include "Menu/OverlayPolicy.h"
 #include "Menu/OverlayRenderer.h"
+#include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/SettingsPage.h"
 #include "RE/B/BSOpenVR.h"
 #include "RE/B/BSOpenVRControllerDevice.h"
@@ -1113,6 +1114,7 @@ namespace
 	void DrawControlsSettings();
 	void DrawDepthCullingSettings(VR& a_vr, const char* a_id);
 	void DrawMenuSettings();
+	void DrawDesktopSettings();
 	void DrawMouseSettings();
 	void DrawStereoSettings();
 	void DrawStereoSyncSettings();
@@ -1121,6 +1123,92 @@ namespace
 	void DrawKeyBindings();
 	void DrawDebugSection();
 	bool pendingFovTabSelection = false;
+}
+
+namespace
+{
+	bool CanDrawInterfaceSettings()
+	{
+		return globals::game::isVR && globals::menu && globals::state;
+	}
+
+	MenuUI::ActionFeedback controllerBindingFeedback;
+
+	const char* InterfaceSettingsBlockReason()
+	{
+		// Only loaded feature settings participate in global persistence.
+		if (!globals::features::vr.loaded)
+			return "VR settings were not loaded. Enable VR in Settings > Startup and restart before editing these preferences.";
+		if (PerformanceTuningRenderer::HasActiveMeasurements())
+			return "Finish the active measurement before changing VR interface settings.";
+		return PerformanceTuningRenderer::GetFeatureSceneControlBlockReason(&globals::features::vr);
+	}
+
+	void DrawInterfacePanel(void (*draw)())
+	{
+		if (!CanDrawInterfaceSettings())
+			return;
+		auto& vr = globals::features::vr;
+		const auto previous = vr.settings;
+		{
+			const auto* reason = InterfaceSettingsBlockReason();
+			const auto disabled = Util::DisableGuard(reason != nullptr);
+			if (reason)
+				MenuUI::DetailText(reason);
+			draw();
+		}
+		if (previous != vr.settings) {
+			globals::menu->RequestSettingsDirtyCheck();
+			PerformanceTuningRenderer::NotifyFeatureSettingsChanged(&vr);
+		}
+	}
+
+}
+
+void VR::DrawMenuInterfaceSettings()
+{
+	DrawInterfacePanel([] { DrawMenuSettings(); });
+}
+
+void VR::DrawControlInterfaceSettings()
+{
+	DrawInterfacePanel([] {
+		DrawControlsSettings();
+		globals::features::vr.DrawComboRecordingPopup();
+	});
+	if (CanDrawInterfaceSettings())
+		controllerBindingFeedback.Draw();
+}
+
+void VR::DrawComboRecordingPopup()
+{
+	if (!CanDrawInterfaceSettings() || !isCapturingCombo)
+		return;
+	ImGui::OpenPopup("Record Combo");
+	if (auto popup = Util::CenteredPopupModal("Record Combo")) {
+		const char* reason = InterfaceSettingsBlockReason();
+		if (!reason && !openVRInfo.isCompatible)
+			reason = "Controller bindings require a compatible VR runtime.";
+		if (reason) {
+			controllerBindingFeedback.message = std::string("Controller recording cancelled. ") + reason;
+			controllerBindingFeedback.error = true;
+			ResetComboRecordingState();
+			ImGui::CloseCurrentPopup();
+			return;
+		}
+		controllerBindingFeedback = {};
+		DrawComboRecordingContents();
+	}
+}
+
+void VR::DrawDesktopInterfaceSettings()
+{
+	DrawInterfacePanel([] { DrawDesktopSettings(); });
+}
+
+void VR::DrawInterfaceDiagnostics()
+{
+	DrawInterfacePanel([] { DrawDebugSection(); });
 }
 
 bool VR::OpenFovSettings()
@@ -1143,19 +1231,12 @@ void VR::DrawSettings()
 										{ "fov-effects", "FOV effects", "Choose which effects use the shared FOV mask.", "Effect coverage and detail budgets", true, true, nullptr },
 										{ "depth-culling", "Depth culling", "Choose visibility checks for exterior and interior objects.", "Object visibility and culling method", true, true, "Balance visibility and appearance" },
 										{ "stereo", "Stereo", "Refine the appearance shared between your eyes.", "Shared stereo appearance", true, true, nullptr },
-										{ "layout", "Menu", "Choose menu placement, presentation and desktop behaviour.", "Headset placement and desktop settings", true, true, "Set up interaction" },
-										{ "controls", "Controls", "Choose navigation, pointer response and controller shortcuts.", "Navigation, pointer and shortcuts", true, true, nullptr, nullptr, nullptr, openVRInfo.isCompatible },
-										{ "diagnostics", "Diagnostics", "Inspect headset and controller diagnostics.", "Headset and controller state", true, false, nullptr },
 									});
 
 	auto menu = globals::menu;
 	if (!menu)
 		return;
 
-	if (page.Is("layout"))
-		DrawMenuSettings();
-	if (page.Is("controls"))
-		DrawControlsSettings();
 	if (page.Is("depth-culling"))
 		DrawDepthCullingSettings(*this, "DepthCullingSettings");
 
@@ -1177,168 +1258,139 @@ void VR::DrawSettings()
 			DrawStereoSettings();
 		}
 	}
+}
 
-	if (page.Is("diagnostics")) {
-		{
-			DrawDebugSection();
+void VR::DrawComboRecordingContents()
+{
+	auto applyRecordedCombo = [&]() {
+		if (this->recordedCombo.empty())
+			return;
+
+		switch (this->currentComboType) {
+		case VR::ComboType::MenuOpen:
+			settings.VRMenuOpenKeys = this->recordedCombo;
+			break;
+		case VR::ComboType::MenuClose:
+			settings.VRMenuCloseKeys = this->recordedCombo;
+			break;
+		case VR::ComboType::OverlayOpen:
+			settings.VROverlayOpenKeys = this->recordedCombo;
+			break;
+		case VR::ComboType::NeuralRenderingToggle:
+			settings.VRNeuralRenderingToggleKeys = this->recordedCombo;
+			UpdateNeuralRenderingToggleFromInput(false);
+			break;
+		case VR::ComboType::OverlayClose:
+			settings.VROverlayCloseKeys = this->recordedCombo;
+			break;
+		default:
+			return;
+		}
+		globals::menu->RequestSettingsDirtyCheck();
+	};
+
+	ImGui::Text("Recording combo for: %s", this->currentComboName ? this->currentComboName : "Unknown");
+	ImGui::Spacing();
+
+	ImGui::TextDisabled("Record with either controller. The controller requirement applies only when using the binding.");
+
+	ImGui::Spacing();
+
+	// Show countdown timer with color
+	double remainingTime = this->comboTimeout - (Util::GetNowSecs() - this->comboStartTime);
+	ImVec4 timerColor = remainingTime > 2.0 ? Util::Colors::GetTimerGood() :
+	                    remainingTime > 1.0 ? Util::Colors::GetTimerWarning() :
+	                                          Util::Colors::GetTimerCritical();
+	ImGui::TextColored(timerColor, "Time remaining: %.1f seconds", remainingTime);
+
+	ImGui::Spacing();
+
+	// Show recorded buttons
+	if (this->recordedCombo.empty()) {
+		ImGui::Text("Press buttons to record combo...");
+	} else {
+		ImGui::Text("Recorded buttons:");
+		// Create a sorted list of decoded buttons for consistent display
+		std::vector<ButtonCombo> sortedRecordedCombos;
+		for (size_t i = 0; i < this->recordedCombo.size(); ++i) {
+			sortedRecordedCombos.push_back(this->recordedCombo[i]);
+		}
+		std::sort(sortedRecordedCombos.begin(), sortedRecordedCombos.end(),
+			[](const ButtonCombo& a, const ButtonCombo& b) {
+				return a.GetKey() < b.GetKey();
+			});
+
+		Util::DrawButtonCombo(sortedRecordedCombos, false);
+	}
+
+	ImGui::Spacing();
+	ImGui::Separator();
+	ImGui::Spacing();
+
+	// Instructions
+	ImGui::Text("Press ENTER to accept, ESC to cancel");
+
+	// Handle button recording
+	// Check for VR controller button presses - record them (any controller allowed during recording)
+	bool buttonPressed = false;
+	uint32_t pressedKey = 0;
+	ControllerDevice pressedDevice = ControllerDevice::Both;  // Default to Both, will set below
+
+	// Check primary controller buttons
+	for (const auto& [keyCode, buttonState] : primaryControllerState.GetActiveButtons()) {
+		if (buttonState->isPressed) {
+			pressedKey = keyCode;
+			buttonPressed = true;
+			pressedDevice = ControllerDevice::Primary;
+			break;
 		}
 	}
 
-	// Combo recording popup
-	if (this->isCapturingCombo) {
-		ImGui::OpenPopup("Record Combo");
-		if (auto popup = Util::CenteredPopupModal("Record Combo")) {
-			auto applyRecordedCombo = [&]() {
-				if (this->recordedCombo.empty())
-					return;
-
-				switch (this->currentComboType) {
-				case VR::ComboType::MenuOpen:
-					settings.VRMenuOpenKeys = this->recordedCombo;
-					break;
-				case VR::ComboType::MenuClose:
-					settings.VRMenuCloseKeys = this->recordedCombo;
-					break;
-				case VR::ComboType::OverlayOpen:
-					settings.VROverlayOpenKeys = this->recordedCombo;
-					break;
-				case VR::ComboType::NeuralRenderingToggle:
-					settings.VRNeuralRenderingToggleKeys = this->recordedCombo;
-					UpdateNeuralRenderingToggleFromInput(false);
-					break;
-				case VR::ComboType::OverlayClose:
-					settings.VROverlayCloseKeys = this->recordedCombo;
-					break;
-				default:
-					return;
-				}
-				globals::menu->RequestSettingsDirtyCheck();
-			};
-
-			// Helper function to get button name
-			auto GetButtonName = [](uint32_t key) -> const char* {
-				switch (key) {
-				case static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kTrigger):
-					return "Trigger";
-				case static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kGrip):
-					return "Grip";
-				case static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kTouchpadClick):
-					return "Touchpad";
-				case static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger):
-					return "Stick Click";
-				case static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kXA):
-					return "A/X";
-				case static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kBY):
-					return "B/Y";
-				default:
-					return "Unknown";
-				}
-			};
-
-			ImGui::Text("Recording combo for: %s", this->currentComboName ? this->currentComboName : "Unknown");
-			ImGui::Spacing();
-
-			ImGui::TextDisabled("Record with either controller. The controller requirement applies only when using the binding.");
-
-			ImGui::Spacing();
-
-			// Show countdown timer with color
-			double remainingTime = this->comboTimeout - (Util::GetNowSecs() - this->comboStartTime);
-			ImVec4 timerColor = remainingTime > 2.0 ? Util::Colors::GetTimerGood() :
-			                    remainingTime > 1.0 ? Util::Colors::GetTimerWarning() :
-			                                          Util::Colors::GetTimerCritical();
-			ImGui::TextColored(timerColor, "Time remaining: %.1f seconds", remainingTime);
-
-			ImGui::Spacing();
-
-			// Show recorded buttons
-			if (this->recordedCombo.empty()) {
-				ImGui::Text("Press buttons to record combo...");
-			} else {
-				ImGui::Text("Recorded buttons:");
-				// Create a sorted list of decoded buttons for consistent display
-				std::vector<ButtonCombo> sortedRecordedCombos;
-				for (size_t i = 0; i < this->recordedCombo.size(); ++i) {
-					sortedRecordedCombos.push_back(this->recordedCombo[i]);
-				}
-				std::sort(sortedRecordedCombos.begin(), sortedRecordedCombos.end(),
-					[](const ButtonCombo& a, const ButtonCombo& b) {
-						return a.GetKey() < b.GetKey();
-					});
-
-				Util::DrawButtonCombo(sortedRecordedCombos, false);
-			}
-
-			ImGui::Spacing();
-			ImGui::Separator();
-			ImGui::Spacing();
-
-			// Instructions
-			ImGui::Text("Press ENTER to accept, ESC to cancel");
-
-			// Handle button recording
-			// Check for VR controller button presses - record them (any controller allowed during recording)
-			bool buttonPressed = false;
-			uint32_t pressedKey = 0;
-			ControllerDevice pressedDevice = ControllerDevice::Both;  // Default to Both, will set below
-
-			// Check primary controller buttons
-			for (const auto& [keyCode, buttonState] : primaryControllerState.GetActiveButtons()) {
-				if (buttonState->isPressed) {
-					pressedKey = keyCode;
-					buttonPressed = true;
-					pressedDevice = ControllerDevice::Primary;
-					break;
-				}
-			}
-
-			// Check secondary controller buttons if primary didn't have any
-			if (!buttonPressed) {
-				for (const auto& [keyCode, buttonState] : secondaryControllerState.GetActiveButtons()) {
-					if (buttonState->isPressed) {
-						pressedKey = keyCode;
-						buttonPressed = true;
-						pressedDevice = ControllerDevice::Secondary;
-						break;
-					}
-				}
-			}
-
-			// Record button press
-			if (buttonPressed) {
-				// Check if this button is already in the combo (avoid duplicates)
-				auto it = recordingButtonControllers.find(pressedKey);
-				if (it == recordingButtonControllers.end()) {
-					// Not yet recorded, add with the current device
-					recordingButtonControllers[pressedKey] = pressedDevice;
-				} else {
-					// Already recorded, if the other controller is now pressed, set to BOTH
-					if (it->second != pressedDevice && it->second != ControllerDevice::Both) {
-						it->second = ControllerDevice::Both;
-					}
-				}
-				// Update the recordedCombo vector to match the map
-				this->recordedCombo.clear();
-				for (const auto& [key, device] : recordingButtonControllers) {
-					this->recordedCombo.push_back(ButtonCombo(device, key));
-				}
-			}
-
-			bool accept = false;
-			{
-				Util::DisableGuard disabled(this->recordedCombo.empty());
-				accept = ImGui::Button("Use combo");
-			}
-			ImGui::SameLine();
-			const bool cancel = ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape);
-			accept |= ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter) || remainingTime <= 0.0;
-			if (accept || cancel) {
-				if (!cancel)
-					applyRecordedCombo();
-				ResetComboRecordingState();
-				ImGui::CloseCurrentPopup();
+	// Check secondary controller buttons if primary didn't have any
+	if (!buttonPressed) {
+		for (const auto& [keyCode, buttonState] : secondaryControllerState.GetActiveButtons()) {
+			if (buttonState->isPressed) {
+				pressedKey = keyCode;
+				buttonPressed = true;
+				pressedDevice = ControllerDevice::Secondary;
+				break;
 			}
 		}
+	}
+
+	// Record button press
+	if (buttonPressed) {
+		// Check if this button is already in the combo (avoid duplicates)
+		auto it = recordingButtonControllers.find(pressedKey);
+		if (it == recordingButtonControllers.end()) {
+			// Not yet recorded, add with the current device
+			recordingButtonControllers[pressedKey] = pressedDevice;
+		} else {
+			// Already recorded, if the other controller is now pressed, set to BOTH
+			if (it->second != pressedDevice && it->second != ControllerDevice::Both) {
+				it->second = ControllerDevice::Both;
+			}
+		}
+		// Update the recordedCombo vector to match the map
+		this->recordedCombo.clear();
+		for (const auto& [key, device] : recordingButtonControllers) {
+			this->recordedCombo.push_back(ButtonCombo(device, key));
+		}
+	}
+
+	bool accept = false;
+	{
+		Util::DisableGuard disabled(this->recordedCombo.empty());
+		accept = ImGui::Button("Use combo");
+	}
+	ImGui::SameLine();
+	const bool cancel = ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape);
+	accept |= ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter) || remainingTime <= 0.0;
+	if (accept || cancel) {
+		if (!cancel)
+			applyRecordedCombo();
+		ResetComboRecordingState();
+		ImGui::CloseCurrentPopup();
 	}
 }
 
@@ -1867,7 +1919,10 @@ namespace
 		Util::AddTooltip("Restore menu size, sidebar, zoom, fonts and headset placement. Emergency shortcut: Ctrl+Shift+End.");
 		ImGui::Spacing();
 		DrawHeadsetMenuSettings();
-		MenuUI::SectionHeading("Desktop");
+	}
+
+	void DrawDesktopSettings()
+	{
 		DrawKeepDesktopWindowFocusedForVRMenuSetting();
 		DrawStabilizeRenderScaleDesktopMirrorSetting();
 	}

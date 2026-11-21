@@ -1046,7 +1046,7 @@ const char* ProfilingRenderer::GetProfilingDisabledReason()
 	if (!globals::profiler || !globals::profiler->IsInitialized())
 		return "Profiler is unavailable.";
 	if (!globals::profiler->IsUserEnabled())
-		return "Profiling is off. Enable it on the main Profiling page in the sidebar.";
+		return "Profiling is off. Open Performance > Profiling to enable it.";
 	return nullptr;
 }
 

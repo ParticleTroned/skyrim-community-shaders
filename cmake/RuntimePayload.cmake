@@ -20,6 +20,16 @@ function(csx_prepare_runtime_asset _url _destination _sha256 _available)
     set(${_available} ${_verified} PARENT_SCOPE)
 endfunction()
 
+# Preserve original local SDK notices in the same guarded payload as the runtime.
+function(csx_stage_runtime_notice _provider _directory _source _filename)
+    set(_destination "${_directory}/${_filename}")
+    file(COPY_FILE "${_source}" "${_destination}" ONLY_IF_DIFFERENT)
+    set(${_provider}_RUNTIME_PAYLOAD_FILES
+        ${${_provider}_RUNTIME_PAYLOAD_FILES} "${_destination}" PARENT_SCOPE)
+    set(${_provider}_RUNTIME_FILES
+        ${${_provider}_RUNTIME_FILES} "${_destination}" PARENT_SCOPE)
+endfunction()
+
 function(csx_configure_runtime_payload)
     set(_missing
         ${FFX_RUNTIME_PAYLOAD_MISSING}

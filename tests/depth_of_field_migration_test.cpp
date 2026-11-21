@@ -51,7 +51,27 @@ int main(int argc, char** argv)
 	std::filesystem::create_directories(users);
 	auto& manager = *SettingsOverrideManager::GetSingleton();
 	const std::string adaptive = "AdaptiveBrightness";
-	if (test == "godray-context-migration") {
+	if (test == "feature-scoped-global-save") {
+		const auto path = users / "Global.user.json";
+		const json original = { { "Selected", { { "value", 2 } } }, { "Other", { { "value", 3 } } }, { "Unknown", 7 } };
+		const json current = { { "Selected", { { "value", 5 } } }, { "Other", { { "value", 99 } } } };
+		const json provider = { { "Selected", { { "value", 1 } } }, { "Other", { { "value", 1 } } } };
+		Write(path, original);
+		Check(manager.SaveUserOverride("Global", current, provider, "Selected"), "Feature-scoped global save failed");
+		auto expected = original;
+		expected["Selected"] = current["Selected"];
+		Check(Read(path) == expected, "Feature save changed another feature's saved override or unknown data");
+		Check(manager.SaveUserOverride("Global", provider, provider, "Selected"), "Feature-scoped provider reset failed");
+		expected.erase("Selected");
+		Check(Read(path) == expected, "Empty feature delta discarded other saved overrides");
+		Fixture::failedWrite = "Global.user.json";
+		Check(!manager.SaveUserOverride("Global", current, provider, "Selected") && Read(path) == expected,
+			"Failed feature override write must preserve the prior file");
+		Fixture::failedWrite.clear();
+		Write(path, json::array({ 1, 2 }));
+		Check(!manager.SaveUserOverride("Global", current, provider, "Selected") && Read(path) == json::array({ 1, 2 }),
+			"Malformed shared overrides must block a feature save without overwriting the file");
+	} else if (test == "godray-context-migration") {
 		const json exterior = VolumetricLightingTuning::Profile{ .ShaftIntensity = 1.8f, .Opacity = 0.7f, .Saturation = 1.4f, .CustomColorContribution = 0.4f, .CustomColorRed = 0.1f, .CustomColorGreen = 0.3f, .CustomColorBlue = 0.8f };
 		const json interior = VolumetricLightingTuning::Profile{ .ShaftIntensity = 0.6f, .Opacity = 1.2f, .Saturation = 0.4f };
 		json source = { { "ExteriorGodrays", exterior }, { "InteriorGodrays", interior }, { "ExteriorEnabled", false }, { "InteriorQuality", 3 } };

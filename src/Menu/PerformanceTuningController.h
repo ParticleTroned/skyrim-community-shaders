@@ -3,6 +3,9 @@
 #include <cstddef>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace PerformanceTuningController
 {
@@ -11,6 +14,36 @@ namespace PerformanceTuningController
 		nlohmann::json enabledState;
 		nlohmann::json disabledState;
 	};
+
+	/** Roll back native state and toggle history; successful replacements discard only their own history. */
+	template <class Feature, class Apply>
+	bool ApplyTransaction(const std::vector<Feature*>& features,
+		std::unordered_map<std::string, std::optional<DisabledConfiguration>>& configurations, Apply&& apply, bool replaceToggleHistory = false)
+	{
+		const auto previousConfigurations = configurations;
+		std::vector<nlohmann::json> previous;
+		previous.reserve(features.size());
+		for (auto* feature : features)
+			previous.push_back(feature->CapturePerformanceCostMeasurementState());
+		const auto restore = [&] {
+			for (auto index = features.size(); index > 0; --index)
+				features[index - 1]->RestorePerformanceToggleState(previous[index - 1]);
+			configurations = previousConfigurations;
+		};
+		try {
+			if (apply()) {
+				if (replaceToggleHistory)
+					for (auto* feature : features)
+						configurations.erase(feature->GetShortName());
+				return true;
+			}
+		} catch (...) {
+			restore();
+			throw;
+		}
+		restore();
+		return false;
+	}
 
 	/** Restore only toggle-owned values that the user has not subsequently edited. */
 	inline nlohmann::json RestoreToggleChanges(const nlohmann::json& enabled, const nlohmann::json& disabled, const nlohmann::json& current)

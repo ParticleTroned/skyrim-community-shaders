@@ -74,6 +74,15 @@ release triggers only the existing dry run, never a Nexus upload.
 
 ## Validate packaging
 
+The FidelityFX runtime component includes the binary redistribution licence
+and third-party notices from the same pinned AMD SDK revision as its DLLs.
+It also carries the original notices for the statically linked FidelityFX
+and Anti-Lag 2 SDKs. Update both runtime notice hashes when changing the
+runtime pin. The Streamline component retains its original NVIDIA notices,
+including the NVAPI and Neural Rendering SDK licences.
+Home credits identify these technologies; the distributed licence files
+remain authoritative. Missing or unverified runtime notices block packaging.
+
 Run the focused release suites before publishing a fork's AIO:
 
 ```text

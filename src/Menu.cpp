@@ -644,6 +644,17 @@ void Menu::AcceptCurrentFeatureSettingsAsClean(const std::string& a_featureSetti
 	ClearSettingsSaveResult();
 }
 
+bool Menu::CopySavedFeatureSettings(const std::string& a_name, json& a_settings)
+{
+	if (!EnsureSettingsDirtyBaseline())
+		return false;
+	const auto saved = settingsDirtyBaseline.find(a_name);
+	if (saved == settingsDirtyBaseline.end() || !saved->is_object())
+		return false;
+	a_settings = *saved;
+	return true;
+}
+
 void Menu::UpdateDirtySettingsSections(const json& currentSettings)
 {
 	dirtySettingsSections.clear();
@@ -1177,13 +1188,7 @@ void Menu::DrawSettings()
 	}
 }
 
-/**
- * @brief Renders the General settings tab content
- *
- * Delegates rendering to SettingsTabRenderer for the general configuration panel,
- * which includes Shaders, Keybindings, and Interface sub-tabs. This method provides
- * the callback for key-to-string conversion while maintaining separation of concerns.
- */
+/** Draw interface preferences and startup controls using their existing settings owners. */
 void Menu::DrawGeneralSettings()
 {
 	// Prepare settings state for the renderer
@@ -1191,30 +1196,18 @@ void Menu::DrawGeneralSettings()
 		.settingToggleKey = settingToggleKey,
 		.settingsEffectsToggle = settingsEffectsToggle,
 		.settingNeuralRenderingToggleKey = settingNeuralRenderingToggleKey,
-		.settingSkipCompilationKey = settingSkipCompilationKey,
-		.settingOverlayToggleKey = settingOverlayToggleKey,
-		.settingShaderBlockPrevKey = settingShaderBlockPrevKey,
-		.settingShaderBlockNextKey = settingShaderBlockNextKey,
-		.settingCSEditorToggleKey = settingCSEditorToggleKey,
-		.settingScreenshotKey = settingScreenshotKey
+		.settingOverlayToggleKey = settingOverlayToggleKey
 	};
 
 	// Render settings using extracted component
-	SettingsTabRenderer::RenderGeneralSettings(state);
+	SettingsTabRenderer::RenderGeneralSettings(state, [this]() { DrawDisableAtBootSettings(); });
 }
 
-/**
- * @brief Renders the Advanced settings tab content
- *
- * Delegates rendering to AdvancedSettingsRenderer for developer and advanced user
- * settings. Uses lambda callbacks to access private Menu methods while maintaining
- * encapsulation and proper separation of concerns.
- */
+/** Draw developer tools through their shared native controls. */
 void Menu::DrawAdvancedSettings()
 {
 	// Render advanced settings using extracted component
-	AdvancedSettingsRenderer::RenderAdvancedSettings(
-		[this]() { DrawDisableAtBootSettings(); });
+	AdvancedSettingsRenderer::RenderAdvancedSettings();
 }
 
 void Menu::DrawDisableAtBootSettings()

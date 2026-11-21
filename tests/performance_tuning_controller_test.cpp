@@ -187,6 +187,7 @@ namespace
 
 	struct DeferredFeature
 	{
+		std::string GetShortName() const { return "selected"; }
 		Util::RuntimeToggle enabled{ true };
 		uint32_t applied = 1;
 		int quality = 7;
@@ -239,6 +240,32 @@ try {
 	const auto before = feature.CapturePerformanceCostMeasurementState();
 	Require(!SetEnabled(feature, false, saved), "a rejected toggle must report failure");
 	Require(feature.CapturePerformanceCostMeasurementState() == before && !saved, "rejected disable must leave no snapshot or settings change");
+
+	std::unordered_map<std::string, std::optional<DisabledConfiguration>> configurations;
+	configurations["selected"] = original;
+	configurations["unrelated"] = original;
+	const auto beforeReplacement = feature.CapturePerformanceCostMeasurementState();
+	Require(!ApplyTransaction(std::vector{ &feature }, configurations, [&] {
+		feature.quality = 33;
+		configurations.erase("selected");
+		return false; }, true), "rejected settings replacements report failure");
+	Require(feature.CapturePerformanceCostMeasurementState() == beforeReplacement && configurations.at("selected")->enabledState == original.enabledState,
+		"rejected settings replacements restore native settings and reversible toggle history");
+	bool replacementThrew = false;
+	try {
+		ApplyTransaction(std::vector{ &feature }, configurations, [&]() -> bool {
+			feature.quality = 44;
+			throw std::runtime_error("replacement failed"); }, true);
+	} catch (const std::runtime_error&) {
+		replacementThrew = true;
+	}
+	Require(replacementThrew && feature.CapturePerformanceCostMeasurementState() == beforeReplacement && configurations.contains("selected"),
+		"exceptions restore settings and history before propagating");
+	Require(ApplyTransaction(std::vector{ &feature }, configurations, [&] {
+		feature.quality = 22;
+		return true; }, true), "accepted settings replacements succeed");
+	Require(feature.quality == 22 && !configurations.contains("selected") && configurations.at("unrelated")->enabledState == original.enabledState,
+		"a successful replacement discards only its own stale toggle history");
 
 	const json enabled = { { "effects", { { "a", true }, { "b", false } } }, { "quality", 7 } };
 	const json disabled = { { "effects", { { "a", false }, { "b", false } } }, { "quality", 7 } };

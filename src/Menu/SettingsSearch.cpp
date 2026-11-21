@@ -9,6 +9,7 @@
 #include "Menu/FeatureListRenderer.h"
 #include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/SettingsPage.h"
+#include "SettingsNavigation.h"
 #include "SettingsSearchPolicy.h"
 #include "State.h"
 #include "Utils/StringUtils.h"
@@ -80,6 +81,8 @@ namespace MenuUI::SettingsSearch
 		}
 		bool Available(const Indexed& entry)
 		{
+			if (entry.control && !SettingsNavigation::SectionAvailable(entry.control->page, entry.control->section, globals::game::isVR))
+				return false;
 			const auto& owner = owners[entry.owner];
 			return entry.control ? owner.controlsAvailable : owner.pageAvailable;
 		}
@@ -93,8 +96,8 @@ namespace MenuUI::SettingsSearch
 				for (auto* feature : FeatureListRenderer::GetMenuFeatures())
 					if (feature)
 						owners.push_back({ feature, feature->GetShortName(), feature->GetDisplayName() });
-				for (const auto* name : { "Home", "General", "Advanced", "Profiling", "PerformanceTuning" })
-					owners.push_back({ nullptr, name, name });
+				for (const auto* name : { "Home", "Performance", "Settings", "DevTools", "Profiling", "PerformanceTuning" })
+					owners.push_back({ nullptr, name, std::string_view(name) == "DevTools" ? "Dev Tools" : name });
 				index.reserve(ControlCatalog::Entries().size() + owners.size());
 				for (size_t i = 0; i < owners.size(); ++i) {
 					const auto& owner = owners[i];

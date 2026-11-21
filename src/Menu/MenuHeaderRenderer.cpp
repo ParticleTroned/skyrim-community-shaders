@@ -1,6 +1,8 @@
 #include "MenuHeaderRenderer.h"
 #include "FeatureListRenderer.h"
 #include "Layout.h"
+#include "PerformanceTuningRenderer.h"
+#include "SettingsPage.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -158,6 +160,8 @@ void MenuHeaderRenderer::RenderHeader(
 	if (forceStableHeader) {
 		RenderStableHeader(title, showLogo, actionIcons, uiScale, uiIcons);
 	} else if (isDocked) {
+		const auto navigation = NavigationIcons();
+		actionIcons.insert(actionIcons.begin(), navigation.begin(), navigation.end());
 		// Draw action icons in the title bar area
 		RenderDockedIcons(actionIcons, uiScale);
 	} else {
@@ -183,6 +187,8 @@ void MenuHeaderRenderer::RenderHeader(
 			// Restore Saved Settings Button
 			ImGui::TableNextColumn();
 			MenuUI::DrawGlobalSettingsButton(MenuUI::GlobalSettingsAction::Load, "Restore Saved Settings", { -1, 0 });
+			ImGui::TableNextColumn();
+			MenuUI::DrawGlobalSettingsButton(MenuUI::GlobalSettingsAction::RestoreDefaults, "Restore CSX Defaults", { -1, 0 });
 
 			// Clear Shader Cache Button
 			ImGui::TableNextColumn();
@@ -226,6 +232,16 @@ void MenuHeaderRenderer::RenderHeader(
 	}
 }
 
+std::array<MenuHeaderRenderer::ActionIcon, 2> MenuHeaderRenderer::NavigationIcons()
+{
+	return { ActionIcon{ "HeaderHome", nullptr, nullptr, "Home", [] {
+							if (!PerformanceTuningRenderer::HasActiveMeasurements() && MenuUI::SettingsPage::Select("Home", "welcome"))
+								globals::menu->SelectFeatureMenu("builtin:Home");
+						},
+				 ActionIcon::Glyph::Home },
+		ActionIcon{ "HeaderSearch", nullptr, nullptr, "Search features and settings", [] { FeatureListRenderer::ToggleSearch(); }, ActionIcon::Glyph::Search } };
+}
+
 std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons(bool canShowIcons, const Menu::UIIcons& uiIcons)
 {
 	std::vector<ActionIcon> actionIcons{
@@ -239,7 +255,7 @@ std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons
 	}
 
 	// Build list of available action icons (in display order)
-	if (uiIcons.saveSettings.texture) {
+	{
 		actionIcons.push_back({ "HeaderSaveSettings",
 			"HeaderSaveSettings",
 			uiIcons.saveSettings.texture,
@@ -249,7 +265,7 @@ std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons
 			},
 			ActionIcon::Glyph::SaveSettings, MenuUI::GlobalSettingsAction::Save });
 	}
-	if (uiIcons.loadSettings.texture) {
+	{
 		actionIcons.push_back({ "HeaderRestoreSavedSettings",
 			"HeaderRestoreSavedSettings",
 			uiIcons.loadSettings.texture,
@@ -259,6 +275,9 @@ std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons
 			},
 			ActionIcon::Glyph::LoadSettings, MenuUI::GlobalSettingsAction::Load });
 	}
+	actionIcons.push_back({ "HeaderRestoreDefaults", nullptr, nullptr, "Restore all CSX defaults",
+		[] { MenuUI::InvokeGlobalSettingsAction(MenuUI::GlobalSettingsAction::RestoreDefaults); },
+		ActionIcon::Glyph::RestoreDefaults, MenuUI::GlobalSettingsAction::RestoreDefaults });
 	if (uiIcons.clearCache.texture) {
 		actionIcons.push_back({ "HeaderClearShaderCache",
 			nullptr,
@@ -282,7 +301,7 @@ void MenuHeaderRenderer::DrawActionIcon(ImDrawList* draw, const ActionIcon& icon
 	}
 	const int vertexStart = draw->VtxBuffer.Size;
 	Util::DrawActionGlyph(draw, icon.glyph, minimum, maximum,
-		ImGui::GetColorU32(Util::Color::SecondaryText()), FeatureListRenderer::IsSidebarVisible());
+		tint, FeatureListRenderer::IsSidebarVisible());
 	if (icon.glyph == ActionIcon::Glyph::Close) {
 		float right = minimum.x;
 		for (int vertex = vertexStart; vertex < draw->VtxBuffer.Size; ++vertex)
@@ -312,17 +331,21 @@ void MenuHeaderRenderer::DrawActionButton(const ActionIcon& icon, ImVec2 minimum
 	const bool clicked = ImGui::ButtonBehavior(bounds, id, &hovered, &held, ImGuiButtonFlags_MouseButtonLeft);
 	auto* draw = window->DrawList;
 	const bool flash = icon.flashId && Util::IsButtonFlashActive(icon.flashId);
-	if (hovered || held || flash) {
+	const bool dirty = icon.action == MenuUI::GlobalSettingsAction::Save && globals::menu->HasUnsavedSettings();
+	if (hovered || held || flash || dirty) {
 		auto color = ImGui::GetStyleColorVec4(held ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered);
+		if (dirty)
+			color = globals::menu->GetTheme().StatusPalette.Warning;
 		if (flash)
 			color = Util::GetButtonFlashColor(color);
-		color.w *= held || flash ? .34f : .18f;
+		color.w *= held || flash || dirty ? .34f : .18f;
 		draw->AddRectFilled(minimum, maximum, ImGui::GetColorU32(color));
 	}
-	ImVec4 tint = globals::menu->GetTheme().UseMonochromeIcons ?
-	                  globals::menu->GetTheme().Palette.Text :
-	                  ImVec4(1, 1, 1, 1);
-	if (!hovered && !held && !flash)
+	ImVec4 tint = icon.glyph != ActionIcon::Glyph::Texture ? Util::Color::SecondaryText() : globals::menu->GetTheme().UseMonochromeIcons ? globals::menu->GetTheme().Palette.Text :
+	                                                                                                                                       ImVec4(1, 1, 1, 1);
+	if (dirty)
+		tint = globals::menu->GetTheme().StatusPalette.Warning;
+	if (!hovered && !held && !flash && icon.glyph == ActionIcon::Glyph::Texture)
 		tint.w *= .85f;
 	DrawActionIcon(draw, icon, { minimum.x + iconInset, minimum.y + iconInset },
 		{ maximum.x - iconInset, maximum.y - iconInset }, ImGui::GetColorU32(tint));
@@ -574,7 +597,8 @@ void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showL
 	const ImVec2 screenStart = ImGui::GetCursorScreenPos();
 	const float availableWidth = ImGui::GetContentRegionAvail().x;
 	const float subtitleWidth = ImGui::CalcTextSize("Community Shaders Expanded").x;
-	const float brandWidth = std::max(titleSize.x, subtitleWidth) + logoWidth + style.ItemSpacing.x;
+	const float navigationWidth = (actionIconSize + iconSpacing) * 2;
+	const float brandWidth = std::max(titleSize.x, subtitleWidth) + logoWidth + style.ItemSpacing.x + navigationWidth;
 	const bool stackedActions = availableWidth < brandWidth + iconsWidth + dockReserve + paddingX * 2 + currentFontSize;
 	const float headerHeight = brandRowHeight + (stackedActions ? actionIconSize + paddingY : 0);
 	const float rightLimit = screenStart.x + availableWidth;
@@ -582,6 +606,14 @@ void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showL
 	float titleX = screenStart.x + paddingX + (showSteamVRDockHandle ? GetSteamVRResizeHandleSize(uiScale) : 0);
 	const float centerY = screenStart.y + brandRowHeight * 0.5f;
 	const float actionsY = stackedActions ? screenStart.y + brandRowHeight + actionIconSize * .5f : centerY;
+	for (const auto& icon : NavigationIcons()) {
+		const ImVec2 minimum{ titleX, centerY - actionIconSize * .5f };
+		ImGui::SetCursorScreenPos(minimum);
+		ImGui::ItemSize({ actionIconSize, actionIconSize });
+		const auto disabled = Util::DisableGuard(PerformanceTuningRenderer::HasActiveMeasurements());
+		DrawActionButton(icon, minimum, { minimum.x + actionIconSize, minimum.y + actionIconSize }, paddingReduction * .5f);
+		titleX += actionIconSize + iconSpacing;
+	}
 
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	ImU32 logoTint = IM_COL32_WHITE;

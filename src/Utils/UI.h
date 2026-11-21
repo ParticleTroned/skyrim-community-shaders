@@ -59,6 +59,7 @@ namespace Util
 	{
 		Texture,
 		Home,
+		Search,
 		General,
 		Advanced,
 		Profiling,
@@ -712,7 +713,7 @@ namespace Util
 	 * @param categoryCount Number of features in the category
 	 * @return true if the expansion state was toggled
 	 */
-	bool DrawCategoryHeader(const char* categoryName, bool& isExpanded, int categoryCount);
+	bool DrawCategoryHeader(const char* categoryName, bool& isExpanded, int categoryCount, bool canCollapse = true);
 
 	/**
 	 * Draws a custom styled section header with lines extending from both sides

@@ -2,7 +2,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string_view>
+#include <vector>
 
 #include <nlohmann/json_fwd.hpp>
 
@@ -12,6 +14,10 @@ class PerformanceTuningRenderer
 {
 public:
 	static void Render();
+	/** Scene ownership also applies to selections that do not switch a feature off. */
+	static const char* GetFeatureSceneControlBlockReason(Feature* a_feature);
+	/** Apply settings while preserving reversible toggle history on failure. */
+	static bool ApplyFeatureSettingsTransaction(const std::vector<Feature*>& a_features, const std::function<bool()>& a_apply, bool a_replaceToggleHistory = false);
 	/** Draws the reversible feature switch; custom help never replaces a blocking reason. */
 	static void RenderFeatureEnabledControl(Feature* a_feature, const char* a_tooltip = nullptr);
 	/** Restores temporary profiling when no tuning panel or comparison is active. */

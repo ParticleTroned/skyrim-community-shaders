@@ -2028,6 +2028,13 @@ void ScreenshotFeature::DrawSettings()
 												   });
 
 	if (page.Is("source")) {
+		auto& menu = *globals::menu;
+		Util::InputComboWidget("Screenshot Key:", menu.GetSettings().ScreenshotKey, menu.settingScreenshotKey, "Change##Screenshot");
+		if (IsRuntimeEnabled() && HotkeyCollidesWithVanilla()) {
+			Util::Text::WrappedWarning(
+				"This hotkey also triggers vanilla PrintScreen. Set bAllowScreenShot=0 in Skyrim.ini to prevent the vanilla save, or choose another hotkey.");
+		}
+
 		ImGui::TextWrapped("Capture and save run asynchronously without stalling the game.");
 		ImGui::TextWrapped(
 			"VR HMD captures use accepted OpenVR eye submissions before compositor distortion. SDR/VR use the selected lossless format. Desktop FP16 scenes are Reinhard-tonemapped to SDR; HDR PNG metadata is not written.");
@@ -2275,18 +2282,6 @@ void ScreenshotFeature::DrawSettings()
 		captureFeedback.Draw();
 
 	if (page.Is("framing")) {
-		auto& menuSettings = Menu::GetSingleton()->GetSettings();
-		Util::InputComboWidget(
-			"Hotkey",
-			menuSettings.ScreenshotKey,
-			Menu::GetSingleton()->settingScreenshotKey,
-			"Change##ScreenshotFeature");
-
-		if (IsRuntimeEnabled() && HotkeyCollidesWithVanilla()) {
-			Util::Text::WrappedWarning(
-				"This hotkey also triggers vanilla PrintScreen. Set bAllowScreenShot=0 in Skyrim.ini to prevent the vanilla save, or choose another hotkey.");
-		}
-
 		if (usesFixedEyeFraming) {
 			MenuUI::SectionHeading("Framing");
 			ImGui::Checkbox("Use native resolution when larger than 4K", &vrFramedNativeResolution);

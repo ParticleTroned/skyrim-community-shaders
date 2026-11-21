@@ -9,13 +9,11 @@ class Menu;
 class AdvancedSettingsRenderer
 {
 public:
-	static void RenderAdvancedSettings(
-		const std::function<void()>& drawDisableAtBootSettings);
+	static void RenderAdvancedSettings();
 
 private:
 	static void RenderShadersSection();
 	static void RenderDiagnosticsSection();
-	static void RenderDisableAtBootSection(const std::function<void()>& drawDisableAtBootSettings);
 	static void RenderTestingSection();
 
 	// Helpers used by the sections above

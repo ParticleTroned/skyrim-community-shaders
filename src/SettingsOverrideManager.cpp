@@ -1212,13 +1212,27 @@ bool SettingsOverrideManager::LoadUserOverride(const std::string& featureName, j
 	return true;
 }
 
-bool SettingsOverrideManager::SaveUserOverride(const std::string& featureName, const json& currentSettings, const json& overrideSettings)
+bool SettingsOverrideManager::SaveUserOverride(const std::string& featureName, const json& currentSettings, const json& overrideSettings, const std::string& a_section)
 {
 	if (!enabled || featureName.empty()) {
 		return false;
 	}
 
 	json userOverride = BuildUserOverride(currentSettings, overrideSettings);
+	if (!a_section.empty()) {
+		json saved = json::object();
+		std::string error;
+		const auto path = GetUserOverridesDirectory() / (featureName + ".user.json");
+		if (ReadUserSettingsLayer(path, saved, error) == Util::FileHelpers::JsonFileReadResult::Error) {
+			logger::warn("Cannot preserve other settings in {}: {}", path.string(), error);
+			return false;
+		}
+		if (userOverride.contains(a_section))
+			saved[a_section] = userOverride[a_section];
+		else
+			saved.erase(a_section);
+		userOverride = std::move(saved);
+	}
 	if (featureName == SettingsMigrations::kVolumetricLightingFeatureName) {
 		json saved;
 		std::string error;

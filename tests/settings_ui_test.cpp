@@ -5,6 +5,7 @@
 #include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
 #include "Menu/AdaptiveBalancePresets.h"
 #include "Menu/SettingsActions.h"
+#include "Menu/SettingsNavigation.h"
 #include "Menu/SettingsPage.h"
 #include "Menu/SettingsSearch.h"
 #include "Utils/FeatureProfiling.h"
@@ -51,11 +52,28 @@ struct Feature
 {
 	std::string name;
 	bool supportsMeasurement = true;
+	bool loaded = true;
+	bool hasSettings = true;
+	nlohmann::json settings = { { "Enabled", true } };
+	std::string GetName() const { return name; }
+	bool HasFeatureSettings() const { return hasSettings; }
+	int loadFailures = 0;
+	void SaveSettings(nlohmann::json& value) const { value = settings; }
+	void LoadSettings(nlohmann::json& value)
+	{
+		settings = value;
+		if (loadFailures > 0) {
+			--loadFailures;
+			throw std::runtime_error("Feature load failed");
+		}
+	}
+	void RestoreDefaultSettings() { settings = { { "Enabled", true } }; }
 	std::string GetShortName() const { return name; }
 	bool SupportsPerformanceCostMeasurement() const { return supportsMeasurement; }
 	std::string GetDisplayName() const { return name; }
 	static std::vector<Feature*> GetFeatureList() { return {}; }
 };
+
 namespace globals
 {
 	namespace game
@@ -106,6 +124,15 @@ namespace globals
 		bool IsSettingsSaveMessageError() const { return messageError; }
 		std::string GetSettingsSaveMessage() const { return message; }
 		bool HasUnsavedSettings() const { return dirty; }
+		std::unordered_map<std::string, nlohmann::json> savedFeatures;
+		bool HasUnsavedFeatureSettings(const std::string& name) const { return savedFeatures.contains(name); }
+		bool CopySavedFeatureSettings(const std::string& name, nlohmann::json& value)
+		{
+			if (!savedFeatures.contains(name))
+				return false;
+			value = savedFeatures.at(name);
+			return true;
+		}
 		void RequestSettingsDirtyCheck() { ++dirtyChecks; }
 		void ClearSettingsSaveResult()
 		{
@@ -123,6 +150,7 @@ namespace globals
 	{
 		enum class ConfigMode
 		{
+			USER,
 			DEFAULT
 		};
 		bool blocked = false, snapshotFailure = false;
@@ -134,7 +162,19 @@ namespace globals
 		}
 		int applyFailures = 0, saves = 0, loads = 0, snapshots = 0, applies = 0;
 		nlohmann::json settings{ { "current", true } };
-		void Save() { ++saves; }
+		bool Save()
+		{
+			++saves;
+			return true;
+		}
+		Feature* savedFeature = nullptr;
+		bool Save(ConfigMode, Feature* feature)
+		{
+			savedFeature = feature;
+			return true;
+		}
+		bool startupDisabled = false;
+		bool IsFeatureDisabled(const std::string&) const { return startupDisabled; }
 		void Load() { ++loads; }
 		bool IsPersistentMutationBlocked() const { return blocked; }
 		bool IsDeveloperMode() const { return developerMode; }
@@ -249,7 +289,10 @@ struct PerformanceTuningRenderer
 	static inline int globalDraws = 0;
 	static inline int inactiveNotifications = 0;
 	static inline bool measuring = false;
+	static inline bool sceneControlled = false;
 	static bool HasActiveMeasurements() { return measuring; }
+	static const char* GetFeatureSceneControlBlockReason(Feature*) { return sceneControlled ? "Scene owns feature settings" : nullptr; }
+	static bool ApplyFeatureSettingsTransaction(const std::vector<Feature*>&, const std::function<bool()>& apply, bool = false) { return apply(); }
 	static void NotifyOverviewInactive() { ++inactiveNotifications; }
 	static inline std::string feature;
 	static inline std::function<void()> inspect;
@@ -387,7 +430,21 @@ struct WeatherManager
 		return &manager;
 	}
 	void RefreshFeatureOverrides() { ++refreshes; }
+	void NotifyUserSettingsChanged() {}
 };
+namespace WeatherVariables
+{
+	struct GlobalWeatherRegistry
+	{
+		static GlobalWeatherRegistry* GetSingleton()
+		{
+			static GlobalWeatherRegistry registry;
+			return &registry;
+		}
+		bool HasWeatherSupport(const std::string&) { return false; }
+		void CaptureFeatureUserSettings(const std::string&) {}
+	};
+}
 namespace globals
 {
 	using json = nlohmann::json;
@@ -406,6 +463,8 @@ bool TryGetDisplayCpuMs(const ProfilingRenderer::PerformanceTimingSummary& summa
 	return summary.hasGameCpu;
 }
 #include "settings_footer_under_test.h"
+using State = globals::State;
+using json = nlohmann::json;
 #include "settings_global_actions_under_test.h"
 std::vector<Feature*> BuildPerformanceFeatureList() { return {}; }
 std::vector<std::string> BuildPerformanceFeaturePrefixes(const std::vector<Feature*>& features)
@@ -752,9 +811,12 @@ void key(ImGuiKey keyCode, const std::function<void()>& draw)
 	io.AddKeyEvent(keyCode, false);
 	frame(draw);
 }
+#include "feature_settings_save_test.h"
+
 int main()
 {
 	try {
+		FeatureSettingsSaveTest::Run(require);
 		{
 			RenderDoc capture;
 			auto& state = globals::stateStorage;
@@ -1747,6 +1809,36 @@ int main()
 			require(inspected > 0 && lighting.sanitizations > 0, "lighting keeps validation and performance controls");
 		}
 		PerformanceTuningRenderer::inspect = {};
+		{
+			Feature scopedFeature{ "Skylighting" }, other{ "Unrelated" };
+			require(MenuUI::GetFeatureMutationBlockReason(nullptr), "missing scopedFeature cannot expose a writable master switch");
+			for (bool* unavailable : { &globals::state->blocked, &globals::state->startupDisabled, &PerformanceTuningRenderer::measuring, &PerformanceTuningRenderer::sceneControlled }) {
+				*unavailable = true;
+				require(MenuUI::GetFeatureMutationBlockReason(&scopedFeature) && !MenuUI::InvokeFeatureSettingsAction(MenuUI::GlobalSettingsAction::Load, &scopedFeature), "master switches and scoped persistence share every ownership guard");
+				*unavailable = false;
+			}
+			scopedFeature.loaded = false;
+			require(MenuUI::GetFeatureMutationBlockReason(&scopedFeature), "unloaded scopedFeature cannot expose a writable master switch");
+			scopedFeature.loaded = true;
+			scopedFeature.supportsMeasurement = scopedFeature.hasSettings = false;
+			require(!MenuUI::GetFeatureMutationBlockReason(&scopedFeature) && MenuUI::GetFeatureSettingsActionBlockReason(&scopedFeature), "runtime-only master switches do not require profiling or persistent settings support");
+			scopedFeature.supportsMeasurement = scopedFeature.hasSettings = true;
+			scopedFeature.settings = { { "Enabled", false }, { "value", 7 } };
+			other.settings = { { "value", 99 } };
+			globals::menu->savedFeatures[scopedFeature.name] = { { "Enabled", true }, { "value", 2 } };
+			using Action = MenuUI::GlobalSettingsAction;
+			require(MenuUI::InvokeFeatureSettingsAction(Action::Save, &scopedFeature) && globals::state->savedFeature == &scopedFeature, "scopedFeature Save invokes scoped persistence");
+			require(MenuUI::InvokeFeatureSettingsAction(Action::Load, &scopedFeature) && scopedFeature.settings["value"] == 2 && other.settings["value"] == 99, "scopedFeature Load changes only the selected scopedFeature");
+			scopedFeature.settings["value"] = 8;
+			scopedFeature.loadFailures = 1;
+			require(!MenuUI::InvokeFeatureSettingsAction(Action::Load, &scopedFeature) && scopedFeature.settings["value"] == 8, "failed native load rolls back the complete scopedFeature settings");
+			require(MenuUI::InvokeFeatureSettingsAction(Action::RestoreDefaults, &scopedFeature) && scopedFeature.settings == nlohmann::json({ { "Enabled", true } }) && other.settings["value"] == 99, "scopedFeature defaults preserve unrelated pending values");
+			globals::state->blocked = true;
+			require(!MenuUI::InvokeFeatureSettingsAction(Action::Load, &scopedFeature), "scopedFeature actions retain save/load availability guards");
+			globals::state->blocked = false;
+			globals::menu->savedFeatures.clear();
+			globals::state->savedFeature = nullptr;
+		}
 
 		{
 			for (const float labelScale : { 1.0f, 1.4f, 2.0f }) {
@@ -2730,7 +2822,7 @@ int main()
 			require(state.saves == 0 && state.loads == 0 && globals::menuStorage.dirtyChecks > 0, "restoration preserves saved files and requests a check against the existing dirty baseline");
 		}
 		{
-			for (const char* page : { "Home", "General", "Advanced" }) {
+			for (const char* page : { "Home", "Settings", "DevTools" }) {
 				const auto draw = [&] { DrawUiReviewPage(page, true); };
 				frame(draw);
 				frame(draw);
@@ -2944,13 +3036,13 @@ int main()
 		}
 
 		{
-			MenuUI::SettingsPage::Select("General", "overview");
+			MenuUI::SettingsPage::Select("Settings", "overview");
 			for (const float font : { 13.0f, 21.0f }) {
 				const auto draw = [&] {
 					ImGui::PushFont(ImGui::GetFont(), font);
 					ImGui::BeginChild("CompactOverview", { 850, 600 });
 					{
-						MenuUI::SettingsPage page("General", { { "compact", "Coverage", "Configure this step.", "Shared controls" } });
+						MenuUI::SettingsPage page("Settings", { { "compact", "Coverage", "Configure this step.", "Shared controls" } });
 					}
 					ImGui::EndChild();
 					ImGui::PopFont();
@@ -2998,12 +3090,12 @@ int main()
 				stageHeight = ImGui::GetFont()->CalcTextSizeA(font * 1.25f, FLT_MAX, font * 5.65f, stage).y;
 				ImGui::BeginChild("StageRail", { 850, 320 });
 				{
-					MenuUI::SettingsPage page("General", { { "water", "Water", "Water step", {}, true, true, stage }, { "reflection", "Reflections", "Reflection step" },
-															 { "depth", "Depth", "Depth step" }, { "foam", "Foam", "Foam step" }, { "waves", "Waves", "Waves step" }, { "lighting", "Lighting", "Lighting step" } });
+					MenuUI::SettingsPage page("Settings", { { "water", "Water", "Water step", {}, true, true, stage }, { "reflection", "Reflections", "Reflection step" },
+															  { "depth", "Depth", "Depth step" }, { "foam", "Foam", "Foam step" }, { "waves", "Waves", "Waves step" }, { "lighting", "Lighting", "Lighting step" } });
 				}
 				ImGui::EndChild();
 			};
-			MenuUI::SettingsPage::Select("General", "overview");
+			MenuUI::SettingsPage::Select("Settings", "overview");
 			frame(draw);
 			frame(draw);
 			require(Util::controls.at("Water step").GetHeight() >= stageHeight + ImGui::GetFontSize() * .4f, "compact overview rows reserve space around the full stage label");
@@ -3016,15 +3108,15 @@ int main()
 				const auto draw = [&] {
 					ImGui::BeginChild("IndependentToolRows", { panelWidth, 600 });
 					{
-						MenuUI::SettingsPage page("General", {
-																 { "compact", "Coverage", "Short setup.", "Shared", !toolsOnly },
-																 { "performance", "Performance", explanation, "Measured results", true, false },
-																 { "profiling", "Profiling", "Inspect timing information.", "CPU and GPU", true, false },
-															 });
+						MenuUI::SettingsPage page("Settings", {
+																  { "compact", "Coverage", "Short setup.", "Shared", !toolsOnly },
+																  { "performance", "Performance", explanation, "Measured results", true, false },
+																  { "profiling", "Profiling", "Inspect timing information.", "CPU and GPU", true, false },
+															  });
 					}
 					ImGui::EndChild();
 				};
-				MenuUI::SettingsPage::Select("General", "overview");
+				MenuUI::SettingsPage::Select("Settings", "overview");
 				frame(draw);
 				frame(draw);
 				const auto setup = Util::controls.at("Short setup.");

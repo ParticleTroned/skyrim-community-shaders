@@ -1925,6 +1925,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/menu_settings_under_test.h"
             "${_settings_ui_dir}/settings_footer_under_test.h"
             "${_settings_ui_dir}/settings_global_actions_under_test.h"
+            "${_settings_ui_dir}/feature_settings_save_under_test.h"
             "${_settings_ui_dir}/settings_restore_under_test.h"
             "${_settings_ui_dir}/settings_renderdoc_under_test.h"
             "${_settings_ui_dir}/settings_renderdoc_frames_under_test.h"
@@ -1957,6 +1958,7 @@ if(BUILD_CONTROLLER_TESTS)
         DEPENDS
             src/Menu/FeatureListRenderer.cpp
             src/Menu/SettingsActions.cpp
+            src/State.cpp
             src/Menu/ExternalSettingsPage.h
             src/Menu/StabilizerPage.cpp
             src/Menu/SettingsPage.cpp
@@ -1995,6 +1997,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/menu_settings_under_test.h"
             "${_settings_ui_dir}/settings_footer_under_test.h"
             "${_settings_ui_dir}/settings_global_actions_under_test.h"
+            "${_settings_ui_dir}/feature_settings_save_under_test.h"
             "${_settings_ui_dir}/settings_restore_under_test.h"
             "${_settings_ui_dir}/settings_renderdoc_under_test.h"
             "${_settings_ui_dir}/settings_renderdoc_frames_under_test.h"
@@ -2024,6 +2027,72 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_compile_definitions(settings_ui_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
     set_tests_properties(SettingsUI PROPERTIES TIMEOUT 30)
+
+    set(_menu_ui_navigation_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/menu_ui_navigation_test"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_menu_ui_navigation_dir}/menu_ui_navigation_under_test.h"
+            "${_menu_ui_navigation_dir}/feature_settings_action_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_menu_ui_navigation_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_menu_ui_navigation.cmake"
+        DEPENDS
+            src/MenuDevBenchBridge.cpp
+            src/Menu/SettingsNavigation.h
+            tests/extract_menu_ui_navigation.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(menu_ui_navigation_test MenuUINavigation tests/menu_ui_navigation_test.cpp)
+    target_sources(
+        menu_ui_navigation_test
+        PRIVATE
+            "${_menu_ui_navigation_dir}/menu_ui_navigation_under_test.h"
+            "${_menu_ui_navigation_dir}/feature_settings_action_under_test.h"
+    )
+    target_include_directories(
+        menu_ui_navigation_test
+        PRIVATE "${_menu_ui_navigation_dir}"
+    )
+    target_link_libraries(
+        menu_ui_navigation_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+
+    set(_vr_interface_settings_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/vr_interface_settings_test"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_vr_interface_settings_dir}/vr_interface_settings_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_vr_interface_settings_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_vr_interface_settings.cmake"
+        DEPENDS
+            src/Features/VR.cpp
+            src/Features/VR.h
+            tests/extract_vr_interface_settings.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(vr_interface_settings_test VRInterfaceSettings tests/vr_interface_settings_test.cpp)
+    target_sources(
+        vr_interface_settings_test
+        PRIVATE
+            "${_vr_interface_settings_dir}/vr_interface_settings_under_test.h"
+    )
+    target_include_directories(
+        vr_interface_settings_test
+        PRIVATE "${_vr_interface_settings_dir}"
+    )
+    target_link_libraries(
+        vr_interface_settings_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
 
     add_controller_test(grass_placement_test GrassPlacement tests/grass_placement_test.cpp)
     target_link_libraries(

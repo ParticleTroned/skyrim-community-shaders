@@ -16,17 +16,14 @@ namespace FeatureCategories
 	inline constexpr std::string_view kUtility = "Utility";
 	inline constexpr std::string_view kWater = "Water";
 
+	/** Primary rendering and utility controls stay directly accessible. */
+	constexpr bool AlwaysExpanded(std::string_view category)
+	{
+		return category == kDisplay || category == kUtility;
+	}
+
 	inline constexpr std::array kMenuOrder{
-		kUtility,
-		kDisplay,
-		kLighting,
-		kSky,
-		kLandscapeAndTextures,
-		kWater,
-		kCharacters,
-		kMaterials,
-		kFoliage,
-		kPostProcessing,
-		kOther
+		kDisplay, kUtility, kCharacters, kFoliage, kLighting, kMaterials,
+		kPostProcessing, kSky, kLandscapeAndTextures, kWater, kOther
 	};
 }

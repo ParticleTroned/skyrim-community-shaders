@@ -60,6 +60,9 @@ class DepthOfFieldMigrationTests(unittest.TestCase):
     def test_godray_context_migration_and_precedence(self):
         self.check_case("godray-context-migration")
 
+    def test_feature_save_preserves_other_global_user_overrides(self):
+        self.check_case("feature-scoped-global-save")
+
     def test_godray_context_provider_routing(self):
         self.check_case("godray-context-providers")
 

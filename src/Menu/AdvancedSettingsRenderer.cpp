@@ -1,6 +1,7 @@
 #include "AdvancedSettingsRenderer.h"
 #include "Menu/SettingsPage.h"
 #include "SettingsActions.h"
+#include "SettingsTabRenderer.h"
 #include "Utils/WinApi.h"
 
 #include <algorithm>
@@ -15,6 +16,7 @@
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/RenderDoc.h"
 #include "Features/ReverseZ.h"
+#include "Features/VR.h"
 #include "Fonts.h"
 #include "Globals.h"
 #include "Menu.h"
@@ -26,26 +28,30 @@
 #include "Utils/TracyZones.h"
 #include "Utils/UI.h"
 
-void AdvancedSettingsRenderer::RenderAdvancedSettings(
-	const std::function<void()>& drawDisableAtBootSettings)
+void AdvancedSettingsRenderer::RenderAdvancedSettings()
 {
-	MenuUI::SettingsPage page("Advanced", {
-											  { "startup", "Startup", "Choose which features load when the game starts.", "Features loaded at startup", true, true, "Choose startup and compilation" },
-											  { "shaders", "Shaders", "Refine compilation and shader replacement.", "Compilation and replacement", true, true, nullptr },
-											  { "diagnostics", "Diagnostics", "Choose logging and inspect runtime state.", "Logs and runtime state", true, false, "Inspect and record" },
-											  { "capture", "Capture", "Choose frame capture and recording options.", "Frame capture and storage", true, true, nullptr },
-											  { "testing", "Testing", "Compare controlled settings and test scenes.", "Controlled scene comparisons", true, true, "Validate your setup" },
-										  });
-	if (page.Is("startup"))
-		RenderDisableAtBootSection(drawDisableAtBootSettings);
-	if (page.Is("shaders"))
+	MenuUI::SettingsPage page("DevTools", { { "renderdoc", "RenderDoc", "Capture frames and inspect recorded files.", "Frame capture and storage" }, { "shaders", "Shaders & Cache", "Configure shader compilation and cache behaviour.", "Compilation, flags and file watching" }, { "shader_debug", "Shader Debug", "Inspect active shaders, replacements and blocking.", "Active shaders and replacement controls" }, { "diagnostics", "Diagnostics", "Choose logging and inspect runtime state.", "Developer mode, logs and runtime data" }, { "testing", "Testing", "Compare controlled settings and test scenes.", "Controlled A/B tests and scene preparation" }, { "vr_diagnostics", "VR Diagnostics", "Inspect headset and controller diagnostics.", "Headset, controller and input state", globals::game::isVR } }, "Dev Tools", "Choose a development, inspection or testing tool.");
+	if (page.Is("vr_diagnostics"))
+		VR::DrawInterfaceDiagnostics();
+	if (page.Is("shaders")) {
+		SettingsTabRenderer::RenderShaderSettings();
 		RenderShadersSection();
+	}
+	if (page.Is("shader_debug")) {
+		SettingsTabRenderer::RenderDeveloperShortcuts();
+		RenderShaderReplacementTable();
+		if (globals::state->IsDeveloperMode())
+			RenderShaderBlockingPanel();
+		else if (MenuUI::DetailNote("Debug or Trace logging enables developer mode and active-shader inspection.", "Open Diagnostics"))
+			MenuUI::SettingsPage::Select("DevTools", "diagnostics");
+	}
 	if (page.Is("diagnostics"))
 		RenderDiagnosticsSection();
-	if (page.Is("capture")) {
-		if (MenuUI::DetailNote("RenderDoc has its own feature page for capture setup, storage and recorded files.", "Open RenderDoc"))
-			globals::menu->SelectFeatureMenu(globals::features::renderDoc.GetShortName());
+	if (page.Is("renderdoc")) {
+		MenuUI::SettingsPage::Select("DevTools", "overview");
+		globals::menu->SelectFeatureMenu(globals::features::renderDoc.GetShortName());
 	}
+
 	if (page.Is("testing"))
 		RenderTestingSection();
 }
@@ -69,12 +75,6 @@ void AdvancedSettingsRenderer::RenderShadersSection()
 	ImGui::Spacing();
 
 	RenderShaderCacheControls();
-
-	ImGui::Spacing();
-	ImGui::Separator();
-	ImGui::Spacing();
-
-	RenderShaderReplacementTable();
 
 	ImGui::Spacing();
 	ImGui::Separator();
@@ -505,14 +505,7 @@ void AdvancedSettingsRenderer::RenderDiagnosticsSection()
 
 	RenderRuntimeDebugControls();
 
-	// Shader blocking only meaningful in developer mode (matches prior behavior).
-	if (globals::state->IsDeveloperMode()) {
-		ImGui::Spacing();
-		ImGui::Separator();
-		ImGui::Spacing();
-
-		RenderShaderBlockingPanel();
-	}
+	MenuUI::DetailText(globals::state->IsDeveloperMode() ? "Developer mode is active through Debug or Trace logging." : "Debug or Trace logging enables developer mode.");
 }
 
 void AdvancedSettingsRenderer::RenderCompileTraceExport()
@@ -922,15 +915,6 @@ void AdvancedSettingsRenderer::RenderShaderBlockingPanel()
 
 // -----------------------------------------------------------------------------
 // Disable at Boot tab
-// -----------------------------------------------------------------------------
-
-void AdvancedSettingsRenderer::RenderDisableAtBootSection(const std::function<void()>& drawDisableAtBootSettings)
-{
-	drawDisableAtBootSettings();
-}
-
-// -----------------------------------------------------------------------------
-// Testing tab
 // -----------------------------------------------------------------------------
 
 void AdvancedSettingsRenderer::RenderTestingSection()

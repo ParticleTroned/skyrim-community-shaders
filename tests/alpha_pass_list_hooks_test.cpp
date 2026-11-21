@@ -1,3 +1,4 @@
+#include "EngineFix.h"
 #include "EngineFixes/AlphaPassListPolicy.h"
 #include "EngineFixes/VRAlphaPassListFix.h"
 #include "Utils/VirtualFunctionHook.h"
@@ -5,6 +6,7 @@
 #include <array>
 #include <atomic>
 #include <cstring>
+#include <cwchar>
 #include <format>
 #include <iostream>
 #include <memory>
@@ -13,6 +15,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace Test
@@ -36,19 +39,34 @@ namespace Test
 	};
 	struct Fixture
 	{
-		bool vr{ true }, transaction{}, published{};
+		bool vr{ true }, transaction{}, published{}, engineFixInstalled{};
 		std::uint32_t version{ 0x010400F0 };
 		long beginError{}, updateError{}, commitError{};
 		std::size_t failedAttach{}, unreadableSite{ 3 }, modifiedSite{ 3 };
+		std::size_t ownershipQueries{}, nativeReads{};
+		std::array<bool, 2> loadedModules{};
+		std::uintptr_t hookDestination{};
+		HMODULE hookOwner{};
+		bool partialHookRead{};
+		std::vector<std::pair<std::uintptr_t, std::vector<std::uint8_t>>> hookCode;
 		std::vector<Attachment> attachments;
-		std::string calls;
+		std::string calls, infoMessage;
 	} state;
 	BOOL ReadMemory(HANDLE, LPCVOID address, LPVOID output, SIZE_T size, SIZE_T* read)
 	{
+		++state.nativeReads;
+		const auto location = reinterpret_cast<std::uintptr_t>(address);
+		for (const auto& [start, code] : state.hookCode) {
+			if (location < start || location - start > code.size() || size > code.size() - (location - start))
+				continue;
+			std::memcpy(output, code.data() + (location - start), size);
+			*read = state.partialHookRead && size == 6 ? size - 1 : size;
+			return TRUE;
+		}
 		for (std::size_t i = 0; i < Sites.size(); ++i) {
 			if (reinterpret_cast<std::uintptr_t>(address) != Base + Sites[i])
 				continue;
-			Check(size == Prefixes[i].size());
+			Check(size <= Prefixes[i].size());
 			if (i == state.unreadableSite)
 				return FALSE;
 			std::memcpy(output, Prefixes[i].data(), size);
@@ -57,8 +75,29 @@ namespace Test
 			*read = size;
 			return TRUE;
 		}
-		throw std::runtime_error("unexpected native entrypoint");
+		return FALSE;
 	}
+	HMODULE Module(std::size_t index) { return reinterpret_cast<HMODULE>(0x10000 + index * 0x10000); }
+	HMODULE FindModule(const wchar_t* name)
+	{
+		const auto index = std::wcscmp(name, L"EngineFixes.dll") == 0 ? 0 : 1;
+		Check(index == 0 || std::wcscmp(name, L"EngineFixesVR.dll") == 0);
+		return state.loadedModules[index] ? Module(index) : nullptr;
+	}
+	BOOL FindOwner(DWORD flags, LPCWSTR address, HMODULE* owner)
+	{
+		Check(flags == (GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT));
+		if (reinterpret_cast<std::uintptr_t>(address) != state.hookDestination || !state.hookOwner)
+			return FALSE;
+		*owner = state.hookOwner;
+		return TRUE;
+	}
+}
+bool EngineFix::IsInstalledByEngineFixes(const char* name)
+{
+	Test::Check(std::strcmp(name, "AlphaPassListDuplicatePush") == 0);
+	++Test::state.ownershipQueries;
+	return Test::state.engineFixInstalled;
 }
 namespace RE
 {
@@ -123,8 +162,10 @@ namespace logger
 	void error(const char*, Args&&...)
 	{}
 	template <class... Args>
-	void info(const char*, Args&&...)
-	{}
+	void info(const char* message, Args&&...)
+	{
+		Test::state.infoMessage = message;
+	}
 }
 long DetourTransactionBegin()
 {
@@ -165,7 +206,11 @@ long DetourTransactionCommit()
 	return NO_ERROR;
 }
 #define ReadProcessMemory Test::ReadMemory
+#define GetModuleHandleW Test::FindModule
+#define GetModuleHandleExW Test::FindOwner
 #include "alpha_pass_list_hooks.h"
+#undef GetModuleHandleExW
+#undef GetModuleHandleW
 #undef ReadProcessMemory
 
 namespace Test
@@ -188,11 +233,25 @@ namespace Test
 		Reset();
 		state.vr = false;
 		Install();
-		Check(!installed && state.calls.empty());
+		Check(!installed && state.calls.empty() && state.ownershipQueries == 0);
 		Reset();
 		state.version = 0;
 		Install();
-		Check(!installed && state.calls.empty() && !installationError.empty());
+		Check(!installed && state.calls.empty() && !installationError.empty() && state.ownershipQueries == 0);
+		Reset();
+		state.engineFixInstalled = true;
+		Install();
+		Check(!installed && state.ownershipQueries == 1 && state.nativeReads == 0 && state.calls.empty());
+		Check(!original && !originalConsume && !originalRenderGroup && installationError.empty());
+		Check(state.infoMessage.find("already installed by Engine Fixes") != std::string::npos);
+		Check(!Control(nlohmann::json::object()).at("active").get<bool>());
+		Reset();
+		state.modifiedSite = 0;
+		Install();
+		Check(!installationError.empty());
+		state.engineFixInstalled = true;
+		Install();
+		Check(!installed && installationError.empty() && state.calls.empty());
 		for (std::size_t site = 0; site < 3; ++site) {
 			Reset();
 			state.modifiedSite = site;
@@ -224,6 +283,7 @@ namespace Test
 		state = {};
 		Install();
 		Check(installed && state.published && installationError.empty());
+		Check(state.ownershipQueries == 1 && state.nativeReads == 3);
 		Check(reinterpret_cast<std::uintptr_t>(original) == Base + Sites[0] + 0x100);
 		Check(reinterpret_cast<std::uintptr_t>(originalConsume) == Base + Sites[1] + 0x100);
 		Check(reinterpret_cast<std::uintptr_t>(originalRenderGroup) == Base + Sites[2] + 0x100);
@@ -232,7 +292,102 @@ namespace Test
 		Check(state.attachments[2].replacement == reinterpret_cast<void*>(&RenderQueue));
 		auto calls = state.calls;
 		Install();
-		Check(state.calls == calls);
+		Check(state.calls == calls && state.ownershipQueries == 1);
+	}
+	void SetAppendHook(bool relay, bool indirect)
+	{
+		const auto entry = Base + Sites[0];
+		const auto relayAddress = entry - 0x1000;
+		state.loadedModules[0] = true;
+		state.hookDestination = entry + 0x2000;
+		state.hookOwner = Module(0);
+		std::vector<std::uint8_t> code(Prefixes[0].size(), 0);
+		if (indirect) {
+			code[0] = 0xFF;
+			code[1] = 0x25;
+			std::memcpy(code.data() + 6, &state.hookDestination, sizeof(state.hookDestination));
+		} else {
+			code[0] = 0xE9;
+			const auto target = relay ? relayAddress : state.hookDestination;
+			const auto displacement = static_cast<std::int32_t>(target - (entry + 5));
+			std::memcpy(code.data() + 1, &displacement, sizeof(displacement));
+		}
+		state.hookCode.emplace_back(entry, std::move(code));
+		if (relay) {
+			std::vector<std::uint8_t> relayCode(14, 0);
+			relayCode[0] = 0xFF;
+			relayCode[1] = 0x25;
+			std::memcpy(relayCode.data() + 6, &state.hookDestination, sizeof(state.hookDestination));
+			state.hookCode.emplace_back(relayAddress, std::move(relayCode));
+		}
+	}
+	void PrivateOwnership()
+	{
+		for (const auto module : { 0u, 1u }) {
+			for (const auto shape : { 0, 1, 2 }) {
+				Reset();
+				SetAppendHook(shape == 1, shape == 2);
+				state.loadedModules = {};
+				state.loadedModules[module] = true;
+				state.hookOwner = Module(module);
+				Install();
+				Check(!installed && state.ownershipQueries == 1 && state.calls.empty());
+				Check(state.nativeReads <= 4 && installationError.empty());
+				Check(!original && !originalConsume && !originalRenderGroup);
+				Check(state.infoMessage.find("append hook owned by Engine Fixes") != std::string::npos);
+				bool rejected = false;
+				try {
+					Control({ { "alphaPassIntegrity", { { "enabled", true } } } });
+				} catch (const std::invalid_argument&) {
+					rejected = true;
+				}
+				Check(rejected);
+			}
+		}
+		for (const auto failure : { 0, 1, 2, 3, 4, 5, 6, 7, 8 }) {
+			Reset();
+			SetAppendHook(true, false);
+			switch (failure) {
+			case 0:
+				state.loadedModules = {};
+				break;
+			case 1:
+				state.hookOwner = Module(2);
+				break;
+			case 2:
+				state.hookCode.pop_back();
+				break;
+			case 3:
+				state.hookCode.back().second.resize(6);
+				break;
+			case 4:
+				state.hookCode.front().second[0] = 0xE8;
+				break;
+			case 5:
+				state.partialHookRead = true;
+				break;
+			case 6:
+				{
+					const auto entry = Base + Sites[0];
+					std::memcpy(state.hookCode.back().second.data() + 6, &entry, sizeof(entry));
+					break;
+				}
+			case 7:
+				std::fill_n(state.hookCode.back().second.data() + 6, sizeof(std::uintptr_t), 0);
+				break;
+			case 8:
+				state.hookCode.clear();
+				state.unreadableSite = 0;
+				break;
+			}
+			Install();
+			Check(!installed && !installationError.empty() && state.calls.empty() && state.infoMessage.empty());
+			Check(state.nativeReads <= 4);
+		}
+		Reset();
+		state.loadedModules = { true, true };
+		Install();
+		Check(installed && state.published && state.nativeReads == 3);
 	}
 	std::size_t forwarded{};
 	std::uint8_t receivedFront{};
@@ -332,6 +487,7 @@ int main()
 {
 	try {
 		Test::Installation();
+		Test::PrivateOwnership();
 		Test::Hooks();
 		std::cout << "PASS native alpha hooks, lifetime, admission, rollback and control\n";
 	} catch (const std::exception& error) {

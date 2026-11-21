@@ -1,5 +1,6 @@
 #include "VRAlphaPassListFix.h"
 
+#include "EngineFix.h"
 #include "EngineFixes/AlphaPassListPolicy.h"
 #include "Globals.h"
 #include "State.h"
@@ -77,6 +78,41 @@ namespace VRAlphaPassListFix
 			if (!allocationWarning.test_and_set(std::memory_order_relaxed))
 				logger::warn("[VR alpha list] Membership cache allocation failed; using bounded native-list scans");
 		}
+		bool IsEngineFixesAppendHook(std::uintptr_t address) noexcept
+		{
+			const auto engineFixes = GetModuleHandleW(L"EngineFixes.dll");
+			const auto engineFixesVR = GetModuleHandleW(L"EngineFixesVR.dll");
+			if (!engineFixes && !engineFixesVR)
+				return false;
+			// The capability may be private; recognize only a direct jump or one relay.
+			// Hook ownership identifies who to defer to, not which protection it implements.
+			constexpr std::size_t maximumJumps = 2;
+			for (std::size_t jump = 0; jump < maximumJumps; ++jump) {
+				std::array<std::uint8_t, 6> code{};
+				SIZE_T read{};
+				if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), code.data(), code.size(), &read) || read != code.size())
+					return false;
+				std::int32_t displacement{};
+				if (code[0] == 0xE9) {
+					std::memcpy(&displacement, code.data() + 1, sizeof(displacement));
+					address += 5 + static_cast<std::uintptr_t>(displacement);
+				} else if (code[0] == 0xFF && code[1] == 0x25) {
+					std::memcpy(&displacement, code.data() + 2, sizeof(displacement));
+					const auto slot = address + 6 + static_cast<std::uintptr_t>(displacement);
+					if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(slot), &address, sizeof(address), &read) || read != sizeof(address))
+						return false;
+				} else {
+					return false;
+				}
+				if (!address)
+					return false;
+				HMODULE owner{};
+				if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+						reinterpret_cast<LPCWSTR>(address), &owner))
+					return owner == engineFixes || owner == engineFixesVR;
+			}
+			return false;
+		}
 		void GuardedAppend(Group* group, RE::BSRenderPass* pass, std::uint8_t front)
 		{
 			if (!group || !pass || !(group->flags & 1)
@@ -119,6 +155,11 @@ namespace VRAlphaPassListFix
 			logger::warn("[VR alpha list] {}", installationError);
 			return;
 		}
+		if (EngineFix::IsInstalledByEngineFixes("AlphaPassListDuplicatePush")) {
+			installationError.clear();
+			logger::info("[VR alpha list] Skipped CSX duplicate protection (already installed by Engine Fixes)");
+			return;
+		}
 		struct Site
 		{
 			std::uintptr_t rva;
@@ -139,6 +180,11 @@ namespace VRAlphaPassListFix
 			SIZE_T read{};
 			if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(base + site.rva), actual.data(), site.prefix.size(), &read) ||
 				read != site.prefix.size() || !std::equal(site.prefix.begin(), site.prefix.end(), actual.begin())) {
+				if (site.rva == AppendRVA && IsEngineFixesAppendHook(base + site.rva)) {
+					installationError.clear();
+					logger::info("[VR alpha list] Skipped CSX duplicate protection (append hook owned by Engine Fixes; capability not publicly reported)");
+					return;
+				}
 				installationError = "Native alpha-list entrypoint is modified or unsupported; existing hooks retained";
 				logger::warn("[VR alpha list] {}", installationError);
 				return;

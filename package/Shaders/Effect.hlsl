@@ -978,6 +978,13 @@ PS_OUTPUT main(PS_INPUT input)
 #	if !defined(LIGHTING) && !defined(MOTIONVECTORS_NORMALS)
 	if (isSkyStatic || (Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject))
 		propertyColor = Color::WeatherEffectLighting(propertyColor, true);
+#		if defined(PARTICLES) && !defined(ADDBLEND) && !defined(MULTBLEND) && !defined(MULTBLEND_DECAL) && !defined(MEMBRANE)
+	else if (lightingInfluence > 0.0 && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld) && IsParticleEffect()) {
+		propertyColor = Color::WeatherEffectLighting(propertyColor, false);
+		propertyColor = Color::AdjustUtilityColor(propertyColor, SharedData::adaptiveBalanceSettings.appearance.effectLightingSaturation,
+			SharedData::adaptiveBalanceSettings.appearance.effectLightingGammaOffset);
+	}
+#		endif
 #	endif
 	float3 lightColor = lerp(baseColor.xyz, propertyColor * baseColor.xyz, lightingInfluence.xxx);
 

@@ -27,9 +27,11 @@
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <shared_mutex>
+#include <stdexcept>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 #include "Deferred.h"
 #include "Feature.h"
@@ -67,6 +69,16 @@ namespace SIE
 		}
 
 		Util::CompileDedupe::Registry g_compileDedupe;
+		struct CompilationTimingObservation
+		{
+			CompilationSet& set;
+			const ShaderCompilationTask& task;
+			std::string context;
+			bool sourceCompiled = false;
+		};
+		thread_local CompilationTimingObservation* g_compilationTiming = nullptr;
+		const std::filesystem::path kCompileTimeHistoryPath = L"Data/SKSE/Plugins/CommunityShaders/CompileTimeHistory.json";
+		constexpr size_t kMaximumCompileTimeHistoryBytes = 256 * 1024;
 
 		Util::CompileDedupe::Registry& GetCompileDedupe()
 		{
@@ -2778,6 +2790,11 @@ namespace SIE
 			}
 
 			auto compileState = CaptureGlobalCompileState();
+			if (g_compilationTiming && !globals::shaderCache->menuLoaded.load(std::memory_order_acquire)) {
+				auto& timing = *g_compilationTiming;
+				timing.context = timing.set.PrepareEstimate(timing.task,
+					fmt::format("{};validation={}", compileState.digest.ToHex(), !useDiskCache));
+			}
 			// Cache admission and compilation must use the same captured macros.
 			std::array<D3D_SHADER_MACRO, 64> descriptorDefines{};
 			GetShaderDefines(shader, descriptor, std::span{ descriptorDefines });
@@ -2986,6 +3003,10 @@ namespace SIE
 					} else {
 						cache.IncSourceCompileTasks(type, a_taskGeneration);
 						cache.MarkCompilationPhaseStarted(type, a_taskGeneration);
+						if (g_compilationTiming && !cache.menuLoaded.load(std::memory_order_acquire)) {
+							g_compilationTiming->sourceCompiled = true;
+							g_compilationTiming->set.MarkEstimateSourceCompile(g_compilationTiming->task);
+						}
 						compileResult = shared->Compile(path, pathString, defines.data(), GetShaderProfile(shaderClass),
 							flags, includeHandler, &shaderBlob, errorBlob.put());
 					}
@@ -5589,6 +5610,7 @@ namespace SIE
 		}
 
 		dependencyTracker = std::make_unique<ShaderFileDependencyTracker>();
+		compilationSet.LoadEstimateHistory();
 		logger::debug("ShaderCache initialized: {} startup threads, {} background threads, {} pool threads",
 			(int)compilationThreadCount, (int)backgroundCompilationThreadCount, (int)compilationPool.get_thread_count());
 		// Management thread runs on a dedicated jthread, not in the compilation pool,
@@ -6520,6 +6542,16 @@ namespace SIE
 		LARGE_INTEGER start, end, freq;
 		QueryPerformanceFrequency(&freq);
 		QueryPerformanceCounter(&start);
+		std::optional<CompilationTimingObservation> timing;
+		auto* previousTiming = g_compilationTiming;
+		if (!menuLoaded.load(std::memory_order_acquire)) {
+			timing.emplace(compilationSet, task);
+			g_compilationTiming = &*timing;
+		}
+		const SKSE::stl::scope_exit restoreTiming([&]() noexcept {
+			if (timing)
+				g_compilationTiming = previousTiming;
+		});
 		const double queueWaitMs = task.GetEnqueuedQpc() > 0 ?
 		                               static_cast<double>(start.QuadPart - task.GetEnqueuedQpc()) * 1000.0 / freq.QuadPart :
 		                               0.0;
@@ -6596,7 +6628,8 @@ namespace SIE
 			return;
 		}
 
-		compilationSet.Complete(task);
+		compilationSet.Complete(task, elapsedMs, timing && timing->sourceCompiled,
+			timing ? std::string_view(timing->context) : std::string_view{});
 		ApplyDeferredEviction(taskKey, true);
 	}
 
@@ -6718,6 +6751,44 @@ namespace SIE
 		return priority;
 	}
 
+	ShaderCompilationEstimate::Category ShaderCompilationTask::GetEstimateCategory() const
+	{
+		using namespace ShaderCompilationEstimate;
+		static_assert(static_cast<size_t>(RE::BSShader::Type::Total) <= kFamilyCount);
+		static_assert(static_cast<size_t>(ShaderClass::Total) == kStageCount);
+		const auto stage = static_cast<size_t>(shaderClass);
+		const auto type = shader.shaderType.get();
+		Category category{ static_cast<size_t>(type) * kStageCount + stage,
+			shaderClass == ShaderClass::Pixel ? 800.0 : 150.0 };
+		if (type == RE::BSShader::Type::Lighting) {
+			const auto technique = static_cast<ShaderCache::LightingShaderTechniques>((descriptor >> 24) & 0x3F);
+			const auto hasFlag = [this](ShaderCache::LightingShaderFlags a_flag) {
+				return (descriptor & static_cast<uint32_t>(a_flag)) != 0;
+			};
+			const bool pbr = hasFlag(ShaderCache::LightingShaderFlags::TruePbr);
+			const bool anisotropic = hasFlag(ShaderCache::LightingShaderFlags::AnisoLighting);
+			const bool deferred = hasFlag(ShaderCache::LightingShaderFlags::Deferred);
+			const size_t flags = (pbr ? 1 : 0) | (anisotropic ? 2 : 0) | (deferred ? 4 : 0);
+			category.index = kLightingCategoryOffset + (static_cast<size_t>(technique) * 8 + flags) * kStageCount + stage;
+			// Broad first-run priors; measured costs replace these independently of dispatch order.
+			const bool pixel = shaderClass == ShaderClass::Pixel;
+			category.fallbackMs = pixel ? 4000.0 : 500.0;
+			if (technique == ShaderCache::LightingShaderTechniques::MTLand || technique == ShaderCache::LightingShaderTechniques::MTLandLODBlend)
+				category.fallbackMs *= pixel ? 8.0 : 2.0;
+			else if (technique == ShaderCache::LightingShaderTechniques::Parallax || technique == ShaderCache::LightingShaderTechniques::ParallaxOcc)
+				category.fallbackMs *= 2.0;
+			if (pbr)
+				category.fallbackMs *= pixel ? 3.0 : 1.5;
+			if (anisotropic)
+				category.fallbackMs *= 1.4;
+			if (deferred)
+				category.fallbackMs *= 1.1;
+		} else if (type == RE::BSShader::Type::Effect && shaderClass == ShaderClass::Pixel) {
+			category.fallbackMs = 2000.0;
+		}
+		return category;
+	}
+
 	std::optional<ShaderCompilationTask> CompilationSet::WaitTake(std::stop_token stoken)
 	{
 		std::unique_lock lock(compilationMutex);
@@ -6761,6 +6832,11 @@ namespace SIE
 		}
 
 		tasksInProgress.insert(task);
+		if (estimate) {
+			LARGE_INTEGER dispatched;
+			QueryPerformanceCounter(&dispatched);
+			estimate->Start(task.GetId(), task.GetEstimateCategory(), static_cast<double>(dispatched.QuadPart) * 1000.0 / frequency.QuadPart);
+		}
 		dispatchedTasksInFlight.fetch_add(1, std::memory_order_relaxed);
 		return task;
 	}
@@ -6814,7 +6890,13 @@ namespace SIE
 				}
 
 				totalTasks++;
-				totalPriorityWeight += static_cast<uint64_t>(task.GetPriority()) + 1;
+				if (estimate) {
+					if (estimate->PendingTasks() == 0) {
+						estimateBatchStartQpc = now.QuadPart;
+						estimateBatchEndQpc = 0;
+					}
+					estimate->Queue(task.GetEstimateCategory());
+				}
 			}
 			lock.unlock();
 			if (wasAdded) {
@@ -6831,12 +6913,14 @@ namespace SIE
 				continue;
 			}
 			--totalTasks;
-			totalPriorityWeight -= static_cast<uint64_t>(it->GetPriority()) + 1;
+			if (estimate)
+				estimate->CancelQueued(it->GetEstimateCategory());
 			it = availableTasks.erase(it);
 		}
 	}
 
-	void CompilationSet::Complete(const ShaderCompilationTask& task)
+	void CompilationSet::Complete(const ShaderCompilationTask& task, double a_elapsedMs,
+		bool a_sourceCompiled, std::string_view a_estimateContext)
 	{
 		auto& cache = ShaderCache::Instance();
 		auto key = task.GetString();
@@ -6866,12 +6950,20 @@ namespace SIE
 				logger::debug("Compiling Task failed: {}", key);
 				failedTasks++;
 			}
-			completedPriorityWeight += static_cast<uint64_t>(task.GetPriority()) + 1;
+			if (estimate) {
+				using ShaderCompilationEstimate::Outcome;
+				const auto outcome = !shaderBlob      ? Outcome::Failed :
+				                     a_sourceCompiled ? Outcome::Compiled :
+				                     wasDiskHit       ? Outcome::Disk :
+				                                        Outcome::Shared;
+				const bool compatible = a_estimateContext == estimateContext || (!a_sourceCompiled && a_estimateContext.empty());
+				estimate->Complete(task.GetId(), a_elapsedMs, outcome, compatible);
+				estimateHistoryDirty |= compatible && outcome == Outcome::Compiled;
+			}
 
-			// Track disk-cache hits separately so ETA can use compilation-only timing.
+			// Disk retrieval is counted separately from source work and shared bytecode.
 			if (wasDiskHit) {
 				diskHitTasks++;
-				diskHitPriorityWeight += static_cast<uint64_t>(task.GetPriority()) + 1;
 			}
 
 			// Update timing
@@ -6904,6 +6996,8 @@ namespace SIE
 			std::scoped_lock lock(compilationMutex);
 			LARGE_INTEGER now;
 			QueryPerformanceCounter(&now);
+			if (estimate && estimate->PendingTasks() == 0 && estimateBatchEndQpc == 0)
+				estimateBatchEndQpc = now.QuadPart;
 			// Mixed batches log even when their last task is a disk hit. A disk-only
 			// batch never starts a source-compilation phase and stays silent.
 			if (completionTime.load(std::memory_order_relaxed) == 0 && completedTasks + failedTasks >= totalTasks) {
@@ -6990,11 +7084,9 @@ namespace SIE
 				totalTime = { 0 };
 				completionTime.store(0, std::memory_order_relaxed);
 				compilationPhaseStarted.store(false, std::memory_order_relaxed);
-				compilationPhaseStart = { 0 };
 			}
 
 			if (!compilationPhaseStarted.load(std::memory_order_relaxed)) {
-				QueryPerformanceCounter(&compilationPhaseStart);
 				compilationPhaseStarted.store(true, std::memory_order_release);
 				shouldLog = true;
 				queuedAtPhaseStart = totalTasks.load(std::memory_order_relaxed);
@@ -7029,14 +7121,13 @@ namespace SIE
 		activeReuseTasks = 0;
 		previousReuseTasks = 0;
 		GetCompileDedupe().Clear();
-		diskHitPriorityWeight = 0;
+		if (estimate)
+			estimate->ClearWork();
+		estimateBatchStartQpc = estimateBatchEndQpc = 0;
 		compilationPhaseStarted = false;
-		compilationPhaseStart = { 0 };
 		generation.fetch_add(1, std::memory_order_relaxed);
 		slowTasks = 0;
 		verySlowTasks = 0;
-		totalPriorityWeight = 0;
-		completedPriorityWeight = 0;
 		QueryPerformanceCounter(&lastReset);
 		lastResetQpc.store(lastReset.QuadPart, std::memory_order_relaxed);
 		QueryPerformanceCounter(&lastCalculation);
@@ -7061,7 +7152,12 @@ namespace SIE
 				}
 				// Canceled tasks cannot complete; their physical worker slots retire separately.
 				totalTasks.fetch_sub(1, std::memory_order_relaxed);
-				totalPriorityWeight.fetch_sub(static_cast<uint64_t>(it->GetPriority()) + 1, std::memory_order_relaxed);
+				if (estimate) {
+					if (tasks == &availableTasks)
+						estimate->CancelQueued(it->GetEstimateCategory());
+					else
+						estimate->CancelRunning(it->GetId());
+				}
 				it = tasks->erase(it);
 			}
 		}
@@ -7092,7 +7188,6 @@ namespace SIE
 			totalTime = { 0 };
 			completionTime.store(0, std::memory_order_relaxed);
 			compilationPhaseStarted.store(false, std::memory_order_relaxed);
-			compilationPhaseStart = { 0 };
 		}
 	}
 
@@ -7109,83 +7204,172 @@ namespace SIE
 		return Util::FormatDuration(a_totalMs);
 	}
 
-	double CompilationSet::GetEta()
+	void CompilationSet::LoadEstimateHistory()
 	{
+		try {
+			std::error_code error;
+			const auto size = std::filesystem::file_size(kCompileTimeHistoryPath, error);
+			if (error == std::errc::no_such_file_or_directory)
+				return;
+			if (error || size > kMaximumCompileTimeHistoryBytes)
+				throw std::runtime_error("unreadable or oversized timing history");
+			// Bound the actual read too: a replaced file must not bypass the size check.
+			std::ifstream input(kCompileTimeHistoryPath, std::ios::binary);
+			std::string contents(kMaximumCompileTimeHistoryBytes + 1, '\0');
+			input.read(contents.data(), static_cast<std::streamsize>(contents.size()));
+			if (input.bad() || !input.eof() || input.gcount() > static_cast<std::streamsize>(kMaximumCompileTimeHistoryBytes))
+				throw std::runtime_error("unreadable or oversized timing history");
+			contents.resize(static_cast<size_t>(input.gcount()));
+			const auto history = nlohmann::json::parse(contents);
+			if (history.at("version") != 1 || !history.at("processors").is_number_unsigned() ||
+				history.at("compiler").get<std::string>() != BuildProvenance::GetShaderCompilerIdentity() ||
+				history.at("processors").get<uint64_t>() != std::thread::hardware_concurrency())
+				return;
+			const auto& entries = history.at("categories");
+			if (!entries.is_array() || entries.size() > ShaderCompilationEstimate::kCategoryCount)
+				throw std::runtime_error("invalid timing category count");
+			savedEstimateContext = history.at("context").get<std::string>();
+			if (savedEstimateContext.empty() || savedEstimateContext.size() > 256)
+				throw std::runtime_error("invalid timing context");
+			std::array<bool, ShaderCompilationEstimate::kCategoryCount> seen{};
+			for (const auto& entry : entries) {
+				if (!entry.at("category").is_number_unsigned() || !entry.at("samples").is_number_unsigned())
+					throw std::runtime_error("non-integer timing category or sample count");
+				const auto category = entry.at("category").get<size_t>();
+				const auto milliseconds = entry.at("milliseconds").get<double>();
+				const auto samples = entry.at("samples").get<uint64_t>();
+				if (category >= seen.size() || seen[category] || !std::isfinite(milliseconds) ||
+					milliseconds <= 0 || milliseconds > ShaderCompilationEstimate::kMaximumSampleMs || samples == 0 || samples > 8)
+					throw std::runtime_error("invalid timing category");
+				seen[category] = true;
+				savedEstimateHistory.push_back({ category, milliseconds, static_cast<uint32_t>(samples) });
+			}
+		} catch (const std::exception& error) {
+			savedEstimateContext.clear();
+			savedEstimateHistory.clear();
+			logger::warn("Shader ETA history ignored; using initial estimates: {}", error.what());
+		}
+	}
+
+	std::string CompilationSet::PrepareEstimate(const ShaderCompilationTask& a_task, std::string_view a_context)
+	{
+		auto& cache = *globals::shaderCache;
+		const auto workers = ShaderCompilationSchedulingPolicy::DispatchLimit(cache.compilationThreadCount,
+			cache.backgroundCompilationThreadCount, cache.backgroundCompilation.load(std::memory_order_relaxed), cache.compilationPool.get_thread_count());
+		auto context = fmt::format("{};workers={};startup=true", a_context, workers);
+		std::scoped_lock lock(compilationMutex);
+		if (!estimate || !IsCurrentGeneration(a_task))
+			return {};
+		if (estimateContext != context) {
+			estimate->ClearLearning();
+			estimateContext = context;
+			estimateHistoryDirty = false;
+			if (savedEstimateContext == context) {
+				for (const auto& entry : savedEstimateHistory)
+					estimate->Seed(entry);
+			}
+		}
+		return context;
+	}
+
+	void CompilationSet::MarkEstimateSourceCompile(const ShaderCompilationTask& a_task)
+	{
+		std::scoped_lock lock(compilationMutex);
+		if (estimate && IsCurrentGeneration(a_task))
+			estimate->MarkSourceCompile(a_task.GetId());
+	}
+
+	void CompilationSet::FinishStartupEstimate()
+	{
+		std::unique_ptr<ShaderCompilationEstimate::Estimator> finished;
+		std::string context;
+		bool saveHistory;
+		{
+			std::scoped_lock lock(compilationMutex);
+			finished = std::move(estimate);
+			context = std::move(estimateContext);
+			saveHistory = std::exchange(estimateHistoryDirty, false);
+			std::string{}.swap(savedEstimateContext);
+			std::vector<ShaderCompilationEstimate::HistoryEntry>{}.swap(savedEstimateHistory);
+		}
+		// The model is detached before I/O; gameplay never collects or persists timing observations.
+		if (!finished || !saveHistory || context.empty())
+			return;
+		try {
+			const auto entries = finished->History();
+			if (entries.empty())
+				return;
+			nlohmann::json categories = nlohmann::json::array();
+			for (const auto& entry : entries)
+				categories.push_back({ { "category", entry.category }, { "milliseconds", entry.milliseconds }, { "samples", entry.samples } });
+			const nlohmann::json history{
+				{ "version", 1 }, { "compiler", BuildProvenance::GetShaderCompilerIdentity() },
+				{ "processors", std::thread::hardware_concurrency() }, { "context", context }, { "categories", std::move(categories) }
+			};
+			std::string error;
+			if (!Util::FileHelpers::WriteTextFileAtomic(kCompileTimeHistoryPath, history.dump(), error, false))
+				logger::warn("Could not save shader ETA history; compilation is unaffected: {}", error);
+		} catch (const std::exception& error) {
+			logger::warn("Could not save shader ETA history; compilation is unaffected: {}", error.what());
+		}
+	}
+
+	ShaderCompilationEstimate::Snapshot CompilationSet::GetEstimate()
+	{
+		std::scoped_lock lock(compilationMutex);
 		LARGE_INTEGER now;
 		QueryPerformanceCounter(&now);
-		const int64_t endQpc = (completionTime.load(std::memory_order_relaxed) != 0) ? completionTime.load(std::memory_order_relaxed) : now.QuadPart;
-
-		// Helper: given elapsed time and done/total priority weights, return remaining ms (or 0).
-		auto weightedEta = [](double elapsedMs, double doneW, double totalW) -> double {
-			if (elapsedMs <= 0.0 || doneW <= 0.0 || totalW <= 0.0)
-				return 0.0;
-			double fraction = doneW / totalW;
-			return std::max(elapsedMs / fraction - elapsedMs, 0.0);
-		};
-
-		const uint64_t diskWeight = diskHitPriorityWeight.load(std::memory_order_relaxed);
-		const uint64_t totalWeight = totalPriorityWeight.load(std::memory_order_relaxed);
-		const uint64_t doneWeight = completedPriorityWeight.load(std::memory_order_relaxed);
-
-		if (diskWeight > 0) {
-			// There are disk-cache hits in this session.
-			if (!compilationPhaseStarted.load(std::memory_order_acquire)) {
-				// Compilations haven't started yet (still loading from disk cache).
-				// We have no compilation rate to extrapolate from, so return 0 to
-				// avoid a wildly wrong ETA based purely on the fast disk-hit rate.
-				return 0.0;
-			}
-
-			// At least one actual compilation has completed.  Use compilation-phase
-			// timing so that fast disk loads at the start of the session don't inflate
-			// the apparent progress rate and produce an underestimated ETA.
-			const int64_t phaseStart = compilationPhaseStart.QuadPart;  // visible due to acquire above
-			double compilationElapsedMs = static_cast<double>(endQpc - phaseStart) * 1000.0 / frequency.QuadPart;
-
-			// Exclude disk-hit weight from both numerator and denominator so the
-			// rate reflects only the actual compilation speed.
-			double compiledDone = static_cast<double>(doneWeight > diskWeight ? doneWeight - diskWeight : 0);
-			double compiledTotal = static_cast<double>(totalWeight > diskWeight ? totalWeight - diskWeight : 0);
-			return weightedEta(compilationElapsedMs, compiledDone, compiledTotal);
+		if (!estimate) {
+			ShaderCompilationEstimate::Snapshot result;
+			result.active = !availableTasks.empty() || !tasksInProgress.empty();
+			const auto completed = completionTime.load(std::memory_order_relaxed);
+			const auto end = completed != 0 && !result.active ? completed : now.QuadPart;
+			if (totalTasks.load(std::memory_order_relaxed) != 0)
+				result.elapsedMs = std::max(0.0, static_cast<double>(end - lastReset.QuadPart) * 1000.0 / frequency.QuadPart);
+			return result;
 		}
-
-		// No disk hits: fall back to the original whole-session ETA.
-		// Priority-weighted so heavy tasks completing early don't inflate the estimate.
-		double elapsedMs = static_cast<double>(endQpc - lastReset.QuadPart) * 1000.0 / frequency.QuadPart;
-		return weightedEta(elapsedMs, static_cast<double>(doneWeight), static_cast<double>(totalWeight));
+		auto& cache = *globals::shaderCache;
+		const auto workers = ShaderCompilationSchedulingPolicy::DispatchLimit(cache.compilationThreadCount,
+			cache.backgroundCompilationThreadCount, cache.backgroundCompilation.load(std::memory_order_relaxed), cache.compilationPool.get_thread_count());
+		auto result = estimate->Estimate(static_cast<double>(now.QuadPart) * 1000.0 / frequency.QuadPart, workers);
+		const auto end = estimateBatchEndQpc != 0 ? estimateBatchEndQpc : now.QuadPart;
+		if (estimateBatchStartQpc != 0)
+			result.elapsedMs = std::max(0.0, static_cast<double>(end - estimateBatchStartQpc) * 1000.0 / frequency.QuadPart);
+		return result;
 	}
 
 	std::string CompilationSet::GetStatsString(bool a_timeOnly, bool a_elapsedOnly)
 	{
-		// Calculate elapsed time since compilation started
-		LARGE_INTEGER currentTime;
-		QueryPerformanceCounter(&currentTime);
-
-		// Use completion time if compilation is finished, otherwise current time
-		int64_t endTime = (completionTime.load(std::memory_order_relaxed) != 0) ? completionTime.load(std::memory_order_relaxed) : currentTime.QuadPart;
-		double totalMs = static_cast<double>(endTime - lastReset.QuadPart) * 1000.0 / frequency.QuadPart;
+		const auto timing = GetEstimate();
+		const auto totalMs = timing.elapsedMs;
+		const auto elapsed = GetHumanTime(totalMs);
+		std::string estimated;
+		if (timing.enabled && !(a_timeOnly && a_elapsedOnly))
+			estimated = !timing.active     ? elapsed :
+			            !timing.calibrated ? std::string("estimating...") :
+			                                 fmt::format("~{}-{}", GetHumanTime(totalMs + timing.lowerRemainingMs),
+												 GetHumanTime(totalMs + timing.upperRemainingMs));
 
 		if (a_timeOnly) {
-			if (a_elapsedOnly) {
+			if (a_elapsedOnly || !timing.enabled) {
 				// Only elapsed
-				return GetHumanTime(totalMs);
+				return elapsed;
 			} else {
 				// Elapsed + estimated
 				return fmt::format("{}/{}",
-					GetHumanTime(totalMs),
-					GetHumanTime(GetEta() + totalMs));
+					elapsed,
+					estimated);
 			}
 		}
 
-		return fmt::format("{}/{} (successful/total)\tfailed: {}\tdeduplicated: {}\tdisk cache: {}\tsource compiles: {}\nElapsed/Estimated Time: {}/{}",
+		return fmt::format("{}/{} (successful/total)\tfailed: {}\tdeduplicated: {}\tdisk cache: {}\tsource compiles: {}\n{}",
 			(std::uint64_t)completedTasks,
 			(std::uint64_t)totalTasks,
 			(std::uint64_t)failedTasks,
 			(std::uint64_t)cacheHitTasks,
 			(std::uint64_t)diskHitTasks,
 			(std::uint64_t)sourceCompileTasks,
-			GetHumanTime(totalMs),
-			GetHumanTime(GetEta() + totalMs));
+			timing.enabled ? fmt::format("Elapsed/Estimated Time: {}/{}", elapsed, estimated) : fmt::format("Elapsed Time: {}", elapsed));
 	}
 
 	UpdateListener::UpdateListener(ShaderFileDependencyTracker* deps_) :

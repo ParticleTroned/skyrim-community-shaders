@@ -4997,6 +4997,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/shader_compilation_scheduling_policy_test.cpp
     )
     add_controller_test(
+        shader_compilation_estimate_test
+        ShaderCompilationEstimate
+        tests/shader_compilation_estimate_test.cpp
+    )
+    add_controller_test(
         vr_depth_culling_cache_refresh_policy_test
         VRDepthCullingCacheRefreshPolicy
         tests/vr_depth_culling_cache_refresh_policy_test.cpp

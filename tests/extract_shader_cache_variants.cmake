@@ -33,6 +33,10 @@ extract_between(
     "\n\tvoid CompilationSet::Complete(" "shader_queue_add_under_test.h"
 )
 extract_between(
+    "${_source}" "\tShaderCompilationEstimate::Category ShaderCompilationTask::GetEstimateCategory() const"
+    "\n\tstd::optional<ShaderCompilationTask> CompilationSet::WaitTake(" "shader_estimate_category.h"
+)
+extract_between(
     "${_header}" "\t\tuint64_t LiveGeneration("
     "\n\t\tvoid Clear();" "shader_queue_generation.h"
 )

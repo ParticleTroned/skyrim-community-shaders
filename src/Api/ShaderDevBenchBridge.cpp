@@ -213,6 +213,18 @@ namespace
 		snapshotJson["compilation"]["contentDedupeTasks"] = globals::shaderCache ? globals::shaderCache->GetContentDedupeTasks() : 0;
 		snapshotJson["compilation"]["activeReuseTasks"] = globals::shaderCache ? globals::shaderCache->GetActiveReuseTasks() : 0;
 		snapshotJson["compilation"]["previousReuseTasks"] = globals::shaderCache ? globals::shaderCache->GetPreviousReuseTasks() : 0;
+		const auto estimate = globals::shaderCache ? globals::shaderCache->GetCompilationEstimate() : ShaderCompilationEstimate::Snapshot{};
+		const bool hasEstimate = estimate.enabled && (!estimate.active || estimate.calibrated);
+		snapshotJson["compilation"]["estimate"] = {
+			{ "enabled", estimate.enabled },
+			{ "active", estimate.active }, { "calibrated", estimate.calibrated },
+			{ "elapsedMs", estimate.elapsedMs },
+			{ "remainingMs", hasEstimate ? json(estimate.remainingMs) : json(nullptr) },
+			{ "lowerRemainingMs", hasEstimate ? json(estimate.lowerRemainingMs) : json(nullptr) },
+			{ "upperRemainingMs", hasEstimate ? json(estimate.upperRemainingMs) : json(nullptr) },
+			{ "learnedFraction", estimate.learnedFraction },
+			{ "sourceSamples", estimate.sourceSamples }, { "workers", estimate.workers }
+		};
 		snapshotJson["compilation"]["recentFailures"] = globals::shaderCache ?
 		                                                    RecentFailuresJson(globals::shaderCache->GetRecentCompileFailures()) :
 		                                                    json::array();
@@ -521,7 +533,7 @@ namespace CSX::Api::ShaderDevBenchBridge
 			return;
 		}
 		const char* descriptor = R"({
-			"description":"Reply and event strings replace invalid UTF-8 with U+FFFD; request validation remains strict. Versioned CSX shader, feature, compilation, and cache lifecycle API. Disk-cache rollback flags in each snapshot come from one publication; compilation counters remain live. snapshot.diskCache.installation reports the boot admission issue (not_checked, none, wrong_runtime, invalid_pack) without triggering cache admission, cachedRuntime when mismatched, requiredRuntime (SE includes AE), and repairRequired. Rejected installations require resolving the installation or access problem and restarting; accept_cache_rebuild is blocked with cache_installation_repair_required. snapshot.compilation.sourceCompiles counts actual compiler invocations; contentDedupeTasks counts tasks reusing identical preprocessed bytecode across different shader keys. activeReuseTasks counts matching content in installed packs or the active loose cache; previousReuseTasks counts matching content in the loose rollback cache. snapshot.compilation.recentFailures contains the last 32 source compile failures as {key,path,error,epoch,frame}; error text is capped at 2000 bytes. Mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile releases the boot compile wait and wakes the dispatcher to apply the background thread budget. exportTrace writes completed task timings as Chrome Trace JSON after a build finishes. set_skip_unchanged permits only content-verified disk hits when true; false skips disk reads while preserving disk writes.",
+			"description":"Reply and event strings replace invalid UTF-8 with U+FFFD; request validation remains strict. Versioned CSX shader, feature, compilation, and cache lifecycle API. Disk-cache rollback flags in each snapshot come from one publication; compilation counters remain live. snapshot.compilation.estimate exposes the read-only startup UI ETA with elapsed and remaining milliseconds, heuristic bounds, enabled/calibration status, learned fraction, source sample count and observed worker capacity. Remaining times are null when disabled or calibrating and zero when enabled but idle. ETA collection stops at DataLoaded, including when background compilation continues. Observation never schedules compilation. snapshot.diskCache.installation reports the boot admission issue (not_checked, none, wrong_runtime, invalid_pack) without triggering cache admission, cachedRuntime when mismatched, requiredRuntime (SE includes AE), and repairRequired. Rejected installations require resolving the installation or access problem and restarting; accept_cache_rebuild is blocked with cache_installation_repair_required. snapshot.compilation.sourceCompiles counts actual compiler invocations; contentDedupeTasks counts tasks reusing identical preprocessed bytecode across different shader keys. activeReuseTasks counts matching content in installed packs or the active loose cache; previousReuseTasks counts matching content in the loose rollback cache. snapshot.compilation.recentFailures contains the last 32 source compile failures as {key,path,error,epoch,frame}; error text is capped at 2000 bytes. Mutations use preflight followed by execute with the exact same arguments and returned token. backgroundCompile releases the boot compile wait and wakes the dispatcher to apply the background thread budget. exportTrace writes completed task timings as Chrome Trace JSON after a build finishes. set_skip_unchanged permits only content-verified disk hits when true; false skips disk reads while preserving disk writes.",
 			"inputSchema":{
 				"type":"object",
 				"required":["contractMajor","clientId","commandId","action"],
@@ -558,6 +570,27 @@ namespace CSX::Api::ShaderDevBenchBridge
 							"snapshot":{
 								"type":"object",
 								"properties":{
+									"compilation":{
+										"type":"object",
+										"properties":{
+											"estimate":{
+												"type":"object",
+												"description":"Read-only startup UI ETA. Disabled after startup with no in-game learning. Remaining times are null when disabled or calibrating, and zero when enabled but idle. Bounds are heuristic, not a statistical confidence interval.",
+												"properties":{
+													"enabled":{"type":"boolean"},
+													"active":{"type":"boolean"},
+													"calibrated":{"type":"boolean"},
+													"elapsedMs":{"type":"number","minimum":0},
+													"remainingMs":{"type":["number","null"],"minimum":0},
+													"lowerRemainingMs":{"type":["number","null"],"minimum":0},
+													"upperRemainingMs":{"type":["number","null"],"minimum":0},
+													"learnedFraction":{"type":"number","minimum":0,"maximum":1},
+													"sourceSamples":{"type":"integer","minimum":0},
+													"workers":{"type":"integer","minimum":0}
+												}
+											}
+										}
+									},
 									"diskCache":{
 										"type":"object",
 										"properties":{

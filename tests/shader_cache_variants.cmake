@@ -21,6 +21,7 @@ foreach(
         shader_capture_state.h
         shader_task_identity_under_test.h
         shader_queue_add_under_test.h
+        shader_estimate_category.h
         shader_queue_generation.h
         shader_queue_clear_type.h
         shader_queue_release_slot.h

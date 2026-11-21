@@ -2004,6 +2004,9 @@ struct WetnessDirectLightState
 WetnessDirectLightState CreateWetnessDirectLightState(
 	float3 wetnessNormal,
 	float3 worldNormal,
+#		if defined(TRUE_PBR)
+	float3 coatWorldNormal,
+#		endif
 	float3 directViewDirection,
 	float waterRoughnessSpecular,
 	float wetnessStrength,
@@ -2046,6 +2049,9 @@ WetnessDirectLightState CreateWetnessDirectLightState(
 	// Match the direct-lighting context normalization so the prepared wet params remain
 	// identical when shared across the directional light and both point-light loops.
 	float3 directViewDirFallback = SafeNormalizeLighting(worldNormal, float3(0.0, 0.0, 1.0));
+#		if defined(TRUE_PBR)
+	directViewDirFallback = SafeNormalizeLighting(coatWorldNormal, directViewDirFallback);
+#		endif
 	float3 directViewDir = SafeNormalizeLighting(directViewDirection, directViewDirFallback);
 	state.params = CreateWetnessDirectLightingParams(wetnessNormal, directViewDir, wetnessStrength, wetReflectionParamsDirect);
 	state.params.highlightReduction = filmHighlightReduction;
@@ -2113,6 +2119,9 @@ WetnessLightingState CreateWetnessLightingState(
 	bool wetLightingVisible,
 	float3 wetnessNormal,
 	float3 worldNormal,
+#		if defined(TRUE_PBR)
+	float3 coatWorldNormal,
+#		endif
 	float3 directViewDirection,
 	float waterRoughnessSpecular,
 	float wetnessStrength,
@@ -2161,6 +2170,9 @@ WetnessLightingState CreateWetnessLightingState(
 		state.directLightState = CreateWetnessDirectLightState(
 			wetnessNormal,
 			worldNormal,
+#		if defined(TRUE_PBR)
+			coatWorldNormal,
+#		endif
 			directViewDirection,
 			waterRoughnessSpecular,
 			wetnessStrength,
@@ -3940,10 +3952,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #			endif
 #		endif
-	float3 wetnessDirectViewDirection = viewDirection;
-#		if defined(TRUE_PBR)
-	wetnessDirectViewDirection = refractedViewDirection;
-#		endif
 	// Directional luminance is already available here and cleanly distinguishes
 	// bright exterior rain from dark scenes dominated by local light sources.
 	float wetDirectionalLuminance = Color::RGBToLuminance(max(0.0.xxx, SanitizeFloat3(dirLightColor)));
@@ -3953,7 +3961,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		wetLightingVisible,
 		wetnessNormal,
 		worldNormal.xyz,
-		wetnessDirectViewDirection,
+#		if defined(TRUE_PBR)
+		coatWorldNormal,
+#		endif
+		viewDirection,
 		waterRoughnessSpecular,
 		wetnessSurface.lightingStrength,
 		wetnessSurface.filmHighlightReduction,

@@ -278,19 +278,24 @@ WetnessDirectLightingParams CreateWetnessDirectLightingParams(float3 wetnessNorm
 void EvaluateWetnessLighting(float3 wetnessNormal, DirectContext context, float roughness, WetnessDirectLightingParams params, inout DirectLightingOutput lightingOutput)
 {
 #	if defined(TRUE_PBR)
+	// The wet film lies above the refracting substrate.
+	const float3 V = context.coatViewDir;
+	const float3 L = context.coatLightDir;
+	const float3 H = context.coatHalfVector;
 	float3 lightColor = context.coatLightColor;
 #	else
+	const float3 V = context.viewDir;
+	const float3 L = context.lightDir;
+	const float3 H = context.halfVector;
 	float3 lightColor = context.lightColor * context.detailedShadow;
 #	endif
 	lightColor *= params.lightColorScale;
 
 	const float3 N = wetnessNormal;
-	const float3 L = context.lightDir;
-	const float3 H = context.halfVector;
 
 	float NdotL = clamp(dot(N, L), EPSILON_DOT_CLAMP, 1);
 	float NdotH = saturate(dot(N, H));
-	float VdotH = saturate(dot(context.viewDir, H));
+	float VdotH = saturate(dot(V, H));
 
 	float G = BRDF::Vis_SmithJointApprox(roughness, params.NdotV, NdotL);
 	float3 F = BRDF::F_Schlick(params.wetnessF0, VdotH);
@@ -355,17 +360,20 @@ void EvaluateWetnessLighting(float3 wetnessNormal, DirectContext context, float 
 {
 	const float wetnessStrength = saturate(1 - roughness);
 #	if defined(TRUE_PBR)
+	const float3 V = context.coatViewDir;
+	const float3 L = context.coatLightDir;
+	const float3 H = context.coatHalfVector;
 	const float3 lightColor = context.coatLightColor;
 #	else
+	const float3 V = context.viewDir;
+	const float3 L = context.lightDir;
+	const float3 H = context.halfVector;
 	const float3 lightColor = context.lightColor * context.detailedShadow;
 #	endif
 
 	const float wetnessF0 = 0.02;
 
 	const float3 N = wetnessNormal;
-	const float3 V = context.viewDir;
-	const float3 L = context.lightDir;
-	const float3 H = context.halfVector;
 
 	float NdotL = clamp(dot(N, L), EPSILON_DOT_CLAMP, 1);
 	float NdotV = saturate(abs(dot(N, V)) + EPSILON_DOT_CLAMP);

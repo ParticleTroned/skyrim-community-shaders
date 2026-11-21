@@ -83,7 +83,7 @@ struct Light
 	uint4 roomFlags;
 	uint lightFlags;
 	uint shadowLightIndex;
-	uint pad0;
-	uint pad1;
+	uint effectSpotlightIndex;
+	float effectSpotlightHalfFalloff;
 };
 #endif  //__LLF_COMMON_DEPENDENCY_HLSL__

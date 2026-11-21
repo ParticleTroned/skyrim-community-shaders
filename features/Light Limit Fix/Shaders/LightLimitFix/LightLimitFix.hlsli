@@ -2,6 +2,8 @@
 #	include "LightLimitFix/ContactShadowRay.hlsli"
 #endif
 
+#include "LightLimitFix/EffectSpotlight.hlsli"
+
 namespace LightLimitFix
 {
 
@@ -19,6 +21,7 @@ namespace LightLimitFix
 	StructuredBuffer<Light> lights : register(t35);
 	StructuredBuffer<uint> lightList : register(t36);       //MAX_CLUSTER_LIGHTS * 16^3
 	StructuredBuffer<LightGrid> lightGrid : register(t37);  //16^3
+	StructuredBuffer<EffectSpotlight> effectSpotlights : register(t40);
 #if defined(DEFERRED) || defined(WATER)
 	StructuredBuffer<uint> contactShadowList : register(t38);
 	StructuredBuffer<LightGrid> contactShadowGrid : register(t39);
@@ -221,12 +224,8 @@ namespace LightLimitFix
 	}
 #endif
 
-	bool IsLightIgnored(Light light)
+	bool IsLightIgnoredByRoom(Light light)
 	{
-		if (light.lightFlags & LightLimitFix::LightFlags::Shadow) {
-			return !(ShadowBitMask & (1 << light.shadowLightIndex));
-		}
-
 		bool lightIgnored = false;
 		if ((light.lightFlags & LightFlags::PortalStrict) && RoomIndex >= 0) {
 			lightIgnored = true;
@@ -243,5 +242,24 @@ namespace LightLimitFix
 			}
 		}
 		return lightIgnored;
+	}
+
+	bool IsLightIgnored(Light light)
+	{
+		if (light.lightFlags & LightFlags::Shadow)
+			return !(ShadowBitMask & (1 << light.shadowLightIndex));
+		return IsLightIgnoredByRoom(light);
+	}
+
+	float GetEffectLightVisibility(Light light, float3 relativePosition, uint eyeIndex)
+	{
+		if (IsLightIgnoredByRoom(light))
+			return 0.0;
+		[branch] if (!(light.lightFlags & LightFlags::Shadow) || light.effectSpotlightIndex == 0) return 1.0;
+		[branch] if (light.effectSpotlightIndex == 0xFFFFFFFFu) return 0.0;
+
+		// Opaque scene-depth shadows do not describe the surface of translucent effects.
+		return GetEffectSpotlightFootprint(effectSpotlights[light.effectSpotlightIndex - 1], light.effectSpotlightHalfFalloff,
+			relativePosition + FrameBuffer::CameraPosAdjust[eyeIndex].xyz);
 	}
 }

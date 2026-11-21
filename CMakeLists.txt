@@ -4529,6 +4529,11 @@ if(BUILD_CONTROLLER_TESTS)
         LightLimitFixVRHookPolicy
         tests/light_limit_fix_vr_hook_policy_test.cpp
     )
+    add_controller_test(
+        light_limit_fix_effect_spotlight_test
+        LightLimitFixEffectSpotlight
+        tests/light_limit_fix_effect_spotlight_test.cpp
+    )
     set(_fsr_selection_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/fsr-sdk-selection"
     )

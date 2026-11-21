@@ -16,10 +16,15 @@
 #include "Utils/FileSystem.h"
 #include "Utils/Finite.h"
 #include "Utils/Game.h"
+#include "Utils/StringUtils.h"
 #include "Utils/UI.h"
 
+#include <algorithm>
 #include <atomic>
+#include <filesystem>
 #include <mutex>
+#include <system_error>
+#include <vector>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	GlintParameters,
@@ -107,13 +112,43 @@ static void WarnInvalidPBRRenderTargetOnce(const std::string& inputFilePath, std
 
 namespace PNState
 {
+	/** @brief Loads record configs in filename order, isolating unconvertible names. */
 	void ReadPBRRecordConfigs(const std::string& rootPath, std::function<bool(const std::string&, const json&)> recordReader, bool enableVerboseJsonLogging)
 	{
-		if (std::filesystem::exists(rootPath)) {
-			auto configs = clib_util::distribution::get_configs(rootPath, "", ".json");
+		std::error_code ec;
+		const bool rootExists = std::filesystem::exists(rootPath, ec);
+		if (ec) {
+			logger::error("[TruePBR] could not access {}: {}", rootPath, ec.message());
+			return;
+		}
+		if (rootExists) {
+			bool anyFailed = false;
+			std::vector<std::string> configs;
+			for (std::filesystem::directory_iterator it(rootPath, ec), end; !ec && it != end; it.increment(ec)) {
+				const auto& path = it->path();
+				if (path.extension() != ".json")
+					continue;
+				try {
+					configs.push_back(path.string());
+				} catch (const std::system_error&) {
+					anyFailed = true;
+					// Invalid UTF-16 names can also prevent UTF-8 diagnostic conversion.
+					try {
+						logger::warn("[TruePBR] skipping {}: its name is outside the system code page", Util::PathToUtf8(path));
+					} catch (const std::system_error&) {
+						logger::warn("[TruePBR] skipping a config whose name cannot be converted to text");
+					}
+				}
+			}
+			if (ec) {
+				logger::error("[TruePBR] could not list {}: {}", rootPath, ec.message());
+				anyFailed = true;
+			}
+			std::ranges::sort(configs);
 
 			if (configs.empty()) {
-				logger::warn("[TruePBR] no .json files were found within the {} folder, aborting...", rootPath);
+				if (!anyFailed)
+					logger::warn("[TruePBR] no .json files were found within the {} folder, aborting...", rootPath);
 				return;
 			}
 
@@ -121,7 +156,6 @@ namespace PNState
 				logger::info("[TruePBR] {} matching jsons found", configs.size());
 			}
 
-			bool anyFailed = false;
 			for (auto& path : configs) {
 				if (enableVerboseJsonLogging) {
 					logger::info("[TruePBR] loading json : {}", path);

@@ -1,5 +1,6 @@
-#include <REX/W32/Bridge.h>
 #include <SKSE/Impl/PCH.h>
+
+#include <REX/W32/Bridge.h>
 
 #include "d3d11_shader_test.h"
 #include <iostream>

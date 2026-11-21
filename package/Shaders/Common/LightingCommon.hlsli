@@ -1,6 +1,8 @@
 #ifndef LIGHTING_COMMON_HLSLI
 #define LIGHTING_COMMON_HLSLI
 
+#include "Common/Math.hlsli"
+
 #if defined(HAIR) && defined(CS_HAIR) && !defined(TRUE_PBR)
 #	define CS_HAIR_SHADING
 #endif
@@ -141,17 +143,33 @@ float ShininessToRoughness(float shininess)
 	return pow(abs(2.0 / (shininess + 2.0)), 0.25);
 }
 
+float3 SafeNormalizeLighting(float3 v, float3 fallback, float minimumLengthSq = EPSILON_DIVISION)
+{
+	float lenSq = dot(v, v);
+	return (lenSq > minimumLengthSq && lenSq == lenSq && lenSq < 1.0e16) ? v * rsqrt(lenSq) : fallback;
+}
+
+/// Reconstructs the existing independently projected axes from surface derivatives.
+float3x3 ReconstructTBN(float3 dFdx, float3 dFdy, float3 worldNormal, float2 dUVdx, float2 dUVdy)
+{
+	float3 normal = SafeNormalizeLighting(worldNormal, float3(0, 0, 1), EPSILON_LENGTH_SQ);
+	// Screen-space derivatives can be much smaller than unit lighting vectors.
+	float3 tangent = SafeNormalizeLighting(dFdx * dUVdy.y - dFdy * dUVdx.y, 0, EPSILON_LENGTH_SQ);
+	float3 bitangent = SafeNormalizeLighting(dFdy * dUVdx.x - dFdx * dUVdy.x, 0, EPSILON_LENGTH_SQ);
+	tangent = SafeNormalizeLighting(tangent - worldNormal * dot(worldNormal, tangent), 0, EPSILON_LENGTH_SQ);
+	bitangent = SafeNormalizeLighting(bitangent - worldNormal * dot(worldNormal, bitangent), 0, EPSILON_LENGTH_SQ);
+
+	[branch] if (abs(dot(cross(tangent, bitangent), normal)) <= EPSILON_LENGTH_SQ)
+	{
+		float3 axis = abs(normal.z) < 0.999f ? float3(0, 0, 1) : float3(0, 1, 0);
+		tangent = normalize(cross(axis, normal));
+		bitangent = cross(normal, tangent);
+	}
+	return float3x3(tangent, bitangent, normal);
+}
+
 float3x3 ReconstructTBN(float3 worldPos, float3 worldNormal, float2 uv)
 {
-	float3 dFdx = ddx(worldPos);
-	float3 dFdy = ddy(worldPos);
-	float2 dUVdx = ddx(uv);
-	float2 dUVdy = ddy(uv);
-	float3 tangent = normalize(dFdx * dUVdy.y - dFdy * dUVdx.y);
-	float3 bitangent = normalize(dFdy * dUVdx.x - dFdx * dUVdy.x);
-	tangent = normalize(tangent - worldNormal * dot(worldNormal, tangent));
-	bitangent = normalize(bitangent - worldNormal * dot(worldNormal, bitangent));
-
-	return float3x3(tangent, bitangent, normalize(worldNormal));
+	return ReconstructTBN(ddx(worldPos), ddy(worldPos), worldNormal, ddx(uv), ddy(uv));
 }
 #endif

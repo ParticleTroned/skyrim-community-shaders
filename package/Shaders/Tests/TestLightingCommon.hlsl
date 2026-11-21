@@ -2,6 +2,40 @@
 #include "/Shaders/Common/LightingCommon.hlsli"
 #include "/Test/STF/ShaderTestFramework.hlsli"
 
+/// @tags lighting, tangent-basis
+[numthreads(1, 1, 1)] void TestReconstructedBasisOrientation() {
+	float3 normal = float3(0, 0, 1);
+	for (int mirrored = 0; mirrored < 2; ++mirrored) {
+		float sign = mirrored ? -1.0 : 1.0;
+		float3x3 basis = ReconstructTBN(float3(2, 0, 1), float3(1, 3, -2), normal, float2(sign, 0), float2(0, 1));
+		ASSERT(IsTrue, all(abs(basis[0] - float3(1, 0, 0)) < 1e-5));
+		ASSERT(IsTrue, all(abs(basis[1] - normalize(float3(1, 3, 0)) * sign) < 1e-5));
+		ASSERT(IsTrue, all(abs(basis[2] - normal) < 1e-5));
+	}
+	float3x3 small = ReconstructTBN(float3(0, 1e-4, 0), float3(-1e-4, 0, 0), normal, float2(1e-4, 0), float2(0, 1e-4));
+	ASSERT(IsTrue, all(abs(small[0] - float3(0, 1, 0)) < 1e-5));
+	ASSERT(IsTrue, all(abs(small[1] - float3(-1, 0, 0)) < 1e-5));
+}
+
+	/// @tags lighting, tangent-basis, robustness
+	[numthreads(1, 1, 1)] void TestReconstructedBasisFallback()
+{
+	float infinity = asfloat(0x7f800000u);
+	float nan = asfloat(0x7fc00000u);
+	float3 badVectors[] = { float3(0, 0, 0), float3(0, 0, 1), float3(0, 1, 0), float3(infinity, 0, 0), float3(nan, 0, 0), float3(1e30, 0, 0) };
+	for (int i = 0; i < 6; ++i) {
+		float3x3 basis = ReconstructTBN(badVectors[i], float3(0, 1, 0), float3(0, 0, 1), float2(1, 0), float2(0, 1));
+		ASSERT(IsTrue, all(isfinite(basis[0])) && all(isfinite(basis[1])) && all(isfinite(basis[2])));
+		ASSERT(IsTrue, abs(dot(cross(basis[0], basis[1]), basis[2]) - 1) < 1e-5);
+		ASSERT(IsTrue, abs(dot(basis[0], basis[0]) - 1) < 1e-5);
+		ASSERT(IsTrue, abs(dot(basis[1], basis[1]) - 1) < 1e-5);
+
+		basis = ReconstructTBN(float3(1, 0, 0), float3(0, 1, 0), badVectors[i], float2(0, 0), float2(0, 0));
+		ASSERT(IsTrue, all(isfinite(basis[0])) && all(isfinite(basis[1])) && all(isfinite(basis[2])));
+		ASSERT(IsTrue, abs(dot(cross(basis[0], basis[1]), basis[2]) - 1) < 1e-5);
+	}
+}
+
 /// @tags lighting, foliage, transmission
 [numthreads(1, 1, 1)] void TestFoliageTransmission() {
 	float frontLit = GetFoliageTransmission(1.0f, -1.0f);
@@ -22,8 +56,9 @@
 	ASSERT(IsTrue, !isnan(forwardAligned) && !isinf(forwardAligned));
 }
 
-/// @tags lighting, material
-[numthreads(1, 1, 1)] void TestShininessToRoughness() {
+	/// @tags lighting, material
+	[numthreads(1, 1, 1)] void TestShininessToRoughness()
+{
 	// Test 1: Known conversions
 	// Formula: roughness = (2/(shininess+2))^0.25
 	// Shininess = 2: roughness = (2/4)^0.25 = 0.5^0.25 ≈ 0.841
@@ -68,9 +103,8 @@
 	ASSERT(IsTrue, abs(actual - expected) < 0.0001f);
 }
 
-	/// @tags lighting, material, edge-cases
-	[numthreads(1, 1, 1)] void TestShininessToRoughnessEdgeCases()
-{
+/// @tags lighting, material, edge-cases
+[numthreads(1, 1, 1)] void TestShininessToRoughnessEdgeCases() {
 	// Test near-zero shininess
 	float roughness_zero = ShininessToRoughness(0.0f);
 	ASSERT(IsTrue, !isnan(roughness_zero));
@@ -96,8 +130,9 @@
 	ASSERT(IsTrue, !isinf(roughness_neg));
 }
 
-/// @tags lighting, material, properties
-[numthreads(1, 1, 1)] void TestShininessToRoughnessProperties() {
+	/// @tags lighting, material, properties
+	[numthreads(1, 1, 1)] void TestShininessToRoughnessProperties()
+{
 	// Property: Continuous and smooth
 	float prev = ShininessToRoughness(1.0f);
 

@@ -9,12 +9,6 @@
 #	include "Common/PBR.hlsli"
 #endif
 
-float3 SafeNormalizeLighting(float3 v, float3 fallback)
-{
-	float lenSq = dot(v, v);
-	return (lenSq > EPSILON_DIVISION && lenSq == lenSq && lenSq < 1.0e16) ? v * rsqrt(lenSq) : fallback;
-}
-
 #if defined(TRUE_PBR)
 DirectContext CreateDirectLightingContext(float3 worldNormal, float3 coatWorldNormal, float3 vertexNormal, float3 viewDir, float3 coatViewDir, float3 lightDir, float3 coatLightDir, float3 lightColor, float detailedShadow, float softShadow)
 #else

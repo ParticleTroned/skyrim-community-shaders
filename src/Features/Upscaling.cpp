@@ -69648,8 +69648,8 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		const auto& target = renderer->GetRuntimeData().renderTargets[static_cast<std::uint32_t>(a_target)];
 		const bool matchesMain = target.texture == renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN].texture;
 		CSX::Diagnostics::ColourPipelineProbe::CaptureImageSpaceStage(a_stage,
-			target.texture, target.SRV,
-			target.RTV, target.UAV,
+			REX::W32::AsReal(target.texture), REX::W32::AsReal(target.SRV),
+			REX::W32::AsReal(target.RTV), REX::W32::AsReal(target.UAV),
 			static_cast<std::uint32_t>(a_target), matchesMain,
 			"Upscaling::Main_PostProcessing::thunk", "at the original ImageSpace call boundary");
 	};
@@ -69662,11 +69662,11 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		const bool activated = runtime.ActivatePostProcessingWindow(
 			static_cast<std::uint32_t>(a_target), globals::state ? globals::state->frameCount : 0, publication);
 		const auto source = renderer && runtime.IsCapturing() ? CSX::RenderMap::DescribeResource(
-																	renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN].texture) :
+																	REX::W32::AsReal(renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN].texture)) :
 		                                                        CSX::RenderMap::ResourceObservationInput{};
 		const auto targetIndex = static_cast<std::uint32_t>(a_target);
 		const auto destination = renderer && runtime.IsCapturing() && targetIndex < std::size(renderer->GetRuntimeData().renderTargets) ?
-		                             CSX::RenderMap::DescribeResource(renderer->GetRuntimeData().renderTargets[targetIndex].texture) :
+		                             CSX::RenderMap::DescribeResource(REX::W32::AsReal(renderer->GetRuntimeData().renderTargets[targetIndex].texture)) :
 		                             CSX::RenderMap::ResourceObservationInput{};
 		const auto transferScope = runtime.EnterPostProcessing(source, destination, targetIndex, publication);
 		if (activated)

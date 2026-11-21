@@ -5079,7 +5079,7 @@ FidelityFX::UpscaleResult FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture
 				winrt::com_ptr<ID3D11Texture2D> combined;
 				if (a_upscalingTexture && SUCCEEDED(a_upscalingTexture->QueryInterface(IID_PPV_ARGS(combined.put())))) {
 					const auto* renderer = globals::game::renderer;
-					const bool matchesMain = renderer && combined.get() == renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN].texture;
+					const bool matchesMain = renderer && combined.get() == REX::W32::AsReal(renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN].texture);
 					CSX::Diagnostics::ColourPipelineProbe::CaptureImageSpaceStage(
 						CSX::Diagnostics::ColourPipelineProbe::Stage::CombinedMain,
 						combined.get(), nullptr, nullptr, nullptr, static_cast<std::uint32_t>(RE::RENDER_TARGETS::kMAIN),

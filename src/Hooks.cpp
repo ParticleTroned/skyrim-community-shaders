@@ -6,6 +6,7 @@
 #include "Api/AcceptedDrawService.h"
 #include "Deferred.h"
 #include "EngineFixes/VRAlphaPassListFix.h"
+#include "EngineFixes/VRAlphaSort.h"
 #include "EngineFixes/VRShadowBatch.h"
 #include "Features/TerrainSeams.h"
 
@@ -116,7 +117,7 @@ namespace
 		if (a_texture->name.c_str())
 			binding.path = a_texture->name.c_str();
 		if (a_texture->rendererTexture && a_texture->rendererTexture->texture) {
-			binding.resource = CSX::RenderMap::DescribeResource(a_texture->rendererTexture->texture);
+			binding.resource = CSX::RenderMap::DescribeResource(REX::W32::AsReal(a_texture->rendererTexture->texture));
 		}
 	}
 
@@ -3307,6 +3308,7 @@ namespace Hooks
 	{
 		VRShadowBatch::Install();
 		VRAlphaPassListFix::Install();
+		VRAlphaSort::Install();
 		Util::VRLoadingMenuClear::Install();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		// Construct the inert collector away from render-thread first use. Capture

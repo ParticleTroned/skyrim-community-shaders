@@ -549,6 +549,23 @@ void CheckRenderFamilyIsolation() {
             "Exceptional geometry finish must retire the active pass before another shared draw");
     }
 }
+void CheckPreparedStateFlush() {
+    Fixture f;
+    f.renderer.impl->ready = true;
+    f.Setup();
+    const auto beforePreparation = REL::Relocation<void (*)(uint32_t)>::calls;
+    f.Draw();
+    Require(f.renderer.impl->cullingPrepared && f.renderer.impl->submissions == 1 &&
+            REL::Relocation<void (*)(uint32_t)>::calls >= beforePreparation + 2,
+        "Initial culling must retain the state flush after preparation");
+    ++f.pass.passEnum;
+    f.Setup();
+    const auto beforeDraw = REL::Relocation<void (*)(uint32_t)>::calls;
+    f.Draw();
+    Require(f.renderer.impl->submissions == 2 &&
+            REL::Relocation<void (*)(uint32_t)>::calls == beforeDraw + 1,
+        "A prepared paired pass must flush feature state exactly once");
+}
 int main() {
     try {
         CheckConstantBufferBindings();
@@ -560,6 +577,7 @@ int main() {
             CheckRenderFamilyIsolation();
             CheckQueuedStreamingFallback();
             CheckTextureCacheFrameBoundary();
+            CheckPreparedStateFlush();
             for (bool loaded : {false, true}) for (bool enabled : {false, true}) {
                 Fixture f;
                 globals::features::grassOptimizations.loaded = loaded;

@@ -54,7 +54,9 @@ std::unique_ptr<Buffer> Allocate(uint32_t bytes) {
 }
 auto RawBuffer(uint32_t bytes, uint32_t, uint32_t, const char*) { return Allocate(bytes); }
 template<class T> auto Structured(uint32_t count, bool, bool, const char*) { return Allocate(count * uint32_t(sizeof(T))); }
-struct RecordAllocation { uint32_t base = UINT32_MAX; };
+namespace GrassInstancePacking { constexpr uint32_t kStride = 16; }
+struct Source { bool compactRecords = false; };
+struct RecordAllocation { uint32_t base = UINT32_MAX, stride = 32; };
 struct CullResult { uint32_t capacity = 0, slots = 0; };
 struct CullBuffers {
     std::unique_ptr<Buffer> output, extras, arguments;
@@ -62,6 +64,9 @@ struct CullBuffers {
     GrassPolicy::CullCapacityRetention retention;
 };
 struct Bucket {
+    std::vector<Source> sources{{}};
+    uint32_t RecordStride() const { return records ? records->stride : 32; }
+    uint32_t RecordUnits() const { return recordsCapacity * RecordStride() / 16; }
     std::unique_ptr<RecordAllocation> records;
     uint32_t recordsCapacity = 0, instances = 0, dirtyFirstInstance = 0;
     bool recordsDirty = true;
@@ -107,7 +112,7 @@ int main() {
             }
             Require(!allocations, "Record reservation must not allocate GPU storage");
             state.PrepareRecordPool();
-            Require(state.buckets[0].records->base == 0 && state.buckets[1].records->base == 128,
+            Require(state.buckets[0].records->base == 0 && state.buckets[1].records->base == 256,
                 "Pool did not assign disjoint capacity ranges");
             state.buckets[0].recordsDirty = false;
             state.buckets[1].dirtyFirstInstance = 32;
@@ -126,7 +131,7 @@ int main() {
                 "Failed pool growth changed a retained allocation");
             ResetProbe(); state.PrepareRecordPool();
             Require(state.context->copies.size() == 2 && state.context->copies[0].bytes == 65 * 32 &&
-                state.context->copies[1].bytes == 32 * 32 && state.buckets.back().records->base == 256,
+                state.context->copies[1].bytes == 32 * 32 && state.buckets.back().records->base == 512,
                 "Pool relocation did not preserve exactly the clean prefixes");
             Require(state.buckets[1].recordsDirty && state.buckets[1].dirtyFirstInstance == 32,
                 "Relocation lost the dirty upload suffix");
@@ -139,6 +144,32 @@ int main() {
             Require(!allocations && state.context->copies.size() == copies && state.buckets.back().records->base == 0 &&
                     state.buckets.back().recordsDirty && state.buckets.back().dirtyFirstInstance == 0,
                 "Streaming gap reuse reallocated, copied retained records, or lost the new upload");
+        }
+        {
+            GrassBucketRenderer::Impl state;
+            state.buckets.resize(2);
+            for (auto& bucket : state.buckets) bucket.instances = 1;
+            state.buckets[0].sources[0].compactRecords = true;
+            for (auto& bucket : state.buckets) Require(state.EnsureRecords(bucket), "Mixed reservation failed");
+            state.PrepareRecordPool();
+            Require(state.residentRecordBytes == 48 && state.buckets[1].records->base == 1,
+                "Mixed pool lost its 16-byte allocation units");
+            for (auto& bucket : state.buckets) bucket.recordsDirty = false;
+            state.buckets.emplace_back(); state.buckets.back().instances = 1;
+            Require(state.EnsureRecords(state.buckets.back()), "Mixed growth reservation failed");
+            state.PrepareRecordPool();
+            Require(state.context->copies.size() == 2 && state.context->copies[0].bytes == 16 &&
+                state.context->copies[1].bytes == 32 && state.context->copies[1].source == 16,
+                "Mixed relocation changed a source stride");
+            state.buckets[0].sources[0].compactRecords = false;
+            Require(state.EnsureRecords(state.buckets[0]) && state.residentRecordBytes == 96 &&
+                state.buckets[0].recordsDirty && !state.buckets[0].dirtyFirstInstance,
+                "Compact-to-raw transition reused encoded records");
+            state.PrepareRecordPool();
+            state.buckets[0].sources[0].compactRecords = true;
+            Require(state.EnsureRecords(state.buckets[0]) && state.residentRecordBytes == 80,
+                "Raw-to-compact transition underflowed reservation accounting");
+            state.PrepareRecordPool();
         }
         {
             GrassBucketRenderer::Impl state;

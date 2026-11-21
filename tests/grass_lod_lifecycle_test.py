@@ -720,6 +720,10 @@ struct Owner {
     ~Owner() { Require(!captureLocked); --alive; }
 };
 using QueuedGroup = Owner;
+namespace Hooks {
+    bool grassDrawActive = false;
+    void ResetGrassDrawState() noexcept { grassDrawActive = false; }
+}
 namespace RE {
     using NiSourceTexture = int;
     using BSMultiStreamInstanceTriShape = int;
@@ -970,7 +974,9 @@ int main() {
         state.current = &activeGeometry;
         state.currentSetupPass = &activePass;
         state.currentMainPass = state.currentDrawObserved = true;
+        Hooks::grassDrawActive = true;
         renderer.EndFrame();
+        Require(!Hooks::grassDrawActive);
         Require(!state.current && !state.currentSetupPass && !state.currentMainPass && !state.currentDrawObserved);
         Require(state.lodMeshes.Requested(key) && !state.lodMeshes.Find(key));
         state.lodMeshes.Publish(key, Mesh{std::make_shared<Owner>()});

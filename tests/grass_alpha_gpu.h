@@ -6,7 +6,7 @@ struct GrassAlphaFixture
 	ComPtr<ID3D11Texture2D> target, staging;
 	ComPtr<ID3D11RenderTargetView> rtv;
 	ComPtr<ID3D11SamplerState> sampler;
-	std::array<ComPtr<ID3D11ShaderResourceView>, 3> textures, normalLengths;
+	std::array<ComPtr<ID3D11ShaderResourceView>, 4> textures, normalLengths;
 
 	GrassAlphaFixture()
 	{
@@ -38,6 +38,8 @@ struct GrassAlphaFixture
 			desc.Height = atlas == 0 ? 1 : 2;
 			if (atlas == 2)
 				texels[4][2] = 1.025f;
+			if (atlas == 3)
+				texels[4][2] = 0;
 			ComPtr<ID3D11Texture2D> texture;
 			Check(device->CreateTexture2D(&desc, &initial, texture.GetAddressOf()));
 			Util::SetResourceName(texture.Get(), "GrassAlphaTest::Texture%u", atlas);
@@ -109,7 +111,7 @@ VS_OUTPUT NormalVertex(uint vertex : SV_VertexID) {
     VS_INPUT input = (VS_INPUT)0;
     input.Normal.xyz = float3(37, 128, 218) / 255.0;
     input.Color = float4(1, 1, 1, 0);
-    input.InstanceData1.x = texel / 2;
+    input.InstanceData1.x = (texel / 2) * ((GrassBatchEnabled & 4u) ? 1 : 2);
     input.InstanceData2 = float4(1, 0, 0, 0);
     input.InstanceData3 = float4(0, 1, 0, 1);
     VS_OUTPUT output = main(input);
@@ -145,36 +147,42 @@ float4 NormalPixel(PS_INPUT input) : SV_Target0 {
 			0, 0, 0, 0x3c00, 0x3c00, 0, 0, 0, 0, 0x3c00, 0, 0x3c00, 0, 0, 0, 0,
 			0, 0, 0, 0x3c00, 0, 0xbc00, 0, 0, 0x3c00, 0, 0, 0x3c00, 0, 0, 0, 0
 		};
-		D3D11_BUFFER_DESC desc{};
-		desc.ByteWidth = sizeof(records);
-		desc.Usage = D3D11_USAGE_IMMUTABLE;
-		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
-		D3D11_SUBRESOURCE_DATA initial{ records.data(), 0, 0 };
-		ComPtr<ID3D11Buffer> buffer;
-		Check(device->CreateBuffer(&desc, &initial, buffer.GetAddressOf()));
-		Util::SetResourceName(buffer.Get(), "GrassAlphaTest::NormalInstances");
-		D3D11_SHADER_RESOURCE_VIEW_DESC view{};
-		view.Format = DXGI_FORMAT_R32_TYPELESS;
-		view.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
-		view.BufferEx.NumElements = sizeof(records) / sizeof(uint32_t);
-		view.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
-		ComPtr<ID3D11ShaderResourceView> srv;
-		Check(device->CreateShaderResourceView(buffer.Get(), &view, srv.GetAddressOf()));
-		Util::SetResourceName(srv.Get(), "GrassAlphaTest::NormalInstances SRV");
+		std::array<GrassInstancePacking::Record, 2> compactRecords;
+		for (size_t i = 0; i < compactRecords.size(); ++i)
+			Require(GrassInstancePacking::Pack(records.data() + i * 16, compactRecords[i]), "Grass normal fixture rotation cannot be compressed");
+		std::array<ComPtr<ID3D11ShaderResourceView>, 2> sources;
+		for (UINT compact = 0; compact < sources.size(); ++compact) {
+			D3D11_BUFFER_DESC desc{};
+			desc.ByteWidth = compact ? sizeof(compactRecords) : sizeof(records);
+			desc.Usage = D3D11_USAGE_IMMUTABLE;
+			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+			desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+			D3D11_SUBRESOURCE_DATA initial{ compact ? static_cast<const void*>(compactRecords.data()) : records.data(), 0, 0 };
+			ComPtr<ID3D11Buffer> buffer;
+			Check(device->CreateBuffer(&desc, &initial, buffer.GetAddressOf()));
+			Util::SetResourceName(buffer.Get(), "GrassAlphaTest::NormalInstances%u", compact);
+			D3D11_SHADER_RESOURCE_VIEW_DESC view{};
+			view.Format = DXGI_FORMAT_R32_TYPELESS;
+			view.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
+			view.BufferEx.NumElements = desc.ByteWidth / sizeof(uint32_t);
+			view.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
+			auto& srv = sources[compact];
+			Check(device->CreateShaderResourceView(buffer.Get(), &view, srv.GetAddressOf()));
+			Util::SetResourceName(srv.Get(), "GrassAlphaTest::NormalInstances%u SRV", compact);
+		}
 		ComPtr<ID3D11ShaderReflection> reflection;
 		Check(D3DReflect(vertexCode->GetBufferPointer(), vertexCode->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
 		D3D11ShaderTest::ConstantBuffer params(device.Get(), reflection.Get(), "GrassBatch");
 		context->ClearState();
 		context->VSSetShader(vertex.Get(), nullptr, 0);
 		context->PSSetShader(pixel.Get(), nullptr, 0);
-		context->VSSetShaderResources(3, 1, srv.GetAddressOf());
 		context->VSSetShaderResources(4, 1, normalLengths[2].GetAddressOf());
 		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 		context->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
 		D3D11_VIEWPORT viewport{ 0, 0, 4, 1, 0, 1 };
 		context->RSSetViewports(1, &viewport);
-		for (UINT flags : { 0u, 1u, 3u }) {
+		for (UINT flags : { 0u, 1u, 3u, 5u, 7u }) {
+			context->VSSetShaderResources(3, 1, sources[(flags & 4u) ? 1 : 0].GetAddressOf());
 			params.SetVariable("GrassBatchEnabled", flags);
 			context->UpdateSubresource(params.buffer.Get(), 0, nullptr, params.bytes.data(), 0, 0);
 			context->VSSetConstantBuffers(params.slot, 1, params.buffer.GetAddressOf());
@@ -183,7 +191,7 @@ float4 NormalPixel(PS_INPUT input) : SV_Target0 {
 				Pixel expected{ 37.0f / 255 * 2 - 1, 128.0f / 255 * 2 - 1, 218.0f / 255 * 2 - 1, 1 };
 				if (flags && texel >= 2)
 					expected = { -expected[1], expected[0], expected[2], 1 };
-				if (!enhanced && flags != 3)
+				if (!enhanced && !(flags & 2u))
 					expected = { 0, 0, 0, 1 };
 				expected[3] = flags ? 1.05f : 0;
 				for (UINT channel = 0; channel < expected.size(); ++channel)
@@ -233,27 +241,29 @@ float4 ClassifierPixel(PS_INPUT input) : SV_Target0 {
 		context->ClearState();
 		context->VSSetShader(vertex.Get(), nullptr, 0);
 		context->PSSetShader(pixel.Get(), nullptr, 0);
-		context->PSSetShaderResources(0, 1, textures[2].GetAddressOf());
 		context->PSSetSamplers(0, 1, sampler.GetAddressOf());
 		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 		context->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
 		D3D11_VIEWPORT viewport{ 0, 0, 4, 1, 0, 1 };
 		context->RSSetViewports(1, &viewport);
-		for (float threshold : { 0.01f, 0.1f }) {
-			settings.SetMember("SharedData::grassLightingSettings", "ComplexGrassThreshold", threshold);
-			settings.Bind(context.Get(), D3D11ShaderTest::Stage::Pixel);
-			for (bool cached : { false, true }) {
-				auto value = cached ? normalLengths[2].Get() : nullptr;
-				context->VSSetShaderResources(4, 1, &value);
-				const auto pixels = DrawPixels();
-				for (UINT texel = 0; texel < pixels.size(); ++texel) {
-					const Pixel expected = threshold > 0.05f ? Pixel{ 0.2f, 0.3f, 0.4f, 1 } : Pixel{ 0.5f, 0.5f, texel == 0 ? 1.025f : 1.0f, 0 };
-					for (UINT channel = 0; channel < expected.size(); ++channel)
-						Require(std::isfinite(pixels[texel][channel]) && std::abs(pixels[texel][channel] - expected[channel]) < 1e-5f,
-							"Grass classification cache ignored the live threshold or selected the wrong atlas region");
+		for (UINT atlas : { 2u, 3u })
+			for (float threshold : { 0.01f, 0.1f }) {
+				context->PSSetShaderResources(0, 1, textures[atlas].GetAddressOf());
+				settings.SetMember("SharedData::grassLightingSettings", "ComplexGrassThreshold", threshold);
+				settings.Bind(context.Get(), D3D11ShaderTest::Stage::Pixel);
+				for (bool cached : { false, true }) {
+					auto value = cached ? normalLengths[atlas].Get() : nullptr;
+					context->VSSetShaderResources(4, 1, &value);
+					const auto pixels = DrawPixels();
+					for (UINT texel = 0; texel < pixels.size(); ++texel) {
+						const float marker = atlas == 2 ? 1.025f : 0.0f;
+						const Pixel expected = atlas == 2 && threshold > 0.05f ? Pixel{ 0.2f, 0.3f, 0.4f, 1 } : Pixel{ 0.5f, 0.5f, texel == 0 ? marker : 1.0f, 0 };
+						for (UINT channel = 0; channel < expected.size(); ++channel)
+							Require(std::isfinite(pixels[texel][channel]) && std::abs(pixels[texel][channel] - expected[channel]) < 1e-5f,
+								"Grass classification cache ignored the live threshold or selected the wrong atlas region");
+					}
 				}
 			}
-		}
 	}
 
 	unsigned CheckVariant(bool vr, bool optimized, bool enhanced, bool pbr, bool depth, bool alpha, bool billboard = false, bool authoredPBR = false)

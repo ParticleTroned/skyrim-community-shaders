@@ -37,6 +37,9 @@ void RunCullingShader(bool vr, bool reversed = false)
 	Require(projectionModesLayout.StartOffset == 156 && projectionModesLayout.Size == 4 &&
 				projectionAsymptoteLayout.StartOffset == 232 && projectionAsymptoteLayout.Size == 8,
 		"Projection classification changed the CPU parameter layout");
+	D3D11_SHADER_VARIABLE_DESC tightnessLayout{};
+	Check(parameterReflection->GetVariableByName("OcclusionTightness")->GetDesc(&tightnessLayout));
+	Require(tightnessLayout.StartOffset == 248 && tightnessLayout.Size == sizeof(float), "Occlusion tightness changed the CPU parameter layout");
 	const UINT eyes = vr ? 2 : 1, capacity = 128;
 	using Record = std::array<uint32_t, 8>;
 	const std::array<Record, 3> records{ Record{ 0, 0x3c003800, 0x3c00, 0, 0x3c000000, 0x3c000000, 0, 0 },
@@ -178,6 +181,7 @@ void RunCullingShader(bool vr, bool reversed = false)
 	params.SetVariable("DepthWidth", depthDesc.Width);
 	params.SetVariable("DepthHeight", 4u);
 	params.SetVariable("DepthBias", .001f);
+	params.SetVariable("OcclusionTightness", 1.0f);
 	params.SetVariable("DepthUVScale", std::array<float, 4>{ 1, 1, 0, 0 });
 	native.SetVariable("WindTimer", 4.25f);
 	native.SetVariable("PreviousWindTimer", 3.75f);
@@ -247,7 +251,7 @@ void RunCullingShader(bool vr, bool reversed = false)
 	auto counts = read(counters.Get());
 	Require(counts[10] == 3 * eyes && counts[11] == 3 * eyes, "Missing-pyramid diagnostics do not reconcile");
 	const auto sourceIndex = [](uint32_t encoded, size_t limit) {
-		const float value = std::bit_cast<float>(encoded);
+		const float value = std::bit_cast<float>(encoded) * .5f;
 		Require(std::isfinite(value) && value >= 0 && value < limit && value == std::floor(value), "Invalid survivor source index");
 		return UINT(value);
 	};
@@ -297,8 +301,8 @@ void RunCullingShader(bool vr, bool reversed = false)
 		context->UpdateSubresource(table.Get(), 0, nullptr, slices.data(), 0, 0);
 		dispatch(false, false, false, false);
 	}
-	// The production entry must preserve both buckets across the second dispatch row.
-	{
+	// The production entry preserves mixed record formats across dispatch rows.
+	for (bool compactSecond : { false, true }) {
 		auto batchCode = Compile(L"features/Grass Optimizations/Shaders/GrassOptimizations/GrassCullingBatchCS.hlsl", "cs_5_0", defines);
 		ComPtr<ID3D11ComputeShader> batchShader;
 		Check(device->CreateComputeShader(batchCode->GetBufferPointer(), batchCode->GetBufferSize(), nullptr, batchShader.GetAddressOf()));
@@ -311,21 +315,46 @@ void RunCullingShader(bool vr, bool reversed = false)
 		batchParameters.SetVariable("DispatchGroupCount", 2u);
 		batchParameters.SetVariable("DispatchRowWidth", 1u);
 		const UINT outputStride = capacity * eyes * 3;
-		std::array<std::array<std::byte, 1088>, 2> buckets{};
+		D3D11ShaderTest::ConstantBuffer frameParameters(device.Get(), batchReflection.Get(), "CullFrameParameters");
+		Require(frameParameters.bytes.size() == params.bytes.size(), "Shared frame settings changed layout");
+		frameParameters.bytes = params.bytes;
+		std::array<std::array<std::byte, 624>, 2> buckets{};
+		const auto word = [&](size_t offset) { uint32_t value; std::memcpy(&value, params.bytes.data() + offset, 4); return value; };
 		for (UINT bucket = 0; bucket < 2; ++bucket) {
-			const std::array<UINT, 4> offsets{ bucket, bucket * 3, bucket * outputStride, bucket * 192 };
-			std::memcpy(buckets[bucket].data(), offsets.data(), sizeof(offsets));
-			std::memcpy(buckets[bucket].data() + 16, params.bytes.data(), params.bytes.size());
-			std::memcpy(buckets[bucket].data() + 272, native.bytes.data(), native.bytes.size());
-			if (bucket == 1) {
-				const float threshold = .5f;
-				std::memcpy(buckets[bucket].data() + 16 + 240, &threshold, sizeof(threshold));
-			}
+			auto* out = buckets[bucket].data();
+			const std::array<UINT, 4> offsets{ bucket, bucket * 6, bucket * outputStride, bucket * 192 };
+			std::memcpy(out, offsets.data(), sizeof(offsets));
+			std::memcpy(out + 16, params.bytes.data(), 12);
+			std::memcpy(out + 28, params.bytes.data() + 168, 4);
+			std::memcpy(out + 32, params.bytes.data() + 64, 32);
+			std::memcpy(out + 64, params.bytes.data() + 176, 32);
+			std::memcpy(out + 96, params.bytes.data() + 152, 4);
+			std::memcpy(out + 100, params.bytes.data() + 220, 4);
+			const float threshold = bucket == 1 ? .5f : 0.f;
+			std::memcpy(out + 104, &threshold, 4);
+			const uint32_t flags = word(24) | (word(28) << 1) | (word(224) << 2) | (bucket == 1 && compactSecond ? 8u : 0u);
+			std::memcpy(out + 108, &flags, 4);
+			std::memcpy(out + 112, native.bytes.data(), eyes * 64);
+			std::memcpy(out + 112 + 128, native.bytes.data() + eyes * 128, eyes * 64);
+			const auto wind = GrassPolicy::WindVectorOffset(vr) * 4;
+			std::memcpy(out + 112 + 256, native.bytes.data() + wind, 16);
+			std::memcpy(out + 112 + 272, native.bytes.data() + (vr ? 148 : 84) * 4, 12);
+			std::memcpy(out + 112 + 284, native.bytes.data() + wind + 28, 4);
+			std::memcpy(out + 112 + 288, native.bytes.data() + wind + 44, 4);
+			std::memcpy(out + 112 + 292, native.bytes.data() + wind + 60, 4);
+			std::memcpy(out + 112 + 296, params.bytes.data() + 232, 8);
+			std::memcpy(out + 416 + 196, params.bytes.data() + 156, 4);
 		}
-		auto bucketData = makeBuffer(sizeof(buckets), D3D11_BIND_SHADER_RESOURCE, 1088, D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, buckets.data(), "GrassTest::Buckets");
+		auto bucketData = makeBuffer(sizeof(buckets), D3D11_BIND_SHADER_RESOURCE, 624, D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, buckets.data(), "GrassTest::Buckets");
 		std::array<Record, 6> pooledRecords{};
 		std::copy(records.begin(), records.end(), pooledRecords.begin());
 		std::copy(records.begin(), records.end(), pooledRecords.begin() + 3);
+		if (compactSecond)
+			for (size_t i = 0; i < records.size(); ++i) {
+				GrassInstancePacking::Record packed;
+				Require(GrassInstancePacking::Pack(records[i].data(), packed), "Culling fixture rotation is not compactable");
+				std::memcpy(reinterpret_cast<std::byte*>(pooledRecords.data()) + 3 * sizeof(Record) + i * sizeof(packed), packed.data(), sizeof(packed));
+			}
 		auto pooledInput = makeBuffer(sizeof(pooledRecords), D3D11_BIND_SHADER_RESOURCE, 0, D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, pooledRecords.data(), "GrassTest::RecordPool");
 		ComPtr<ID3D11ShaderResourceView> pooledSRV, bucketsSRV;
 		auto pooledView = inputView;
@@ -347,6 +376,7 @@ void RunCullingShader(bool vr, bool reversed = false)
 		context->CSSetShaderResources(0, 4, srvs.data());
 		context->CSSetUnorderedAccessViews(0, 4, uavs.data(), nullptr);
 		batchParameters.Bind(context.Get());
+		frameParameters.Bind(context.Get());
 		context->CSSetShader(batchShader.Get(), nullptr, 0);
 		context->Dispatch(1, 3, 1);  // Third row must return uniformly before group barriers.
 		uavs.fill(nullptr);
@@ -359,7 +389,11 @@ void RunCullingShader(bool vr, bool reversed = false)
 				std::array<bool, 3> seen{};
 				for (UINT instance = 0; instance < (bucket ? 2u : 3u); ++instance) {
 					const auto slot = bucket * outputStride + eye * capacity + instance;
-					const auto index = sourceIndex(batchOutput[slot], pooledRecords.size());
+					const float address = std::bit_cast<float>(batchOutput[slot]);
+					const bool compact = bucket == 1 && compactSecond;
+					if (compact)
+						Require(address >= 6 && address < 9 && address == std::floor(address), "Invalid compact source address");
+					const auto index = compact ? 3u + UINT(address - 6) : sourceIndex(batchOutput[slot], pooledRecords.size());
 					Require(index >= bucket * 3 && index < (bucket + 1) * 3, "Combined dispatch read another bucket's records");
 					seen[index - bucket * 3] = true;
 					Require(std::bit_cast<float>(batchExtras[slot * 7 + 3]) == (index % 3 == 0 ? .125f : .875f), "Combined dispatch mixed instance extras");
@@ -390,6 +424,7 @@ void RunCullingShader(bool vr, bool reversed = false)
 		extras = savedExtras;
 		args = savedArgs;
 		makeOutputViews();
+		native.Bind(context.Get());
 	}
 	{
 		auto savedDepth = depthSRV;
@@ -446,6 +481,27 @@ void RunCullingShader(bool vr, bool reversed = false)
 		params.SetVariable("DepthWidth", depthDesc.Width);
 		params.SetVariable("DepthHeight", depthDesc.Height);
 		depthSRV = savedDepth;
+	}
+	{
+		// Place an occluder between the full and tightened bounds' nearest depths.
+		std::vector<float> boundaryDepth(depth.size(), reversed ? .548f : .452f);
+		context->UpdateSubresource(depthTexture.Get(), 0, nullptr, boundaryDepth.data(), depthDesc.Width * 4, 0);
+		for (float tightness : { 1.0f, .9f }) {
+			params.SetVariable("OcclusionTightness", tightness);
+			for (float bias : { .001f, .01f }) {
+				params.SetVariable("DepthBias", bias);
+				const auto visible = dispatch(true, false, true, false);
+				const UINT expected = tightness == 1.0f || bias == .01f ? 2u : 0u;
+				for (UINT eye = 0; eye < eyes; ++eye)
+					Require(visible[eye * 8 + 4] == expected, "Occlusion tightness and depth margin did not affect visibility independently");
+			}
+			const auto noHiZ = dispatch(true, false, false, false);
+			for (UINT eye = 0; eye < eyes; ++eye)
+				Require(noHiZ[eye * 8 + 4] == 2, "Occlusion tightness changed frustum-only visibility");
+		}
+		params.SetVariable("OcclusionTightness", 1.0f);
+		params.SetVariable("DepthBias", .001f);
+		context->UpdateSubresource(depthTexture.Get(), 0, nullptr, depth.data(), depthDesc.Width * 4, 0);
 	}
 	values = dispatch(true, false, false, false);
 	for (UINT eye = 0; eye < eyes; ++eye) Require(values[eye * 8 + 4] == 2, "Frustum culling retained an outside instance or lost a visible one");
@@ -716,6 +772,20 @@ void RunCullingShader(bool vr, bool reversed = false)
 		stereo->Bind(context.Get());
 	}
 
+	auto perspective = projections;
+	for (UINT eye = 0; eye < eyes; ++eye) {
+		perspective[eye * 16 + 14] = 1;
+		perspective[eye * 16 + 15] = 0;
+	}
+	setProjection(perspective);
+	native.Bind(context.Get());
+	params.SetVariable("BandPixels", 0.0f);
+	params.SetVariable("MidPixels", 6.0f);
+	params.SetVariable("FarPixels", 2.0f);
+	values = dispatch(false, false, false, true);
+	for (UINT eye = 0; eye < eyes; ++eye)
+		Require(values[(eyes + eye) * 8 + 4] == 3 && values[(2 * eyes + eye) * 8 + 4] == 0,
+			"Equal-depth grass changed LOD with its lateral distance from the eye");
 	for (bool diagnostic : { false, true }) {
 		std::vector<D3D_SHADER_MACRO> policyDefines;
 		if (vr)

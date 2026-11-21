@@ -29,7 +29,8 @@ cbuffer Parameters : register(b0)
 	float2 ProjectionAsymptote;
 	float AlphaThreshold;
 	uint RefineHiZ;
-	uint2 CullingPadding;
+	float OcclusionTightness;
+	uint CullingPadding;
 };
 
 #ifdef GRASS_CULL_BATCH
@@ -40,14 +41,28 @@ cbuffer FrustumParameters : register(b3)
 {
 	float4 CullingPlanes[12];
 	uint CullingPlanesValid;
+#ifdef GRASS_CULL_BATCH
+	uint ProjectionModes;
+	uint2 CullingPlanesPadding;
+#else
 	uint3 CullingPlanesPadding;
+#endif
 };
 
 #ifdef GRASS_CULL_BATCH
-struct GrassNativeGeometry
+struct GrassCullGeometry
+{
+	row_major float4x4 WorldViewProj[2];
+	row_major float4x4 World[2];
+	float3 WindVector;
+	float WindTimer;
+	float3 ScaleMask;
+	float PreviousWindTimer;
+	float AlphaParam1, AlphaParam2;
+	float2 ProjectionAsymptote;
+};
 #else
 cbuffer NativeGeometry : register(b2)
-#endif
 {
 	row_major float4x4 WorldViewProj[EYES];
 	row_major float4x4 WorldView[EYES];
@@ -64,22 +79,27 @@ cbuffer NativeGeometry : register(b2)
 	float AlphaParam2;
 	float3 ScaleMask;
 	float ShadowClampValue;
-#ifdef GRASS_CULL_BATCH
-#	ifndef VR
-	float4 GeometryPadding[16];
-#	endif
-#endif
 };
+#endif
 
 #ifdef GRASS_CULL_BATCH
 struct GrassCullBucket
 {
 	uint DispatchStart, RecordBase, OutputBase, ArgsBase;
-	GrassParameters parameters;
-	GrassNativeGeometry geometry;
+	uint InstanceCount, SliceCount, Capacity, SliceOffset;
+	float4 RepresentativeOrigin, ModelBound;
+	uint4 IndexCounts;
+	float4 MeshWeights;
+	float QualityRadius, FarCoverage, AlphaThreshold;
+	uint Flags;
+	GrassCullGeometry geometry;
 	GrassFrustumParameters frustum;
 };
 StructuredBuffer<GrassCullBucket> CullBuckets : register(t3);
+cbuffer CullFrameParameters : register(b2)
+{
+	GrassParameters FrameParameters;
+};
 cbuffer DispatchParameters : register(b0)
 {
 	uint BucketCount, DispatchStartGroup, DispatchGroupCount, DispatchRowWidth;
@@ -87,12 +107,37 @@ cbuffer DispatchParameters : register(b0)
 	uint3 DispatchPadding;
 };
 static GrassCullBucket Bucket;
-#	define GrassParameter(field) Bucket.parameters.field
+static GrassParameters ActiveParameters;
+
+void LoadGrassBucket(uint index)
+{
+	Bucket = CullBuckets[index];
+	ActiveParameters = FrameParameters;
+	ActiveParameters.InstanceCount = Bucket.InstanceCount;
+	ActiveParameters.SliceCount = Bucket.SliceCount;
+	ActiveParameters.Capacity = Bucket.Capacity;
+	ActiveParameters.SliceOffset = Bucket.SliceOffset;
+	ActiveParameters.RepresentativeOrigin = Bucket.RepresentativeOrigin;
+	ActiveParameters.ModelBound = Bucket.ModelBound;
+	ActiveParameters.IndexCounts = Bucket.IndexCounts;
+	ActiveParameters.MeshWeights = Bucket.MeshWeights;
+	ActiveParameters.QualityRadius = Bucket.QualityRadius;
+	ActiveParameters.FarDensity.w = Bucket.FarCoverage;
+	ActiveParameters.AlphaThreshold = Bucket.AlphaThreshold;
+	ActiveParameters.MidEnabled = Bucket.Flags & 1u;
+	ActiveParameters.FarEnabled = (Bucket.Flags >> 1) & 1u;
+	ActiveParameters.FarPolicyEnabled = (Bucket.Flags >> 2) & 1u;
+	ActiveParameters.ProjectionModes = Bucket.frustum.ProjectionModes;
+	ActiveParameters.ProjectionAsymptote = Bucket.geometry.ProjectionAsymptote;
+}
+
+#	define GrassParameter(field) ActiveParameters.field
 #	define GrassGeometry(field) Bucket.geometry.field
 #	define GrassFrustum(field) Bucket.frustum.field
 #	define GrassRecordBase Bucket.RecordBase
 #	define GrassOutputBase Bucket.OutputBase
 #	define GrassArgsBase Bucket.ArgsBase
+#	define GrassRecordStep ((Bucket.Flags & 8u) ? 1u : 2u)
 #else
 #	define DisableAlphaRejection 0
 #	define GrassParameter(field) field
@@ -101,6 +146,7 @@ static GrassCullBucket Bucket;
 #	define GrassRecordBase 0
 #	define GrassOutputBase 0
 #	define GrassArgsBase 0
+#	define GrassRecordStep 2u
 #endif
 
 #endif

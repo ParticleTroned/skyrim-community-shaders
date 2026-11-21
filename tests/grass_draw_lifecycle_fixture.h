@@ -222,6 +222,7 @@ namespace REL
 		using Pointer = std::conditional_t<std::is_function_v<T>, std::add_pointer_t<T>, T>;
 		Pointer target = nullptr;
 		static inline bool throwNext = false;
+		static inline unsigned calls = 0;
 		Relocation() = default;
 		Relocation(RelocationID) {}
 		Relocation(const RE::NiRTTI* value)
@@ -232,6 +233,7 @@ namespace REL
 		template <class... Args>
 		void operator()(Args&&... args) const
 		{
+			++calls;
 			if (throwNext) {
 				throwNext = false;
 				throw std::runtime_error("Injected state flush failure");
@@ -240,6 +242,14 @@ namespace REL
 				target(std::forward<Args>(args)...);
 		}
 	};
+}
+namespace Hooks
+{
+	inline void ResetGrassDrawState() noexcept {}
+	inline void CommitGrassDrawState()
+	{
+		REL::Relocation<void (*)(uint32_t)>{ REL::RelocationID(75580, 77386) }(0);
+	}
 }
 namespace logger
 {

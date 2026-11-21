@@ -1656,11 +1656,16 @@ namespace MenuDevBenchBridge
 			document["description"] = document["description"].get<std::string>() +
 			                          " search_settings requires query (at most 255 UTF-8 bytes, no NUL) and returns up to 64 ranked settings/page results, including unvisited pages. It reads generated metadata without rendering UI. reveal_setting requires a returned resultId and an already open menu; it queues page/tab navigation without changing feature settings or executing buttons. Measurements, dialogs and navigation guards can reject it. Conditional controls may remain hidden. search_status returns queued, revealed, not_visible or cancelled for controls, and page_queued or page_open for pages. Queued is not proof of visibility. IDs are stable for the same control route, not across renamed controls. Search respects loaded and disabled features on SE/AE/VR.";
 			auto& grassProperties = document["inputSchema"]["properties"]["grassOptimizations"]["properties"];
-			const std::string grassOcclusionDescription = "Relative view-distance margin for perspective grass occlusion; 0.001 means 0.1%. Orthographic passes retain an absolute depth margin. Conservative bounds, precision and viewport margins remain independent.";
+			const std::string grassOcclusionDescription = "Relative view-distance margin for perspective grass occlusion; 0.001 means 0.1%. Orthographic passes retain an absolute depth margin. Precision and viewport margins remain independent of the configurable bounds scale.";
 			grassProperties["OcclusionBias"]["description"] = grassOcclusionDescription;
 			document["description"] = document["description"].get<std::string>() +
 			                          " set_grass_optimizations_settings interprets OcclusionBias as: " + grassOcclusionDescription;
 			const GrassPolicy::Settings grassDefaults;
+			const std::string grassTightnessDescription = "Scale only individual grass Hi-Z bounds; requires EnableOcclusionCulling. 1.0 retains full bounds; smaller values reject more grass but can hide exposed tips or cause popping. Independent of OcclusionBias; frustum, density and LOD bounds are unchanged.";
+			grassProperties["OcclusionTightness"] = { { "type", "number" }, { "minimum", GrassPolicy::kMinOcclusionTightness }, { "maximum", GrassPolicy::kMaxOcclusionTightness },
+				{ "default", grassDefaults.OcclusionTightness }, { "description", grassTightnessDescription } };
+			document["description"] = document["description"].get<std::string>() +
+			                          " set_grass_optimizations_settings also accepts OcclusionTightness (default 0.9) in grassOptimizations. Applies at the next grass frame without shader recompilation. " + grassTightnessDescription;
 			grassProperties["RefineHiZ"] = { { "type", "boolean" }, { "default", grassDefaults.RefineHiZ },
 				{ "description", "Finer hidden-grass checks; requires EnableOcclusionCulling. Extra depth reads may help obstructed views and cost performance in open areas." } };
 			grassProperties["FarLODOptimization"] = { { "type", "boolean" }, { "default", grassDefaults.FarLODOptimization } };

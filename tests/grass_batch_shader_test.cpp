@@ -2,6 +2,7 @@
 #	define NOMINMAX
 #endif
 
+#include "Features/GrassOptimizations/GrassInstancePacking.h"
 #include "Features/GrassOptimizations/GrassOcclusionPolicy.h"
 #include "Features/GrassOptimizations/GrassPolicy.h"
 #include "Utils/DepthPyramidPolicy.h"
@@ -160,6 +161,7 @@ int main()
 		};
 		run("Grass vertex variants", [] { ValidateGrassVariants(); });
 		run("Grass exact source indices", [] { RunGrassSourceIndices(); });
+		run("Grass compact source indices", [] { RunGrassSourceIndices(true); });
 		for (bool vr : { false, true })
 			for (bool enhanced : { false, true })
 				for (bool depth : { false, true }) {

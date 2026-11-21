@@ -6,6 +6,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <optional>
 
 namespace GrassPolicy
@@ -23,6 +24,8 @@ namespace GrassPolicy
 	inline constexpr uint32_t kMaxFrameSlices = 131072;
 	inline constexpr uint64_t kMaxDormantRecordBytes = 16ull * 1024 * 1024;
 	inline constexpr float kMaxCollisionDistance = 20480.0f;
+	inline constexpr float kMinOcclusionTightness = 0.25f;
+	inline constexpr float kMaxOcclusionTightness = 1.0f;
 	/** @brief Bound arbitrary packed bases tightly without assuming an orthogonal rotation. */
 	inline float BasisNorm(const std::array<std::array<float, 3>, 3>& rows)
 	{
@@ -54,6 +57,37 @@ namespace GrassPolicy
 	}
 	/** @brief Density and distance costs follow the drawable mesh selected for each LOD slot. */
 	inline float MeshWeight(uint32_t indexCount) { return std::sqrt(std::max(1.0f, indexCount / 24.0f)); }
+	struct CostCullLimits
+	{
+		float distance = 0, minimumPixels = 0, costMinimumPixels = 0, rampEnd = 0;
+	};
+
+	/** @brief Bound every drawable tier; full cost bias applies only beyond its distance ramp. */
+	inline CostCullLimits MakeCostCullLimits(float distance, float minimumPixels, float farMinimumPixels,
+		const std::array<float, 4>& weights, const std::array<bool, 3>& enabled, bool farPolicy, float bias, float start)
+	{
+		CostCullLimits result{ distance, farPolicy && enabled[2] ? std::min(minimumPixels, farMinimumPixels) : minimumPixels };
+		result.costMinimumPixels = result.minimumPixels;
+		if (!std::isfinite(bias) || bias <= 0 || bias > 1 || !std::isfinite(start) || start < 0)
+			return result;
+		double maximumDistanceScale = 0, minimumCostPixels = std::numeric_limits<double>::infinity();
+		for (size_t tier = 0; tier < enabled.size(); ++tier) {
+			if (!enabled[tier])
+				continue;
+			const double weight = weights[tier], pixels = farPolicy && tier == 2 ? farMinimumPixels : minimumPixels;
+			if (!std::isfinite(weight) || weight < 1 || !std::isfinite(pixels) || pixels < 0)
+				return result;
+			maximumDistanceScale = std::max(maximumDistanceScale, 1 + (1 / weight - 1) * bias);
+			minimumCostPixels = std::min(minimumCostPixels, pixels * (1 + (weight - 1) * bias));
+		}
+		if (!std::isfinite(minimumCostPixels))
+			return result;
+		result.rampEnd = start + std::max(start, 1e-4f);
+		// Widen CPU limits for the shader's float lerp and reciprocal rounding.
+		result.distance = std::min(distance, float(std::max(double(result.rampEnd), double(distance) * maximumDistanceScale) * 1.00001 + .001));
+		result.costMinimumPixels = std::max(result.minimumPixels, float(minimumCostPixels * .99999));
+		return result;
+	}
 	/** @brief Estimate extra billboard area from authored bounds without texture readbacks. */
 	inline float BillboardCoverageScale(float sourceRadius, float billboardRadius, float bias)
 	{
@@ -228,6 +262,7 @@ namespace GrassPolicy
 		bool ProportionalDensityFade = false;
 		bool EnableOcclusionCulling = true;
 		bool RefineHiZ = true;
+		float OcclusionTightness = 0.9f;
 		float OcclusionBias = 0.001f;  // Relative view-distance margin; 0.001 means 0.1%.
 
 		bool Valid() const
@@ -237,6 +272,7 @@ namespace GrassPolicy
 			       FullDetailPixelSize > MinPixelSize && range(MinDensity, 0.0f, 1.0f) &&
 			       range(MidLODPixelSize, 0.01f, 128.0f) && range(FarLODPixelSize, 0.01f, MidLODPixelSize) &&
 			       range(MeshLODBandPixels, 0.01f, 32.0f) && range(OcclusionBias, 0.0f, 0.05f) &&
+			       range(OcclusionTightness, kMinOcclusionTightness, kMaxOcclusionTightness) &&
 			       range(FarLODMinPixelSize, 0.0f, 64.0f) && (!FarLODOptimization || FarLODMinPixelSize < FarLODPixelSize) &&
 			       range(FarLODMinDensity, 0.0f, 1.0f) && range(FarLODMaxDensity, FarLODMinDensity, 1.0f) &&
 			       range(FarLODCoverageBias, 0.0f, 1.0f) &&

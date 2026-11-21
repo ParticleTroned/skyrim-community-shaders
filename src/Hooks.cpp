@@ -44,6 +44,7 @@
 #include "TruePBR.h"
 #include "Util.h"
 #include "Utils/ShaderDescriptor.h"
+#include <utility>
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Diagnostics/D3DTextureLifetimeTracker.h"
@@ -57,6 +58,7 @@
 #include "Features/DynamicCubemaps.h"
 #include "Features/GrassOptimizations.h"
 #include "Features/GrassOptimizations/GrassBucketRenderer.h"
+#include "Features/GrassOptimizations/GrassDrawState.h"
 #include "Features/GrassPlacement.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
@@ -1950,13 +1952,65 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 	return validationResult;
 }
 
+namespace
+{
+	thread_local bool grassCommitRequested = false;
+	thread_local GrassDrawState::Cache grassCommitCache;
+
+	void CommitNativeGraphicsState(bool isCompute)
+	{
+		const bool grass = std::exchange(grassCommitRequested, false);
+		if (!grass || isCompute || !globals::game::shadowState || !globals::d3d::context ||
+			!globals::state->currentShader || globals::state->currentShader->shaderType != RE::BSShader::Type::Grass) {
+			grassCommitCache.ready = false;
+			Hooks::BSGraphics_SetDirtyStates::func(isCompute);
+			return;
+		}
+		const auto commit = [&](auto& state) {
+			uint32_t otherDirty = state.PSSamplerModifiedBits | state.CSResourceModifiedBits |
+			                      state.CSSamplerModifiedBits | state.CSUAVModifiedBits;
+			if constexpr (requires { state.OMUAVModifiedBits; state.SRVModifiedBits; })
+				otherDirty |= state.OMUAVModifiedBits | state.SRVModifiedBits;
+			const GrassDrawState::Identity identity{ globals::d3d::context, state.currentVertexShader,
+				state.currentPixelShader, globals::state->frameCount };
+			const auto bindTextures = [&](uint32_t first, uint32_t count) {
+				globals::d3d::context->PSSetShaderResources(first, count,
+					reinterpret_cast<ID3D11ShaderResourceView* const*>(&state.PSTexture[first]));
+			};
+			GrassDrawState::Commit(grassCommitCache, identity, state.stateUpdateFlags, RE::BSGraphics::ShaderFlags::DIRTY_ALPHA_TEST_REF, state.PSResourceModifiedBits, otherDirty, state.alphaTestRef, [] { Hooks::BSGraphics_SetDirtyStates::func(false); }, bindTextures);
+		};
+		if (globals::game::isVR)
+			commit(globals::game::shadowState->GetVRRuntimeData());
+		else
+			commit(globals::game::shadowState->GetRuntimeData());
+	}
+}
+
+void Hooks::ResetGrassDrawState() noexcept
+{
+	grassCommitCache.ready = false;
+}
+
+void Hooks::CommitGrassDrawState()
+{
+	const bool previous = std::exchange(grassCommitRequested, true);
+	const SKSE::stl::scope_exit restore([&]() noexcept { grassCommitRequested = previous; });
+	static REL::Relocation<void (*)(uint32_t)> setDirtyStates{ REL::RelocationID(75580, 77386) };
+	try {
+		setDirtyStates(0);
+	} catch (...) {
+		ResetGrassDrawState();
+		throw;
+	}
+}
+
 void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 {
 	// Release owned bindings before native state updates can replace their saved values.
 	globals::state->RestoreSunGlareBindings();
 	const auto callerRva = static_cast<uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - REL::Module::get().base());
 	if (!ShouldRecordCSFramePhaseDiag()) {
-		func(isCompute);
+		CommitNativeGraphicsState(isCompute);
 		globals::features::terrainBlending.OnSetDirtyStates(isCompute, callerRva);
 		globals::state->Draw(isCompute);
 		GrassPlacement::ApplyNativeBinding(isCompute);
@@ -1972,7 +2026,7 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 
 	const uint64_t totalStartTicks = ReadFrameDiagCounterTicks();
 	uint64_t phaseStartTicks = totalStartTicks;
-	func(isCompute);
+	CommitNativeGraphicsState(isCompute);
 	uint64_t phaseEndTicks = ReadFrameDiagCounterTicks();
 	RecordCSFrameHookPhase(CSFrameHookPhase::SetDirtyStatesOriginal, frame, phaseEndTicks - phaseStartTicks);
 

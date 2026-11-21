@@ -9,17 +9,20 @@
 #include "Globals.h"
 #include "GpuPass.h"
 #include "GrassBucketPreparation.h"
+#include "GrassCullingHierarchy.h"
 #include "GrassD3DState.h"
 #include "GrassFadeHistory.h"
 #include "GrassFrustum.h"
 #include "GrassHiZ.h"
 #include "GrassHiZPolicy.h"
+#include "GrassInstancePacking.h"
 #include "GrassLODCache.h"
 #include "GrassOcclusionPolicy.h"
 #include "GrassPassCache.h"
 #include "GrassRuntime.h"
 #include "GrassTelemetry.h"
 #include "GrassTextureCache.h"
+#include "Hooks.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
@@ -120,6 +123,7 @@ namespace
 		float fade;
 		bool visible;
 		std::shared_ptr<const std::vector<uint8_t>> bytes;
+		std::shared_ptr<const std::vector<GrassInstancePacking::Record>> compact;
 		std::array<float, 3> lo{}, hi{};
 		float minVariance = 0, maxVariance = 0, maxBasisNorm = 0;
 		bool boundsKnown = false;
@@ -145,6 +149,7 @@ namespace
 		uint64_t generation = 0;
 		uint64_t nativeVisibleFrame = UINT64_MAX;
 		uint64_t cpuRecordBytes = 0;
+		bool compactRecords = false;
 		float wavePeriod, renderDistance;
 		RE::NiPoint3 origin;
 		std::vector<RE::BSLight*> lights;
@@ -191,12 +196,14 @@ namespace
 		std::array<float, 2> projectionAsymptote{};
 		float alphaThreshold = 0;
 		uint32_t refineHiZ = 0;
-		std::array<uint32_t, 2> padding{};
+		float occlusionTightness = 1.0f;
+		uint32_t padding = 0;
 	};
 	static_assert(sizeof(Parameters) == 256 && offsetof(Parameters, projectionModes) == 156 && offsetof(Parameters, collisionStrength) == 172 &&
 				  offsetof(Parameters, indexCounts) == 176 && offsetof(Parameters, meshWeights) == 192 &&
 				  offsetof(Parameters, farDensity) == 208 && offsetof(Parameters, farPolicy) == 224 &&
-				  offsetof(Parameters, projectionAsymptote) == 232 && offsetof(Parameters, alphaThreshold) == 240 && offsetof(Parameters, refineHiZ) == 244);
+				  offsetof(Parameters, projectionAsymptote) == 232 && offsetof(Parameters, alphaThreshold) == 240 && offsetof(Parameters, refineHiZ) == 244 &&
+				  offsetof(Parameters, occlusionTightness) == 248);
 	using LODLookup = std::tuple<std::string_view, uint64_t, uintptr_t, uint32_t>;
 	struct LODKey
 	{
@@ -273,6 +280,7 @@ namespace
 	struct RecordAllocation
 	{
 		uint32_t base = UINT32_MAX;
+		uint32_t stride = GrassPolicy::kRecordBytes;
 	};
 	struct CullResult
 	{
@@ -287,11 +295,16 @@ namespace
 	struct CullBucketInput
 	{
 		uint32_t dispatchStart, recordBase, outputBase, argsBase;
-		Parameters parameters;
-		std::array<float, 152> geometry;
+		std::array<uint32_t, 4> counts;
+		std::array<float, 4> origin, bound;
+		std::array<uint32_t, 4> indexCounts;
+		std::array<float, 4> meshWeights;
+		float qualityRadius, farCoverage, alphaThreshold;
+		uint32_t flags;
+		std::array<float, 76> geometry;
 		FrustumParameters frustum;
 	};
-	static_assert(sizeof(CullBucketInput) == 1088 && offsetof(CullBucketInput, geometry) == 272 && offsetof(CullBucketInput, frustum) == 880);
+	static_assert(sizeof(CullBucketInput) == 624 && offsetof(CullBucketInput, geometry) == 112 && offsetof(CullBucketInput, frustum) == 416);
 	struct DispatchParameters
 	{
 		uint32_t buckets, firstGroup, groups, rowWidth;
@@ -320,11 +333,12 @@ namespace
 	inline constexpr uint32_t kCullArgumentBytes = 6 * 32;
 	inline constexpr uint32_t kFrameSlotBytes = 2304, kSlotsPerPage = 28, kDrawOffset = 768;
 	static_assert(kFrameSlotBytes * kSlotsPerPage <= D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT * 16);
-	static_assert(GrassPolicy::kMaxResidentRecordBytes / GrassPolicy::kRecordBytes <= (1u << 24));
+	static_assert(GrassPolicy::kMaxResidentRecordBytes / GrassInstancePacking::kStride <= (1u << 24));
 	struct Bucket
 	{
 		std::vector<Source> sources;
 		std::vector<SliceRun> runs;
+		GrassCulling::Hierarchy culling;
 		uint32_t instances = 0;
 		GrassPassCache::Cache outcomes;
 		std::unique_ptr<RecordAllocation> records;
@@ -333,11 +347,45 @@ namespace
 		uint32_t recordsCapacity = 0;
 		bool recordsDirty = true;
 		uint32_t dirtyFirstInstance = 0;
+		uint32_t RecordStride() const { return records ? records->stride : GrassPolicy::kRecordBytes; }
+		uint32_t RecordUnits() const { return recordsCapacity * RecordStride() / GrassInstancePacking::kStride; }
 	};
 
 	void CacheRuns(Bucket& bucket)
 	{
+		bucket.culling = {};
 		GrassPreparation::BuildRuns(bucket.runs, bucket.sources.size(), [&](size_t source) -> const Source& { return bucket.sources[source]; });
+	}
+
+	void CacheCullBounds(Bucket& bucket, float radius, const std::array<float, 3>& origin, const std::array<float, 3>& scaleMask)
+	{
+		GrassCulling::Hierarchy::Key key{ std::bit_cast<uint32_t>(radius) };
+		for (size_t axis = 0; axis < 3; ++axis) {
+			key[axis + 1] = std::bit_cast<uint32_t>(origin[axis]);
+			key[axis + 4] = std::bit_cast<uint32_t>(scaleMask[axis]);
+		}
+		bucket.culling.Update(key, bucket.runs.size(), [&](size_t index) {
+			const auto& run = bucket.runs[index];
+			const auto& source = bucket.sources[run.source];
+			float scale = 0;
+			bool nonzeroScale = false, finiteScale = true;
+			GrassCulling::Bounds bounds;
+			for (size_t axis = 0; axis < 3; ++axis) {
+				const float low = 1 + run.minVariance * scaleMask[axis], high = 1 + run.maxVariance * scaleMask[axis];
+				finiteScale &= std::isfinite(low) && std::isfinite(high);
+				nonzeroScale |= (low > 0 && high > 0) || (low < 0 && high < 0);
+				scale = std::max({ scale, std::abs(low), std::abs(high) });
+				const float offset = source.origin[axis] - origin[axis];
+				bounds.lo[axis] = run.lo[axis] + offset;
+				bounds.hi[axis] = run.hi[axis] + offset;
+			}
+			bounds.reach = (source.bound.center.Length() + radius) * scale * run.basis;
+			bounds.known = run.known && finiteScale && nonzeroScale;
+			bounds.minimumRadius = bounds.maximumRadius = nonzeroScale && finiteScale ?
+			                                                  bucket.sources.front().bound.radius * std::max(1.0f, 1.0f + run.maxVariance) :
+			                                                  0;
+			return bounds;
+		});
 	}
 
 	size_t RecordLayoutHash(const Bucket& bucket)
@@ -402,19 +450,25 @@ namespace
 	{
 		if (!bytes || !group.count)
 			return;
+		group.compact.reset();
+		group.boundsKnown = false;
+		group.maxBasisNorm = 0;
 		group.lo.fill(std::numeric_limits<float>::max());
 		group.hi.fill(std::numeric_limits<float>::lowest());
 		group.minVariance = std::numeric_limits<float>::max();
 		group.maxVariance = std::numeric_limits<float>::lowest();
+		std::shared_ptr<std::vector<GrassInstancePacking::Record>> compact;
+		try {
+			compact = std::make_shared<std::vector<GrassInstancePacking::Record>>(group.count);
+		} catch (const std::bad_alloc&) {
+			logger::warn("Grass instance compression unavailable; retaining native records");
+		}
+		bool nondegenerate = true;
 		for (uint32_t instance = 0; instance < group.count; ++instance) {
 			std::array<uint16_t, 16> packed{};
-			std::memcpy(packed.data(), static_cast<const uint8_t*>(bytes) + instance * GrassPolicy::kRecordBytes, sizeof(packed));
 			std::array<float, 16> record{};
-			for (size_t i = 0; i < record.size(); ++i) {
-				record[i] = DirectX::PackedVector::XMConvertHalfToFloat(packed[i]);
-				if (!std::isfinite(record[i]))
-					return;
-			}
+			if (!GrassInstancePacking::Decode(static_cast<const uint8_t*>(bytes) + instance * GrassPolicy::kRecordBytes, packed, record))
+				return;
 			for (size_t axis = 0; axis < group.lo.size(); ++axis) {
 				group.lo[axis] = std::min(group.lo[axis], record[axis]);
 				group.hi[axis] = std::max(group.hi[axis], record[axis]);
@@ -423,9 +477,27 @@ namespace
 			group.maxVariance = std::max(group.maxVariance, record[13]);
 			const std::array<std::array<float, 3>, 3> rows{ std::array{ record[4], record[5], record[6] },
 				std::array{ record[8], record[9], record[10] }, std::array{ record[12], record[7], record[11] } };
-			group.maxBasisNorm = std::max(group.maxBasisNorm, GrassPolicy::BasisNorm(rows));
+			const float norm = GrassPolicy::BasisNorm(rows);
+			group.maxBasisNorm = std::max(group.maxBasisNorm, norm);
+			nondegenerate &= std::isfinite(norm) && norm > 0;
+			if (compact && !GrassInstancePacking::PackDecoded(packed, record, (*compact)[instance]))
+				compact.reset();
 		}
-		group.boundsKnown = true;
+		if (compact) {
+			group.compact = std::move(compact);
+			group.maxBasisNorm += GrassInstancePacking::kBoundsSlack;
+		}
+		group.boundsKnown = nondegenerate;
+	}
+	void DiscardCompactRecords(Source& source)
+	{
+		for (auto& group : source.groups) {
+			if (!group.compact)
+				continue;
+			source.cpuRecordBytes -= uint64_t(group.count) * GrassInstancePacking::kStride;
+			group.compact.reset();
+		}
+		source.compactRecords = false;
 	}
 	bool ReuseGroupRecords(Group& snapshot, std::span<const Group> previousGroups, ID3D11Buffer* nativeBuffer)
 	{
@@ -751,7 +823,6 @@ struct GrassBucketRenderer::Impl
 	std::vector<Bucket> dormantBuckets;
 	std::unordered_map<RE::BSMultiStreamInstanceTriShape*, Admission> admitted;
 	std::vector<Slice> cullingSlices, frameSlices;
-	std::vector<std::array<std::array<float, 3>, 2>> runBounds;
 	std::vector<std::unique_ptr<Buffer>> frameConstants;
 	std::vector<Bucket*> cullingBuckets;
 	bool cullingPrepared = false;
@@ -762,7 +833,7 @@ struct GrassBucketRenderer::Impl
 	std::array<winrt::com_ptr<ID3D11PixelShader>, 8> drawPixelShaders;
 	uint64_t resultBytes = 0;
 	CullBuffers cullBuffers;
-	std::unique_ptr<Buffer> recordPool, cullInputs, dispatchParameters;
+	std::unique_ptr<Buffer> recordPool, cullInputs, dispatchParameters, cullFrameParameters;
 	std::vector<CullBucketInput> cullInputCPU;
 	bool recordLayoutDirty = true;
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -915,7 +986,7 @@ struct GrassBucketRenderer::Impl
 	static bool LoadLODMesh(const LODKey& key, Mesh& mesh);
 	bool HasBatchShader() const;
 	bool PrepareDrawShaders();
-	void CullSlices(const Bucket& bucket, float radius, uint32_t eyes, uint32_t& instances);
+	void CullSlices(Bucket& bucket, float radius, uint32_t eyes, const GrassPolicy::CostCullLimits& limits, uint32_t& instances);
 	bool DrawBucket(Bucket& bucket, Outcome& outcome);
 	bool DrawMainPass(Bucket& bucket, const PassKey& key, bool eligible);
 	bool MainDepthBound() const;
@@ -1435,10 +1506,15 @@ bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shap
 				CacheRootBounds(snapshot, group->vertexBuffer->m_data);
 			else if (!snapshot.boundsKnown && snapshot.bytes)
 				CacheRootBounds(snapshot, snapshot.bytes->data());
+			if (snapshot.compact)
+				source.cpuRecordBytes += uint64_t(snapshot.count) * GrassInstancePacking::kStride;
 			source.groups.push_back(std::move(snapshot));
 		}
 		if (!instances)
 			return GRASS_CAPTURE_REJECT(Empty);
+		source.compactRecords = std::ranges::all_of(source.groups, [](const Group& group) { return bool(group.compact); });
+		if (!source.compactRecords)
+			DiscardCompactRecords(source);
 		std::scoped_lock lock(impl->captureMutex);
 		if (!source.lifetime->alive.load(std::memory_order_acquire) ||
 			impl->identities.find(shape) == impl->identities.end() ||
@@ -1446,6 +1522,11 @@ bool GrassBucketRenderer::CaptureVisible(RE::BSMultiStreamInstanceTriShape* shap
 			return GRASS_CAPTURE_REJECT(Destroyed);
 		if (source.lifetime->generation.load(std::memory_order_acquire) != source.generation || !CurrentGroups(source))
 			return GRASS_CAPTURE_REJECT(Stale);
+		const auto cached = impl->residents.find(shape);
+		const uint64_t cachedBytes = cached != impl->residents.end() ? cached->second.cpuRecordBytes : 0;
+		// Optional compression must not evict usable sources or force native rendering.
+		if (!GrassPolicy::SnapshotBudgetValid(impl->cpuRecordBytes, cachedBytes, source.cpuRecordBytes))
+			DiscardCompactRecords(source);
 		if (!impl->MakeResidentRoom(source))
 			return GRASS_CAPTURE_REJECT(FrameCapacity);
 		const auto existing = impl->residents.find(shape);
@@ -1794,12 +1875,12 @@ void GrassBucketRenderer::Impl::ReindexBuckets()
 		for (size_t source = 0; source < bucket.sources.size(); ++source)
 			admitted.emplace(bucket.sources[source].identity, Admission{ index, source });
 		if (bucket.records)
-			residentRecordBytes += uint64_t(bucket.recordsCapacity) * GrassPolicy::kRecordBytes;
+			residentRecordBytes += uint64_t(bucket.recordsCapacity) * bucket.RecordStride();
 	}
 	uint64_t dormantBytes = 0;
 	std::erase_if(dormantBuckets, [&](auto& bucket) {
 		bucket.result = {};
-		const auto bytes = uint64_t(bucket.recordsCapacity) * GrassPolicy::kRecordBytes;
+		const auto bytes = uint64_t(bucket.recordsCapacity) * bucket.RecordStride();
 		if (!bucket.records || bytes > GrassPolicy::kMaxDormantRecordBytes - dormantBytes ||
 			!std::all_of(bucket.sources.begin(), bucket.sources.end(), [](const auto& source) { return source.lifetime->alive.load(std::memory_order_acquire); }))
 			return true;
@@ -2023,7 +2104,7 @@ void GrassBucketRenderer::Impl::ReuseRecordBuffers(std::vector<Bucket>& previous
 			auto& previous = previousBuckets[candidate->second];
 			if (!previous.records || previous.recordsCapacity < bucket.instances || !SameRecords(bucket, previous))
 				continue;
-			const uint64_t bytes = uint64_t(previous.recordsCapacity) * GrassPolicy::kRecordBytes;
+			const uint64_t bytes = uint64_t(previous.recordsCapacity) * previous.RecordStride();
 			if (bytes > GrassPolicy::kMaxResidentRecordBytes - residentRecordBytes)
 				continue;
 			bucket.result = std::move(previous.result);
@@ -2042,7 +2123,7 @@ void GrassBucketRenderer::Impl::ReuseRecordBuffers(std::vector<Bucket>& previous
 			if (!previous.records || previous.recordsCapacity < bucket.instances || previous.sources.empty() ||
 				!Compatible(bucket.sources.front(), previous.sources.front()))
 				continue;
-			const uint64_t bytes = uint64_t(previous.recordsCapacity) * GrassPolicy::kRecordBytes;
+			const uint64_t bytes = uint64_t(previous.recordsCapacity) * previous.RecordStride();
 			if (bytes > GrassPolicy::kMaxResidentRecordBytes - residentRecordBytes)
 				continue;
 			const auto shared = SharedRecordPrefix(bucket, previous);
@@ -2062,11 +2143,12 @@ void GrassBucketRenderer::Impl::ReuseRecordBuffers(std::vector<Bucket>& previous
 				return source.lifetime->alive.load(std::memory_order_acquire);
 			}))
 			continue;
-		const uint64_t bytes = uint64_t(previous.recordsCapacity) * GrassPolicy::kRecordBytes;
+		const uint64_t bytes = uint64_t(previous.recordsCapacity) * previous.RecordStride();
 		if (bytes > GrassPolicy::kMaxDormantRecordBytes - dormantBytes ||
 			bytes > GrassPolicy::kMaxResidentRecordBytes - residentRecordBytes)
 			continue;
 		previous.outcomes.Clear();
+		previous.culling = {};
 		dormantBuckets.push_back(std::move(previous));
 		dormantBytes += bytes;
 		residentRecordBytes += bytes;
@@ -2075,6 +2157,7 @@ void GrassBucketRenderer::Impl::ReuseRecordBuffers(std::vector<Bucket>& previous
 
 void GrassBucketRenderer::Impl::ClearDrawContext() noexcept
 {
+	Hooks::ResetGrassDrawState();
 	current = nullptr;
 	currentSetupPass = nullptr;
 	currentMainPass = currentDrawObserved = false;
@@ -2114,8 +2197,7 @@ void GrassBucketRenderer::PrepareGeometry(RE::BSRenderPass* pass, RE::BSShader* 
 		// The representative translation is the one used by the native geometry constants.
 		impl->currentOrigin = pass->geometry->world.translate;
 		impl->CopyGeometryConstants();
-		static REL::Relocation<void (*)(uint32_t)> setDirtyStates{ REL::RelocationID(75580, 77386) };
-		setDirtyStates(0);
+		Hooks::CommitGrassDrawState();
 	} catch (const std::exception& error) {
 		impl->ClearDrawContext();
 		impl->failed = true;
@@ -2132,8 +2214,7 @@ void GrassBucketRenderer::FinishGeometry(RE::BSRenderPass* pass)
 	if (!impl->HasActiveDrawContext() || impl->currentDrawObserved || impl->nativeFallbackDepth ||
 		impl->currentAdmission.bucket >= impl->buckets.size())
 		return;
-	static REL::Relocation<void (*)(uint32_t)> setDirtyStates{ REL::RelocationID(75580, 77386) };
-	setDirtyStates(0);
+	Hooks::CommitGrassDrawState();
 	impl->currentMainPass = impl->MainDepthBound();
 	if (!impl->currentMainPass)
 		return;
@@ -2155,7 +2236,7 @@ bool GrassBucketRenderer::Impl::MakeRecordRoom(uint64_t replacementBytes)
 		if (dormantBuckets.empty())
 			return false;
 		const auto& dormant = dormantBuckets.back();
-		const uint64_t bytes = dormant.records ? uint64_t(dormant.recordsCapacity) * GrassPolicy::kRecordBytes : 0;
+		const uint64_t bytes = dormant.records ? uint64_t(dormant.recordsCapacity) * dormant.RecordStride() : 0;
 		if (bytes > residentRecordBytes)
 			return false;
 		// Inactive reuse must not prevent active growth; leave every active buffer intact.
@@ -2169,14 +2250,17 @@ bool GrassBucketRenderer::Impl::EnsureRecords(Bucket& bucket)
 {
 	if (!bucket.instances || bucket.instances > GrassPolicy::kMaxBatchInstances)
 		return false;
-	if (bucket.records && bucket.recordsCapacity >= bucket.instances)
+	const bool compact = std::ranges::all_of(bucket.sources, [](const Source& source) { return source.compactRecords; });
+	const auto stride = compact ? GrassInstancePacking::kStride : GrassPolicy::kRecordBytes;
+	if (bucket.records && bucket.recordsCapacity >= bucket.instances && bucket.RecordStride() == stride)
 		return true;
 	const auto next = std::bit_ceil(bucket.instances);
-	const uint64_t bytes = uint64_t(next) * GrassPolicy::kRecordBytes;
-	const uint64_t previous = bucket.records ? uint64_t(bucket.recordsCapacity) * GrassPolicy::kRecordBytes : 0;
-	if (previous > residentRecordBytes || !MakeRecordRoom(bytes - previous))
+	const uint64_t bytes = uint64_t(next) * stride;
+	const uint64_t previous = bucket.records ? uint64_t(bucket.recordsCapacity) * bucket.RecordStride() : 0;
+	if (previous > residentRecordBytes || !MakeRecordRoom(bytes > previous ? bytes - previous : 0))
 		return false;
 	bucket.records = std::make_unique<RecordAllocation>();
+	bucket.records->stride = stride;
 	recordLayoutDirty = true;
 	bucket.recordsCapacity = next;
 	bucket.recordsDirty = true;
@@ -2217,9 +2301,9 @@ void GrassBucketRenderer::Impl::PrepareRecordPool()
 		for (const auto& bucket : collection) {
 			if (!bucket.records)
 				continue;
-			if (bucket.recordsCapacity > GrassPolicy::kMaxResidentRecordBytes / GrassPolicy::kRecordBytes - total)
+			if (bucket.RecordUnits() > GrassPolicy::kMaxResidentRecordBytes / GrassInstancePacking::kStride - total)
 				throw std::length_error("Grass record pool exceeds the resident budget");
-			total += bucket.recordsCapacity;
+			total += bucket.RecordUnits();
 			missing |= bucket.records->base == UINT32_MAX;
 		}
 	};
@@ -2235,7 +2319,7 @@ void GrassBucketRenderer::Impl::PrepareRecordPool()
 		for (const auto* collection : { &buckets, &dormantBuckets })
 			for (const auto& bucket : *collection)
 				if (bucket.records && bucket.records->base != UINT32_MAX)
-					occupied.emplace_back(bucket.records->base, bucket.recordsCapacity);
+					occupied.emplace_back(bucket.records->base, bucket.RecordUnits());
 		std::sort(occupied.begin(), occupied.end());
 		uint32_t end = 0;
 		for (const auto& [base, capacity] : occupied) {
@@ -2243,28 +2327,28 @@ void GrassBucketRenderer::Impl::PrepareRecordPool()
 				gaps.emplace_back(end, base - end);
 			end = base + capacity;
 		}
-		const auto capacity = recordPool->desc.ByteWidth / GrassPolicy::kRecordBytes;
+		const auto capacity = recordPool->desc.ByteWidth / GrassInstancePacking::kStride;
 		if (end < capacity)
 			gaps.emplace_back(end, capacity - end);
 		missing = false;
 		for (auto* collection : { &buckets, &dormantBuckets })
 			for (auto& bucket : *collection)
 				if (bucket.records && bucket.records->base == UINT32_MAX) {
-					auto gap = std::find_if(gaps.begin(), gaps.end(), [&](const auto& range) { return range.second >= bucket.recordsCapacity; });
+					auto gap = std::find_if(gaps.begin(), gaps.end(), [&](const auto& range) { return range.second >= bucket.RecordUnits(); });
 					if (gap == gaps.end()) {
 						missing = true;
 						continue;
 					}
 					bucket.records->base = gap->first;
-					gap->first += bucket.recordsCapacity;
-					gap->second -= bucket.recordsCapacity;
+					gap->first += bucket.RecordUnits();
+					gap->second -= bucket.RecordUnits();
 				}
 	}
-	if (!missing && recordPool->desc.ByteWidth / GrassPolicy::kRecordBytes <= uint64_t(total) * 4) {
+	if (!missing && recordPool->desc.ByteWidth / GrassInstancePacking::kStride <= uint64_t(total) * 4) {
 		recordLayoutDirty = false;
 		return;
 	}
-	const uint32_t bytes = std::bit_ceil(total) * GrassPolicy::kRecordBytes;
+	const uint32_t bytes = std::bit_ceil(total) * GrassInstancePacking::kStride;
 	// All source captures remain owned, so a pressure rebuild can upload them again.
 	if (recordPool && !GrassPolicy::ReplacementFitsBudget(recordPool->desc.ByteWidth, bytes, GrassPolicy::kMaxResidentRecordBytes)) {
 		recordPool.reset();
@@ -2293,13 +2377,13 @@ void GrassBucketRenderer::Impl::PrepareRecordPool()
 				if (recordPool && bucket.records->base != UINT32_MAX) {
 					const auto count = bucket.recordsDirty ? bucket.dirtyFirstInstance : bucket.instances;
 					if (count) {
-						const UINT first = bucket.records->base * GrassPolicy::kRecordBytes;
-						const D3D11_BOX box{ first, 0, 0, first + count * GrassPolicy::kRecordBytes, 1, 1 };
-						context->CopySubresourceRegion(replacement->resource.get(), 0, base * GrassPolicy::kRecordBytes, 0, 0, recordPool->resource.get(), 0, &box);
+						const UINT first = bucket.records->base * GrassInstancePacking::kStride;
+						const D3D11_BOX box{ first, 0, 0, first + count * bucket.RecordStride(), 1, 1 };
+						context->CopySubresourceRegion(replacement->resource.get(), 0, base * GrassInstancePacking::kStride, 0, 0, recordPool->resource.get(), 0, &box);
 					}
 				}
 				bucket.records->base = base;
-				base += bucket.recordsCapacity;
+				base += bucket.RecordUnits();
 			}
 	recordPool = std::move(replacement);
 	recordLayoutDirty = false;
@@ -2619,7 +2703,7 @@ bool GrassBucketRenderer::Impl::PrepareDrawShaders()
 	return drawShadersReady = ready && revision == globals::shaderCache->GetGraphicsShaderRevision();
 }
 
-void GrassBucketRenderer::Impl::CullSlices(const Bucket& bucket, float radius, uint32_t eyes, uint32_t& instances)
+void GrassBucketRenderer::Impl::CullSlices(Bucket& bucket, float radius, uint32_t eyes, const GrassPolicy::CostCullLimits& limits, uint32_t& instances)
 {
 	frustumData = {};
 	const float placementPadding = GrassPlacement::BoundsPadding();
@@ -2645,51 +2729,30 @@ void GrassBucketRenderer::Impl::CullSlices(const Bucket& bucket, float radius, u
 
 	cullingSlices.clear();
 	instances = 0;
-	runBounds.resize(bucket.runs.size());
-	std::array<float, 3> bucketLo, bucketHi;
-	bucketLo.fill(std::numeric_limits<float>::max());
-	bucketHi.fill(std::numeric_limits<float>::lowest());
-	bool bucketKnown = !bucket.runs.empty();
 	const size_t windOffset = GrassPolicy::WindVectorOffset(eyes == 2), scaleOffset = eyes == 2 ? 148 : 84;
-	const float wind = .4f * std::abs(geometryCPU[windOffset + 2]) * std::hypot(geometryCPU[windOffset], geometryCPU[windOffset + 1]);
-	std::array<GrassFrustum::Matrix, 2> world{};
-	for (uint32_t eye = 0; eye < eyes; ++eye)
-		std::copy_n(geometryCPU.begin() + (eyes == 2 ? 64 : 32) + eye * 16, 16, world[eye].begin());
-	for (size_t index = 0; index < bucket.runs.size(); ++index) {
-		const auto& run = bucket.runs[index];
-		const auto& source = bucket.sources[run.source];
-		float scale = 0;
-		for (size_t axis = 0; axis < 3; ++axis)
-			scale = std::max({ scale, std::abs(1 + run.minVariance * geometryCPU[scaleOffset + axis]), std::abs(1 + run.maxVariance * geometryCPU[scaleOffset + axis]) });
-		const float reach = (source.bound.center.Length() + radius) * scale * run.basis;
-		const std::array<float, 3> origin{ source.origin.x - currentOrigin.x, source.origin.y - currentOrigin.y, source.origin.z - currentOrigin.z };
-		std::array<float, 3> rootsLo{}, rootsHi{};
-		for (size_t axis = 0; axis < 3; ++axis) {
-			rootsLo[axis] = run.lo[axis] + origin[axis];
-			rootsHi[axis] = run.hi[axis] + origin[axis];
-		}
-		rootsLo[2] -= placementPadding;
-		rootsHi[2] += placementPadding;
-		const float padding = GrassFrustum::DeformationPadding(world[0], rootsLo, rootsHi, reach, wind,
-			frameCollisionEnabled ? frameSettings.CollisionDistance : 0,
-			frameCollisionStrength);
-		const bool known = run.known && std::isfinite(padding) && padding >= 0;
-		bucketKnown &= known;
-		for (size_t axis = 0; axis < 3; ++axis) {
-			runBounds[index][0][axis] = known ? rootsLo[axis] - padding : NAN;
-			runBounds[index][1][axis] = known ? rootsHi[axis] + padding : NAN;
-			bucketLo[axis] = std::min(bucketLo[axis], runBounds[index][0][axis]);
-			bucketHi[axis] = std::max(bucketHi[axis], runBounds[index][1][axis]);
+	CacheCullBounds(bucket, radius, { currentOrigin.x, currentOrigin.y, currentOrigin.z },
+		{ geometryCPU[scaleOffset], geometryCPU[scaleOffset + 1], geometryCPU[scaleOffset + 2] });
+	GrassCulling::Query query;
+	query.eyes = eyes;
+	query.planes = planeSets;
+	query.frustum = planesValid && frameSettings.FrustumCulling;
+	query.pixelSize = planesValid && frameSettings.DensityReduction;
+	query.placement = placementPadding;
+	query.wind = .4f * std::abs(geometryCPU[windOffset + 2]) * std::hypot(geometryCPU[windOffset], geometryCPU[windOffset + 1]);
+	query.collisionDistance = frameCollisionEnabled ? frameSettings.CollisionDistance : 0;
+	query.collisionStrength = frameCollisionStrength;
+	query.distance = limits.distance;
+	query.minimumPixels = limits.minimumPixels;
+	query.costMinimumPixels = limits.costMinimumPixels;
+	query.costRampEnd = limits.rampEnd;
+	for (uint32_t eye = 0; eye < eyes; ++eye) {
+		std::copy_n(geometryCPU.begin() + (eyes == 2 ? 64 : 32) + eye * 16, 16, query.world[eye].begin());
+		if (query.pixelSize && std::ranges::all_of(query.world[eye], [](float value) { return std::isfinite(value); })) {
+			GrassFrustum::Matrix projection;
+			std::copy_n(geometryCPU.begin() + eye * 16, 16, projection.begin());
+			query.pixels[eye] = GrassFrustum::PreparePixelProjection(projection, frameHeight);
 		}
 	}
-	const auto visible = [&](const auto& lo, const auto& hi) {
-		if (!planesValid || !frameSettings.FrustumCulling)
-			return true;
-		for (uint32_t eye = 0; eye < eyes; ++eye)
-			if (GrassFrustum::Visible(planeSets[eye], lo, hi))
-				return true;
-		return false;
-	};
 	const auto reject = [&](const SliceRun& run) {
 		(void)run;
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -2699,43 +2762,37 @@ void GrassBucketRenderer::Impl::CullSlices(const Bucket& bucket, float radius, u
 		}
 #endif
 	};
-	if (bucketKnown && !visible(bucketLo, bucketHi)) {
-		for (const auto& run : bucket.runs) reject(run);
-		return;
-	}
-	const float distance = frameSettings.RenderDistanceOverride > 0 ? frameSettings.RenderDistanceOverride : nativeRenderDistance;
-	for (size_t index = 0; index < bucket.runs.size(); ++index) {
-		const auto& run = bucket.runs[index];
-		const auto& box = runBounds[index];
-		bool withinDistance = false;
-		for (uint32_t eye = 0; eye < eyes; ++eye) withinDistance |= GrassFrustum::WithinDistance(world[eye], box[0], box[1], distance);
-		if (!withinDistance || !visible(box[0], box[1])) {
-			reject(run);
-			continue;
-		}
-		const auto& source = bucket.sources[run.source];
-		const auto fade = source.groups[run.firstGroup].fade;
-		if (placementPadding == 0) {
-			cullingSlices.push_back({ run.record, run.count, instances + run.count, 0, { source.origin.x, source.origin.y, source.origin.z, fade } });
-			instances += run.count;
-		} else {
-			uint32_t record = run.record;
-			for (size_t groupIndex = run.firstGroup; groupIndex <= run.lastGroup; ++groupIndex) {
-				const auto& group = source.groups[groupIndex];
-				const auto placement = GrassPlacement::GetOffsets(group.identity);
-				const std::array<float, 4> originFade{ source.origin.x, source.origin.y, source.origin.z + placement[0], fade };
-				const float delta = placement[1] - placement[0];
-				if (!cullingSlices.empty() && cullingSlices.back().first + cullingSlices.back().count == record &&
-					cullingSlices.back().originFade == originFade && cullingSlices.back().previousPlacementDelta == delta) {
-					cullingSlices.back().count += group.count;
-					cullingSlices.back().end += group.count;
-				} else
-					cullingSlices.push_back({ record, group.count, instances + group.count, delta, originFade });
-				record += group.count;
-				instances += group.count;
+	bucket.culling.Cull(query, [&](size_t first, size_t end, bool visible) {
+		for (size_t index = first; index < end; ++index) {
+			const auto& run = bucket.runs[index];
+			if (!visible) {
+				reject(run);
+				continue;
+			}
+			const auto& source = bucket.sources[run.source];
+			const auto fade = source.groups[run.firstGroup].fade;
+			if (placementPadding == 0) {
+				cullingSlices.push_back({ run.record, run.count, instances + run.count, 0, { source.origin.x, source.origin.y, source.origin.z, fade } });
+				instances += run.count;
+			} else {
+				uint32_t record = run.record;
+				for (size_t groupIndex = run.firstGroup; groupIndex <= run.lastGroup; ++groupIndex) {
+					const auto& group = source.groups[groupIndex];
+					const auto placement = GrassPlacement::GetOffsets(group.identity);
+					const std::array<float, 4> originFade{ source.origin.x, source.origin.y, source.origin.z + placement[0], fade };
+					const float delta = placement[1] - placement[0];
+					if (!cullingSlices.empty() && cullingSlices.back().first + cullingSlices.back().count == record &&
+						cullingSlices.back().originFade == originFade && cullingSlices.back().previousPlacementDelta == delta) {
+						cullingSlices.back().count += group.count;
+						cullingSlices.back().end += group.count;
+					} else
+						cullingSlices.push_back({ record, group.count, instances + group.count, delta, originFade });
+					record += group.count;
+					instances += group.count;
+				}
 			}
 		}
-	}
+	});
 }
 
 bool GrassBucketRenderer::Impl::MainDepthBound() const
@@ -2967,8 +3024,15 @@ bool GrassBucketRenderer::Impl::PrepareBucket(Bucket& bucket)
 		return GRASS_DRAW_REJECT(GeometryConstants);
 	// Every pass reuses the last rendered batch phase, never a representative's native history.
 	geometryCPU[wind + 7] = representative.queue->windHistory.Previous(frame, geometryCPU[wind + 3]);
+	const std::array<float, 4> meshWeights{ GrassPolicy::MeshWeight(meshes[0].indexCount),
+		GrassPolicy::MeshWeight(meshes[1].indexCount), GrassPolicy::MeshWeight(meshes[2].indexCount), 1 };
+	const std::array<bool, 3> enabledTiers{ true, meshes[1].vertices && meshes[1].indices, meshes[2].vertices && meshes[2].indices };
+	const bool farPolicy = frameSettings.FarLODOptimization && meshes[2].farLOD;
+	const float renderDistance = frameSettings.RenderDistanceOverride > 0 ? frameSettings.RenderDistanceOverride : nativeRenderDistance;
+	const auto limits = GrassPolicy::MakeCostCullLimits(renderDistance, frameSettings.MinPixelSize, frameSettings.FarLODMinPixelSize,
+		meshWeights, enabledTiers, farPolicy, frameSettings.MeshCostBias, frameSettings.CostBiasStartDistance);
 	uint32_t prefix = 0;
-	CullSlices(bucket, radius, eyes, prefix);
+	CullSlices(bucket, radius, eyes, limits, prefix);
 	bucket.plan.geometry = geometryCPU;
 	const uint32_t tiers = meshes[2].vertices ? 3u : meshes[1].vertices ? 2u :
 	                                                                      1u;
@@ -2985,23 +3049,23 @@ bool GrassBucketRenderer::Impl::PrepareBucket(Bucket& bucket)
 		return GRASS_DRAW_REJECT(Capacity);
 	Parameters params{ prefix, uint32_t(cullingSlices.size()), bucket.result.capacity, eyes,
 		frameSettings.FrustumCulling, frameSettings.DensityReduction,
-		meshes[1].vertices && meshes[1].indices ? 1u : 0u, meshes[2].vertices && meshes[2].indices ? 1u : 0u,
+		enabledTiers[1] ? 1u : 0u, enabledTiers[2] ? 1u : 0u,
 		frameSettings.MinPixelSize, frameSettings.FullDetailPixelSize, frameSettings.MinDensity, frameSettings.MeshLODBandPixels,
 		frameSettings.MidLODPixelSize, frameSettings.FarLODPixelSize, frameSettings.OcclusionBias, frameHeight,
 		{ currentOrigin.x, currentOrigin.y, currentOrigin.z, 0 },
 		{ representative.bound.center.x, representative.bound.center.y, representative.bound.center.z, radius },
 		0, 0, 0, frameCollisionEnabled ? 1u : 0u, {},
 		frameSettings.MeshCostBias, frameSettings.CostBiasStartDistance, frameSettings.InvisibleFadeCull,
-		frameSettings.RenderDistanceOverride > 0 ? frameSettings.RenderDistanceOverride : nativeRenderDistance,
+		renderDistance,
 		frameSettings.EdgeFadeStart, frameSettings.SimpleShadingPixelSize, representative.bound.radius,
 		0, frameSettings.RenderDistanceOverride > 0 ? 1u : 0u, frameSettings.CollisionDistance };
 	params.indexCounts = { meshes[0].indexCount, meshes[1].indexCount, meshes[2].indexCount, 0 };
-	params.meshWeights = { GrassPolicy::MeshWeight(meshes[0].indexCount),
-		GrassPolicy::MeshWeight(meshes[1].indexCount), GrassPolicy::MeshWeight(meshes[2].indexCount), 1 };
+	params.meshWeights = meshWeights;
 	params.collisionStrength = frameCollisionStrength;
 	params.refineHiZ = frameSettings.RefineHiZ;
+	params.occlusionTightness = frameSettings.OcclusionTightness;
 	params.alphaThreshold = bucket.plan.params.alphaThreshold;
-	params.farPolicy = frameSettings.FarLODOptimization && meshes[2].farLOD;
+	params.farPolicy = farPolicy;
 	params.proportionalFade = frameSettings.ProportionalDensityFade;
 	params.farDensity = { frameSettings.FarLODMinPixelSize, frameSettings.FarLODMinDensity, frameSettings.FarLODMaxDensity,
 		GrassPolicy::BillboardCoverageScale(representative.bound.radius, meshes[2].coverageRadius, frameSettings.FarLODCoverageBias) };
@@ -3090,7 +3154,8 @@ void GrassBucketRenderer::Impl::UploadCulling()
 			for (uint32_t tier = 0; tier < 3; ++tier)
 				for (uint32_t eye = 0; eye < params.eyes; ++eye) {
 					const auto index = tier * params.eyes + eye;
-					const uint32_t enabled = 1u | (tier == 2 && plan.meshes[tier].farLOD ? 2u : 0u);
+					const uint32_t enabled = 1u | (tier == 2 && plan.meshes[tier].farLOD ? 2u : 0u) |
+					                         (cullingBuckets[slot]->RecordStride() == GrassInstancePacking::kStride ? 4u : 0u);
 					const DrawConstants draw{ enabled, eye, plan.outputBase + index * params.capacity, frameSettings.CollisionDistance, params.origin };
 					std::memcpy(bytes + kDrawOffset + index * 256, &draw, sizeof(draw));
 				}
@@ -3101,16 +3166,38 @@ void GrassBucketRenderer::Impl::UploadCulling()
 	cullInputCPU.reserve(slots);
 	for (const auto* bucket : cullingBuckets) {
 		const auto& plan = bucket->plan;
-		cullInputCPU.push_back({ plan.dispatchStart, bucket->records->base, plan.outputBase, plan.argsBase, plan.params, plan.geometry, plan.frustum });
+		const auto& params = plan.params;
+		CullBucketInput input{ plan.dispatchStart, bucket->records->base, plan.outputBase, plan.argsBase,
+			{ params.instances, params.slices, params.capacity, params.sliceOffset }, params.origin, params.bound,
+			params.indexCounts, params.meshWeights, params.qualityRadius, params.farDensity[3], params.alphaThreshold,
+			params.midEnabled | (params.farEnabled << 1) | (params.farPolicy << 2) |
+				(bucket->RecordStride() == GrassInstancePacking::kStride ? 8u : 0u),
+			{}, plan.frustum };
+		const auto eyes = params.eyes;
+		std::copy_n(plan.geometry.begin(), eyes * 16, input.geometry.begin());
+		std::copy_n(plan.geometry.begin() + eyes * 32, eyes * 16, input.geometry.begin() + 32);
+		const auto wind = GrassPolicy::WindVectorOffset(eyes == 2);
+		std::copy_n(plan.geometry.begin() + wind, 4, input.geometry.begin() + 64);
+		std::copy_n(plan.geometry.begin() + (eyes == 2 ? 148 : 84), 3, input.geometry.begin() + 68);
+		input.geometry[71] = plan.geometry[wind + 7];
+		input.geometry[72] = plan.geometry[wind + 11];
+		input.geometry[73] = plan.geometry[wind + 15];
+		input.geometry[74] = params.projectionAsymptote[0];
+		input.geometry[75] = params.projectionAsymptote[1];
+		input.frustum.padding[0] = params.projectionModes;
+		cullInputCPU.push_back(input);
 	}
 	if (!cullInputs || cullInputs->desc.ByteWidth < slots * sizeof(CullBucketInput))
 		cullInputs = Structured<CullBucketInput>(std::bit_ceil(slots), false, true, "GrassOptimizations::CullBuckets");
 	Upload(context.get(), *cullInputs, cullInputCPU.data(), cullInputCPU.size() * sizeof(CullBucketInput));
+	if (!cullFrameParameters)
+		cullFrameParameters = std::make_unique<Buffer>(ConstantBufferDesc(sizeof(Parameters)), nullptr, "GrassOptimizations::CullFrameParameters");
+	Upload(context.get(), *cullFrameParameters, &cullingBuckets.front()->plan.params, sizeof(Parameters));
 	if (!dispatchParameters)
 		dispatchParameters = std::make_unique<Buffer>(ConstantBufferDesc(sizeof(DispatchParameters)), nullptr, "GrassOptimizations::DispatchParameters");
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	if (diagnostics.load(std::memory_order_relaxed))
-		++cullingUploadMaps;
+		cullingUploadMaps += 2;
 	for (const auto* bucket : cullingBuckets) {
 		frameWork.candidateInstances += bucket->plan.params.instances;
 		frameWork.candidateEyeInstances += uint64_t(bucket->plan.params.instances) * bucket->plan.params.eyes;
@@ -3154,6 +3241,8 @@ void GrassBucketRenderer::Impl::RunCulling(const Bucket* recovery)
 		context->CSSetConstantBuffers1(1, 1, &buffer, &first, &count);
 	}
 	context->CSSetShader(shader, nullptr, 0);
+	auto frameParameters = cullFrameParameters->resource.get();
+	context->CSSetConstantBuffers(2, 1, &frameParameters);
 	if (recovery) {
 		DispatchCulling(recovery->plan.dispatchStart, (recovery->plan.params.instances + 63) / 64, true);
 		return;
@@ -3175,7 +3264,7 @@ void GrassBucketRenderer::Impl::UploadRecords(Bucket& bucket)
 	CS_GPU_PASS("GrassOptimizations::UploadRecords");
 #endif
 	auto& records = *recordPool;
-	const UINT poolOffset = bucket.records->base * GrassPolicy::kRecordBytes;
+	const UINT poolOffset = bucket.records->base * GrassInstancePacking::kStride;
 	if (bucket.recordsDirty) {
 		uint32_t offset = 0;
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -3183,17 +3272,17 @@ void GrassBucketRenderer::Impl::UploadRecords(Bucket& bucket)
 #endif
 		for (const auto& source : bucket.sources)
 			for (const auto& group : source.groups) {
-				const UINT bytes = group.count * GrassPolicy::kRecordBytes;
-				if (offset + bytes <= bucket.dirtyFirstInstance * GrassPolicy::kRecordBytes) {
+				const UINT bytes = group.count * bucket.RecordStride();
+				if (offset + bytes <= bucket.dirtyFirstInstance * bucket.RecordStride()) {
 					offset += bytes;
 					continue;
 				}
 				const D3D11_BOX box{ 0, 0, 0, bytes, 1, 1 };
-				if (group.buffer)
+				if (bucket.RecordStride() == GrassPolicy::kRecordBytes && group.buffer)
 					context->CopySubresourceRegion(records.resource.get(), 0, poolOffset + offset, 0, 0, group.buffer.get(), 0, &box);
 				else {
 					const D3D11_BOX destination{ poolOffset + offset, 0, 0, poolOffset + offset + bytes, 1, 1 };
-					context->UpdateSubresource(records.resource.get(), 0, &destination, group.bytes->data(), 0, 0);
+					context->UpdateSubresource(records.resource.get(), 0, &destination, bucket.RecordStride() == GrassInstancePacking::kStride ? static_cast<const void*>(group.compact->data()) : group.bytes->data(), 0, 0);
 				}
 				offset += bytes;
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -3410,9 +3499,11 @@ bool GrassBucketRenderer::Impl::DrawMainPass(Bucket& bucket, const PassKey& key,
 		const auto ownership = bucket.outcomes.MainOutcome();
 		bool batched = false;
 		if (ownership == Outcome::Batched || (!ownership && eligible)) {
-			if (!ownership && !cullingPrepared && currentSetupPass && currentSetup)
+			if (!ownership && !cullingPrepared && currentSetupPass && currentSetup) {
 				PrepareCulling(currentSetupPass, currentNativeShader, currentSetupFlags, currentSetup);
-			setDirtyStates(0);
+				setDirtyStates(0);
+			}
+			// The caller flushed native and feature state; only preparation can change it here.
 			batched = DrawBucket(bucket, *outcome);
 		}
 		bucket.outcomes.CommitMain(*outcome);
@@ -3441,8 +3532,7 @@ void GrassBucketRenderer::DrawGroup(RE::BSGraphics::Renderer* renderer, RE::BSGr
 		bool mainPass = false;
 		if (self.HasActiveDrawContext()) {
 			self.currentDrawObserved = true;
-			static REL::Relocation<void (*)(uint32_t)> setDirtyStates{ REL::RelocationID(75580, 77386) };
-			setDirtyStates(0);
+			Hooks::CommitGrassDrawState();
 			mainPass = self.MainDepthBound();
 		}
 		if (mainPass) {
@@ -3485,6 +3575,7 @@ void GrassBucketRenderer::DrawGroup(RE::BSGraphics::Renderer* renderer, RE::BSGr
 #endif
 	if (globals::features::adaptiveBrightness.loaded)
 		GrassPlacement::BindNative(buffer);
+	Hooks::ResetGrassDrawState();
 	originalDraw(renderer, mesh, firstTriangle, triangles, instances, descriptor, buffer);
 }
 
@@ -3628,16 +3719,16 @@ void GrassBucketRenderer::Impl::PublishTelemetry()
 	snapshot.buckets = buckets.size();
 	snapshot.dormantBuckets = dormantBuckets.size();
 	for (const auto& bucket : buckets) {
-		snapshot.activeRecordBytes += bucket.records ? uint64_t(bucket.recordsCapacity) * GrassPolicy::kRecordBytes : 0;
+		snapshot.activeRecordBytes += bucket.records ? uint64_t(bucket.recordsCapacity) * bucket.RecordStride() : 0;
 	}
 	for (const auto& bucket : dormantBuckets)
-		snapshot.dormantRecordBytes += bucket.records ? uint64_t(bucket.recordsCapacity) * GrassPolicy::kRecordBytes : 0;
+		snapshot.dormantRecordBytes += bucket.records ? uint64_t(bucket.recordsCapacity) * bucket.RecordStride() : 0;
 	snapshot.cullingBufferBytes = bytes(cullBuffers.output) + bytes(cullBuffers.extras) + bytes(cullBuffers.arguments);
 	snapshot.recordPoolBytes = bytes(recordPool);
 	snapshot.combinedCulling = frameCombinedCulling;
 	snapshot.alphaRejection = frameAlphaRejection;
 	snapshot.refineHiZ = frameSettings.RefineHiZ;
-	snapshot.scratchBufferBytes = bytes(table) + bytes(disabled) + bytes(cullInputs) + bytes(dispatchParameters);
+	snapshot.scratchBufferBytes = bytes(table) + bytes(disabled) + bytes(cullInputs) + bytes(dispatchParameters) + bytes(cullFrameParameters);
 	for (const auto& buffer : frameConstants)
 		snapshot.scratchBufferBytes += bytes(buffer);
 	snapshot.diagnosticBufferBytes = bytes(gpuCounters);

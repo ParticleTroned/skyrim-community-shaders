@@ -148,6 +148,11 @@ namespace Util::IconLoader
 		int iconsOverridden = 0;
 
 		for (const auto& iconDef : iconDefs) {
+			// Monochrome tinting requires the stock white base, even when a theme supplies a coloured logo.
+			if (menu->GetSettings().Theme.UseMonochromeLogo && iconDef.texture == &menu->uiIcons.logo.texture) {
+				continue;
+			}
+
 			const std::string iconBaseName = std::filesystem::path(iconDef.filename).filename().string();
 			if (iconBaseName == "discord.png" || iconBaseName == "faultier.png") {
 				continue;

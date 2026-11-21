@@ -5,6 +5,10 @@
 #	define CS_HAIR_SHADING
 #endif
 
+#if defined(SKIN) && defined(CS_SKIN) && !defined(TRUE_PBR)
+#	define CS_SKIN_SHADING
+#endif
+
 struct DirectContext
 {
 	float3 worldNormal;
@@ -71,6 +75,16 @@ struct MaterialProperties
 	float3 backLightColor;
 	float Roughness;
 	float3 F0;
+#	if defined(CS_SKIN_SHADING)
+	float RoughnessSecondary;
+	float SecondarySpecIntensity;
+	float Thickness;
+	float AO;
+	float FuzzWeight;
+	float FuzzRoughness;
+	float3 FuzzColor;
+	float3 DirectSpecularEnergyCompensation;
+#	endif
 #else
 	float Roughness;
 	float Metallic;

@@ -1,5 +1,6 @@
 #include "Feature.h"
 #include "Features/ReverseZ.h"
+#include "Features/Skin.h"
 #include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/SettingsPage.h"
 
@@ -292,6 +293,7 @@ namespace
 			&globals::features::volumetricShadows,
 			&globals::features::lodBlending,
 			&globals::features::inverseSquareLighting,
+			&globals::features::skin,
 			&globals::features::hairSpecular,
 			&globals::features::furShells,
 			&globals::features::detailMaps,

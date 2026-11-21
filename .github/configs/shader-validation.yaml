@@ -108,6 +108,7 @@ file_common_defines:
             - ADAPTIVE_BALANCE
             - CLOUD_SHADOWS
             - CS_HAIR
+            - CS_SKIN
             - DYNAMIC_CUBEMAPS
             - EXTENDED_MATERIALS
             - EXTENDED_TRANSLUCENCY
@@ -131,6 +132,7 @@ file_common_defines:
             - ADAPTIVE_BALANCE
             - CLOUD_SHADOWS
             - CS_HAIR
+            - CS_SKIN
             - DYNAMIC_CUBEMAPS
             - EXTENDED_MATERIALS
             - EXTENDED_TRANSLUCENCY

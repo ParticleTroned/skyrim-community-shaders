@@ -1,5 +1,6 @@
 #include "Hooks.h"
 #include "Features/ReverseZ.h"
+#include "Features/Skin.h"
 #if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
 #	include "Diagnostics/NvPerf.h"
 #endif
@@ -1575,6 +1576,9 @@ namespace LightingExtensions
 
 			state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::IsTree);
 
+			if (globals::features::skin.loaded)
+				globals::features::skin.BeginPass(pass);
+
 			if (globals::features::detailMaps.IsEnabled())
 				globals::features::detailMaps.BeginPass(shader, pass);
 
@@ -1595,6 +1599,7 @@ struct AcceptedDrawRestoreGeometry
 	static void thunk(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_flags)
 	{
 		if constexpr (ShaderKind == 1) {
+			globals::features::skin.EndPass();
 			if (globals::features::detailMaps.HasActivePass())
 				globals::features::detailMaps.EndPass();
 			TerrainSeams::GetInstance().Restore();

@@ -14,6 +14,7 @@ struct FoliageLighting;
 struct GrassCollision;
 struct GrassLighting;
 struct GrassOptimizations;
+struct Skin;
 struct HairSpecular;
 struct HorizonFix;
 struct IBL;
@@ -85,6 +86,7 @@ namespace globals
 		extern GrassCollision grassCollision;
 		extern GrassLighting grassLighting;
 		extern GrassOptimizations grassOptimizations;
+		extern Skin skin;
 		extern HairSpecular hairSpecular;
 		extern HorizonFix horizonFix;
 		extern IBL ibl;

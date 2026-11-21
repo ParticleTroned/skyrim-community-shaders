@@ -1060,6 +1060,10 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "Common/FoveatedShaderDetail.hlsli"
 #	endif
 
+#	if defined(CS_SKIN)
+#		include "Skin/Skin.hlsli"
+#	endif
+
 #	if defined(CS_HAIR_SHADING)
 #		include "Hair/Hair.hlsli"
 #	endif
@@ -2966,6 +2970,33 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif  // FACEGEN
 
+#	if defined(CS_SKIN_SHADING)
+	const bool skinEnabled = Skin::IsEnabled();
+	SharedData::SkinData skinData = SharedData::skinData;
+	float4 skinExtra = 1;
+	float4 skinWetnessNormal = float4(0.5, 0.5, 1, 1);
+	float skinWetMask = 1;
+	float skinThickness = 1;
+	const bool hasSkinExtra = Skin::skinMaterialFlags.x > 0.5;
+	const bool hasSkinWetness = Skin::skinMaterialFlags.y > 0.5;
+	[branch] if (skinEnabled)
+	{
+		baseColor.xyz *= skinData.skinParams2.w;
+		if (hasSkinExtra)
+			skinExtra = Skin::TexSkinExtra.Sample(SampColorSampler, uv);
+		if (Skin::skinMaterialFlags.w > 0.5)
+			skinThickness = 1 - saturate(Skin::TexSkinThickness.Sample(SampColorSampler, uv).x);
+		if (hasSkinWetness) {
+			skinWetnessNormal = Skin::TexSkinWetness.Sample(SampColorSampler, uv);
+			// Released grayscale masks remain valid alongside packed normal/alpha maps.
+			bool grayscale = Skin::skinMaterialFlags.y > 1.5 || all(abs(skinWetnessNormal.rgb - skinWetnessNormal.rrr) < 1.0 / 255.0);
+			skinWetMask = saturate(grayscale ? skinWetnessNormal.r : skinWetnessNormal.a);
+			if (grayscale)
+				skinWetnessNormal.xyz = float3(0.5, 0.5, 1);
+		}
+	}
+#	endif
+
 #	if defined(CS_HAIR_SHADING)
 	float3 hairTint = 0;
 
@@ -3224,6 +3255,69 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 vertexNormal = worldNormal;
 #	endif
 
+#	if defined(CS_SKIN_SHADING)
+#		if (defined(WETTERNESS) || defined(WETNESS_EFFECTS))
+	float3 skinWetNormal = worldNormal.xyz;
+	float skinWetness = 0.0f;
+	const bool skinNeedsWetness = skinData.physicalParams.w > 0 &&
+	                              (Skin::skinPerGeometry.x > 0 || Skin::skinPerGeometry.y > 0 || skinData.skinParams2.y > 0);
+#		else
+	const bool skinNeedsWetness = false;
+#		endif
+	[branch] if (skinEnabled && (skinData.skinDetailParams.w > 0 || skinNeedsWetness))
+	{
+#		if (defined(WETTERNESS) || defined(WETNESS_EFFECTS))
+#			if defined(FACEGEN)
+		float2 wetUV = uv;
+#			else
+		float2 wetUV = uv * skinData.skinDetailParams.y;
+#			endif
+		float2 dynamicWet = Skin::GetWetness(input.WorldPosition.z + FrameBuffer::CameraPosAdjust[eyeIndex].z, worldNormal.xyz);
+		skinWetness = skinNeedsWetness ? Skin::PerlinNoise(wetUV, skinData.wetParams.x, skinData.wetParams.y, skinData.wetParams.z, clamp(dynamicWet.x + dynamicWet.y + skinData.skinParams2.y, 0.f, 2.f)) * skinWetMask : 0;
+		float3 heightWetNormal = Skin::NormalFromHeight(skinWetness, skinData.wetParams.w * 0.0005, uv);
+#		endif
+		float2 detailUV = uv * skinData.skinDetailParams.x;
+#		if !defined(FACEGEN)
+		detailUV *= skinData.skinDetailParams.y;
+#		endif
+#		if defined(MODELSPACENORMALS)
+		const float3x3 tbnTr = Skin::SurfaceBasis(input.WorldPosition.xyz, worldNormal, uv);
+		const float3x3 tbn = transpose(tbnTr);
+		const float3 tangentNormal = mul(tbnTr, worldNormal.xyz);
+#		else
+		const float3 tangentNormal = normal.xyz;
+#		endif  // MODELSPACENORMALS
+		float3 combinedTangentNormal = tangentNormal;
+		if (skinData.skinDetailParams.w > 0.0f) {
+			float3 detailNormal = Skin::TexSkinDetailNormal.SampleBias(Skin::DetailSampler, detailUV, SharedData::MipBias).rgb * 2.0f - 1.0f;
+			bool normalOnly = Skin::skinMaterialFlags.z > 0.5f;
+			if (normalOnly)
+				detailNormal.z = sqrt(saturate(1.0f - dot(detailNormal.xy, detailNormal.xy)));
+			float detailMask = normalOnly ? 1.0f : saturate(Skin::TexSkinDetailNormal.SampleBias(Skin::DetailSampler, uv, SharedData::MipBias).a);
+			float detailWeight = skinData.skinDetailParams.z * detailMask;
+			if (detailWeight != 0.0f) {
+				detailNormal = normalize(float3(detailNormal.xy * detailWeight, max(detailNormal.z, 1e-4f)));
+				combinedTangentNormal = normalize(NormalBlending::Reorient(tangentNormal, detailNormal));
+				worldNormal.xyz = normalize(mul(tbn, combinedTangentNormal));
+			}
+		}
+#		if (defined(WETTERNESS) || defined(WETNESS_EFFECTS))
+		if (skinWetness > 0.0f) {
+			float3 wetNormal = heightWetNormal;
+			if (hasSkinWetness) {
+				float3 wetMaskNormal = (skinWetnessNormal.xyz * 2.0 - 1.0);
+				wetNormal = NormalBlending::Reorient(wetMaskNormal, wetNormal);
+			}
+			if (skinData.skinParams2.y > 1.0f) {
+				wetNormal = lerp(wetNormal, tangentNormal, saturate(skinData.skinParams2.y - 1.0f));
+			}
+			float3 combinedWetNormal = normalize(NormalBlending::Reorient(combinedTangentNormal, wetNormal));
+			skinWetNormal = normalize(lerp(worldNormal.xyz, mul(tbn, combinedWetNormal), saturate(skinWetness)));
+		}
+#		endif
+	}
+#	endif  // CS_SKIN
+
 	float3 screenSpaceNormal = SafeNormalize3(FrameBuffer::WorldToView(worldNormal, false, eyeIndex), float3(0.0, 0.0, 1.0));
 
 #	if defined(CS_HAIR_SHADING)
@@ -3458,6 +3552,28 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	endif  // defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) || defined(EYE)
 
+#	if defined(CS_SKIN_SHADING)
+	if (skinEnabled) {
+		const float extraRoughness = BRDF::F_Schlick(0.04f, saturate(dot(worldNormal.xyz, viewDirection))).x * skinData.fuzzParams.w;
+		material.Roughness = saturate(skinData.skinParams.x - skinData.skinParams.z * material.Glossiness);
+		material.RoughnessSecondary = skinData.skinParams.y;
+		if (hasSkinExtra) {
+			material.Roughness = skinExtra.x * skinData.physicalParams.x;
+			material.RoughnessSecondary = skinExtra.x * skinData.physicalParams.y;
+		}
+		material.Roughness = clamp(material.Roughness + extraRoughness, 0.02f, 1.0f);
+		material.RoughnessSecondary = clamp(material.RoughnessSecondary + extraRoughness, 0.02f, 1.0f);
+		material.SecondarySpecIntensity = skinData.skinParams2.x;
+		material.Thickness = skinThickness;
+		material.F0 = hasSkinExtra ? 0.08f * skinExtra.w * skinData.physicalParams.z : skinData.skinParams2.zzz;
+		material.AO = saturate(skinExtra.z);
+		material.FuzzWeight = skinData.fuzzParams.x * skinExtra.y;
+		material.FuzzRoughness = skinData.fuzzParams.y;
+		material.FuzzColor = skinData.fuzzParams.zzz;
+		material.DirectSpecularEnergyCompensation = Skin::GGXEnergyCompensation(lerp(material.Roughness, material.RoughnessSecondary, material.SecondarySpecIntensity), saturate(abs(dot(worldNormal, viewDirection)) + 1e-5), material.F0);
+	}
+#	endif  // CS_SKIN
+
 	float porosity = 1.0;
 
 #	if defined(SKYLIGHTING)
@@ -3638,6 +3754,21 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif  // SNOW_COVER
 	float waterRoughnessSpecular = 1;
+#	if defined(CS_SKIN) && (defined(WETTERNESS) || defined(WETNESS_EFFECTS))
+	float actorWetness = 0;
+	[branch] if (SharedData::skinData.skinParams.w > 0 && SharedData::skinData.physicalParams.w > 0)
+	{
+		float2 dynamicWet = Skin::GetWetness(input.WorldPosition.z + FrameBuffer::CameraPosAdjust[eyeIndex].z, worldNormal);
+		actorWetness = saturate(dynamicWet.x + dynamicWet.y);
+#		if defined(CS_SKIN_SHADING)
+		actorWetness = skinEnabled ? saturate(skinWetness) : 0;
+#		elif defined(HAIR)
+		actorWetness = saturate(dynamicWet.x + dynamicWet.y + SharedData::skinData.skinParams2.y);
+#		elif defined(TRUE_PBR)
+		actorWetness *= 1 - material.Metallic;
+#		endif
+	}
+#	endif
 
 #	if defined(WETTERNESS)
 #		if !defined(SKIN) && !defined(HAIR)
@@ -3673,6 +3804,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		,
 		snowMeltWetness);
 
+#		if defined(CS_SKIN)
+	if (actorWetness > 0) {
+		wetnessSurface.enabled = 1;
+		wetnessSurface.lightingStrength = max(wetnessSurface.lightingStrength, actorWetness);
+		wetnessSurface.glossinessSpecular = max(wetnessSurface.glossinessSpecular, actorWetness);
+		wetnessSurface.roughnessSpecular = max(0.05, 1 - saturate(wetnessSurface.glossinessSpecular));
+#			if defined(CS_SKIN_SHADING)
+		wetnessSurface.normal = skinWetNormal;
+#			endif
+	}
+#		endif
 	float3 wetnessNormal = wetnessSurface.normal;
 	float wetnessGlossinessSpecular = wetnessSurface.glossinessSpecular;
 	float wetHighlightReflectanceScale = wetnessSurface.highlightReflectanceScale;
@@ -3743,7 +3885,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float puddleWetness = SharedData::wetnessEffectsSettings.PuddleWetness * minWetnessAngle;
 	float puddle = wetness;
 
-#		if !defined(SKINNED)
+#		if !defined(SKINNED) && !defined(SKIN)
 	if (wetness > 0.0 || puddleWetness > 0.0) {
 		float3 puddleCoords = ((input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz) * 0.5 + 0.5) * 0.01 / SharedData::wetnessEffectsSettings.PuddleRadius;
 		puddle = Random::perlinNoise(puddleCoords) * 0.5 + 0.5;
@@ -3780,6 +3922,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// optically perfect; the ripple normal map adds micro-variation but GGX still peaks
 	// sharply without this floor.
 	static const float wetnessMinPuddleRoughness = 0.05;
+#		if defined(CS_SKIN)
+	wetnessGlossinessSpecular = max(wetnessGlossinessSpecular, actorWetness);
+#			if defined(CS_SKIN_SHADING)
+	if (actorWetness > 0)
+		wetnessNormal = skinWetNormal;
+#			endif
+#		endif
 	waterRoughnessSpecular = max(saturate(1.0 - wetnessGlossinessSpecular), wetnessMinPuddleRoughness);
 #	endif
 
@@ -4302,7 +4451,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if !defined(LANDSCAPE)
 	if (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::CharacterLight) {
 		float charLightMul = saturate(dot(viewDirection, worldNormal.xyz)) * CharacterLightParams.x + CharacterLightParams.y * saturate(dot(float2(0.164398998, -0.986393988), worldNormal.yz));
-		float charLightColor = min(CharacterLightParams.w, max(0, CharacterLightParams.z * TexCharacterLightProjNoiseSampler.Sample(SampCharacterLightProjNoiseSampler, baseShadowUV).x));
+		float charLightColor = min(CharacterLightParams.w, max(0, CharacterLightParams.z));
 		diffuseColor += (charLightMul * charLightColor).xxx;
 	}
 #	endif

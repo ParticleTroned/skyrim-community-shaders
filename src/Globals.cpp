@@ -1,5 +1,6 @@
 #include "Globals.h"
 #include "Features/ReverseZ.h"
+#include "Features/Skin.h"
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "RenderMap/D3DContextHooks.h"
@@ -95,6 +96,7 @@ namespace globals
 		LightLimitFix lightLimitFix{};
 		LinearLighting linearLighting{};
 		LODBlending lodBlending{};
+		Skin skin{};
 		HairSpecular hairSpecular{};
 		HorizonFix horizonFix{};
 		InteriorSun interiorSun{};

@@ -25,7 +25,7 @@ namespace FeatureVersions
         {"GrassOptimizations"sv,   {1,2,0}},
         {"HairSpecular"sv,         {1,1,4}},
         {"HorizonFix"sv,           {1,0,0}},
-        {"ImageBasedLighting"sv,   {1,1,4}},
+        {"ImageBasedLighting"sv,   {1,1,6}},
         {"InteriorSun"sv,          {1,0,5}},
         {"InverseSquareLighting"sv,{1,3,0}},
         {"LODBlending"sv,          {1,0,0}},

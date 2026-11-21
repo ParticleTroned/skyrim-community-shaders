@@ -38,9 +38,8 @@ extract_between("${_source}" "float3 Skylighting::GetProbeCellSize()" "void Skyl
 extract_between("${_source}" "void Skylighting::SetupResources()" "void Skylighting::SetupRenderTargetResources()" _resources)
 extract_between("${_source}" "void Skylighting::ApplyProbeGridQuality()" "void Skylighting::QueueResetSkylighting(" _grid)
 extract_between("${_source}" "const char* Skylighting::GetPerformanceCostMeasurementWaitText() const" "double Skylighting::GetPerformanceCostMeasurementSettleSeconds(" _wait)
-# Exercise the volume retention policy before the unrelated capture allocation.
-extract_between("${_source}" "void Skylighting::SetupRenderTargetResources()" "\n\tdelete texOcclusion;" _target_policy)
+extract_between("${_source}" "void Skylighting::SetupRenderTargetResources()" "bool Skylighting::HasCurrentShadowData() const" _target_policy)
 file(
     WRITE "${OUTPUT_DIRECTORY}/skylighting_lifecycle_under_test.h"
-    "${_cull_constant}\n${_probe_policy}\n${_cadence}\n${_reload}\n${_lifecycle}\n${_probe_pass}\n${_resources}\n${_grid}\n${_wait}\n${_target_policy}\n(void)renderer;\n}\n"
+    "${_cull_constant}\n${_probe_policy}\n${_cadence}\n${_reload}\n${_lifecycle}\n${_probe_pass}\n${_resources}\n${_grid}\n${_wait}\n${_target_policy}\n"
 )

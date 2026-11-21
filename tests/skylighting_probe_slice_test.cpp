@@ -26,6 +26,7 @@ namespace
 	constexpr uint32_t volumeWidth = 8;
 	constexpr uint32_t volumeDepth = 8;
 	constexpr size_t volumeElements = volumeWidth * volumeWidth * volumeDepth;
+	constexpr uint16_t unknownRoofState = 2u << 13;
 
 	using D3D11ShaderTest::Check;
 	using D3D11ShaderTest::ConstantBuffer;
@@ -101,6 +102,8 @@ namespace
 		std::array<ComPtr<ID3D11ShaderResourceView>, 2> depthView;
 		ComPtr<ID3D11Texture2D> occlusionDepth;
 		ComPtr<ID3D11ShaderResourceView> occlusionView;
+		ComPtr<ID3D11Texture2D> zenithDepth;
+		ComPtr<ID3D11ShaderResourceView> zenithView;
 		ComPtr<ID3D11SamplerState> sampler;
 
 		ShadowFixture(ID3D11Device* device)
@@ -164,6 +167,12 @@ namespace
 			Util::SetResourceName(occlusionDepth.Get(), "SkylightingTest::OcclusionDepth");
 			Check(device->CreateShaderResourceView(occlusionDepth.Get(), nullptr, occlusionView.GetAddressOf()));
 			Util::SetResourceName(occlusionView.Get(), "SkylightingTest::OcclusionDepth SRV");
+			const float zenithValue = 0.5f;
+			D3D11_SUBRESOURCE_DATA initialZenith{ &zenithValue, sizeof(float) };
+			Check(device->CreateTexture2D(&occlusionDesc, &initialZenith, zenithDepth.GetAddressOf()));
+			Util::SetResourceName(zenithDepth.Get(), "SkylightingTest::ZenithDepth");
+			Check(device->CreateShaderResourceView(zenithDepth.Get(), nullptr, zenithView.GetAddressOf()));
+			Util::SetResourceName(zenithView.Get(), "SkylightingTest::ZenithDepth SRV");
 			D3D11_SAMPLER_DESC samplerDesc{};
 			samplerDesc.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_MIP_POINT;
 			samplerDesc.AddressU = samplerDesc.AddressV = samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
@@ -177,6 +186,8 @@ namespace
 		{
 			ID3D11ShaderResourceView* occlusion = occlusionView.Get();
 			context->CSSetShaderResources(0, 1, &occlusion);
+			ID3D11ShaderResourceView* zenith = zenithView.Get();
+			context->CSSetShaderResources(4, 1, &zenith);
 			if (directional) {
 				ID3D11ShaderResourceView* views[]{ lightView.Get(), depthView[lit].Get() };
 				context->CSSetShaderResources(2, 2, views);
@@ -199,6 +210,10 @@ namespace
 		uint32_t frameCount = 0;
 		bool occlusionCovered = false;
 		bool rejectFirstJitter = false;
+		bool accumulateOcclusion = true;
+		bool zenithValid = false;
+		bool roofCovered = false;
+		bool roofOutside = false;
 	};
 
 	using ProbeLighting = std::array<float, 4>;
@@ -213,7 +228,7 @@ namespace
 		ProbeState()
 		{
 			for (size_t i = 0; i < volumeElements; ++i) {
-				accumulation[i] = static_cast<uint16_t>(((i % 32) << 8) | (17 + i % 200));
+				accumulation[i] = static_cast<uint16_t>(unknownRoofState | ((i % 32) << 8) | (17 + i % 200));
 				history[i] = 0xAAAA0000u | (static_cast<uint32_t>(i) << 1);
 				visibility[i] = -1.0f - static_cast<float>(i);
 			}
@@ -290,6 +305,13 @@ namespace
 			Set("ProbeUpdateSliceStart", test.start);
 			Set("ProbeUpdateSliceCount", test.count);
 			Set("ShadowDataAvailable", static_cast<uint32_t>(test.shadowAvailable));
+			Set("AccumulateOcclusion", static_cast<uint32_t>(test.accumulateOcclusion));
+			Set("ZenithValid", static_cast<uint32_t>(test.zenithValid));
+			std::array<float, 16> zenithProjection{};
+			zenithProjection[3] = test.roofOutside ? 3.0f : 0.0f;
+			zenithProjection[11] = test.roofCovered ? 0.75f : 0.25f;
+			zenithProjection[15] = 1.0f;
+			Set("ZenithViewProj", zenithProjection);
 			Set("ValidMargin", std::array{ 0, 0, test.invalid ? static_cast<int>(volumeDepth) : 0, 0 });
 			// Align physical probe x=0 with camera-relative x=0 for the jitter rejection case.
 			Set("PosOffset", std::array{ test.rejectFirstJitter ? -4480.0f : 0.0f, 0.0f, 0.0f });
@@ -363,7 +385,7 @@ namespace
 				if (test.invalid) {
 					expected.history[i] = UINT32_MAX;
 					expected.visibility[i] = 1.0f;
-					expected.accumulation[i] = 0;
+					expected.accumulation[i] = unknownRoofState;
 					expected.lighting[i] = { std::sqrt(4.0f * std::numbers::pi_v<float>), 0.0f, 0.0f, 0.0f };
 				}
 				if (!test.shadowAvailable) {
@@ -375,7 +397,7 @@ namespace
 				}
 				if (test.shadowAvailable && test.onScreen) {
 					const auto cursor = ((expected.accumulation[i] >> 8) + 1u) % 32;
-					expected.accumulation[i] = static_cast<uint16_t>((cursor << 8) | (expected.accumulation[i] & 255u));
+					expected.accumulation[i] = static_cast<uint16_t>(unknownRoofState | (cursor << 8) | (expected.accumulation[i] & 255u));
 				}
 			}
 			fixture.Verify(expected, test.name);
@@ -404,7 +426,7 @@ namespace
 			expected.history[i] = 0xFFFFFFFEu;
 			expected.visibility[i] = 31.0f / 32.0f;
 			const auto cursor = ((expected.accumulation[i] >> 8) + 1u) % 32;
-			expected.accumulation[i] = static_cast<uint16_t>((cursor << 8) | (expected.accumulation[i] & 255u));
+			expected.accumulation[i] = static_cast<uint16_t>(unknownRoofState | (cursor << 8) | (expected.accumulation[i] & 255u));
 		}
 		fixture.Verify(expected, "recovered dark sample starts from fully lit history");
 		std::cout << fixture.runtime << "short shadow outage and recovery passed\n";
@@ -449,7 +471,7 @@ namespace
 					expected.history[i] = mask;
 					expected.visibility[i] = test.shadowLit ? phaseUpdates / 32.0f : 1.0f - phaseUpdates / 32.0f;
 					const uint32_t cursor = ((initial.accumulation[i] >> 8) + update + 1) % 32;
-					expected.accumulation[i] = static_cast<uint16_t>((cursor << 8) | (initial.accumulation[i] & 255u));
+					expected.accumulation[i] = static_cast<uint16_t>(unknownRoofState | (cursor << 8) | (initial.accumulation[i] & 255u));
 				}
 				fixture.Verify(expected, std::string(schedule.name) + " accepted update " + std::to_string(update + 1));
 			}
@@ -463,7 +485,7 @@ namespace
 		ProbeState expected;
 		for (size_t i = 0; i < volumeElements; ++i) {
 			if (IsSelected(i, test))
-				expected.accumulation[i] = static_cast<uint16_t>((((i / volumeWidth) % 2) << 8) | 19u);
+				expected.accumulation[i] = static_cast<uint16_t>(unknownRoofState | (((i / volumeWidth) % 2) << 8) | 19u);
 		}
 		fixture.Reset(expected);
 		for (uint32_t attempt = 0; attempt < 2; ++attempt) {
@@ -478,7 +500,7 @@ namespace
 					expected.history[i] <<= 1;
 					expected.visibility[i] = static_cast<float>(std::popcount(expected.history[i])) / 32.0f;
 				}
-				expected.accumulation[i] = static_cast<uint16_t>(((startCursor + attempt + 1) << 8) | 19u);
+				expected.accumulation[i] = static_cast<uint16_t>(unknownRoofState | ((startCursor + attempt + 1) << 8) | 19u);
 			}
 			fixture.Verify(expected, std::string(test.name) + " attempt " + std::to_string(attempt + 1));
 		}
@@ -490,7 +512,7 @@ namespace
 		SliceCase test{ "SH count, saturation and shadow cursor independence", 3, 2, 2, false, true, true, true, 17, true };
 		ProbeState expected;
 		for (size_t i = 0; i < volumeElements; ++i)
-			expected.accumulation[i] = static_cast<uint16_t>(((i % 32) << 8) | (254 + i % 2));
+			expected.accumulation[i] = static_cast<uint16_t>(unknownRoofState | ((i % 32) << 8) | (254 + i % 2));
 		fixture.Reset(expected);
 		for (uint32_t update = 0; update < 2; ++update) {
 			fixture.Dispatch(test);
@@ -500,7 +522,7 @@ namespace
 				const uint32_t blendCount = (expected.accumulation[i] & 255u) + 1;
 				expected.lighting[i][0] += (8.0f - expected.lighting[i][0]) / static_cast<float>(blendCount);
 				const uint32_t cursor = ((expected.accumulation[i] >> 8) + 1) % 32;
-				expected.accumulation[i] = static_cast<uint16_t>((cursor << 8) | 255u);
+				expected.accumulation[i] = static_cast<uint16_t>(unknownRoofState | (cursor << 8) | 255u);
 				expected.history[i] = (expected.history[i] << 1) | 1u;
 				expected.visibility[i] = static_cast<float>(std::popcount(expected.history[i])) / 32.0f;
 			}
@@ -514,12 +536,42 @@ namespace
 				continue;
 			const float unoccluded = std::sqrt(4.0f * std::numbers::pi_v<float>);
 			expected.lighting[i][0] = unoccluded + (8.0f - unoccluded) / 15.0f;
-			expected.accumulation[i] = 0x0101u;
+			expected.accumulation[i] = unknownRoofState | 0x0101u;
 			expected.history[i] = UINT32_MAX;
 			expected.visibility[i] = 1.0f;
 		}
 		fixture.Verify(expected, "invalid covered probe resets SH count and shadow cursor");
 		std::cout << fixture.runtime << test.name << " and invalid reset passed\n";
+	}
+
+	void CheckRoofCoverage(ProbeFixture& fixture)
+	{
+		for (bool invalid : { false, true }) {
+			for (uint32_t coverage = 0; coverage < 4; ++coverage) {
+				SliceCase test{ "roof classification and sky-history isolation", 3, 2, 3, invalid, false };
+				test.occlusionCovered = true;
+				test.accumulateOcclusion = false;
+				test.zenithValid = coverage != 2;
+				test.roofCovered = coverage == 1;
+				test.roofOutside = coverage == 3;
+				ProbeState expected;
+				fixture.Reset(expected);
+				fixture.Dispatch(test);
+				for (size_t i = 0; i < volumeElements; ++i) {
+					if (!IsSelected(i, test))
+						continue;
+					const uint32_t roofState = coverage < 2 ? coverage : 2;
+					const uint32_t historyBits = invalid ? 0 : expected.accumulation[i] & 0x1FFFu;
+					expected.accumulation[i] = static_cast<uint16_t>(historyBits | (roofState << 13));
+					if (invalid)
+						expected.lighting[i] = { std::sqrt(4.0f * std::numbers::pi_v<float>), 0, 0, 0 };
+					expected.history[i] = UINT32_MAX;
+					expected.visibility[i] = 1.0f;
+				}
+				fixture.Verify(expected, std::string(test.name) + " state " + std::to_string(coverage) + (invalid ? " invalid" : " valid"));
+			}
+		}
+		std::cout << fixture.runtime << "roof classification, slice bounds and isolated sky accumulation passed\n";
 	}
 
 	void RunPermutation(ID3D11Device* device, ID3D11DeviceContext* context, const std::filesystem::path& path, bool vr)
@@ -530,6 +582,7 @@ namespace
 		CheckTemporalConvergence(fixture);
 		CheckRejectedJitterRecovery(fixture);
 		CheckAccumulationIndependence(fixture);
+		CheckRoofCoverage(fixture);
 	}
 }
 

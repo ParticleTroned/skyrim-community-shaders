@@ -771,6 +771,13 @@ void Deferred::DeferredPasses()
 
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
+		const bool sampleRoofCoverage = dynamicCubemaps.loaded && skylighting.IsRuntimeActive();
+		ID3D11ShaderResourceView* coverageSRVs[2]{
+			sampleRoofCoverage && skylighting.texAccumFramesArray ? skylighting.texAccumFramesArray->srv.get() : nullptr,
+			sampleRoofCoverage && skylighting.texZenithOcclusion ? skylighting.texZenithOcclusion->srv.get() : nullptr
+		};
+		context->CSSetShaderResources(18, ARRAYSIZE(coverageSRVs), coverageSRVs);
+
 		ID3D11UnorderedAccessView* uavs[3]{ REX::W32::AsReal(main.UAV), REX::W32::AsReal(normals.UAV), REX::W32::AsReal(motionVectors.UAV) };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
@@ -790,6 +797,7 @@ void Deferred::DeferredPasses()
 	{
 		ID3D11ShaderResourceView* views[16]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
+		context->CSSetShaderResources(18, 2, views);
 
 		ID3D11UnorderedAccessView* uavs[3]{ nullptr, nullptr, nullptr };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);

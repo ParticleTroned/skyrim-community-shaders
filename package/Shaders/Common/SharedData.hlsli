@@ -238,7 +238,11 @@ namespace SharedData
 		uint ProbeUpdateSliceStart;
 		uint ProbeUpdateSliceCount;
 		uint ShadowDataAvailable;
-		uint3 ShadowDataPadding;
+		uint AccumulateOcclusion;
+		uint2 ShadowDataPadding;
+		row_major float4x4 ZenithViewProj;
+		float3 ZenithOffset;
+		uint ZenithValid;
 	};
 
 	struct CloudShadowsSettings

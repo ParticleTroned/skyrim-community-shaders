@@ -202,8 +202,10 @@ struct Texture3D
 	{}
 	ID3D11ShaderResourceView srvObject;
 	ID3D11UnorderedAccessView uavObject;
+	ID3D11DepthStencilView dsvObject;
 	View<ID3D11ShaderResourceView> srv{ &srvObject };
 	View<ID3D11UnorderedAccessView> uav{ &uavObject };
+	View<ID3D11DepthStencilView> dsv{ &dsvObject };
 };
 using Texture2D = Texture3D;
 struct RecordingContext
@@ -226,11 +228,11 @@ struct RecordingContext
 	void PSGetShaderResources(UINT slot, UINT, ID3D11ShaderResourceView** views) { *views = pixelResources[slot]; }
 	void PSSetShaderResources(UINT slot, UINT count, ID3D11ShaderResourceView* const* views)
 	{
-		if (count != 1)
-			throw std::runtime_error("unexpected SRV count");
-		pixelResources[slot] = views[0];
-		if (!views[0])
-			unboundSlots.push_back(slot);
+		for (uint i = 0; i < count; ++i) {
+			pixelResources[slot + i] = views[i];
+			if (!views[i])
+				unboundSlots.push_back(slot + i);
+		}
 	}
 	void Cleared()
 	{
@@ -331,6 +333,7 @@ struct Skylighting
 	bool loaded = true;
 	void* resourceDevice = nullptr;
 	Texture2D* texOcclusion = nullptr;
+	Texture2D* texZenithOcclusion = nullptr;
 	View<ID3D11ComputeShader> probeUpdateCompute;
 	View<ID3D11SamplerState> comparisonSampler;
 	bool shadowAvailable = false;
@@ -386,7 +389,7 @@ void Require(bool value, const char* message)
 struct Fixture
 {
 	RecordingContext context;
-	Texture3D probes, confidence, mask, visibility, occlusion;
+	Texture3D probes, confidence, mask, visibility, occlusion, zenith;
 	RecordingState state;
 	Renderer renderer;
 	Deferred deferred;
@@ -413,6 +416,7 @@ struct Fixture
 		deferred.directionalShadowLights = &occlusion;
 		renderer.data.depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kSHADOWMAPS_ESRAM].depthSRV = &occlusion.srvObject;
 		feature.texOcclusion = &occlusion;
+		feature.texZenithOcclusion = &zenith;
 		feature.probeUpdateCompute.value = &compute;
 		feature.comparisonSampler.value = &sampler;
 		state.update = [&] { published = feature.GetCommonBufferData(true); };
@@ -428,6 +432,7 @@ struct Fixture
 	void OwnResources()
 	{
 		feature.texOcclusion = new Texture2D;
+		feature.texZenithOcclusion = new Texture2D;
 		feature.texProbeArray = new Texture3D;
 		feature.texAccumFramesArray = new Texture3D;
 		feature.texShadowBitmask = new Texture3D;
@@ -438,6 +443,7 @@ struct Fixture
 	void ReleaseResources()
 	{
 		delete feature.texOcclusion;
+		delete feature.texZenithOcclusion;
 		delete feature.texProbeArray;
 		delete feature.texAccumFramesArray;
 		delete feature.texShadowBitmask;
@@ -455,6 +461,7 @@ struct Fixture
 	{
 		++state.frameCount;
 		feature.frameCount += advance;
+		feature.zenithFrame = false;
 		feature.occlusionCaptureCorner = feature.nextOcclusionCorner;
 		feature.lastOcclusionRenderFrame = state.frameCount;
 		feature.needsOcclusionRefresh = false;
@@ -517,7 +524,8 @@ unsigned CheckCadenceMatrix()
 					f.feature.settings.ProbeUpdateInterval = probeInterval;
 					for (uint travel = 0; travel < 2; ++travel) {
 						f.feature.ResetSkylighting();
-						for (uint sample = 0; sample < Skylighting::kProbeHistoryWarmupUpdates; ++sample) {
+						for (uint capture = 0; f.feature.forcedFullUpdateFrames; ++capture) {
+							Require(capture < Skylighting::kProbeHistoryWarmupUpdates * 2, "roof captures must not stall sky recovery");
 							++f.state.frameCount;
 							Require(f.CaptureIfDue(), "every reset-recovery frame must bypass capture throttling");
 							Require(!f.CaptureIfDue(), "a rendered frame must not capture twice");
@@ -531,7 +539,7 @@ unsigned CheckCadenceMatrix()
 						Require(!f.feature.forcedFullUpdateFrames, "stationary recovery must complete without camera motion");
 						std::vector<uint> coverage(depth);
 						uint captures = 0;
-						const uint frames = 4 * ((depth + 12) / 13) * probeInterval;
+						const uint frames = 8 * ((depth + 12) / 13) * probeInterval;
 						for (uint elapsed = 1; elapsed <= frames; ++elapsed) {
 							++f.state.frameCount;
 							captures += f.CaptureIfDue();
@@ -539,7 +547,7 @@ unsigned CheckCadenceMatrix()
 							const auto dispatches = f.context.dispatchCount;
 							const uint corner = f.feature.occlusionCaptureCorner;
 							f.feature.Prepass();
-							if (f.context.dispatchCount == dispatches)
+							if (f.context.dispatchCount == dispatches || f.feature.zenithFrame)
 								continue;
 							const uint end = f.published.ProbeUpdateSliceStart + f.published.ProbeUpdateSliceCount;
 							for (uint z = f.published.ProbeUpdateSliceStart; z < end; ++z)
@@ -595,7 +603,8 @@ unsigned CheckDelayedCadenceRecovery()
 			Require(f.context.dispatchCount == dispatches && f.feature.occlusionCaptureCorner == pendingCorner, "unconsumed captures must retry the pending quadrant");
 		}
 		f.feature.probeUpdateCompute.value = &f.compute;
-		for (uint sample = 2; sample < Skylighting::kProbeHistoryWarmupUpdates; ++sample) {
+		for (uint capture = 0; f.feature.forcedFullUpdateFrames; ++capture) {
+			Require(capture < Skylighting::kProbeHistoryWarmupUpdates * 2, "interrupted sky recovery must remain bounded");
 			++f.state.frameCount;
 			Require(f.CaptureIfDue(), "interrupted recovery must resume across frame-counter wrap");
 			f.Publish();
@@ -610,14 +619,17 @@ unsigned CheckDelayedCadenceRecovery()
 		Require(f.context.dispatchCount == recoveredDispatches, "old capture must not advance stationary probes");
 		f.feature.settings.EnableIncrementalProbeUpdates = false;
 		Util::eye.x += f.feature.settings.ProbeFieldSize / f.feature.probeArrayDims[0];
-		for (uint corner = 0; corner < 4; ++corner) {
+		uint movementCaptures = 0;
+		for (uint corner = 0; corner < 4;) {
+			Require(++movementCaptures <= 5, "one roof capture may interrupt a movement sweep");
 			++f.state.frameCount;
 			Require(f.CaptureIfDue(), "movement and its recovery sweep must bypass capture throttling");
 			f.Publish();
 			Require(f.published.ProbeUpdateSliceCount == 96, "movement recovery must cover the complete grid");
 			f.feature.Prepass();
+			corner += !f.feature.zenithFrame;
 		}
-		Require(!f.feature.forcedFullUpdateFrames && f.context.dispatchCount == recoveredDispatches + 4, "movement recovery must consume exactly one quadrant sweep");
+		Require(!f.feature.forcedFullUpdateFrames && f.context.dispatchCount == recoveredDispatches + movementCaptures, "movement recovery must consume exactly one sky quadrant sweep");
 		++f.state.frameCount;
 		Require(!f.CaptureIfDue(), "movement recovery must return to configured capture delays");
 		f.state.frameCount = UINT32_MAX - 15u;
@@ -635,9 +647,59 @@ unsigned CheckDelayedCadenceRecovery()
 	return 2;
 }
 
+void CheckRoofCoverageLifecycle()
+{
+	Fixture f;
+	f.Ready();
+	f.Publish();
+	Require(!f.published.ZenithValid, "coverage must remain unknown until a complete capture is published");
+	f.feature.zenithEyePending = true;
+	f.feature.zenithCaptureFrame = f.state.frameCount;
+	f.Publish(false);
+	Require(f.feature.zenithEyePending && !f.feature.zenithValid, "non-world publication must not claim the capture camera");
+	Util::eye = { 10, 20, 30 };
+	f.Publish();
+	Require(f.published.ZenithValid && !f.feature.zenithEyePending && f.published.ZenithOffset.x == 0, "world publication must associate the capture with its camera");
+	Util::eye = { 12, 24, 36 };
+	f.Publish();
+	Require(f.published.ZenithOffset.x == 2 && f.published.ZenithOffset.y == 4 && f.published.ZenithOffset.z == 6, "camera motion must retain the roof capture's reference frame");
+	f.feature.zenithEyePending = true;
+	++f.state.frameCount;
+	f.Publish();
+	Require(!f.published.ZenithValid && !f.feature.zenithEyePending, "missed capture-frame publication must not associate depth with a later camera");
+	f.context.pixelResources[51] = f.confidence.srv.get();
+	f.context.duringClear = [&] { Require(!f.context.pixelResources[51], "packed coverage must be unbound before UAV writes"); };
+	f.feature.ResetSkylighting();
+	Require(!f.feature.zenithValid && !f.feature.zenithEyePending && f.context.pixelResources[51] == f.confidence.srv.get(), "reset must invalidate coverage and restore its consumer binding");
+	Util::eye = {};
+	f.feature.frameCount = 0;
+	for (uint capture = 1; capture <= 14; ++capture) {
+		++f.state.frameCount;
+		Require(f.CaptureIfDue(), "warmup must allow sky and roof captures");
+		f.Publish();
+		const auto remaining = f.feature.forcedFullUpdateFrames;
+		const auto cornerMask = f.feature.probeUpdateCornerMask;
+		const auto nextCorner = f.feature.nextOcclusionCorner;
+		const auto cursor = f.feature.probeUpdateSliceCursor;
+		const auto dispatches = f.context.dispatchCount;
+		const bool roof = capture % 7 == 0;
+		Require(f.feature.zenithFrame == roof && f.published.AccumulateOcclusion == !roof, "only every seventh capture must suspend sky accumulation");
+		f.feature.Prepass();
+		f.feature.Prepass();
+		Require(f.context.dispatchCount == dispatches + 1, "roof and sky captures must each dispatch at most once");
+		if (roof)
+			Require(f.feature.forcedFullUpdateFrames == remaining && f.feature.probeUpdateCornerMask == cornerMask && f.feature.nextOcclusionCorner == nextCorner && f.feature.probeUpdateSliceCursor == cursor, "roof updates must not consume sky quadrants or slice progress");
+	}
+	Require(f.context.pixelResources[51] == f.confidence.srv.get() && f.context.pixelResources[52] == f.zenith.srv.get(), "pixel consumers must receive both coverage inputs");
+	f.feature.QueueResetSkylighting();
+	f.feature.Prepass();
+	Require(!f.context.pixelResources[51] && !f.context.pixelResources[52], "inactive sampling must unbind both coverage inputs");
+}
+
 int main()
 try {
 	CheckOcclusionCutoff();
+	CheckRoofCoverageLifecycle();
 	unsigned scenarios = 0;
 	for (unsigned outcome = 0; outcome < 3; ++outcome) {
 		Fixture f;
@@ -733,12 +795,13 @@ try {
 		Require(f.context.clearCount == clears + 2, "stable shadow availability must not repeatedly clear history");
 		++scenarios;
 	}
-	for (unsigned failure = 1; failure <= 16; ++failure) {
+	for (unsigned failure = 1; failure <= 19; ++failure) {
 		Fixture f;
 		f.OwnResources();
 		f.Ready();
 		const auto* probes = f.feature.texProbeArray;
 		const auto* occlusion = f.feature.texOcclusion;
+		const auto* zenith = f.feature.texZenithOcclusion;
 		const auto liveTextures = Allocation::liveTextures;
 		const auto clears = f.context.clearCount;
 		f.feature.settings.ProbeGridQuality = 0;
@@ -747,7 +810,7 @@ try {
 		f.feature.EarlyPrepass();
 		Require(f.feature.resourceRebuildFailed && f.feature.HasPendingReset(), "allocation failure must retain an explicit failed state");
 		Require(!f.feature.IsRuntimeActive(), "failed rebuild must select the vanilla precipitation fallback");
-		Require(f.feature.texProbeArray == probes && f.feature.texOcclusion == occlusion && f.feature.probeArrayDims[2] == 96, "partial rebuild must retain the active resources and grid");
+		Require(f.feature.texProbeArray == probes && f.feature.texOcclusion == occlusion && f.feature.texZenithOcclusion == zenith && f.feature.probeArrayDims[2] == 96, "partial rebuild must retain the active resources and grid");
 		Require(Allocation::liveTextures == liveTextures && f.context.clearCount == clears, "partial replacements must be released without clearing active history");
 		Require(std::string(f.feature.GetPerformanceCostMeasurementWaitText()).find("failed") != std::string::npos, "rebuild failure must be visible without logging");
 		f.Publish();
@@ -831,7 +894,7 @@ try {
 		f.OwnResources();
 		++f.state.frameCount;
 		f.feature.EarlyPrepass();
-		Require(Allocation::calls == 16 && !f.feature.HasPendingReset(), "resource rebuild must survive consumption of its reset flag");
+		Require(Allocation::calls == 19 && !f.feature.HasPendingReset(), "resource rebuild must survive consumption of its reset flag");
 		f.ReleaseResources();
 		globals::d3d::device = nullptr;
 		++scenarios;
@@ -871,9 +934,9 @@ try {
 		Require(f.context.clearCount == 4, "duplicate requests must coalesce into one reset");
 		Require(!f.feature.queuedResetSkylighting, "completed reset must consume its request");
 		Require(f.feature.needsOcclusionRefresh, "cleared probes still require a fresh capture");
-		Require(f.context.unboundSlots == std::vector<UINT>{ 50, 53, 50, 53 }, "history SRVs must be unbound before clears");
+		Require(f.context.unboundSlots == std::vector<UINT>{ 50, 51, 53, 50, 51, 53 }, "history SRVs must be unbound before clears");
 		Require(f.probes.uavObject.floats[0] > 3.54f && f.probes.uavObject.floats[1] == 0, "SH clear must be neutral");
-		Require(f.confidence.uavObject.uints == std::array<UINT, 4>{ 0, 0, 0, 0 }, "confidence and jitter must reset");
+		Require(f.confidence.uavObject.uints == std::array<UINT, 4>{ 0x4000, 0x4000, 0x4000, 0x4000 }, "confidence and jitter must reset while roof coverage starts unknown");
 		Require(f.mask.uavObject.uints[0] == UINT32_MAX, "shadow history must start fully lit");
 		Require(f.visibility.uavObject.floats == std::array<float, 4>{ 1, 1, 1, 1 }, "visibility must start fully lit");
 		Require(f.feature.forceProbeUpdateThisFrame && f.feature.forcedFullUpdateFrames == Skylighting::kProbeHistoryWarmupUpdates, "rebuild must force a full probe update");
@@ -902,7 +965,7 @@ try {
 		Require(!f.feature.queuedResetSkylighting && f.context.clearCount == 4, "reset must recover when the context returns");
 		++scenarios;
 	}
-	for (unsigned missing = 0; missing < 11; ++missing) {
+	for (unsigned missing = 0; missing < 12; ++missing) {
 		Fixture f;
 		switch (missing) {
 		case 0:
@@ -937,6 +1000,9 @@ try {
 			break;
 		case 10:
 			f.visibility.uav.value = nullptr;
+			break;
+		case 11:
+			f.confidence.srv.value = nullptr;
 			break;
 		}
 		f.feature.needsOcclusionRefresh = false;
@@ -990,7 +1056,7 @@ try {
 		Require(f.context.dispatchCount == 5, "stable updates must retain the configured six-frame cadence");
 		++scenarios;
 	}
-	for (uint unavailable = 0; unavailable < 4; ++unavailable) {
+	for (uint unavailable = 0; unavailable < 8; ++unavailable) {
 		Fixture f;
 		f.Ready();
 		Util::eye.x = f.feature.settings.ProbeFieldSize / f.feature.probeArrayDims[0];
@@ -1003,6 +1069,14 @@ try {
 			f.sky.mode.value = RE::Sky::Mode::kNone;
 		if (unavailable == 3)
 			f.visibility.srv.value = nullptr;
+		if (unavailable == 4)
+			f.feature.texZenithOcclusion = nullptr;
+		if (unavailable == 5)
+			f.zenith.srv.value = nullptr;
+		if (unavailable == 6)
+			f.zenith.dsv.value = nullptr;
+		if (unavailable == 7)
+			f.confidence.srv.value = nullptr;
 		f.feature.Prepass();
 		Require(f.context.dispatchCount == 0 && f.feature.forcedFullUpdateFrames == Skylighting::kProbeHistoryWarmupUpdates && f.feature.prevCellID.x == 0, "unavailable pass inputs must preserve all outstanding update debt");
 		if (unavailable != 1) {
@@ -1014,6 +1088,10 @@ try {
 		globals::d3d::context = &f.context;
 		f.sky.mode.value = RE::Sky::Mode::kFull;
 		f.visibility.srv.value = &f.visibility.srvObject;
+		f.feature.texZenithOcclusion = &f.zenith;
+		f.zenith.srv.value = &f.zenith.srvObject;
+		f.zenith.dsv.value = &f.zenith.dsvObject;
+		f.confidence.srv.value = &f.confidence.srvObject;
 		f.Publish();
 		Require(f.published.Enabled && f.published.ValidMargin[0] == -1, "recovery must preserve the pending movement margin");
 		f.feature.Prepass();
@@ -1051,13 +1129,31 @@ try {
 	}
 	{
 		Fixture f;
+		f.OwnResources();
 		f.Ready();
 		f.feature.forcedFullUpdateFrames = 0;
-		f.probes.uavObject.floats[0] = 1.25f;
+		const auto* probes = f.feature.texProbeArray;
+		f.feature.texProbeArray->uavObject.floats[0] = 1.25f;
+		f.feature.zenithValid = true;
 		const uint clears = f.context.clearCount;
 		f.feature.SetupRenderTargetResources();
-		Require(!f.feature.queuedResetSkylighting && !f.feature.needsOcclusionRefresh, "same-device target replacement must not introduce scene invalidation");
-		Require(f.context.clearCount == clears && f.probes.uavObject.floats[0] == 1.25f && !f.feature.forcedFullUpdateFrames, "same-device replacement must preserve world-space histories and update cadence");
+		Require(!f.feature.queuedResetSkylighting && f.feature.needsOcclusionRefresh && !f.feature.zenithValid, "target replacement must request fresh depth without discarding world history");
+		Require(f.context.clearCount == clears && f.feature.texProbeArray == probes && probes->uavObject.floats[0] == 1.25f && !f.feature.forcedFullUpdateFrames, "same-device replacement must preserve world-space histories and update cadence");
+		f.ReleaseResources();
+		++scenarios;
+	}
+	for (uint failure = 1; failure <= 6; ++failure) {
+		Fixture f;
+		f.OwnResources();
+		f.Ready();
+		const auto* occlusion = f.feature.texOcclusion;
+		const auto* zenith = f.feature.texZenithOcclusion;
+		const auto liveTextures = Allocation::liveTextures;
+		Allocation::failAt = failure;
+		f.feature.SetupRenderTargetResources();
+		Require(f.feature.texOcclusion == occlusion && f.feature.texZenithOcclusion == zenith && Allocation::liveTextures == liveTextures, "failed target replacement must retain both complete old targets without leaks");
+		Require(f.feature.resourceRebuildFailed && f.feature.HasPendingReset() && !f.feature.IsRuntimeActive(), "target failures must disable sampling until an explicit recovery request");
+		f.ReleaseResources();
 		++scenarios;
 	}
 	for (uint depth : { 64u, 96u, 128u }) {

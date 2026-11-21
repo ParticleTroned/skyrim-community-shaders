@@ -39,6 +39,8 @@ SamplerState LinearSampler : register(s0);
 
 #if defined(SKYLIGHTING)
 #	define SKYLIGHTING_PROBE_REGISTER t8
+#	define SKYLIGHTING_COVERAGE_REGISTER t18
+#	define SKYLIGHTING_ZENITH_REGISTER t19
 #	include "Skylighting/Skylighting.hlsli"
 
 #endif
@@ -122,6 +124,27 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 	float3 linDiffuseColor = Color::IrradianceToLinear(diffuseColor);
 	float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse[eyeIndex], float4(normalVS, 0)).xyz);
 
+#if defined(DYNAMIC_CUBEMAPS)
+	float3 reflectance = saturate(ReflectanceTexture[dispatchID.xy]);
+#	if defined(SKYLIGHTING)
+	bool needsSkylighting = any(reflectance > 0.0);
+#		if defined(SSGI) && defined(IBL)
+	needsSkylighting = needsSkylighting || SharedData::iblSettings.EnableIBL;
+#		endif
+	sh2 skylightingSH = Skylighting::GetUnoccludedProbe();
+	[branch] if (needsSkylighting)
+	{
+#		if defined(VR)
+		float3 positionMS = positionWS.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
+#		else
+		float3 positionMS = positionWS.xyz;
+#		endif
+		// Normal bias keeps both lighting lobes on the receiver's side of thin surfaces.
+		skylightingSH = Skylighting::Sample(positionMS, normalWS);
+	}
+#	endif
+#endif
+
 #if defined(SSGI)
 
 	float ssgiAo;
@@ -142,12 +165,6 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 		float3 vanillaDALC = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
 
 #		if defined(SKYLIGHTING)
-#			if defined(VR)
-		float3 positionMS = positionWS.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
-#			else
-		float3 positionMS = positionWS.xyz;
-#			endif
-		sh2 skylightingSH = Skylighting::Sample(positionMS.xyz, normalWS);
 		float skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, normalWS);
 		directionalAmbientColor = AdaptiveBalanceAppearance::ApplyAmbientSaturation(ImageBasedLighting::GetDiffuseIBLOccluded(vanillaDALC, -normalWS, skylightingDiffuse)) * albedo;
 #		else
@@ -190,8 +207,6 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 
 #if defined(DYNAMIC_CUBEMAPS)
 
-	float3 reflectance = saturate(ReflectanceTexture[dispatchID.xy]);
-
 	if (any(reflectance > 0.0)) {
 		float3 V = -normalize(positionWS.xyz);
 		float3 R = reflect(-V, normalWS);
@@ -208,13 +223,6 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 		float skylightingVisibility = 1.0;
 
 #	if defined(SKYLIGHTING)
-#		if defined(VR)
-		float3 positionMS = positionWS.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
-#		else
-		float3 positionMS = positionWS.xyz;
-#		endif
-
-		sh2 skylightingSH = Skylighting::Sample(positionMS.xyz, R);
 		skylightingSpecular = Skylighting::EvaluateSpecular(skylightingSH, specularLobe);
 #		if defined(IBL)
 		if (!SharedData::InInterior && SharedData::iblSettings.EnableIBL && SharedData::iblSettings.DALCMode == 3) {

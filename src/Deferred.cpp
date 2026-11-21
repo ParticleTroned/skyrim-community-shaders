@@ -806,13 +806,8 @@ void Deferred::DeferredPasses()
 
 void Deferred::EndDeferred()
 {
-	if (!globals::state->inWorld)
-		return;
-
-	// The master shader switch can change after StartDeferred() has replaced the
-	// engine render targets.  Always finish a pass that actually began; returning
-	// here based on the new switch value would leave the deferred attachments
-	// bound and their stale contents visible in subsequent VR frames.
+	// A started pass owns render-target and blend-state restoration even if the
+	// master shader switch or world-render state changes before it ends.
 	if (!deferredPass)
 		return;
 
@@ -1081,7 +1076,7 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 	func(This, RenderFlags);
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	const bool hadDeferredPass = globals::state->inWorld && deferred->deferredPass;
+	const bool hadDeferredPass = deferred->deferredPass;
 #endif
 	deferred->EndDeferred();
 

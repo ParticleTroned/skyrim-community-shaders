@@ -2336,19 +2336,16 @@ struct BSInputDeviceManager_PollInputDevices
 		}
 		const bool blockedDevice = blockDecision != MenuInputBlockDecision::kAllow;
 
-		if (blockedDevice && shouldSwallowInput) {  //the menu is open, eat all keypresses
-			// During active flying preview, let input reach the game for movement/camera.
-			if (menu->IsPreviewFlying()) {
-				func(a_dispatcher, a_events);
-				return;
-			}
+		// Flying preview needs native input for movement and camera control.
+		if (blockedDevice && shouldSwallowInput && !menu->IsPreviewFlying()) {
 			LogInputHookSafeguardOnce(InputHookSafeguardReason::kSwallow, a_dispatcher, TryGetInputEventHead(a_events), true);
 			constexpr RE::InputEvent* const dummy[] = { nullptr };
 			func(a_dispatcher, dummy);
-			return;
+		} else {
+			func(a_dispatcher, a_events);
 		}
 
-		func(a_dispatcher, a_events);
+		globals::features::screenshotFeature.SuppressVanillaMultiScreenshot();
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };

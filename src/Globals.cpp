@@ -163,6 +163,7 @@ namespace globals
 		REX::EnumSet<RE::BSGraphics::ShaderFlags, uint32_t>* stateUpdateFlags = nullptr;
 
 		RE::Setting* bEnableLandFade = nullptr;
+		RE::Setting* bAllowScreenShot = nullptr;
 		RE::Setting* bShadowsOnGrass = nullptr;
 		RE::Setting* shadowMaskQuarter = nullptr;
 
@@ -220,6 +221,9 @@ namespace globals
 			iniSettingCollection = RE::INISettingCollection::GetSingleton();
 			iniPrefSettingCollection = RE::INIPrefSettingCollection::GetSingleton();
 			gameSettingCollection = RE::GameSettingCollection::GetSingleton();
+			bAllowScreenShot = RE::GetINISetting("bAllowScreenShot:Display");
+			if (bAllowScreenShot && bAllowScreenShot->GetType() != RE::Setting::Type::kBool)
+				bAllowScreenShot = nullptr;
 			RefreshTES();
 			waterSystem = RE::TESWaterSystem::GetSingleton();
 			cameraNear = (float*)(REL::RelocationID(517032, 403540).address() + 0x40);

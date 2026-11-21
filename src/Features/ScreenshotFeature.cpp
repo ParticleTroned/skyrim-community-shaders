@@ -1780,6 +1780,17 @@ bool ScreenshotFeature::IsInMenu() const
 	return true;
 }
 
+void ScreenshotFeature::SuppressVanillaMultiScreenshot() const
+{
+	const auto* allowScreenshot = globals::game::bAllowScreenShot;
+	if (!allowScreenshot || allowScreenshot->GetBool())
+		return;
+
+	// The native multi-screenshot path bypasses the INI opt-out and changes game timing.
+	if (auto* controls = RE::MenuControls::GetSingleton(); controls && controls->screenshotHandler)
+		controls->screenshotHandler->multiScreenshotQueued = false;
+}
+
 void ScreenshotFeature::DrawSettingsEnabledControl()
 {
 	bool runtimeEnabled = enabled.load(std::memory_order_acquire);

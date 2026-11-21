@@ -264,6 +264,7 @@ namespace globals
 		extern REX::EnumSet<RE::BSGraphics::ShaderFlags, uint32_t>* stateUpdateFlags;
 
 		extern RE::Setting* bEnableLandFade;
+		extern RE::Setting* bAllowScreenShot;
 		extern RE::Setting* bShadowsOnGrass;
 		extern RE::Setting* shadowMaskQuarter;
 		extern REL::Relocation<ID3D11Buffer**> perFrame;

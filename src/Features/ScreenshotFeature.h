@@ -70,6 +70,9 @@ struct ScreenshotFeature : public Feature
 	/** Release the UI-only preview at Present after the main menu closes. */
 	void Reset() override;
 
+	/** Honor the native screenshot opt-out after input dispatch, before the render loop consumes its queue. */
+	void SuppressVanillaMultiScreenshot() const;
+
 	/** Submits one contract-v1 capture for the native UI or screenshot hotkey. */
 	void RequestUiCapture();
 	/** Executes one versioned screenshot API command. Mutating calls must run on the game thread. */

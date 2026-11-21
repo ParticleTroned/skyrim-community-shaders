@@ -3245,6 +3245,16 @@ if(BUILD_CONTROLLER_TESTS)
         water_history_shader_test
         PRIVATE spdlog::spdlog windowsapp.lib
     )
+    add_d3d_shader_test(downsample_stereo_shader_test DownsampleStereoShader tests/downsample_stereo_shader_test.cpp)
+    target_sources(
+        downsample_stereo_shader_test
+        PRIVATE src/Utils/ShaderInclude.cpp
+    )
+    target_link_libraries(
+        downsample_stereo_shader_test
+        PRIVATE spdlog::spdlog windowsapp.lib
+    )
+    set_tests_properties(DownsampleStereoShader PROPERTIES TIMEOUT 0)
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_depth.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/vanilla_ssao.cmake")
     add_d3d_shader_test(

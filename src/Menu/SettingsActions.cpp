@@ -126,7 +126,7 @@ namespace MenuUI
 	{
 		switch (action) {
 		case GlobalSettingsAction::Save:
-			return "Save global CSX settings and theme selection. Theme appearance, Stabilizer profiles and editor files have their own Save actions.";
+			return "Save global CSX settings, menu zoom and theme selection. Theme appearance, Stabilizer profiles and editor files have their own Save actions.";
 		case GlobalSettingsAction::Load:
 			return "Replace current CSX settings with saved settings, including the saved theme selection.";
 		case GlobalSettingsAction::RestoreDefaults:

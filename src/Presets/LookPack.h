@@ -18,12 +18,22 @@ namespace Presets
 		Json baseline = Json::object();
 		Json interior = Json::object();
 		std::vector<std::string> errors;
+		std::vector<std::string> unavailable;
 		std::vector<std::string> notices;
-		bool IsCompatible() const { return errors.empty(); }
+		bool requiresPostProcessing = false;
+		bool IsCompatible() const { return errors.empty() && unavailable.empty(); }
+		/** Separates malformed profiles from profiles requiring unavailable capabilities. */
+		std::string_view CompatibilityStatus() const;
+		/** Short card/header message; detailed requirements belong in the tooltip. */
+		std::string CompatibilitySummary() const;
+		/** Includes every validation error and unavailable requirement without losing either. */
+		std::string CompatibilityDetails() const;
 	};
 
 	/** Reads a bounded JSON object, rejecting duplicate keys and excessive nesting. */
 	Json ReadProfileDocument(const std::filesystem::path& path);
+	/** Requires loaded settings and, for PP, reviewed profile ownership before accepting imports. */
+	bool IsLookFeatureAvailable(std::string_view feature, const Json& schemas);
 	/** Accepts one portable folder name, never a path or Windows device name. */
 	bool IsPackId(std::string_view id);
 	/** Reads upstream Baseline/InteriorOnly documents and reports unavailable capabilities. */

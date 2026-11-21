@@ -1081,17 +1081,19 @@ void SettingsTabRenderer::RenderFontsTab()
 
 void SettingsTabRenderer::RenderStylingTab()
 {
-	auto& themeSettings = globals::menu->GetSettings().Theme;
+	auto& settings = globals::menu->GetSettings();
+	auto& themeSettings = settings.Theme;
 	auto& style = themeSettings.Style;
 
 	MenuUI::SectionHeading("Menu size");
 	if (ImGui::Button("Reset Menu"))
 		globals::menu->RequestLayoutReset();
 	Util::AddTooltip("Restore menu geometry, sidebar, zoom and font sizing. Emergency shortcut: Ctrl+Shift+End.");
-	if (Util::Widgets::SliderFloat("Global Scale", &themeSettings.GlobalScale, -1.f, 1.f, "%.2f")) {
-		ImGui::GetStyle().FontScaleMain = MenuUI::Layout::EffectiveScale(themeSettings.GlobalScale,
+	if (Util::Widgets::SliderFloat("Global Scale", &settings.GlobalScale, -1.f, 1.f, "%.2f")) {
+		ImGui::GetStyle().FontScaleMain = MenuUI::Layout::EffectiveScale(settings.GlobalScale,
 			ImGui::GetIO().FontDefault->LegacySize, ImGui::GetIO().DisplaySize, ImGui::GetStyle().FontScaleDpi);
 	}
+	Util::AddTooltip("Save this zoom with Save settings. Changing the theme keeps your zoom.");
 	ImGui::Text("Effective zoom: %.0f%%", ImGui::GetStyle().FontScaleMain * 100.0f);
 	Util::AddTooltip("Zoom is limited to keep the menu usable on the current display. Zero on the slider means 100%.");
 

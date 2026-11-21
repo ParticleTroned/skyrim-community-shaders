@@ -47,10 +47,10 @@ namespace MenuUI
 		for (const auto& pack : catalog.value("packs", nlohmann::json::array())) {
 			const auto description = pack["manifest"].find("description");
 			std::string help = description != pack["manifest"].end() && description->is_string() ? description->get<std::string>() : "";
-			for (const auto* key : { "errors", "notices" })
+			for (const auto* key : { "errors", "unavailable", "notices" })
 				for (const auto& message : pack[key]) help += "\n" + message.get<std::string>();
 			const bool compatible = pack["compatible"].get<bool>();
-			text.push_back({ pack["id"], pack["name"], compatible ? "Select this appearance." : "Unavailable in this build.", help, !blocked && compatible });
+			text.push_back({ pack["id"], pack["name"], pack["summary"], help, !blocked && compatible });
 			if (pack["id"] == profiles.ActiveId())
 				selected = static_cast<int>(text.size()) - 1;
 		}
@@ -75,6 +75,7 @@ namespace MenuUI
 			PageNotice("Could not read the profile library.", NoticeKind::Error, catalog["discoveryError"].get<std::string>());
 		if (!Presets::LookSceneRuntime::Error().empty())
 			PageNotice("Visuals scene rules stopped.", NoticeKind::Error, Presets::LookSceneRuntime::Error());
-		feedback.Draw();
+		const auto summary = std::string_view(feedback.message).substr(0, feedback.message.find('\n'));
+		PageNotice(summary, feedback.error ? NoticeKind::Error : NoticeKind::Information, feedback.message);
 	}
 }

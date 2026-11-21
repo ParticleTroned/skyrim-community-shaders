@@ -19,7 +19,19 @@ namespace Presets
 	{
 		constexpr std::uintmax_t kMaxDocumentBytes = 1024 * 1024;
 		constexpr size_t kMaxPackFiles = 256;
+		constexpr size_t kMaxPackEntries = 1024;
 		constexpr std::uintmax_t kMaxPackDocumentBytes = 16 * 1024 * 1024;
+		constexpr std::uintmax_t kMaxPackAssetBytes = 256 * 1024 * 1024;
+
+		void RequireFeature(LookPack& pack, const std::string& feature)
+		{
+			pack.requiresPostProcessing |= feature == "PostProcessing";
+			const auto message = feature == "PostProcessing" ?
+			                         "Post Processing is not available in this CSX build." :
+			                         "Required feature is unavailable: " + feature;
+			if (std::ranges::find(pack.unavailable, message) == pack.unavailable.end())
+				pack.unavailable.push_back(message);
+		}
 
 		std::filesystem::path Utf8Path(const std::string& value)
 		{
@@ -34,6 +46,12 @@ namespace Presets
 
 		std::string DocumentFeature(const Json& document, const std::filesystem::path& path)
 		{
+			if (document.contains("_feature")) {
+				const auto feature = document.at("_feature").get<std::string>();
+				if (document.contains("feature") && document.at("feature") != feature)
+					throw std::runtime_error("Conflicting feature identifiers: " + DocumentKey(path));
+				return feature;
+			}
 			const auto stem = Util::PathToUtf8(path.stem());
 			return document.value("feature", stem.substr(stem.rfind('_') == std::string::npos ? 0 : stem.rfind('_') + 1));
 		}
@@ -84,12 +102,8 @@ namespace Presets
 			for (const auto& file : files) {
 				if (!Util::IsPathWithinDirectory(folder, file))
 					throw std::runtime_error("Preset file resolves outside its pack");
-				const auto stem = Util::PathToUtf8(file.stem());
-				const auto separator = stem.rfind('_');
-				auto feature = schemas.contains(stem) ? stem : stem.substr(separator == std::string::npos ? 0 : separator + 1);
 				const auto original = ReadObject(file);
-				if (original.contains("feature"))
-					feature = original.at("feature").get<std::string>();
+				const auto feature = DocumentFeature(original, file);
 				if (feature == "Advanced") {
 					pack.errors.push_back("Core appearance belongs in the manifest's csx.core section.");
 					continue;
@@ -105,7 +119,7 @@ namespace Presets
 					continue;
 				for (const auto* unsupported : { "entryTransitions", "entryDefaults", "entryDeletions" })
 					if (metadata.contains(unsupported) && !metadata[unsupported].empty())
-						pack.errors.push_back(std::string("This profile requires unsupported scene metadata: ") + unsupported);
+						pack.unavailable.push_back(std::string("This profile requires unsupported scene metadata: ") + unsupported);
 				if (metadata.contains("timeOfDayEnabled") && !metadata["timeOfDayEnabled"].is_boolean())
 					throw std::runtime_error("Invalid time-of-day enabled flag");
 				if (metadata.contains("timeOfDayEnabled")) {
@@ -121,14 +135,13 @@ namespace Presets
 				if (metadata.contains("targetType")) {
 					const auto type = metadata.at("targetType").get<std::string>();
 					if (type != "Worldspace" && type != "Location" && type != "Cell")
-						pack.errors.push_back("Unsupported location target: " + type);
+						pack.unavailable.push_back("Unsupported location target: " + type);
 				}
 				values.erase("_metadata");
+				values.erase("_feature");
 				values.erase("feature");
-				if (!schemas.contains(feature)) {
-					pack.errors.push_back(feature == "PostProcessing" ?
-											  "PostProcessing requires the upstream rendering module, which this CSX build does not provide." :
-											  "Required feature is unavailable: " + feature);
+				if (!IsLookFeatureAvailable(feature, schemas)) {
+					RequireFeature(pack, feature);
 					continue;
 				}
 				if (!HasProfileSettings(feature)) {
@@ -166,7 +179,7 @@ namespace Presets
 						                     (feature == "ImageBasedLighting" && (path == "/DisableInWorldMap" || path == "/DisableInLoadingScreen")) ||
 						                     (feature == "AdaptiveBrightness" && path.starts_with("/locationOverrides"));
 						if (rebuild || (floatsOnly && !value.is_number_float()))
-							pack.errors.push_back("Setting is not supported in this scene layer: " + feature + path);
+							pack.unavailable.push_back("Setting is not supported in this scene layer: " + feature + path);
 					}
 				}
 				if (appearance != values)
@@ -187,6 +200,37 @@ namespace Presets
 
 	Json ReadProfileDocument(const std::filesystem::path& path) { return ReadObject(path); }
 
+	bool IsLookFeatureAvailable(std::string_view feature, const Json& schemas)
+	{
+		// A PP serializer alone must not enable imports before its field ownership is reviewed.
+		return schemas.contains(feature) && (feature != "PostProcessing" || HasProfileSettings(feature));
+	}
+
+	std::string_view LookPack::CompatibilityStatus() const
+	{
+		return !errors.empty() ? "invalid" : !unavailable.empty() ? "unavailable" :
+		                                                            "compatible";
+	}
+
+	std::string LookPack::CompatibilitySummary() const
+	{
+		if (!errors.empty())
+			return "Invalid profile.";
+		if (requiresPostProcessing)
+			return "Requires Post Processing.";
+		return unavailable.empty() ? "Select this appearance." : "Unavailable in this build.";
+	}
+
+	std::string LookPack::CompatibilityDetails() const
+	{
+		if (IsCompatible())
+			return {};
+		auto result = CompatibilitySummary();
+		for (const auto* messages : { &errors, &unavailable })
+			for (const auto& message : *messages) result += "\n" + message;
+		return result;
+	}
+
 	bool IsPackId(std::string_view id)
 	{
 		if (id.empty() || id.size() > 100 || (id.front() == '.' || id.front() == '_') || id.back() == '.' || id.back() == ' ')
@@ -203,21 +247,18 @@ namespace Presets
 		return true;
 	}
 
-	LookPack ReadLookPack(const std::filesystem::path& root, const std::string& id, const Json& schemas)
+	static LookPack ReadPackFolder(const std::filesystem::path& folder, const std::string& id, const Json& schemas)
 	{
 		LookPack pack;
 		pack.id = id;
 		try {
-			if (!IsPackId(id) || !Util::IsPathWithinDirectory(root, root / Utf8Path(id)))
-				throw std::runtime_error("Invalid preset folder");
-			const auto folder = root / Utf8Path(id);
 			pack.sourceRoot = folder;
 			if (!std::filesystem::is_directory(folder))
 				throw std::runtime_error("Preset folder is missing");
 			std::vector<std::filesystem::path> entries;
 			std::uintmax_t documentBytes = 0;
 			for (const auto& entry : std::filesystem::recursive_directory_iterator(folder)) {
-				if (entries.size() >= 1024 || !Util::IsPathWithinDirectory(folder, entry.path()))
+				if (entries.size() >= kMaxPackEntries || !Util::IsPathWithinDirectory(folder, entry.path()))
 					throw std::runtime_error("Profile contains too many files or a path outside its folder");
 				if (entry.is_regular_file() && Util::IEndsWithAsciiInsensitive(Util::PathToUtf8(entry.path().extension()), ".json")) {
 					const auto bytes = entry.file_size();
@@ -245,19 +286,19 @@ namespace Presets
 				for (const auto& feature : *found)
 					if (!feature.is_string())
 						throw std::runtime_error("requiredFeatures must contain names");
-					else if (!schemas.contains(feature.get<std::string>()))
-						pack.errors.push_back("Required feature is unavailable: " + feature.get<std::string>());
+					else if (!IsLookFeatureAvailable(feature.get<std::string>(), schemas))
+						RequireFeature(pack, feature.get<std::string>());
 			}
 			if (Util::ToLowerAscii(pack.manifest.value("type", "")) == "e11" || pack.manifest.contains("effects11") || std::filesystem::exists(folder / "enbseries.ini"))
-				pack.errors.push_back("Effects11 profiles are not supported by CSX.");
+				pack.unavailable.push_back("Effects11 profiles are not supported by CSX.");
 			for (const char* unsupported : { "Forms", "effects11" }) {
 				const auto path = folder / unsupported;
 				if (std::filesystem::exists(path) && !std::filesystem::is_empty(path))
-					pack.errors.push_back(std::string("This build cannot apply the pack's ") + unsupported + " layer.");
+					pack.unavailable.push_back(std::string("This build cannot apply the pack's ") + unsupported + " layer.");
 			}
 			for (const char* unsupported : { "sceneControl", "disableAtBoot" })
 				if (pack.manifest.contains(unsupported) && !pack.manifest[unsupported].empty())
-					pack.errors.push_back(std::string("This Look requires unsupported manifest control: ") + unsupported);
+					pack.unavailable.push_back(std::string("This Look requires unsupported manifest control: ") + unsupported);
 			if (pack.manifest.contains("csVersion"))
 				pack.notices.push_back("Authored for Community Shaders " + pack.manifest["csVersion"].get<std::string>() + "; compatibility is checked by supported settings, not the CSX version number.");
 			if (const auto plugins = pack.manifest.find("requiredPlugins"); plugins != pack.manifest.end()) {
@@ -300,11 +341,12 @@ namespace Presets
 				}
 				if (entry.is_regular_file() && !Util::IEndsWithAsciiInsensitive(Util::PathToUtf8(entry.path().extension()), ".json")) {
 					const auto extension = Util::ToLowerAscii(Util::PathToUtf8(entry.path().extension()));
-					if (extension != ".dds" && extension != ".png" && extension != ".jpg" && extension != ".jpeg" && extension != ".cube" && extension != ".txt" && extension != ".md")
+					if (extension != ".dds" && extension != ".png" && extension != ".bmp" && extension != ".jpg" && extension != ".jpeg" && extension != ".cube" && extension != ".txt" && extension != ".md")
 						throw std::runtime_error("Unsupported profile asset: " + DocumentKey(relative));
-					assetBytes += entry.file_size();
-					if (assetBytes > 256 * 1024 * 1024)
+					const auto bytes = entry.file_size();
+					if (bytes > kMaxPackAssetBytes - assetBytes)
 						throw std::runtime_error("Profile assets exceed 256 MiB");
+					assetBytes += bytes;
 					pack.assets.push_back(relative);
 				}
 			}
@@ -315,7 +357,7 @@ namespace Presets
 			}
 
 			if (pack.manifest.value("weatherTransitionScale", 1.f) != 1.f)
-				pack.errors.push_back("This profile changes the native weather-transition speed, which this build cannot apply.");
+				pack.unavailable.push_back("This profile changes the native weather-transition speed, which this build cannot apply.");
 
 			if (const auto extension = pack.manifest.find("csx"); extension != pack.manifest.end()) {
 				if (!extension->is_object() || extension->value("lookSchema", 1) != 1)
@@ -328,8 +370,22 @@ namespace Presets
 				}
 			}
 			std::erase_if(pack.scenes, [](const auto& item) { return item.second.empty(); });
-			if (pack.baseline.empty() && pack.interior.empty() && pack.scenes.empty())
+			if (pack.IsCompatible() && pack.baseline.empty() && pack.interior.empty() && pack.scenes.empty())
 				pack.errors.push_back("This folder has no supported Visuals settings.");
+		} catch (const std::exception& error) {
+			pack.errors.push_back(error.what());
+		}
+		return pack;
+	}
+
+	LookPack ReadLookPack(const std::filesystem::path& root, const std::string& id, const Json& schemas)
+	{
+		LookPack pack;
+		pack.id = id;
+		try {
+			if (!IsPackId(id) || !Util::IsPathWithinDirectory(root, root / Utf8Path(id)))
+				throw std::runtime_error("Invalid preset folder");
+			return ReadPackFolder(root / Utf8Path(id), id, schemas);
 		} catch (const std::exception& error) {
 			pack.errors.push_back(error.what());
 		}
@@ -341,7 +397,7 @@ namespace Presets
 		std::filesystem::path staging;
 		try {
 			if (!pack.IsCompatible())
-				throw std::runtime_error("Cannot export an incompatible profile: " + pack.errors.front());
+				throw std::runtime_error(pack.CompatibilityDetails());
 			if (!IsPackId(pack.id))
 				throw std::runtime_error("Use a valid folder name for the Look");
 			if (!root.is_absolute())
@@ -384,7 +440,7 @@ namespace Presets
 							Overlay(output["_metadata"], original["_metadata"]);
 					}
 					if (name != "Baseline")
-						output["feature"] = feature;
+						output["_feature"] = feature;
 					if (!SettingsSerialization::WriteFileAtomic(layerPath / Utf8Path(feature + ".json"), output, error))
 						throw std::runtime_error(error);
 					required.insert(feature);
@@ -398,7 +454,7 @@ namespace Presets
 				if (!Util::IsPathWithinDirectory(pack.sourceRoot, pack.sourceRoot / relative) || !Util::IsPathWithinDirectory(staging, staging / relative))
 					throw std::runtime_error("Asset resolves outside the profile");
 				const auto bytes = std::filesystem::file_size(pack.sourceRoot / relative);
-				if (bytes > 256 * 1024 * 1024 - copiedAssetBytes)
+				if (bytes > kMaxPackAssetBytes - copiedAssetBytes)
 					throw std::runtime_error("Profile assets exceed 256 MiB");
 				copiedAssetBytes += bytes;
 				std::filesystem::create_directories((staging / relative).parent_path());
@@ -420,7 +476,7 @@ namespace Presets
 				if (std::filesystem::exists(staging / path)) {
 					if (original.value("_metadata", Json::object()).value("enabled", true))
 						throw std::runtime_error("Profile documents have conflicting names");
-					output["feature"] = feature;
+					output["_feature"] = feature;
 					const auto stem = Util::PathToUtf8(path.stem());
 					unsigned suffix = 0;
 					do {
@@ -435,28 +491,9 @@ namespace Presets
 			for (const auto& feature : required) manifest["requiredFeatures"].push_back(feature);
 			if (!SettingsSerialization::WriteFileAtomic(staging / Utf8Path(pack.id + ".json"), manifest, error))
 				throw std::runtime_error(error);
-			ReadObject(staging / Utf8Path(pack.id + ".json"));
-			LookPack verified;
-			verified.sourceRoot = staging;
-			ReadLayer(staging / "Baseline", schemas, verified.baseline, verified);
-			ReadLayer(staging / "InteriorOnly", schemas, verified.interior, verified);
-			for (const auto& [context, layer] : pack.scenes) ReadLayer(staging / Utf8Path(context), schemas, verified.scenes[context], verified);
+			const auto verified = ReadPackFolder(staging, pack.id, schemas);
 			if (!verified.IsCompatible())
-				throw std::runtime_error("Export is not importable: " + verified.errors.front());
-			if (manifest["csx"].contains("core") && !ValidatePatch(manifest["csx"]["core"], schemas.at("Advanced"), error))
-				throw std::runtime_error(error);
-			std::uintmax_t documentBytes = 0;
-			std::size_t files = 0;
-			for (const auto& entry : std::filesystem::recursive_directory_iterator(staging)) {
-				if (++files > 1024)
-					throw std::runtime_error("Export exceeds the profile file limit");
-				if (entry.is_regular_file() && Util::IEndsWithAsciiInsensitive(Util::PathToUtf8(entry.path().extension()), ".json")) {
-					const auto bytes = entry.file_size();
-					if (bytes > kMaxDocumentBytes || bytes > kMaxPackDocumentBytes - documentBytes)
-						throw std::runtime_error("Export exceeds the profile JSON size limit");
-					documentBytes += bytes;
-				}
-			}
+				throw std::runtime_error("Export is not importable: " + verified.CompatibilityDetails());
 			std::filesystem::rename(staging, destination);
 			return true;
 		} catch (const std::exception& failure) {

@@ -2132,13 +2132,30 @@ if(BUILD_CONTROLLER_TESTS)
     )
 
     add_controller_test(look_profiles_test LookProfiles tests/look_profiles_test.cpp)
+    set(_look_profiles_test
+        "${CMAKE_CURRENT_BINARY_DIR}/look_profiles_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_look_profiles_test}"
+        COMMAND
+            ${CMAKE_COMMAND} -DPROJECT_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+            -DOUTPUT_FILE=${_look_profiles_test} -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/extract_look_profiles.cmake"
+        DEPENDS src/Presets/LookProfiles.cpp tests/extract_look_profiles.cmake
+        VERBATIM
+    )
     target_sources(
         look_profiles_test
         PRIVATE
+            "${_look_profiles_test}"
             src/Presets/SettingsDomains.cpp
             src/Presets/LookScenes.cpp
             src/Presets/LookPack.cpp
             src/Utils/PathValidation.cpp
+    )
+    target_include_directories(
+        look_profiles_test
+        PRIVATE "${CMAKE_CURRENT_BINARY_DIR}"
     )
     target_link_libraries(
         look_profiles_test

@@ -24,6 +24,7 @@ struct Menu
 	{
 		bool FirstTimeSetupCompleted = false;
 		bool ShowCompilationHUDInVR = false;
+		float GlobalScale = 0.0f;
 	} settings;
 	const Settings& GetSettings() const { return settings; }
 	struct Theme
@@ -495,7 +496,8 @@ int main()
 				io.FontDefault = io.Fonts->AddFontDefault(&config);
 				io.Fonts->Build();
 				Menu menu;
-				menu.theme.GlobalScale = globalScale;
+				menu.settings.GlobalScale = globalScale;
+				menu.theme.GlobalScale = -0.5f;
 				ImGui::GetStyle().FontScaleMain = std::exp2(globalScale);
 				float previousWelcomeFont = 0;
 				ImVec2 previousWelcomeSize{};

@@ -33,6 +33,8 @@ void Save(const std::filesystem::path& path, const Json& value)
 	std::string error;
 	Require(SettingsSerialization::WriteFileAtomic(path, value, error), "fixture write");
 }
+#include "look_profile_persistence_test.h"
+
 int main()
 try {
 	const auto root = std::filesystem::current_path() / ("csx-look-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -49,10 +51,16 @@ try {
 	const Json schemas = { { "Advanced", { { "Refraction Scale", 1.f } } }, { "Skylighting", { { "EnableSkylighting", true }, { "ProbeGridQuality", 2 }, { "MinDiffuseVisibility", .3f }, { "MinSpecularVisibility", .4f } } } };
 	Save(root / "Example" / "preset.json", { { "name", "Example" }, { "type", "CS" }, { "description", "Shared profile" } });
 	Save(root / "Example" / "Baseline" / "Skylighting.json", { { "EnableSkylighting", false }, { "ProbeGridQuality", 0 }, { "MinDiffuseVisibility", .7f } });
-	Save(root / "Example" / "TimeOfDay" / "Night" / "Example_Skylighting.json", { { "feature", "Skylighting" }, { "MinDiffuseVisibility", .1f }, { "_metadata", { { "enabled", true }, { "label", "Night" } } } });
+	Save(root / "Example" / "TimeOfDay" / "Night" / "Night-values.json", { { "_feature", "Skylighting" }, { "MinDiffuseVisibility", .1f }, { "_metadata", { { "enabled", true }, { "label", "Night" } } } });
 	Save(root / "Example" / "Locations" / "0x1~Test.esm" / "Example_Skylighting.json", { { "feature", "Skylighting" }, { "MinDiffuseVisibility", .8f }, { "_metadata", { { "timeOfDayEnabled", false } } } });
+	Save(root / "Example" / "Weather" / "0x2~Test.esm" / "Example_Skylighting.json", { { "feature", "Skylighting" }, { "MinDiffuseVisibility", .6f }, { "_metadata", { { "label", "Rain" }, { "authorNotes", { { "future", "preserve me" } } } } } });
 	Save(root / "Example" / "InteriorOnly" / "Disabled_Skylighting.json", { { "feature", "Skylighting" }, { "MinSpecularVisibility", .9f }, { "_metadata", { { "enabled", false } } } });
 	std::ofstream(root / "Example" / "notes.txt") << "asset bytes";
+	const std::string bitmapBytes("BM\0\xff\x7f", 5);
+	std::ofstream(root / "Example" / "look.BMP", std::ios::binary).write(bitmapBytes.data(), bitmapBytes.size());
+	const Json futureDocument = { { "futureSettings", { { "curve", { 1, 2, 3 } } } },
+		{ "_metadata", { { "enabled", false }, { "entryTransitions", { { "curve", "future" } } } } } };
+	Save(root / "Example" / "Baseline" / "PostProcessing.json", futureDocument);
 	auto pack = ReadLookPack(root, "Example", schemas);
 	Require(pack.IsCompatible(), "native pack reads");
 	Require(!pack.baseline["Skylighting"].contains("ProbeGridQuality") && !pack.baseline["Skylighting"].contains("EnableSkylighting"), "appearance excludes quality and master switches");
@@ -66,8 +74,34 @@ try {
 	Require(shared.IsCompatible() && shared.baseline == pack.baseline && shared.scenes == pack.scenes, "native pack round trip");
 	Require(shared.documents.contains("InteriorOnly/Disabled_Skylighting.json"), "disabled context survives export");
 	Require(shared.documents.at("TimeOfDay/Night/Skylighting.json")["_metadata"]["label"] == "Night", "scene metadata survives export");
+	Require(shared.documents.at("TimeOfDay/Night/Skylighting.json").at("_feature") == "Skylighting", "scene exports identify features using the upstream contract");
+	Require(shared.documents.at("Locations/0x1~Test.esm/Skylighting.json").at("_feature") == "Skylighting", "legacy CSX feature identifiers export in native format");
 	Require(std::filesystem::file_size(root / "Shared" / "notes.txt") == 11, "assets survive export");
+	std::ifstream bitmap(root / "Shared" / "look.BMP", std::ios::binary);
+	Require(std::string(std::istreambuf_iterator<char>(bitmap), {}) == bitmapBytes, "BMP assets survive byte-for-byte");
+	bitmap.close();
+	Require(ReadProfileDocument(root / "Shared" / "Baseline" / "PostProcessing.json") == futureDocument, "inactive unknown settings and metadata survive export unchanged");
+	Require(ReadProfileDocument(root / "Example" / "Baseline" / "PostProcessing.json") == futureDocument, "source document is never rewritten");
+	Require(shared.documents.at("Weather/0x2~Test.esm/Skylighting.json")["_metadata"]["authorNotes"]["future"] == "preserve me", "uninterpreted descriptive metadata survives export");
+	auto escapedAsset = pack;
+	escapedAsset.id = "EscapedAsset";
+	escapedAsset.assets.push_back("../outside.bmp");
+	Require(!WriteLookPack(root, escapedAsset, schemas, error) && !std::filesystem::exists(root / escapedAsset.id), "BMP support retains export path containment");
 	Require(!WriteLookPack(root, pack, schemas, error), "existing export is never replaced");
+	auto invalidExport = pack;
+	invalidExport.id = "InvalidManifestExport";
+	invalidExport.manifest["locationTransitionSeconds"] = -1;
+	Require(!WriteLookPack(root, invalidExport, schemas, error) && !std::filesystem::exists(root / invalidExport.id), "publication validates manifest semantics through the full importer");
+	invalidExport = pack;
+	invalidExport.id = "MissingRequirementExport";
+	invalidExport.manifest["requiredFeatures"] = { "PostProcessing" };
+	Require(!WriteLookPack(root, invalidExport, schemas, error) && !std::filesystem::exists(root / invalidExport.id), "publication cannot bypass unavailable requirements");
+	invalidExport = pack;
+	invalidExport.id = "InvalidSceneExport";
+	invalidExport.scenes["TimeOfDay/Unknown"] = invalidExport.baseline;
+	Require(!WriteLookPack(root, invalidExport, schemas, error) && !std::filesystem::exists(root / invalidExport.id), "publication rejects scene folders that cannot be imported");
+	Save(root / "ConflictingFeature" / "Baseline" / "Skylighting.json", { { "_feature", "Skylighting" }, { "feature", "PostProcessing" }, { "MinDiffuseVisibility", .2f } });
+	Require(ReadLookPack(root, "ConflictingFeature", schemas).CompatibilityStatus() == "invalid", "conflicting native and legacy feature identifiers are rejected");
 	Require(SceneFormKey("0X000ABC~TeSt.EsM") == "0xabc~test.esm", "scene keys ignore case and hex padding");
 	auto collision = pack;
 	collision.id = "DisabledCollision";
@@ -76,7 +110,15 @@ try {
 	auto collisionRead = ReadLookPack(root, collision.id, schemas);
 	Require(collisionRead.IsCompatible() && collisionRead.baseline == collision.baseline, "disabled source stays inactive after export");
 	Save(root / "Deletion" / "Baseline" / "Skylighting.json", { { "MinDiffuseVisibility", .2f }, { "_metadata", { { "entryDeletions", { { "MinDiffuseVisibility", true } } } } } });
-	Require(!ReadLookPack(root, "Deletion", schemas).IsCompatible(), "unsupported deletion rules cannot silently change the appearance");
+	const auto deletion = ReadLookPack(root, "Deletion", schemas);
+	Require(deletion.CompatibilityStatus() == "unavailable" && !deletion.IsCompatible(), "unsupported deletion rules are unavailable, not malformed");
+	Require(deletion.documents.at("Baseline/Skylighting.json")["_metadata"]["entryDeletions"]["MinDiffuseVisibility"] == true, "unsupported metadata stays intact for recovery");
+	for (const auto* metadata : { "entryTransitions", "entryDefaults" }) {
+		Save(root / metadata / "Baseline" / "Skylighting.json", { { "MinDiffuseVisibility", .2f }, { "_metadata", { { metadata, { { "MinDiffuseVisibility", .5f } } } } } });
+		auto unsupported = ReadLookPack(root, metadata, schemas);
+		unsupported.id = std::string(metadata) + "Export";
+		Require(!WriteLookPack(root, unsupported, schemas, error) && !std::filesystem::exists(root / unsupported.id), "unsupported active behaviour cannot be silently exported as supported");
+	}
 	Save(root / "Misplaced" / "Baseline" / "Skylighting.json", { { "MinDiffuseVisibility", .2f } });
 	Save(root / "Misplaced" / "TimeOfDay" / "Skylighting.json", { { "MinDiffuseVisibility", .3f } });
 	Require(!ReadLookPack(root, "Misplaced", schemas).IsCompatible(), "unconsumed scene files are rejected");
@@ -92,9 +134,20 @@ try {
 	Save(root / "E11" / "preset.json", { { "type", "E11" } });
 	Require(!ReadLookPack(root, "E11", schemas).IsCompatible(), "E11 never supported");
 	Save(root / "PP" / "Baseline" / "PostProcessing.json", { { "Exposure", 1.f } });
-	Require(!ReadLookPack(root, "PP", schemas).IsCompatible(), "missing PP capability rejected before application");
+	Save(root / "PP" / "preset.json", { { "requiredFeatures", { "PostProcessing" } } });
+	const auto pp = ReadLookPack(root, "PP", schemas);
+	Require(!pp.IsCompatible() && pp.errors.empty() && pp.unavailable.size() == 1 && pp.CompatibilitySummary() == "Requires Post Processing.", "missing PP capability has a concise deduplicated requirement");
+	auto futureSchemas = schemas;
+	futureSchemas["PostProcessing"] = { { "Exposure", 1.f } };
+	Require(!ReadLookPack(root, "PP", futureSchemas).IsCompatible(), "a future serializer alone cannot opt PP into profiles");
+	Require(!HasProfileSettings("PostProcessing"), "PP waits for reviewed ownership rules");
+	for (const auto* path : { "/Color Grading and Tone Mapping/settings/exposureTemperatureTint/0", "/Depth of Field/settings/GatherQuality", "/Display/PeakNits" })
+		Require(Classify("PostProcessing", path) == SettingsDomain::Local, "unreviewed PP controls stay local");
 	Save(root / "Bad" / "Baseline" / "Skylighting.json", { { "MinDiffuseVisibility", "oops" } });
-	Require(!ReadLookPack(root, "Bad", schemas).IsCompatible(), "invalid numeric setting rejected");
+	Require(ReadLookPack(root, "Bad", schemas).CompatibilityStatus() == "invalid", "invalid numeric setting is distinguished from unavailable features");
+	Save(root / "Bad" / "Baseline" / "PostProcessing.json", { { "Exposure", 1.f } });
+	const auto mixedErrors = ReadLookPack(root, "Bad", schemas);
+	Require(mixedErrors.CompatibilitySummary() == "Invalid profile." && !mixedErrors.unavailable.empty(), "malformed values take priority without hiding missing capabilities");
 	auto current = schemas["Skylighting"];
 	auto selected = ReplaceAppearance("Skylighting", current, pack.baseline["Skylighting"]);
 	Require(selected["EnableSkylighting"] == true && selected["ProbeGridQuality"] == 2 && selected["MinDiffuseVisibility"] == .7f, "selection preserves performance");
@@ -168,6 +221,7 @@ try {
 	document = MakeExport(performance, "test");
 	document["profile"]["choices"] = { { "appearance", { { "brightness", 2 } } } };
 	Require(!ReadExport(document, imported) && imported.Save() == previous, "performance exchange rejects visual settings atomically");
+	TestProfilePersistence(root);
 	std::cout << "Visuals pack, ownership, scene and exchange tests passed\n";
 	return 0;
 } catch (const std::exception& error) {

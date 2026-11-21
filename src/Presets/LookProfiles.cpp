@@ -69,17 +69,6 @@ namespace Presets
 				error += "\nCould not restore profile ownership: " + std::string(failure.what());
 			}
 		}
-
-		std::string Join(const std::vector<std::string>& messages)
-		{
-			std::string result;
-			for (const auto& message : messages) {
-				if (!result.empty())
-					result += "\n";
-				result += message;
-			}
-			return result;
-		}
 	}
 
 	LookProfiles& LookProfiles::Get()
@@ -194,7 +183,7 @@ namespace Presets
 						throw std::runtime_error("Invalid saved Look identifier");
 					auto pack = ReadLookPack(RootPath(), id.get<std::string>(), schemas);
 					if (!pack.IsCompatible())
-						throw std::runtime_error(pack.id + ": " + Join(pack.errors));
+						throw std::runtime_error(pack.id + ": " + pack.CompatibilityDetails());
 					packs.push_back(std::move(pack));
 				}
 				const auto activeId = savedSelection.value("activePackId", std::string{});
@@ -445,7 +434,7 @@ namespace Presets
 		try {
 			auto pack = ReadLookPack(RootPath(), id, Schemas());
 			if (!pack.IsCompatible()) {
-				error = Join(pack.errors);
+				error = pack.CompatibilityDetails();
 				return false;
 			}
 			return Change({ pack }, false, error);
@@ -501,7 +490,7 @@ namespace Presets
 			const auto root = RootPath();
 			result["supportedLayers"] = { "Baseline", "InteriorOnly", "TimeOfDay", "Weather", "Locations" };
 			result["sceneError"] = LookSceneRuntime::Error();
-			result["postProcessingAvailable"] = schemas.contains("PostProcessing");
+			result["postProcessingAvailable"] = IsLookFeatureAvailable("PostProcessing", schemas);
 			result["appearanceFeatures"] = Json::array();
 			const auto availableAppearance = Appearance(schemas);
 			for (const auto& [name, values] : availableAppearance.items()) {
@@ -522,7 +511,8 @@ namespace Presets
 				const auto pack = ReadLookPack(root, id, schemas);
 				const auto name = pack.manifest.contains("name") && pack.manifest["name"].is_string() ? pack.manifest["name"].get<std::string>() : id;
 				result["packs"].push_back({ { "id", id }, { "name", name }, { "manifest", pack.manifest },
-					{ "compatible", pack.IsCompatible() }, { "errors", pack.errors }, { "notices", pack.notices } });
+					{ "compatible", pack.IsCompatible() }, { "status", pack.CompatibilityStatus() }, { "summary", pack.CompatibilitySummary() },
+					{ "errors", pack.errors }, { "unavailable", pack.unavailable }, { "notices", pack.notices } });
 			}
 		} catch (const std::exception& error) {
 			result["discoveryError"] = error.what();
@@ -593,7 +583,7 @@ namespace Presets
 				}
 			}
 			if (!pack.IsCompatible()) {
-				error = Join(pack.errors);
+				error = pack.CompatibilityDetails();
 				return false;
 			}
 			const auto installedPath = RootPath() / std::filesystem::path(std::u8string(id.begin(), id.end()));

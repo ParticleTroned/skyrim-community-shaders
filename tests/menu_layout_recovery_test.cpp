@@ -95,7 +95,7 @@ struct Menu
 	};
 	struct ThemeSettings
 	{
-		float FontSize = 27, GlobalScale = 0;
+		float FontSize = 27;
 		ImGuiStyle Style;
 		struct Role
 		{
@@ -106,6 +106,7 @@ struct Menu
 	struct Settings
 	{
 		ThemeSettings Theme;
+		float GlobalScale = 0;
 		bool UseResolutionFont = false;
 		int untouchedGraphicsSetting = 42;
 	} settings;
@@ -482,7 +483,7 @@ int main()
 	menu.ProcessKeys({ { VK_END, false } });
 	passed &= Check(menu.forwardedKeys == 2 && menu._comboFiredKeys.empty(),
 		"releasing recovery keys after refocus cannot fire the ordinary menu toggle");
-	menu.settings.Theme.GlobalScale = 1;
+	menu.settings.GlobalScale = 1;
 	menu.settings.Theme.FontSize = 108;
 	menu.settings.Theme.FontRoles[0].SizeScale = 4;
 	menu.featureSearch = "hidden";
@@ -508,7 +509,7 @@ int main()
 		passed &= Check(GImGui->OpenPopupStack.empty() && !GImGui->MovingWindow && !GImGui->ActiveId,
 			"recovery dismisses blocking modals and cancels active drags");
 		passed &= Check(!menu.pendingLayoutReset && menu.open && menu.resetLayout && menu.pendingFontReload &&
-							menu.settings.UseResolutionFont && menu.settings.Theme.GlobalScale == 0 && menu.settings.Theme.FontSize == 27 &&
+							menu.settings.UseResolutionFont && menu.settings.GlobalScale == 0 && menu.settings.Theme.FontSize == 27 &&
 							menu.settings.Theme.FontRoles[0].SizeScale == 1 && menu.featureSearch.empty() && !menu.settingToggleKey,
 			"recovery restores navigation, typography and geometry");
 		passed &= Check(menu.settings.untouchedGraphicsSetting == 42 && menu.baseline && menu.dirty && menu.cancelledMeasurement,

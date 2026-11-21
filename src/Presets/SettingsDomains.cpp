@@ -165,17 +165,15 @@ namespace Presets
 
 	bool HasProfileSettings(std::string_view feature)
 	{
-		return profileKeys.contains(feature) || feature == "PostProcessing";
+		return profileKeys.contains(feature);
 	}
 
 	SettingsDomain Classify(std::string_view feature, std::string_view path)
 	{
 		const auto key = Root(path);
-		if (feature != "PostProcessing") {
-			const auto found = profileKeys.find(feature);
-			if (found == profileKeys.end() || !found->second.contains(key))
-				return SettingsDomain::Local;
-		}
+		const auto found = profileKeys.find(feature);
+		if (found == profileKeys.end() || !found->second.contains(key))
+			return SettingsDomain::Local;
 		if (OneOf(key, { "Enabled", "Enable", "enabled", "EnableWetterness", "EnableWetnessEffects", "EnableSkylighting", "EnableSubsurfaceScattering", "EnableTerrainHelper", "EnableTerrainShadow", "EnableIBL" }))
 			return SettingsDomain::Performance;
 		if (feature == "InteriorSun" && key == "ForceSingleShadowCascade")
@@ -191,7 +189,7 @@ namespace Presets
 			return key == "BurleySamples" ? SettingsDomain::Performance : SettingsDomain::Appearance;
 		if (OneOf(feature, { "HairSpecular", "CloudShadows", "FoliageLighting", "GrassLighting", "LinearLighting",
 							   "ExtendedTranslucency", "InteriorSun", "InverseSquareLighting", "LODBlending", "SkySync",
-							   "ExtendedMaterials", "TerrainShadows", "TerrainHelper", "TerrainVariation", "VolumetricShadows", "PostProcessing" }))
+							   "ExtendedMaterials", "TerrainShadows", "TerrainHelper", "TerrainVariation", "VolumetricShadows" }))
 			return SettingsDomain::Appearance;
 		if (feature == "DynamicCubemaps")
 			return key == "CubemapResolution" ? SettingsDomain::Performance : SettingsDomain::Appearance;

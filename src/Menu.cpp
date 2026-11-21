@@ -189,6 +189,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkipConstraintWarning,
 	RequireShiftToDock,
 	UseResolutionFont,
+	GlobalScale,
 	SelectedThemePreset)
 
 bool IsEnabled = false;
@@ -557,6 +558,10 @@ void Menu::Load(json& o_json)
 			}
 		}
 	}
+
+	// Older configurations keep zoom in the selected or embedded theme.
+	settings.GlobalScale = MenuUI::Layout::SanitizeGlobalScale(
+		o_json.contains("GlobalScale") ? settings.GlobalScale : settings.Theme.GlobalScale);
 
 	if (settings.BackgroundShaderCompilationOnBoot)
 		globals::shaderCache->SetBackgroundCompilation(true);
@@ -1350,7 +1355,7 @@ void Menu::ApplyPendingLayoutReset()
 
 	EnsureSettingsDirtyBaseline();
 	const ThemeSettings defaults{};
-	settings.Theme.GlobalScale = ThemeManager::Constants::DEFAULT_GLOBAL_SCALE;
+	settings.GlobalScale = ThemeManager::Constants::DEFAULT_GLOBAL_SCALE;
 	settings.Theme.FontSize = defaults.FontSize;
 	settings.Theme.Style = defaults.Style;
 	settings.UseResolutionFont = true;

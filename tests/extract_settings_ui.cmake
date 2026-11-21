@@ -93,7 +93,11 @@ string(FIND "${rest}" ")" end)
 math(EXPR length "${end} + 1")
 string(SUBSTRING "${rest}" 0 ${length} serializer)
 file(WRITE "${OUTPUT_DIRECTORY}/menu_settings_under_test.h"
-    "struct Menu { using ThemeSettings = nlohmann::json; ${declaration} };\n${serializer}\n")
+    "struct Menu { struct ThemeSettings { float GlobalScale = 0; }; ${declaration} };\n${serializer}\n")
+extract_between("${source}" "\tsettings.GlobalScale = MenuUI::Layout::SanitizeGlobalScale(" "\n\n\tif (settings.BackgroundShaderCompilationOnBoot)" "menu_zoom_load_under_test.h")
+file(READ "${OUTPUT_DIRECTORY}/menu_zoom_load_under_test.h" zoom_load)
+file(APPEND "${OUTPUT_DIRECTORY}/menu_settings_under_test.h"
+    "inline void RestoreMenuZoom(Menu::Settings& settings, const nlohmann::json& o_json) { ${zoom_load} }\n")
 
 # Exercise RenderDoc toggle/load/default transitions without loading its runtime DLL.
 file(READ "${PROJECT_ROOT}/src/Features/RenderDoc.cpp" source)

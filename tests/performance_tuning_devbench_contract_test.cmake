@@ -113,6 +113,14 @@ foreach(_required_action IN ITEMS start_quick_scan start_feature_costs set_featu
 endforeach()
 
 set(_excluded_features WeatherPicker PerformanceOverlay Screenshot UnifiedWater)
+foreach(_field IN ITEMS compatible status summary errors unavailable notices)
+    string(JSON _type ERROR_VARIABLE _error TYPE
+        "${_descriptor}" outputSchema properties packs items properties ${_field}
+    )
+    if(_error OR NOT _type STREQUAL "OBJECT")
+        message(FATAL_ERROR "Visuals compatibility schema is missing ${_field}")
+    endif()
+endforeach()
 string(JSON _excluded_count LENGTH
     "${_descriptor}" inputSchema allOf 0 then properties featureShortName not enum
 )

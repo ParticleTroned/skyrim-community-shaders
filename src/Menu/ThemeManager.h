@@ -26,7 +26,7 @@ using json = nlohmann::json;
  *   "Theme": {
  *     "FontSize": 27.0,                    // Base font size (16-108px range)
  *     "FontName": "Jost/Jost-Regular.ttf", // Legacy font path (use FontRoles instead)
- *     "GlobalScale": 0.0,                   // UI scale exponent (-2.0 to 2.0, 0.0=100%)
+ *     "GlobalScale": 0.0,                   // Legacy zoom fallback; saved menu zoom takes precedence
  *
  *     // Font Role System (4 roles: Body, Heading, Subheading, Subtitle)
  *     "FontRoles": [

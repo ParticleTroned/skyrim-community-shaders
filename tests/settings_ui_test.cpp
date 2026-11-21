@@ -5,6 +5,7 @@
 #include "Features/Upscaling/NeuralRendering/GuidedReconstructionPolicy.h"
 #include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
 #include "Menu/AdaptiveBalancePresets.h"
+#include "Menu/Layout.h"
 #include "Menu/PerformancePage.h"
 #include "Menu/PerformanceResults.h"
 #include "Menu/ProfileExchange.h"
@@ -50,6 +51,10 @@ struct InputCombo
 	static InputCombo Keyboard(int code) { return { code }; }
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(InputCombo, key)
+namespace ThemeManager::Constants
+{
+	constexpr float DEFAULT_GLOBAL_SCALE = 0.0f;
+}
 #include "menu_settings_under_test.h"
 
 // Only game services are substituted. Layout, input, tabs and popups use real ImGui.
@@ -906,6 +911,22 @@ int main()
 			{ "FirstTimeSetupCompleted", true }, { "RequireShiftToDock", false }
 		};
 		const auto expectedMenu = nlohmann::json(savedMenu.get<Menu::Settings>());
+		for (const float scale : { -1.0f, -0.5f, 0.0f, 0.35f, 1.0f }) {
+			auto preferences = savedMenu.get<Menu::Settings>();
+			preferences.GlobalScale = scale;
+			const nlohmann::json saved = preferences;
+			require(saved.at("GlobalScale") == scale && saved.get<Menu::Settings>().GlobalScale == scale,
+				"menu zoom survives Save settings and Load saved without saving a theme");
+			require(!saved.contains("Theme"), "saving menu zoom does not publish unsaved theme edits");
+			auto reopened = saved.get<Menu::Settings>();
+			reopened.Theme.GlobalScale = 0.7f;
+			RestoreMenuZoom(reopened, saved);
+			require(reopened.GlobalScale == scale, "saved menu zoom wins over the selected theme on reload");
+			auto legacy = savedMenu.get<Menu::Settings>();
+			legacy.Theme.GlobalScale = scale;
+			RestoreMenuZoom(legacy, savedMenu);
+			require(legacy.GlobalScale == scale, "legacy theme zoom migrates when menu zoom is absent");
+		}
 		for (const auto* key : { "UI Mode", "PerformanceUiMode" }) {
 			for (const auto& obsoleteValue : nlohmann::json::array({ 0, 1, -1, "invalid", nullptr })) {
 				auto legacyMenu = savedMenu;
@@ -1502,7 +1523,7 @@ int main()
 		require(MenuUI::SettingsPage::Selected("Performance") == "streaming" && MenuUI::SettingsPage::Selected("TextureStreaming") == "status", "streaming status retains the parent tab");
 		require(MenuUI::SettingsPage::Navigate("Performance", "presets"), "streaming can return to the other Performance tools");
 		globals::menu->destination.clear();
-		frame(drawStreaming);
+		for (int i = 0; i < 3; ++i) frame(drawStreaming);
 		require(globals::menu->destination == "builtin:Performance Presets", "streaming routes parent navigation through the existing preset page");
 
 		std::vector<std::string> profilingPages{ "Screenshot", "TextureStreaming" };

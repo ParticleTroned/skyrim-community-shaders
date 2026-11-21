@@ -282,7 +282,7 @@ public:
 
 		float FontSize = ThemeManager::Constants::DEFAULT_FONT_SIZE;
 		std::string FontName = "Jost/Jost-Regular.ttf";         // Default font file name (legacy)
-		float GlobalScale = REL::Module::IsVR() ? -0.5f : 0.f;  // exponential
+		float GlobalScale = REL::Module::IsVR() ? -0.5f : 0.f;  // Legacy theme zoom, used only when menu zoom has not been saved.
 		std::array<FontRoleSettings, static_cast<size_t>(FontRole::Count)> FontRoles = []() {
 			std::array<FontRoleSettings, static_cast<size_t>(FontRole::Count)> roles{};
 			auto setRole = [&roles](FontRole role, std::string family, std::string style, std::string file, float sizeScale) {
@@ -461,6 +461,7 @@ public:
 		bool SkipConstraintWarning = false;                                             // Skip popup when a setting change creates new constraints
 		bool RequireShiftToDock = true;                                                 // Require holding Shift to dock windows
 		bool UseResolutionFont = true;                                                  // When true, runtime font size scales with screen resolution; when persisted to theme files, FontSize is zeroed for backward compatibility
+		float GlobalScale = ThemeManager::Constants::DEFAULT_GLOBAL_SCALE;              // UI zoom exponent, saved independently of theme appearance.
 		ThemeSettings Theme;
 		std::string SelectedThemePreset = "";  // Currently selected theme preset (empty = custom/user theme)
 	};

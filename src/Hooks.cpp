@@ -962,6 +962,20 @@ namespace
 		}
 	}
 
+	/** A raw wheel delta is current only when the batch includes a wheel event. */
+	bool HasMouseWheelEvent(const RE::InputEvent* a_event)
+	{
+		for (; a_event; a_event = a_event->next) {
+			const auto* button = a_event->AsButtonEvent();
+			if (button && button->GetDevice() == RE::INPUT_DEVICES::INPUT_DEVICE::kMouse) {
+				const auto code = button->GetIDCode();
+				if (code == RE::BSWin32MouseDevice::Key::kWheelUp || code == RE::BSWin32MouseDevice::Key::kWheelDown)
+					return true;
+			}
+		}
+		return false;
+	}
+
 	MenuInputBlockDecision GetMenuInputBlockDecision(RE::InputEvent* const* a_events, bool a_blockAllDevices)
 	{
 		if (a_blockAllDevices) {
@@ -2236,8 +2250,11 @@ struct BSInputDeviceManager_PollInputDevices
 		if (a_events) {
 			__try {
 				if (auto* inputManager = RE::BSInputDeviceManager::GetSingleton()) {
-					if (const auto* mouse = inputManager->GetMouse())
-						menu->RecordDirectInputWheelDelta(mouse->GetRuntimeData().dInputNextState.z);
+					if (const auto* mouse = inputManager->GetMouse()) {
+						const auto wheelDelta = mouse->GetRuntimeData().dInputNextState.z;
+						if (wheelDelta != 0 && HasMouseWheelEvent(*a_events))
+							menu->RecordDirectInputWheelDelta(wheelDelta);
+					}
 				}
 			} __except (EXCEPTION_EXECUTE_HANDLER) {
 				LogInputHookSafeguardOnce(InputHookSafeguardReason::kMouseWheelReadException, a_dispatcher, TryGetInputEventHead(a_events), false);

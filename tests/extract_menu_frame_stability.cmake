@@ -51,6 +51,7 @@ extract_between("${_features}" "\tconstexpr float sidebarTextScale" "\tconstexpr
 file(READ "${PROJECT_ROOT}/src/Menu/MenuHeaderRenderer.cpp" _header)
 extract_between("${_header}" "\tfloat GetHeaderIconSize()" "\tfloat GetSteamVRResizeHandleInset" "menu_header_scale_under_test.h")
 file(READ "${PROJECT_ROOT}/src/Menu/OverlayRenderer.cpp" _overlay)
+extract_between("${_overlay}" "\tvoid FilterWin32GamepadStickEvents(" "\tbool IsMainWindow(" "menu_gamepad_filter_under_test.h")
 if(NOT _menu MATCHES "ProcessInputEventQueue\\(\\);[\r\n\t ]+UpdateIdleCameraSuppression\\(\\);")
     message(FATAL_ERROR "Idle-camera ownership must follow input processing before any rendering early return")
 endif()

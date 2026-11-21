@@ -67,7 +67,12 @@ struct VR
 	};
 	bool available = true, compatible = true;
 	mutable unsigned attachModeQueries = 0;
-	void ProcessControllerInputForImGui() {}
+	std::function<void()> controllerInput;
+	void ProcessControllerInputForImGui()
+	{
+		if (controllerInput)
+			controllerInput();
+	}
 	Settings::OverlayAttachMode selectedAttachMode = Settings::OverlayAttachMode::HMDOnly;
 	TextureSlot menuTexture, menuControllerTexture;
 	bool IsOpenVRCompatible() const { return available && compatible; }
@@ -218,7 +223,13 @@ namespace Util
 	}
 }
 void ImGui_ImplDX11_NewFrame() {}
-void ImGui_ImplWin32_NewFrame() { ImGui::GetIO().DisplaySize = { 1024, 768 }; }
+std::function<void()> win32Input;
+void ImGui_ImplWin32_NewFrame()
+{
+	ImGui::GetIO().DisplaySize = { 1024, 768 };
+	if (win32Input)
+		win32Input();
+}
 ImVec2 GetDesktopMirrorCursor(void*, const ImVec2&, const ImVec2&) { return { 0, 0 }; }
 namespace logger
 {
@@ -255,6 +266,8 @@ struct OverlayRenderer
 	static ImVec2 GetDefaultVRSettingsWindowSize(bool) { return { 900, 700 }; }
 	static float GetDefaultVRLeftAnchorX(float) { return ImGui::GetMainViewport()->WorkPos.x + 300; }
 };
+
+#include "menu_gamepad_filter_under_test.h"
 
 #include "menu_canvas_size_under_test.h"
 #include "menu_font_size_under_test.h"
@@ -469,6 +482,60 @@ void CheckDesktopFrameFallback()
 	globals::d3d::swapChain = nullptr;
 }
 
+void CheckGamepadInputFiltering()
+{
+	auto& io = ImGui::GetIO();
+	auto& events = ImGui::GetCurrentContext()->InputEventsQueue;
+	io.ClearInputKeys();
+	events.clear();
+	io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickRight, true, 0.55f);
+	io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickLeft, false, 0.08f);
+	io.AddKeyAnalogEvent(ImGuiKey_GamepadR2, true, 0.4f);
+	io.AddMouseWheelEvent(0.0f, 0.25f);
+	FilterWin32GamepadStickEvents(0);
+	Require(events.Size == 4 && std::abs(events[0].Key.AnalogValue - 0.5f) < 1e-6f &&
+				events[1].Key.AnalogValue == 0.0f && !events[1].Key.Down,
+		"Resting sticks must be zero and active sticks must retain proportional navigation");
+	Require(events[2].Key.AnalogValue == 0.4f && events[3].MouseWheel.WheelY == 0.25f,
+		"Stick filtering changed triggers or fractional mouse wheel input");
+	const int firstNewEvent = events.Size;
+	io.AddKeyAnalogEvent(ImGuiKey_GamepadRStickRight, true, 1.0f);
+	FilterWin32GamepadStickEvents(firstNewEvent);
+	Require(std::abs(events[0].Key.AnalogValue - 0.5f) < 1e-6f && events.back().Key.AnalogValue == 1.0f,
+		"Retained ImGui input was filtered twice or full stick travel was reduced");
+
+	auto& vr = globals::features::vr;
+	SwapChain swapChain;
+	globals::d3d::swapChain = &swapChain;
+	vr.available = true;
+	vr.selectedAttachMode = VR::Settings::OverlayAttachMode::HMDOnly;
+	io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+	io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+	const bool previousTrickle = io.ConfigInputTrickleEventQueue;
+	io.ConfigInputTrickleEventQueue = false;
+	win32Input = [&] {
+		io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickLeft, false, 0.08f);
+		io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickRight, true, 0.55f);
+	};
+	vr.controllerInput = [&] { io.AddMouseWheelEvent(0.0f, 0.25f); };
+	for (const bool compatible : { false, true }) {
+		vr.compatible = compatible;
+		io.ClearInputKeys();
+		events.clear();
+		OverlayRenderer::InitializeImGuiFrame(*Menu::GetSingleton(), true);
+		Require(ImGui::GetKeyData(ImGuiKey_GamepadLStickLeft)->AnalogValue == 0.0f &&
+					std::abs(ImGui::GetKeyData(ImGuiKey_GamepadLStickRight)->AnalogValue - 0.5f) < 1e-6f,
+			"Desktop or VR canvas bypassed Win32 stick filtering");
+		Require(io.MouseWheel == (compatible ? 0.25f : 0.0f),
+			"Win32 filtering changed VR-owned scrolling queued afterward");
+		ImGui::Render();
+	}
+	win32Input = {};
+	vr.controllerInput = {};
+	io.ConfigInputTrickleEventQueue = previousTrickle;
+	globals::d3d::swapChain = nullptr;
+}
+
 int main()
 {
 	try {
@@ -476,6 +543,7 @@ int main()
 		CheckCanvasAndFontFallback();
 		CheckStatusBounds();
 		CheckDesktopFrameFallback();
+		CheckGamepadInputFiltering();
 		ImGui::DestroyContext();
 		std::puts("Desktop fallback, headset typography and wrapped status regressions passed.");
 		return 0;

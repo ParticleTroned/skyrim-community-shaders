@@ -63,7 +63,11 @@ namespace SnowCover
 	{
 #	if !(CSX_PERF_REFERENCE_FLAGS & CSX_PERF_SNOW_WEATHER_RANGE)
 		bool needsWeather = SharedData::snowCoverSettings.TimeSnowing != 0;
+#		if defined(WETTERNESS)
+		needsWeather = needsWeather || SharedData::snowMeltSettings.enabled != 0;
+#		endif
 #	endif
+		// Historical coverage still needs its original weather footprint after snowfall stops.
 		float range = 0;
 #	if !(CSX_PERF_REFERENCE_FLAGS & CSX_PERF_SNOW_WEATHER_RANGE)
 		[branch] if (needsWeather)
@@ -86,18 +90,63 @@ namespace SnowCover
 		return 1 - smoothstep(fadeStart, fadeEnd, viewDist) * amount;
 	}
 
+	float GetFireMeltSphere(float3 p, float4 sphere, float radiusScale)
+	{
+		float radius = max(0.001, sphere.w * radiusScale);
+		float3 delta = p - sphere.xyz;
+		return 1 - smoothstep(radius * radius * 0.25, radius * radius, dot(delta, delta));
+	}
+
 	float GetFireMelt(float3 p)
 	{
 		float melt = 0;
-		uint fireCount = min(SharedData::snowCoverSettings.FireMeltCount, MaxFireMeltSources);
-		[loop] for (uint i = 0; i < fireCount; i++)
-		{
-			float4 fire = SharedData::snowCoverSettings.FireMeltSpheres[i];
-			float radius = fire.w * SharedData::snowCoverSettings.FireMeltRadiusScale;
-			float3 delta = p - fire.xyz;
-			melt = max(melt, 1 - smoothstep(radius * radius * 0.25, radius * radius, dot(delta, delta)));
-		}
+		uint count = min(SharedData::snowCoverSettings.FireMeltCount, MaxFireMeltSources);
+		[loop] for (uint i = 0; i < count; ++i)
+			melt = max(melt, GetFireMeltSphere(p, SharedData::snowCoverSettings.FireMeltSpheres[i],
+								 SharedData::snowCoverSettings.FireMeltRadiusScale));
 		return melt * SharedData::snowCoverSettings.FireMeltStrength;
+	}
+
+	struct CoverageInputs
+	{
+		float3 position;
+		float environment;
+		float weatherRange;
+		float weatherUpness;
+		float waterFade;
+		float scale;
+		uint foliage;
+	};
+
+	float GetCoverage(CoverageInputs footprint, float3 state, float fire)
+	{
+		float environment = footprint.environment + state.z / SharedData::snowCoverSettings.BlendSmoothness;
+		float weather = footprint.weatherRange * state.x * max(WeatherDensityScale, state.y) / WeatherDensityScale;
+		float coverage;
+		if (footprint.foliage)
+			coverage = saturate(SharedData::snowCoverSettings.MainTint.a * saturate(environment) + weather);
+		else {
+			weather = clamp(weather * state.x * state.x * footprint.weatherUpness, -1, 1);
+			coverage = saturate(max(environment, weather)) - footprint.waterFade;
+		}
+		return saturate(footprint.scale * coverage * (1 - fire));
+	}
+
+	CoverageInputs GetSurfaceFootprint(float3 normal, float disp, float3 p, float skylight,
+		float waterDist, float viewDist, float lift, float environment)
+	{
+		CoverageInputs footprint;
+		footprint.position = p;
+		footprint.environment = environment + (lift - SharedData::snowCoverSettings.SeasonalAltitude) / SharedData::snowCoverSettings.BlendSmoothness + disp * DisplacementInfluence;
+		footprint.weatherRange = GetWeatherRange(p, viewDist);
+		footprint.weatherUpness = max(SharedData::snowCoverSettings.minAngle, normal.z);
+		footprint.waterFade = smoothstep(-WaterFadeDepth, WaterFadeHeight, -waterDist - disp);
+		footprint.scale = skylight * smoothstep(SharedData::snowCoverSettings.minAngle, SharedData::snowCoverSettings.maxAngle, normal.z);
+#	if !defined(LANDSCAPE) && !defined(LOD) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE)
+		footprint.scale *= GetObjectFade(viewDist);
+#	endif
+		footprint.foliage = 0;
+		return footprint;
 	}
 
 	float GetHeightMult(float3 p)
@@ -141,6 +190,19 @@ namespace SnowCover
 		float weatherMult = GetWeatherRange(p, viewDist) * SharedData::snowCoverSettings.TimeSnowing * max(WeatherDensityScale, SharedData::snowCoverSettings.SnowingDensity) / WeatherDensityScale;
 		float mult = SharedData::snowCoverSettings.MainTint.a * saturate(env_mult);
 		return distMult * saturate(mult + weatherMult) * smoothstep(SharedData::snowCoverSettings.minAngle, SharedData::snowCoverSettings.maxAngle, worldNormal.z);
+	}
+
+	CoverageInputs GetFoliageFootprint(float3 normal, float3 p, float viewDist, float environment, float scale)
+	{
+		CoverageInputs footprint;
+		footprint.position = p;
+		footprint.environment = environment - SharedData::snowCoverSettings.SeasonalAltitude / SharedData::snowCoverSettings.BlendSmoothness;
+		footprint.weatherRange = GetWeatherRange(p, viewDist);
+		footprint.weatherUpness = 1;
+		footprint.waterFade = 0;
+		footprint.scale = scale * smoothstep(SharedData::snowCoverSettings.minAngle, SharedData::snowCoverSettings.maxAngle, normal.z);
+		footprint.foliage = 1;
+		return footprint;
 	}
 
 	struct FoliageSnowResult
@@ -202,19 +264,28 @@ namespace SnowCover
 		}
 	}
 
-	FoliageSnowResult ApplyGrassSnow(inout float3 color, float3 normal, float3 relativeWorldPos, float2 uv, float3 viewPosition, float skyVisibility, bool complex, uint eyeIndex, Texture2D<float4> diffuseTexture, bool pbrMaterial = false, bool applyDiffuseControls = true)
+	struct GrassSnowState
 	{
-		if (!IsActive()) {
-			FoliageSnowResult result = (FoliageSnowResult)0;
-			result.SubstrateColor = color;
-			return result;
-		}
+		CoverageInputs footprint;
+		float3 normal;
+		float environment;
+		float coverage;
+	};
+
+	GrassSnowState GetGrassSnowState(float3 normal, float3 relativeWorldPos, float2 uv, float3 viewPosition, float skyVisibility, bool complex, uint eyeIndex, Texture2D<float4> diffuseTexture, bool pbrMaterial = false)
+	{
+		if (!IsActive())
+			return (GrassSnowState)0;
 		float3 snowPosition = relativeWorldPos + FrameBuffer::CameraPosAdjust[eyeIndex].xyz;
 		float3 snowNormal = float3(uv, normal.z * (1 - FoliageNormalBias) + FoliageNormalBias);
 		float snowEnvironment;
 		float snowCoverage = GetFoliageSnowBase(snowNormal, snowPosition, length(viewPosition), 1.0, snowEnvironment);
 		float snowOcclusion = smoothstep(0, SkyVisibilityThreshold, skyVisibility) * GrassBaseVisibility;
-		[branch] if (snowCoverage > 0 && SharedData::snowCoverSettings.EnableExpensiveFoliage)
+		bool needsSnowFootprint = snowCoverage > 0;
+#		if defined(WETTERNESS)
+		needsSnowFootprint = needsSnowFootprint || SharedData::snowMeltSettings.enabled != 0;
+#		endif
+		[branch] if (needsSnowFootprint && SharedData::snowCoverSettings.EnableExpensiveFoliage)
 		{
 			float rx;
 			float ry;
@@ -226,23 +297,41 @@ namespace SnowCover
 			}
 		}
 		snowOcclusion *= saturate(relativeWorldPos.z - SharedData::GetWaterData(relativeWorldPos, eyeIndex).w);
-		return ApplySnowFoliageBase(color, snowNormal, snowPosition, snowEnvironment, snowCoverage * snowOcclusion, pbrMaterial, applyDiffuseControls);
+		GrassSnowState state;
+		state.footprint = GetFoliageFootprint(snowNormal, snowPosition, length(viewPosition), snowEnvironment, snowOcclusion);
+		state.normal = snowNormal;
+		state.environment = snowEnvironment;
+		state.coverage = snowCoverage * snowOcclusion;
+		return state;
+	}
+
+	FoliageSnowResult ApplyGrassSnow(inout float3 color, GrassSnowState state, bool pbrMaterial = false, bool applyDiffuseControls = true)
+	{
+		if (!IsActive()) {
+			FoliageSnowResult result = (FoliageSnowResult)0;
+			result.SubstrateColor = color;
+			return result;
+		}
+		return ApplySnowFoliageBase(color, state.normal, state.footprint.position, state.environment, state.coverage, pbrMaterial, applyDiffuseControls);
+	}
+	FoliageSnowResult ApplyGrassSnow(inout float3 color, float3 normal, float3 relativeWorldPos, float2 uv, float3 viewPosition, float skyVisibility, bool complex, uint eyeIndex, Texture2D<float4> diffuseTexture, bool pbrMaterial = false, bool applyDiffuseControls = true)
+	{
+		return ApplyGrassSnow(color, GetGrassSnowState(normal, relativeWorldPos, uv, viewPosition, skyVisibility, complex, eyeIndex, diffuseTexture, pbrMaterial), pbrMaterial, applyDiffuseControls);
 	}
 #	endif
 
 #	if !defined(BASIC_SNOW_COVER)
 	float ApplySnowBase(float3 worldNormal, inout float2 uv, out bool alt, float disp, float3 p, float skylight, float waterDist, float viewDist, float lift, float environment)
 	{
-		waterDist = smoothstep(-WaterFadeDepth, WaterFadeHeight, -waterDist - disp);
-		float weatherMult = GetWeatherRange(p, viewDist) * (SharedData::snowCoverSettings.TimeSnowing * SharedData::snowCoverSettings.TimeSnowing * SharedData::snowCoverSettings.TimeSnowing) * max(WeatherDensityScale, SharedData::snowCoverSettings.SnowingDensity) / WeatherDensityScale;
-		weatherMult = clamp((weatherMult)*max(SharedData::snowCoverSettings.minAngle, worldNormal.z), -1, 1);
-		float env_mult = saturate(max((environment + lift / SharedData::snowCoverSettings.BlendSmoothness + disp * DisplacementInfluence), weatherMult)) - waterDist;
-#		if !defined(LANDSCAPE) && !defined(LOD) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE)
-		float distMult = GetObjectFade(viewDist);
-#		else
-		float distMult = 1;
+		CoverageInputs footprint = GetSurfaceFootprint(worldNormal, disp, p, skylight, waterDist, viewDist, lift, environment);
+		float weatherRange = footprint.weatherRange;
+#		if (CSX_PERF_REFERENCE_FLAGS & CSX_PERF_SNOW_WEATHER_RANGE)
+		weatherRange = GetWeatherRange(p, viewDist);
 #		endif
-		float mult = distMult * skylight * env_mult * smoothstep(SharedData::snowCoverSettings.minAngle, SharedData::snowCoverSettings.maxAngle, worldNormal.z);
+		float weatherMult = weatherRange * (SharedData::snowCoverSettings.TimeSnowing * SharedData::snowCoverSettings.TimeSnowing * SharedData::snowCoverSettings.TimeSnowing) * max(WeatherDensityScale, SharedData::snowCoverSettings.SnowingDensity) / WeatherDensityScale;
+		weatherMult = clamp((weatherMult)*max(SharedData::snowCoverSettings.minAngle, worldNormal.z), -1, 1);
+		float3 state = float3(SharedData::snowCoverSettings.TimeSnowing, SharedData::snowCoverSettings.SnowingDensity, SharedData::snowCoverSettings.SeasonalAltitude);
+		float mult = GetCoverage(footprint, state, 0);
 		[branch] if (mult > 0)
 			mult *= 1 - GetFireMelt(p);
 		if (mult <= 0) {

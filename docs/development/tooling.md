@@ -73,6 +73,10 @@ not establish that its control is visible.
 
 ## Daily commands
 
+CSX compiles its pinned CommonLib fork from source. Its build sets
+`COMMONLIB_BUILD_FROM_SOURCE=ON` before adding the dependency, so a cached or
+explicit upstream prebuilt bundle cannot bypass the fork's runtime fixes.
+
 ```powershell
 # Run Git with this worktree as a command-scoped safe directory
 pwsh ./tools/git.ps1 status --short

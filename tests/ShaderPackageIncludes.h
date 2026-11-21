@@ -13,8 +13,8 @@
 class PackageIncludes : public ID3DInclude
 {
 public:
-	explicit PackageIncludes(std::filesystem::path root, std::filesystem::path featureRoot = {}, std::filesystem::path secondFeatureRoot = {}) :
-		roots_{ std::move(root), std::move(featureRoot), std::move(secondFeatureRoot) } {}
+	explicit PackageIncludes(std::filesystem::path root, std::filesystem::path featureRoot = {}, std::filesystem::path secondFeatureRoot = {}, std::filesystem::path testRoot = {}) :
+		roots_{ std::move(root), std::move(featureRoot), std::move(secondFeatureRoot), std::move(testRoot) } {}
 	HRESULT __stdcall Open(D3D_INCLUDE_TYPE, LPCSTR name, LPCVOID,
 		LPCVOID* data, UINT* bytes) override
 	{
@@ -52,5 +52,5 @@ public:
 	}
 
 private:
-	std::array<std::filesystem::path, 3> roots_;
+	std::array<std::filesystem::path, 4> roots_;
 };

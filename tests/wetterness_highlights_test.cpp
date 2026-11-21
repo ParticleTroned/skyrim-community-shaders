@@ -599,7 +599,7 @@ namespace
 			for (bool deferred : { false, true }) {
 				for (bool cubemaps : { false, true }) {
 					for (const auto& material : materials) {
-						PackageIncludes includes("package/Shaders", "features/Wetterness/Shaders", "features/Dynamic Cubemaps/Shaders");
+						PackageIncludes includes("package/Shaders", "features/Wetterness/Shaders", "features/Dynamic Cubemaps/Shaders", "features/Snow Cover/Shaders");
 						std::vector<D3D_SHADER_MACRO> defines{
 							{ "PSHADER", "1" }, { "WETTERNESS", "1" }, { material.define, "1" }
 						};
@@ -613,6 +613,8 @@ namespace
 							defines.push_back({ "TRUE_PBR", "1" });
 						if (material.skinned)
 							defines.push_back({ "SKINNED", "1" });
+						if (!material.skinned)
+							defines.push_back({ "SNOW_COVER", "1" });
 						defines.push_back({ nullptr, nullptr });
 						std::cout << "Compile wetness pixel shader VR=" << vr << " deferred=" << deferred << " PBR=" << material.pbr
 								  << " material=" << material.define << " skinned=" << material.skinned << " cubemaps=" << cubemaps << std::endl;

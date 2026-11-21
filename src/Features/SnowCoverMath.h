@@ -8,6 +8,14 @@ namespace SnowCoverMath
 	constexpr float MonthsPerYear = 12.0f;
 	constexpr float MaxWeatherAccumulation = 2.0f;
 
+	/** Game-hour accumulation rate, shared with melt history's time-skip endpoint calculation. */
+	inline float AccumulationRate(float snow, bool snowing, bool raining, float snowSpeed, float meltSpeed)
+	{
+		snowSpeed = std::isfinite(snowSpeed) ? std::max(snowSpeed, 0.0f) : 0.0f;
+		meltSpeed = std::isfinite(meltSpeed) ? std::max(meltSpeed, 0.0f) : 0.0f;
+		return snowing ? snowSpeed : (raining ? -2.0f * meltSpeed : (snow > 0 ? -meltSpeed : (snow < 0 ? meltSpeed : 0.0f)));
+	}
+
 	/** @brief Interpolates the cyclic snow line between the summer and winter peaks. */
 	inline float SeasonalAltitude(float month, unsigned summerMonth, unsigned winterMonth, float summerHeight, float winterHeight)
 	{
@@ -32,16 +40,13 @@ namespace SnowCoverMath
 		snow = std::isfinite(snow) ? std::clamp(snow, -MaxWeatherAccumulation, MaxWeatherAccumulation) : 0.0f;
 		if (!std::isfinite(hours) || hours <= 0.0f)
 			return snow;
-		snowSpeed = std::isfinite(snowSpeed) ? std::max(snowSpeed, 0.0f) : 0.0f;
-		meltSpeed = std::isfinite(meltSpeed) ? std::max(meltSpeed, 0.0f) : 0.0f;
-		if (snowing)
-			snow += hours * snowSpeed;
-		else if (raining)
-			snow -= 2.0f * hours * meltSpeed;
+		const float delta = hours * AccumulationRate(snow, snowing, raining, snowSpeed, meltSpeed);
+		if (snowing || raining)
+			snow += delta;
 		else if (snow > 0.0f)
-			snow = std::max(snow - hours * meltSpeed, 0.0f);
+			snow = std::max(snow + delta, 0.0f);
 		else
-			snow = std::min(snow + hours * meltSpeed, 0.0f);
+			snow = std::min(snow + delta, 0.0f);
 		return std::clamp(snow, -MaxWeatherAccumulation, MaxWeatherAccumulation);
 	}
 }

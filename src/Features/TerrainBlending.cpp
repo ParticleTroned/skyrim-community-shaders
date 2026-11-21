@@ -892,7 +892,7 @@ void TerrainBlending::SetupResources()
 
 		D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc;
 		REX::W32::AsReal(mainDepth.views[0])->GetDesc(&dsvDesc);
-		DX::ThrowIfFailed(device->CreateDepthStencilView(REX::W32::AsReal(terrainDepth.texture), &dsvDesc, REX::W32::CastTo<ID3D11DepthStencilView*>(&terrainDepth.views[0])));
+		DX::ThrowIfFailed(device->CreateDepthStencilView(REX::W32::AsReal(terrainDepth.texture), &dsvDesc, REX::W32::AsReal(&terrainDepth.views[0])));
 		Util::SetResourceName(REX::W32::AsReal(terrainDepth.views[0]), "TerrainBlending::TerrainDepth DSV");
 		globals::features::reverseZ.RegisterSceneDepthView(REX::W32::AsReal(terrainDepth.views[0]));
 	}

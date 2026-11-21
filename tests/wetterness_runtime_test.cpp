@@ -1,3 +1,4 @@
+#include "../package/Shaders/Common/WetternessDrying.hlsli"
 #include "Features/WetternessLightingPolicy.h"
 #include "commonlib_d3d_bridge_fake.h"
 
@@ -13,6 +14,15 @@ struct float2
 {
 	float x, y;
 };
+struct float4
+{
+	float x, y, z, w;
+};
+namespace WetternessSnowMelt
+{
+	bool active = false;
+	bool HasHistory() { return active; }
+}
 namespace REX::W32
 {
 	struct XMFLOAT4X4
@@ -194,6 +204,7 @@ struct Wetterness
 	float UpdateRuntimeClock(bool) const;
 	PerFrame MakeDryPerFrameData() const;
 	bool IsRuntimeProcessingActive() const;
+	float4 GetDryingHours(float) const;
 	PerFrame GetCommonBufferData() const;
 	float GetRainFilmPercent() const;
 	void SetRainFilmPercent(float percent);
@@ -247,6 +258,7 @@ namespace
 			RE::frameDelta = 1.0f / 60.0f;
 			Util::interior = false;
 			weatherUpdates = 0;
+			WetternessSnowMelt::active = false;
 			wetness.ResetRuntimeState();
 			clear.data.flags.value = RE::TESWeather::WeatherDataFlag::kPleasant;
 			rainy.data.flags.value = RE::TESWeather::WeatherDataFlag::kRainy;
@@ -468,6 +480,21 @@ namespace
 		f.wetness.preserveWetnessHighlights = false;
 		Require(f.Step(0).PackedPostRainControl == original.PackedPostRainControl, "Rain-film toggle failed to restore legacy controls");
 	}
+
+	void CheckSnowMeltLifecycle()
+	{
+		Fixture f;
+		f.Step();
+		WetternessSnowMelt::active = true;
+		auto data = f.Step(3600);
+		Require(data.settings.EnableWetterness && f.wetness.IsRuntimeProcessingActive(), "Local snowmelt did not keep Wetterness shading available");
+		Require(data.Raining == 0 && data.Wetness == 0 && data.PuddleWetness == 0 && data.GrassWetnessPhase == 0 &&
+					!data.settings.EnableRaindropFx,
+			"Local snowmelt created global rain or grass wetness");
+		WetternessSnowMelt::active = false;
+		data = f.Step(24 * 3600);
+		Require(!data.settings.EnableWetterness && !f.wetness.IsRuntimeProcessingActive(), "Expired snowmelt did not restore dry inactivity");
+	}
 }
 
 int main()
@@ -479,6 +506,7 @@ int main()
 		CheckRainMetadata();
 		CheckPuddleSlopeToggle();
 		CheckRainFilmControls();
+		CheckSnowMeltLifecycle();
 		std::cout << "Wetterness runtime lifecycle passed\n";
 		return 0;
 	} catch (const std::exception& error) {

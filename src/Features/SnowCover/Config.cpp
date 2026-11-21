@@ -32,6 +32,7 @@ namespace SnowConfig
 			result["settings"]["properties"]["FireMeltRadiusScale"] = json::parse(R"({"type":"number","minimum":1,"maximum":16})");
 			result["settings"]["properties"]["FireMeltStrength"] = json::parse(R"({"type":"number","minimum":0,"maximum":1})");
 			result["settings"]["properties"]["FireMeltEnabled"] = json::parse(R"({"type":"boolean"})");
+			result["settings"]["properties"]["MeltWetnessEnabled"] = json::parse(R"({"type":"boolean","default":false})");
 			result["settings"]["properties"]["SurvivalEnabled"] = json::parse(R"({"type":"boolean"})");
 			result["world"] = { { "type", "object" }, { "additionalProperties", false }, { "properties", json::object() } };
 			result["world"]["properties"]["EnableSnowCover"] = json::parse(R"({"type":"boolean"})");

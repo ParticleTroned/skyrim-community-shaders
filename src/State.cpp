@@ -48,6 +48,7 @@
 #include "Features/LightLimitFix.h"
 #include "Features/LightLimitFix/LightAttach.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/SnowCover.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
@@ -526,6 +527,7 @@ void State::Draw(bool isCompute)
 			globals::features::lightLimitFix.Reset();
 			globals::features::interiorSun.isInteriorWithSun = false;
 			globals::features::wetterness.ResetRuntimeStateAfterGameLoad();
+			globals::features::snowCover.ResetRuntimeStateAfterGameLoad();
 			globals::features::grassCollision.ResetRuntimeStateAfterGameLoad();
 			pendingPostLoadRuntimeReset = false;
 			logger::info("Applied deferred post-load runtime reset");

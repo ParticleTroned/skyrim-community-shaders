@@ -103,7 +103,8 @@ constexpr std::array Numbers { Number{"Roughness", "lighting", 0}, Number{"Tilin
         entries = catalog.collect(sources)
         by_label = {e["label"]: e["section"] for e in entries}
         for label, section in {"Fresnel Reflectance": "lighting", "Body Tiling Multiplier": "detail",
-                               "Transmission Depth": "transmission", "Wetness Fade Time": "wetness"}.items():
+                               "Transmission Depth": "transmission", "Wetness Fade Time": "wetness",
+                               "Post-process SSS Strength": "transmission", "Wetness Response": "wetness"}.items():
             self.assertEqual(by_label[label], section)
         self.assertEqual(sum(e["label"] == "Enable Skin Detail" for e in entries), 1)
         self.assertEqual(sum(e["label"] == "Enable Skin Transmission" for e in entries), 1)

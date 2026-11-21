@@ -2981,7 +2981,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	const bool hasSkinWetness = Skin::skinMaterialFlags.y > 0.5;
 	const float skinBodyTiling = Skin::skinMaterialFlags.z >= 2.0 ? 1.0 : skinData.skinDetailParams.y;
 #		if defined(WETTERNESS) || defined(WETNESS_EFFECTS)
-	const bool skinNeedsWetness = skinData.physicalParams.w > 0 &&
+	const bool skinNeedsWetness = skinData.physicalParams.w > 0 && skinData.wetResponse > 0 &&
 	                              (Skin::skinPerGeometry.x > 0 || Skin::skinPerGeometry.y > 0 || skinData.skinParams2.y > 0);
 #		else
 	const bool skinNeedsWetness = false;
@@ -2994,7 +2994,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (Skin::skinMaterialFlags.w > 0.5 && skinData.sssParams.w > 0 && skinData.sssParams.x > 0)
 			skinThickness = 1 - saturate(Skin::TexSkinThickness.Sample(SampColorSampler, uv).x);
 #		if defined(WETTERNESS) || defined(WETNESS_EFFECTS)
-		if (hasSkinWetness && skinData.physicalParams.w > 0 && (skinNeedsWetness || CS_WETNESS_SETTINGS.EnableWetnessEffects != 0)) {
+		if (hasSkinWetness && skinData.physicalParams.w > 0 && skinData.wetResponse > 0 && (skinNeedsWetness || CS_WETNESS_SETTINGS.EnableWetnessEffects != 0)) {
 			skinWetnessNormal = Skin::TexSkinWetness.Sample(SampColorSampler, uv);
 			// Opaque grayscale/red masks store wetness in red; packed normals use alpha.
 			bool grayscale = Skin::skinMaterialFlags.y > 1.5 || (skinWetnessNormal.a >= 0.99 &&
@@ -3003,6 +3003,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			if (grayscale)
 				skinWetnessNormal.xyz = float3(0.5, 0.5, 1);
 		}
+		skinWetMask *= skinData.wetResponse;
 #		endif
 	}
 #	endif
@@ -5034,6 +5035,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float sssMask = 0.0;
 #			if defined(SKIN)
 	sssMask = saturate(baseColor.a);
+#				if defined(CS_SKIN_SHADING)
+	if (skinEnabled)
+		sssMask *= skinData.sssParams.z;
+#				endif
 #			elif defined(HAIR)
 	float a = saturate(baseColor.a);
 	// Fixed, low-cost transition mask for brow/hairline blending in Burley SSS.

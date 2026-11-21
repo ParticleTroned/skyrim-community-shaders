@@ -70,6 +70,13 @@ int main()
 								ComPtr<ID3D11ShaderReflection> reflection;
 								Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(&reflection)));
 								if (!pbr) {
+									auto* skin = reflection->GetVariableByName("SharedData::skinData");
+									D3D11_SHADER_VARIABLE_DESC shared{};
+									Check(skin->GetDesc(&shared));
+									Require(shared.Size == 128, "Skin shared CPU/GPU layout mismatch");
+									D3D11_SHADER_TYPE_DESC response{};
+									Check(skin->GetType()->GetMemberTypeByName("wetResponse")->GetDesc(&response));
+									Require(response.Offset == 112, "Skin wetness response offset mismatch");
 									Binding(reflection.Get(), "Skin::SkinPerGeometry", 7);
 									Binding(reflection.Get(), "Skin::TexSkinDetailNormal", 72);
 									Binding(reflection.Get(), "Skin::DetailSampler", 7);

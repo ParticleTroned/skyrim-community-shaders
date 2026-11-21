@@ -3,6 +3,7 @@
 #include "Feature.h"
 
 #include <array>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -20,7 +21,7 @@ struct Skin : Feature
 	std::string GetName() override { return "Advanced Skin"; }
 	std::string GetShortName() override { return "Skin"; }
 	std::string_view GetShaderDefineName() override { return "CS_SKIN"; }
-	std::string_view GetShaderCacheAbiVersion() override { return "2"; }
+	std::string_view GetShaderCacheAbiVersion() override { return "3"; }
 	std::string_view GetCategory() const override { return FeatureCategories::kCharacters; }
 	bool SupportsVR() override { return true; }
 	bool HasShaderDefine(RE::BSShader::Type a_type) override { return a_type == RE::BSShader::Type::Lighting; }
@@ -61,12 +62,14 @@ struct Skin : Feature
 		float SkinDetailTiling = 10.0f;
 		float BodyTilingMultiplier = 2.0f;
 		float ExtraSkinWetness = 0.0f;
+		float WetResponse = 1.0f;
 		float WetFadeTime = 10.0f;
 		float StartSweat = 0.75f;
 		float FullSweat = 0.15f;
 		float4 WetParams{ 512.0f, 0.7f, 10.0f, 4.0f };
 		float Translucency = 0.1f;
 		float sssWidth = 0.2f;
+		float SSSAmount = 1.0f;
 		bool UseSSS = true;
 		float FuzzStrength = 1.0f;
 		float FuzzRoughness = 0.35f;
@@ -77,8 +80,11 @@ struct Skin : Feature
 	{
 		float4 skinParams, skinParams2, skinDetailParams, sssParams;
 		float4 fuzzParams, physicalParams, wetParams;
+		float wetResponse;
+		float3 padding;
 	};
-	static_assert(sizeof(SkinData) == 112);
+	static_assert(sizeof(SkinData) == 128);
+	static_assert(offsetof(SkinData, wetResponse) == 112);
 	/** Packs validated global settings without per-material profiles. */
 	SkinData GetCommonBufferData() const;
 	/** Prepares actor and optional-map data after the native lighting setup. */

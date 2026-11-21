@@ -40,10 +40,12 @@ namespace
 		Number{ "/FuzzF0", "Fuzz Reflectance", "lighting", 0, .5f, [](Settings& s) -> float& { return s.FuzzF0; } },
 		Number{ "/Translucency", "Transmission Strength", "transmission", 0, 1, [](Settings& s) -> float& { return s.Translucency; } },
 		Number{ "/sssWidth", "Transmission Depth", "transmission", .001f, 1, [](Settings& s) -> float& { return s.sssWidth; } },
+		Number{ "/SSSAmount", "Post-process SSS Strength", "transmission", 0, 1, [](Settings& s) -> float& { return s.SSSAmount; } },
 		Number{ "/SkinDetailStrength", "Skin Detail Strength", "detail", -2, 2, [](Settings& s) -> float& { return s.SkinDetailStrength; } },
 		Number{ "/SkinDetailTiling", "Skin Detail Tiling", "detail", 1, 50, [](Settings& s) -> float& { return s.SkinDetailTiling; } },
 		Number{ "/BodyTilingMultiplier", "Body Tiling Multiplier", "detail", .5f, 5, [](Settings& s) -> float& { return s.BodyTilingMultiplier; } },
 		Number{ "/ExtraSkinWetness", "Extra Skin Wetness", "wetness", 0, 2, [](Settings& s) -> float& { return s.ExtraSkinWetness; } },
+		Number{ "/WetResponse", "Wetness Response", "wetness", 0, 1, [](Settings& s) -> float& { return s.WetResponse; } },
 		Number{ "/WetFadeTime", "Wetness Fade Time", "wetness", 0, 50, [](Settings& s) -> float& { return s.WetFadeTime; } },
 		Number{ "/StartSweat", "Sweat Starts Below Stamina", "wetness", 0, 1, [](Settings& s) -> float& { return s.StartSweat; } },
 		Number{ "/FullSweat", "Full Sweat Below Stamina", "wetness", 0, 1, [](Settings& s) -> float& { return s.FullSweat; } },
@@ -164,7 +166,7 @@ void Skin::DrawSettings()
 {
 	MenuUI::SettingsPage page("Skin", { { "lighting", "Lighting", "Tune highlights and skin color.", "Dual specular lobes and fuzz", true, true, "Refine skin lighting" },
 										  { "detail", "Detail", "Add fine surface normals.", "Skin texture detail", true, true, nullptr },
-										  { "transmission", "Transmission", "Control light passing through thin skin.", "Backlit skin", true, true, nullptr },
+										  { "transmission", "Transmission & SSS", "Control backlighting and skin diffusion.", "Backlit skin and subsurface scattering", true, true, nullptr },
 										  { "wetness", "Wetness", "Tune sweat and drying after leaving water.", "Requires Wetterness or Wetness Effects", true, true, nullptr } });
 	DrawEnableControl(settings);
 	if (!resourceError.empty())
@@ -176,8 +178,10 @@ void Skin::DrawSettings()
 		Util::Widgets::Checkbox("Enable Skin Detail", &settings.EnableSkinDetail);
 	if (page.Is("transmission")) {
 		Util::Widgets::Checkbox("Enable Skin Transmission", &settings.UseSSS);
-		ImGui::TextWrapped("These controls affect transmitted light. Subsurface Scattering still controls diffusion, intensity, brightness and saturation separately for male and female skin.");
+		ImGui::TextWrapped("Transmission controls backlighting through thin skin. Post-process SSS Strength scales the skin diffusion mask; it requires Subsurface Scattering. Male/female intensity, brightness and saturation still apply there. Zero skips diffusion and its color adjustments for this skin.");
 	}
+	if (page.Is("wetness"))
+		ImGui::TextWrapped("Wetness Response scales rain, sweat and retained water on Advanced Skin surfaces. Extra Skin Wetness adds persistent wetness. Hair and clothing keep their own wetness response.");
 	for (const auto& field : Numbers)
 		if (page.Is(field.section))
 			Util::Widgets::SliderFloat(field.label, &field.value(settings), field.minimum, field.maximum, "%.3f", ImGuiSliderFlags_AlwaysClamp);
@@ -192,10 +196,11 @@ Skin::SkinData Skin::GetCommonBufferData() const
 	data.skinParams = float4(settings.SkinMainRoughness, settings.SkinSecondRoughness, settings.SkinSpecularTexMultiplier, float(enabled));
 	data.skinParams2 = float4(settings.SecondarySpecularStrength, settings.ExtraSkinWetness, settings.F0, settings.BaseColorMultiplier);
 	data.skinDetailParams = float4(settings.SkinDetailTiling, settings.BodyTilingMultiplier, settings.SkinDetailStrength, float(enabled && settings.EnableSkinDetail && settings.SkinDetailStrength != 0 && detailTexture));
-	data.sssParams = float4(settings.Translucency, settings.sssWidth, 0.0f, float(settings.UseSSS));
+	data.sssParams = float4(settings.Translucency, settings.sssWidth, settings.SSSAmount, float(settings.UseSSS));
 	data.fuzzParams = float4(settings.FuzzStrength, settings.FuzzRoughness, settings.FuzzF0, settings.ExtraEdgeRoughness);
 	data.physicalParams = float4(settings.PhysicalMainRoughnessMultiplier, settings.PhysicalSecondRoughnessMultiplier, settings.PhysicalSpecularStrength, float(IsWetnessEnabled()));
 	data.wetParams = settings.WetParams;
+	data.wetResponse = settings.WetResponse;
 	return data;
 }
 

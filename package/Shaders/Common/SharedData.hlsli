@@ -620,6 +620,8 @@ namespace SharedData
 		float4 fuzzParams;
 		float4 physicalParams;
 		float4 wetParams;
+		float wetResponse;
+		float3 padding;
 	};
 
 	cbuffer FeatureData : register(b6)

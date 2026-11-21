@@ -18,8 +18,9 @@ namespace LightLimitFixDetail::ShadowCulling
 	struct FlameHolderContext
 	{
 		const RE::NiLight* source = nullptr;
-		std::array<float, 3> restOrigin{};
+		std::array<float, 3> origin{};
 		std::uint32_t ownerHandle = 0;
+		bool carried = false;
 		bool captured = false;
 	};
 
@@ -45,6 +46,8 @@ namespace LightLimitFixDetail::ShadowCulling
 		       (delta[2] < 0 && horizontalSquared <= reach * reach && -delta[2] - radius <= FlameAboveHolderMax * scale);
 	}
 
-	/** Reject only an identified non-actor light's own holder; uncertain ownership keeps the shadow. */
+	/** Reject an identified light's own holder; carried meshes must be rigid and enclose the light. */
 	[[nodiscard]] bool ShouldSkipFlameHolder(FlameHolderContext& context, RE::BSShadowLight& light, const RE::BSGeometry& geometry) noexcept;
+	/** Identify dynamic actor-attached point lights; ambiguous ownership retains nearby shadows. */
+	[[nodiscard]] bool IsCarriedShadowLight(RE::BSShadowLight& light) noexcept;
 }

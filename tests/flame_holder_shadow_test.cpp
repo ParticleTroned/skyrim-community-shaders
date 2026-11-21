@@ -1,4 +1,5 @@
 #include "Features/LightLimitFix/ShadowCullingDrawScope.h"
+#include "Utils/ScopedFlag.h"
 #include <Windows.h>
 #include <iostream>
 #include <limits>
@@ -46,6 +47,11 @@ namespace RE
 	class BSGeometry : public NiAVObject
 	{
 	public:
+		struct RuntimeData
+		{
+			const void* skinInstance = nullptr;
+		} runtimeData;
+		const RuntimeData& GetGeometryRuntimeData() const { return runtimeData; }
 		struct
 		{
 			Point center;
@@ -60,7 +66,7 @@ namespace RE
 			NiLight* value = nullptr;
 			NiLight* get() const { return value; }
 		} light;
-		bool parabolic = true;
+		bool parabolic = true, dynamic = true;
 		bool GetIsParabolicLight() { return parabolic; }
 	};
 }
@@ -116,8 +122,91 @@ int main()
 		Require(!fresh());
 		holder.owner = nullptr;
 		owner.actor = true;
+		Require(fresh());
+		holder.runtimeData.skinInstance = &holder;
 		Require(!fresh());
+		holder.runtimeData.skinInstance = nullptr;
+		// Carried geometry uses its world sphere, including larger rigid held meshes.
+		holder.worldBound.radius = 40;
+		holder.worldBound.center.x = 40;
+		Require(fresh());
+		holder.worldBound.center.x = 40.01f;
+		Require(!fresh());
+		holder.worldBound.center = {};
+		holder.owner = &otherOwner;
+		Require(!fresh());
+		otherOwner.actor = true;
+		Require(!fresh());
+		otherOwner.actor = false;
+		holder.owner = nullptr;
+		owner.handle = 0;
+		Require(!fresh());
+		owner.handle = 1;
+		RE::NiAVObject attachedObject;
+		attachedObject.owner = &otherOwner;
+		attachedObject.parent = &root;
+		holder.parent = &attachedObject;
+		Require(!fresh());
+		holder.parent = &root;
+		holder.worldBound.radius = 5;
+		// The carried check must not substitute the parent's flame-wobble anchor.
+		source.local.translate.x = source.world.translate.x = 16;
+		Require(!fresh());
+		holder.worldBound.center.x = 16;
+		Require(fresh());
+		source.local.translate = source.world.translate = holder.worldBound.center = {};
+		for (const float invalid : { 0.0f, -1.0f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() }) {
+			holder.worldBound.radius = invalid;
+			Require(!fresh());
+		}
+		holder.worldBound.radius = 5;
+		for (const float invalid : { std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() }) {
+			holder.worldBound.center.x = invalid;
+			Require(!fresh());
+			holder.worldBound.center = {};
+			source.world.translate.x = invalid;
+			Require(!fresh());
+			source.world.translate = {};
+		}
+		{
+			C::FlameHolderContext context;
+			Require(C::ShouldSkipFlameHolder(context, light, holder));
+			const auto reads = owner.handleReads;
+			Require(C::ShouldSkipFlameHolder(context, light, holder));
+			Require(owner.handleReads == reads + 1);
+			// Bounds rejection must precede any caster ownership traversal.
+			holder.worldBound.center.x = 6;
+			holder.accessFault = true;
+			Require(!C::ShouldSkipFlameHolder(context, light, holder));
+			Require(context.ownerHandle == owner.handle && owner.handleReads == reads + 1);
+			holder.worldBound.center = {};
+			Require(!C::ShouldSkipFlameHolder(context, light, holder));
+			Require(context.captured && !context.ownerHandle);
+			holder.accessFault = false;
+			Require(!C::ShouldSkipFlameHolder(context, light, holder));
+			Require(fresh());
+		}
+		Require(C::IsCarriedShadowLight(light));
+		light.dynamic = false;
+		Require(!fresh());
+		Require(!C::IsCarriedShadowLight(light));
+		light.dynamic = true;
+		light.parabolic = false;
+		Require(!fresh());
+		Require(!C::IsCarriedShadowLight(light));
+		light.parabolic = true;
+		light.light.value = nullptr;
+		Require(!C::IsCarriedShadowLight(light));
+		light.light.value = &source;
+		root.accessFault = true;
+		Require(!fresh());
+		Require(!C::IsCarriedShadowLight(light));
+		root.accessFault = false;
+		source.parent = &source;
+		Require(!C::IsCarriedShadowLight(light));
+		source.parent = &root;
 		owner.actor = false;
+		Require(!C::IsCarriedShadowLight(light));
 		holder.parent = nullptr;
 		Require(!fresh());
 		holder.parent = &root;
@@ -165,6 +254,27 @@ int main()
 			const C::DrawScope nextRender{ &light };
 			Require(!C::DrawScope::FlameHolder()->captured);
 		}
+		constexpr std::uint32_t carried = 1u << 31;
+		std::uint32_t flags = 4;
+		{
+			const Util::ScopedFlag outer(flags, carried, true);
+			Require(flags == (carried | 4));
+			{
+				const Util::ScopedFlag unrelatedLight(flags, carried, false);
+				Require(flags == 4);
+				flags |= 8;
+			}
+			Require(flags == (carried | 12));
+			bool caught = false;
+			try {
+				const Util::ScopedFlag nested(flags, carried, false);
+				throw std::runtime_error("Scope unwind fixture");
+			} catch (const std::runtime_error&) {
+				caught = true;
+			}
+			Require(caught && flags == (carried | 12));
+		}
+		Require(flags == 12);
 		std::cout << "Flame holder ownership, bounds and render lifetime passed\n";
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

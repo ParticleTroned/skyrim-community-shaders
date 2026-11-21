@@ -8,6 +8,10 @@
 #include "Common/Skinned.hlsli"
 #include "Common/VR.hlsli"
 
+#if defined(RENDER_SHADOWMAP_PB)
+#	include "Utility/CarriedLightShadow.hlsli"
+#endif
+
 #if defined(RENDER_SHADOWMASK) || defined(RENDER_SHADOWMASKSPOT) || defined(RENDER_SHADOWMASKPB) || defined(RENDER_SHADOWMASKDPB)
 #	define RENDER_SHADOWMASK_ANY
 #endif
@@ -52,7 +56,7 @@ struct VS_OUTPUT
 #	endif
 
 #	if defined(RENDER_SHADOWMAP_PB)
-	float3 TexCoord1: TEXCOORD2;
+	float4 TexCoord1: TEXCOORD2;
 	float3 ParaboloidViewPos: TEXCOORD6;
 #	elif defined(ALPHA_TEST) && (defined(RENDER_DEPTH) || defined(RENDER_SHADOWMAP))
 	float4 TexCoord1: TEXCOORD2;
@@ -244,6 +248,8 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.TexCoord1.y = positionCS.w;
 	precise float parabolaParam = ParabolaParam.y * positionCS.z;
 	vsout.TexCoord1.z = parabolaParam * 0.5 + 0.5;
+	// Keep the distance available without changing shader variants when the runtime toggle changes.
+	vsout.TexCoord1.w = CarriedLightShadow::NormalizedNearDistance(ParabolaParam.x);
 #		elif defined(ALPHA_TEST) && (defined(RENDER_DEPTH) || defined(RENDER_SHADOWMAP))
 	float4 texCoord1 = float4(0, 0, 0, 0);
 	texCoord1.xy = positionCS.zw;
@@ -436,7 +442,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 baseColor = TexBaseSampler.SampleBias(SampBaseSampler, baseTexCoord, SharedData::MipBias);
 
 #	if defined(RENDER_SHADOWMAP_PB)
-	if (input.TexCoord1.z < 0) {
+	if (input.TexCoord1.z < 0 || CarriedLightShadow::RejectNearCaster(input.TexCoord1.x, input.TexCoord1.w)) {
 		discard;
 	}
 #	endif

@@ -132,6 +132,13 @@ namespace LightLimitFixDetail::ShadowCulling
 	{
 		return { geometry.actor, geometry.dynamic, geometry.protectedGeometry, geometry.actorRoot, geometry.actor ? geometry.actorReference : nullptr };
 	}
+	bool carriedLightMatches = false;
+	unsigned carriedLightCalls = 0;
+	bool IsCarriedShadowLight(RE::BSShadowLight&) noexcept
+	{
+		++carriedLightCalls;
+		return carriedLightMatches;
+	}
 	bool flameHolderMatches = false;
 	unsigned flameHolderCalls = 0;
 	bool ShouldSkipFlameHolder(FlameHolderContext&, RE::BSShadowLight&, const RE::BSGeometry&) noexcept
@@ -497,10 +504,51 @@ void CheckFlameHolderDraws()
 	C::snapshot.Publish({});
 }
 
+void CheckCarriedLightCutoff()
+{
+	RE::NiCamera camera;
+	RE::NiLight source{ { { 1000, 0, 0 } } }, otherSource;
+	RE::BSShadowLight light{ { &source }, {} }, otherLight;
+	auto captured = std::make_shared<C::Snapshot>();
+	captured->sampledAt = clockMs;
+	captured->cameraCount = 1;
+	captured->cameras[0] = { { &camera }, { &light }, { &source }, C::Pass::Point, 0, {}, 1000 };
+	C::snapshot.Publish(captured);
+	C::active = C::carriedLightMatches = true;
+	C::carriedLightCalls = 0;
+	Require(!C::UseCarriedLightNearCutoff(&light) && C::carriedLightCalls == 0);
+	auto enabled = std::make_shared<C::Snapshot>(*captured);
+	enabled->settings.carriedLightNearCutoff = true;
+	C::snapshot.Publish(enabled);
+	Require(!C::UseCarriedLightNearCutoff(nullptr) && !C::UseCarriedLightNearCutoff(&otherLight));
+	Require(C::carriedLightCalls == 0);
+	Require(C::UseCarriedLightNearCutoff(&light) && C::carriedLightCalls == 1);
+	C::carriedLightMatches = false;
+	Require(!C::UseCarriedLightNearCutoff(&light));
+	C::carriedLightMatches = true;
+	light.light.value = &otherSource;
+	const auto calls = C::carriedLightCalls;
+	Require(!C::UseCarriedLightNearCutoff(&light) && C::carriedLightCalls == calls);
+	light.light.value = &source;
+	light.worldTranslate.x = 1;
+	Require(!C::UseCarriedLightNearCutoff(&light));
+	light.worldTranslate.x = 0;
+	clockMs += C::SnapshotMaxAgeMs + 1;
+	Require(!C::UseCarriedLightNearCutoff(&light));
+	clockMs -= C::SnapshotMaxAgeMs + 1;
+	globals::state->loading = true;
+	Require(!C::UseCarriedLightNearCutoff(&light));
+	globals::state->loading = false;
+	C::active = false;
+	Require(!C::UseCarriedLightNearCutoff(&light));
+	C::snapshot.Publish({});
+}
+
 int main()
 {
 	try {
 		CheckFlameHolderDraws();
+		CheckCarriedLightCutoff();
 		CheckActorPartHistory();
 		CheckExistingActorPolicy();
 		CheckActorPartDraws();

@@ -31,7 +31,8 @@ namespace
 	struct Output
 	{
 		std::array<float, 4> position, texture;
-		Vec depth, light;
+		std::array<float, 4> depth;
+		Vec light;
 		float alpha, clip, cull;
 		UINT eye;
 	};
@@ -125,7 +126,7 @@ namespace
 			Util::SetResourceName(vertex.Get(), "ParaboloidTest::VS");
 			std::vector<D3D11_SO_DECLARATION_ENTRY> elements{
 				{ 0, "SV_POSITION", 0, 0, 4, 0 }, { 0, "TEXCOORD", 0, 0, 4, 0 },
-				{ 0, "TEXCOORD", 2, 0, 3, 0 }, { 0, "TEXCOORD", 6, 0, 3, 0 }, { 0, "TEXCOORD", 4, 0, 1, 0 }
+				{ 0, "TEXCOORD", 2, 0, 4, 0 }, { 0, "TEXCOORD", 6, 0, 3, 0 }, { 0, "TEXCOORD", 4, 0, 1, 0 }
 			};
 			if (vr) {
 				elements.push_back({ 0, "SV_ClipDistance", 0, 0, 1, 0 });
@@ -177,10 +178,10 @@ namespace
 			}
 		}
 
-		void Verify(const std::array<Vec, 3>& positions, float hemisphere, bool stereo, UINT eye)
+		void Verify(const std::array<Vec, 3>& positions, float hemisphere, bool stereo, UINT eye, float inverseRadius = .1f)
 		{
 			context->ClearState();
-			constants[0]->SetVariable("ParabolaParam", std::array<float, 2>{ .1f, hemisphere });
+			constants[0]->SetVariable("ParabolaParam", std::array<float, 2>{ inverseRadius, hemisphere });
 			if (vr)
 				constants[4]->SetVariable("StereoEnabled", stereo ? 1.0f : 0.0f);
 			for (const auto& constant : constants) {
@@ -234,13 +235,14 @@ namespace
 					x = .5f * x + (eye == 0 ? -.5f : .5f);
 				Near(out.position[0], x);
 				Near(out.position[1], denominator != 0 ? p[1] / denominator : 0);
-				Near(out.position[2], radius * .1f);
+				Near(out.position[2], radius * inverseRadius);
 				Near(out.position[3], 1);
 				Near(out.texture[0], p[0]);
 				Near(out.texture[1], p[1]);
 				Near(out.alpha, .5f + p[0] * .1f);
-				Near(out.depth[0], radius * .1f);
+				Near(out.depth[0], radius * inverseRadius);
 				Near(out.depth[1], 1);
+				Near(out.depth[3], std::min(12.0f * inverseRadius, 12.0f / 256.0f));
 				if (vr) {
 					Near(out.clip, clip);
 					Near(out.cull, clip);
@@ -374,6 +376,7 @@ try {
 						fixture.Verify(triangle, hemisphere, mode != 0, mode == 2 ? 1 : 0);
 					}
 		fixture.Verify({ Vec{ 0, 0, 0 }, Vec{ 1, 0, 1 }, Vec{ 0, 1, 1 } }, 1, false, 0);
+		fixture.Verify({ Vec{ 0, 0, 0 }, Vec{ 1, 0, 1 }, Vec{ 0, 1, 1 } }, 1, false, 0, 1.0f / 512.0f);
 		fixture.Verify({ Vec{ 1, 0, 0 }, Vec{ 0, 1, 1 }, Vec{ -1, 0, 0 } }, 1, false, 0);
 	}
 	std::cout << "Paraboloid shadow: clipping, fixed subdivision, winding, alpha, stereo and stage ownership passed\n";

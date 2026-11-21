@@ -3274,6 +3274,16 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE spdlog::spdlog windowsapp.lib
     )
     set_tests_properties(ParaboloidShadow PROPERTIES TIMEOUT 0)
+    add_d3d_shader_test(carried_light_shadow_test CarriedLightShadow tests/carried_light_shadow_test.cpp)
+    target_sources(
+        carried_light_shadow_test
+        PRIVATE src/Utils/ShaderInclude.cpp
+    )
+    target_link_libraries(
+        carried_light_shadow_test
+        PRIVATE spdlog::spdlog windowsapp.lib
+    )
+    set_tests_properties(CarriedLightShadow PROPERTIES TIMEOUT 0)
     add_d3d_shader_test(paraboloid_sampling_test ParaboloidSampling tests/paraboloid_sampling_test.cpp)
     target_sources(paraboloid_sampling_test PRIVATE src/Utils/ShaderInclude.cpp)
     target_link_libraries(

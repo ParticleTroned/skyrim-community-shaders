@@ -94,6 +94,9 @@ namespace ShadowSnapshotFixture
 		Require(HasEligibleCamera(captured), "Flame-holder policy must be independent of interior distance culling");
 		captured.settings.skipFlameEnclosure = false;
 		Require(!HasEligibleCamera(captured), "Disabled interior point demand activated culling");
+		captured.settings.carriedLightNearCutoff = true;
+		Require(HasEligibleCamera(captured), "Carried cutoff must be independent of interior distance culling");
+		captured.settings.carriedLightNearCutoff = false;
 		captured.settings.interiorTorches = true;
 		Require(HasEligibleCamera(captured), "Interior torch opt-in did not reactivate culling");
 		captured.settings.sun = captured.settings.torch = false;
@@ -249,20 +252,21 @@ void CheckPerformanceControls()
 		auto& parts = controls.settings.ShadowCulling;
 		parts.smallActorParts = enabled;
 		parts.skipFlameEnclosure = enabled;
+		parts.carriedLightNearCutoff = enabled;
 		parts.actorPartDistanceMeters = 20;
 		parts.actorPartReturnDistanceMeters = 10;
 		parts.actorPartRadiusCentimeters = 25;
 		const auto original = controls.CapturePerformanceCostMeasurementState();
 		controls.SetPerformanceToggleEnabled(false);
-		Require(!parts.smallActorParts && !controls.IsPerformanceToggleEnabled(), "Master off left tiny-part culling enabled");
+		Require(!parts.smallActorParts && !parts.carriedLightNearCutoff && !controls.IsPerformanceToggleEnabled(), "Master off left tiny-part culling enabled");
 		controls.SetPerformanceToggleEnabled(true);
 		Require(controls.settings.SkipRedundantLightAttach, "Master on must restore the light-update default");
-		Require(parts.smallActorParts && parts.skipFlameEnclosure && controls.IsPerformanceToggleEnabled(), "Master on did not restore the tiny-part default");
+		Require(parts.smallActorParts && parts.skipFlameEnclosure && !parts.carriedLightNearCutoff && controls.IsPerformanceToggleEnabled(), "Master on did not restore the tiny-part default");
 		controls.SetPerformanceCostMeasurementEnabled(false);
-		Require(!parts.smallActorParts && !controls.IsPerformanceCostMeasurementEnabled(), "Measurement off left tiny-part culling enabled");
+		Require(!parts.smallActorParts && !parts.carriedLightNearCutoff && !controls.IsPerformanceCostMeasurementEnabled(), "Measurement off left tiny-part culling enabled");
 		controls.SetPerformanceCostMeasurementEnabled(true);
 		Require(controls.settings.SkipRedundantLightAttach, "Default cost measurement must restore the light-update default");
-		Require(parts.smallActorParts && parts.skipFlameEnclosure && controls.IsPerformanceCostMeasurementEnabled(), "Measurement on omitted tiny-part culling");
+		Require(parts.smallActorParts && parts.skipFlameEnclosure && !parts.carriedLightNearCutoff && controls.IsPerformanceCostMeasurementEnabled(), "Measurement on omitted tiny-part culling");
 		Require(parts.actorPartDistanceMeters == 20 && parts.actorPartReturnDistanceMeters == 10 && parts.actorPartRadiusCentimeters == 25,
 			"Performance switches changed the tuned tiny-part sliders");
 		controls.RestorePerformanceCostMeasurementState(original);
@@ -324,6 +328,16 @@ int main()
 		C::Settings settings;
 		Require(settings.smallActorParts, "Actor-part policy must default on");
 		Require(settings.skipFlameEnclosure, "Flame-holder policy must default on");
+		Require(!settings.carriedLightNearCutoff && !C::Parse(nlohmann::json::object()).carriedLightNearCutoff, "Carried cutoff must default off for new and existing settings");
+		const auto cutoffOn = C::Parse({ { "carriedLightNearCutoff", true } });
+		Require(cutoffOn.carriedLightNearCutoff && nlohmann::json(cutoffOn).get<C::Settings>() == cutoffOn, "Cutoff preference did not round trip");
+		bool invalidCutoff = false;
+		try {
+			C::ValidateOverride({ { "carriedLightNearCutoff", 1 } });
+		} catch (const std::invalid_argument&) {
+			invalidCutoff = true;
+		}
+		Require(invalidCutoff, "Non-boolean carried cutoff was accepted");
 		const auto flameOff = C::Parse({ { "skipFlameEnclosure", false } }, settings);
 		Require(!flameOff.skipFlameEnclosure && nlohmann::json(flameOff).get<C::Settings>() == flameOff, "Flame-holder preference did not round trip");
 		bool invalidFlame = false;

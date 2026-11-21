@@ -2414,7 +2414,7 @@ int main()
 					}
 					const auto radius = shadowControls.at("Small part radius");
 					require(radius.minimum == 0 && radius.maximum == MaximumActorPartRadiusCentimeters, "Actor-part radius uses bounded centimetres with zero/off");
-					for (const char* control : { "Sun shadows", "Torch shadows", "Skip a light's own flame holder", "Distant NPC shadows", "Small actor part shadows", "Indoor torches", "Sun shadow distance", "Torch shadow distance", "NPC distance", "Small part radius", "Small part cutoff distance", "Small part return distance" }) {
+					for (const char* control : { "Sun shadows", "Torch shadows", "Skip a light's own flame holder", "Carried light near-shadow cutoff", "Distant NPC shadows", "Small actor part shadows", "Indoor torches", "Sun shadow distance", "Torch shadow distance", "NPC distance", "Small part radius", "Small part cutoff distance", "Small part return distance" }) {
 						const auto observed = shadowControls.at(control);
 						require(observed.disabled == sps, "SPS alone gates native shadow controls independently of contact shadows");
 						require(!sps || observed.alpha < shadowControls.at("Enable Point Light Contact Shadows").alpha, "SPS greys native shadow controls while leaving contact shadows bright");
@@ -2425,6 +2425,8 @@ int main()
 					click(shadowControls.at("Enable Point Light Contact Shadows").center, draw);
 					require(shadows.contact != contact, "contact shadows stay editable when SPS is installed");
 					if (!sps) {
+						click(shadowControls.at("Carried light near-shadow cutoff").center, draw);
+						require(shadows.settings.ShadowCulling.carriedLightNearCutoff != original.carriedLightNearCutoff, "carried cutoff can be toggled independently");
 						click(shadowControls.at("Skip a light's own flame holder").center, draw);
 						require(shadows.settings.ShadowCulling.skipFlameEnclosure != original.skipFlameEnclosure, "flame-holder shadows can be toggled independently");
 						click(shadowControls.at("Sun shadows").center, draw);

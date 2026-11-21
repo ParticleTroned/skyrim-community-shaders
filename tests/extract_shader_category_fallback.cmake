@@ -15,6 +15,7 @@ extract_between("${_state}" "case RE::BSShader::Type::Lighting:"
     "case RE::BSShader::Type::Grass:" "lighting_lookup.h")
 extract_between("${_state}" "case RE::BSShader::Type::Effect:"
     "case RE::BSShader::Type::DistantTree:" "effect_lookup.h")
+extract_between("${_header}" "enum class UtilityShaderFlags" "// Shader blocking data" "utility_flags.h")
 file(READ "${PROJECT_ROOT}/src/TruePBR.cpp" _pbr)
 file(READ "${PROJECT_ROOT}/src/Features/DetailMaps.cpp" _detail)
 extract_between("${_detail}" "void DetailMaps::GenerateShaderPermutations("

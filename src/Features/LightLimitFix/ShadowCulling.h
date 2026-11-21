@@ -5,6 +5,7 @@
 namespace RE
 {
 	class BSRenderPass;
+	class BSShadowLight;
 }
 
 namespace LightLimitFixDetail::ShadowCulling
@@ -13,6 +14,8 @@ namespace LightLimitFixDetail::ShadowCulling
 	void Install();
 	/** Check once per native sun render so disabled small-part culling leaves sun draws on the unscoped fast path. */
 	bool NeedsSunDrawScope();
+	/** Evaluate the opt-in cutoff once per retained native point-light render. */
+	bool UseCarriedLightNearCutoff(RE::BSShadowLight* light);
 	/** Reject only lightless utility shadow draws inside a matched native light render scope. */
 	bool SkipShadowDraw(const RE::BSRenderPass* pass, std::uint32_t technique);
 	/** Publish immutable stereo demand and retained native shadow-camera identities. */

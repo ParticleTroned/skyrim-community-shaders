@@ -587,6 +587,23 @@ namespace SharedData
 		uint pad3;
 		float4 FireMeltSpheres[8];
 	};
+#		if defined(WETTERNESS)
+	struct SnowMeltSettings
+	{
+		uint count;
+		uint enabled;
+		uint unchangedFireMask;
+		uint padding;
+		float4 lightDryingHours;
+		float4 heavyDryingHours;
+		float4 states[32];
+		uint4 fireParameters[32];
+		float4 fires[256];
+		float4 lightDryingAges[32];
+		float4 heavyDryingAges[32];
+		float4 maximumState;
+	};
+#		endif
 #	endif
 
 	cbuffer FeatureData : register(b6)
@@ -615,6 +632,9 @@ namespace SharedData
 		BloomSettings bloomSettings;
 #	if defined(SNOW_COVER) && defined(PSHADER)
 		SnowCoverSettings snowCoverSettings;
+#		if defined(WETTERNESS)
+		SnowMeltSettings snowMeltSettings;
+#		endif
 #	endif
 	};
 

@@ -52,8 +52,10 @@ namespace RE
 	struct TESObjectREFR
 	{
 		Base* base = nullptr;
-		FormType GetFormType() const { return FormType::Static; }
-		bool CanBeMoved() const { return false; }
+		FormType type = FormType::Static;
+		bool movable = false;
+		FormType GetFormType() const { return type; }
+		bool CanBeMoved() const { return movable; }
 		Base* GetBaseObject() const { return base; }
 	};
 	struct BSShaderProperty
@@ -89,7 +91,8 @@ namespace RE
 		} data{ { &alpha } };
 		RuntimeData& GetGeometryRuntimeData() { return data; }
 		TESObjectREFR* GetUserData() const { return reference; }
-		bool HasAnimation() const { return false; }
+		bool animated = false;
+		bool HasAnimation() const { return animated; }
 	};
 	struct BSShader
 	{
@@ -205,6 +208,18 @@ int main()
 	require(flags == inWorld);
 	snow.EndPass(nested);
 	require(flags == (inWorld | foliage));
+	pass.geometry = &leaf;
+	for (int moving = 0; moving < 3; ++moving) {
+		reference.type = moving == 0 ? RE::FormType::ActorCharacter : RE::FormType::Static;
+		reference.movable = moving == 1;
+		leaf.animated = moving == 2;
+		const auto savedFlags = snow.BeginPass(&pass);
+		require((flags & static_cast<uint32_t>(State::ExtraShaderDescriptors::NoSnowMelt)) != 0);
+		snow.EndPass(savedFlags);
+		require(flags == (inWorld | foliage));
+	}
+	reference.type = RE::FormType::Static;
+	reference.movable = leaf.animated = false;
 	for (int inactive = 0; inactive < 6; ++inactive) {
 		snow.active = inactive != 0;
 		snow.wsettings.EnableSnowCover = inactive != 1;

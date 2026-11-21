@@ -1,4 +1,5 @@
 #include "Wetterness.h"
+#include "Common/WetternessDrying.hlsli"
 #include "GrassLighting.h"
 #include "Menu.h"
 #include "Menu/SettingsPage.h"
@@ -7,6 +8,7 @@
 #include "Utils/Game.h"
 #include "Utils/UI.h"
 #include "WeatherPicker.h"
+#include "Wetterness/SnowMelt.h"
 #include "WetternessLightingPolicy.h"
 
 #include <algorithm>
@@ -511,7 +513,7 @@ namespace
 			return;
 		}
 
-		const float remaining = std::clamp(1.0f - (elapsedSeconds / durationSeconds), 0.0f, 1.0f);
+		const float remaining = WetternessDrying::Remaining(elapsedSeconds, durationSeconds);
 		const float startCap = std::clamp(startDepth, 0.0f, maxDepth) * remaining;
 		const float globalCap = maxDepth * remaining;
 		const float envelopeCap = std::min(startCap, globalCap);
@@ -1542,6 +1544,7 @@ void Wetterness::DrawSettings()
 	}
 
 	if (page.Is("drying")) {
+		ImGui::TextWrapped("These drying controls also apply to melted Snow Cover. Wetness stays where snow was; heavier cover leaves more water and dries later. Waiting, sleeping and travel advance drying in game hours.");
 		const auto drawDryingSlider = [](const char* label, float& value, const char* tooltip) {
 			Util::Widgets::SliderFloat(label, &value, DRYING_HOURS_MIN, DRYING_HOURS_MAX, "%.0f h", ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -2042,7 +2045,7 @@ bool Wetterness::IsRuntimeProcessingActive() const
 		return true;
 	}
 
-	if (HasPendingDrying()) {
+	if (HasPendingDrying() || WetternessSnowMelt::HasHistory()) {
 		return true;
 	}
 
@@ -2054,6 +2057,17 @@ bool Wetterness::IsRuntimeProcessingActive() const
 	}
 
 	return false;
+}
+
+float4 Wetterness::GetDryingHours(float precipitationWeight) const
+{
+	const auto* sky = globals::game::sky;
+	const float currentWeight = sky ? std::clamp(sky->currentWeatherPct, 0.0f, 1.0f) : 1.0f;
+	const auto hours = enableWeatherDrivenDryingModel ?
+	                       GetWeatherDrivenDryingHours(sky ? sky->currentWeather : nullptr, sky ? sky->lastWeather : nullptr,
+							   currentWeight, 1.0f - currentWeight, precipitationWeight) :
+	                       GetManualDryingHours(settings, puddleDryingHours);
+	return { hours.stoneHours, hours.grassHours, hours.dirtHours, hours.puddleHours };
 }
 
 float Wetterness::GetEffectiveGrassGlossiness(float dryGlossiness, const PerFrame& frameData) const
@@ -2375,10 +2389,8 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 	const bool rainingNow = (blendedRainingVisualSnapped > 0.0f) || rainingByWeatherMetadata;
 	const float rainExposureSource = hasPrecipitationFxSignal ? blendedRainingVisualWeighted : blendedRainingAccum;
 	const auto getEffectiveDryingHours = [&](float rainEventWeight) {
-		if (enableWeatherDrivenDryingModel) {
-			return GetWeatherDrivenDryingHours(currentWeather, lastWeather, currentWeight, lastWeight, rainEventWeight);
-		}
-		return GetManualDryingHours(settings, puddleDryingHours);
+		const auto hours = GetDryingHours(rainEventWeight);
+		return EffectiveDryingHours{ hours.x, hours.y, hours.z, hours.w };
 	};
 	EffectiveDryingHours effectiveDryingHours{};
 
@@ -2495,7 +2507,8 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 		runtimeState.wasRainingLastFrame = false;
 		runtimeState.grassLightingWetnessPhase = 0.0f;
 		g_hasLastValidOcclusionViewProj = false;
-		return CacheCommonBufferData(MakeDryPerFrameData());
+		if (!WetternessSnowMelt::HasHistory())
+			return CacheCommonBufferData(MakeDryPerFrameData());
 	}
 
 	if (settings.EnableWetterness) {

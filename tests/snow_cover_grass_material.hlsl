@@ -30,9 +30,10 @@ ColorOutput FoliageMaterial(float4 position : SV_Position)
 	SnowCover::FoliageSnowResult snow = SnowCover::ApplyGrassSnow(material.BaseColor, float3(0, 0, 1), float3(0, 0, 100 + CoatingCoverage),
 		float2(0.5, 0.5), 0, 1, false, 0, TexBaseSampler, true);
 	Foliage::ApplySnowCoating(material, snow.Coverage, snow.SubstrateColor);
-	if (PlantSurface && SharedData::snowCoverSettings.AffectGrassTint)
+	bool snowActive = PlantSurface && SharedData::snowCoverSettings.EnableSnowCover;
+	if (snowActive && SharedData::snowCoverSettings.AffectGrassTint)
 		SnowCover::ApplyFoliageColor(leafColor, CoatingCoverage);
-	float coverage = PlantSurface ? saturate(CoatingCoverage * SharedData::snowCoverSettings.MainTint.a + SharedData::snowCoverSettings.TimeSnowing) : 0;
+	float coverage = snowActive ? saturate(CoatingCoverage * SharedData::snowCoverSettings.MainTint.a + SharedData::snowCoverSettings.TimeSnowing) : 0;
 	coverage *= SharedData::snowCoverSettings.EnableExpensiveFoliage ? 1 : 0.55;
 	coverage *= 1 - ProjectedCoverage;
 	if (coverage < 0.01)

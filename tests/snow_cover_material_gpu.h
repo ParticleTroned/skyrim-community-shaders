@@ -40,6 +40,7 @@ size_t CheckFoliageMaterial(ID3D11Device* device, ID3D11DeviceContext* context, 
 		features.SetMember("SharedData::wetternessSettings", "ShorePersistentDarkeningStrength", 1.0f);
 	}
 	if (grass) {
+		features.SetMember("SharedData::snowCoverSettings", "FoliageHeightOffset", -2048.0f);
 		features.SetMember("SharedData::snowCoverSettings", "SnowHeightOffset", 100.0f);
 		features.SetMember("SharedData::snowCoverSettings", "WeatherFadeStart", 1000.0f);
 		features.SetMember("SharedData::snowCoverSettings", "WeatherFadeEnd", 2000.0f);
@@ -74,7 +75,11 @@ size_t CheckFoliageMaterial(ID3D11Device* device, ID3D11DeviceContext* context, 
 					samples.SetVariable("CoatingCoverage", coverage);
 					for (float alpha : { 0.0f, 0.5f, 1.0f }) {
 						features.SetMember("SharedData::snowCoverSettings", "MainTint", Color{ 0.6f, 0.8f, 1, alpha });
-						for (bool enabled : { false, true }) {
+						for (unsigned mode : { 0u, 1u, 2u }) {
+							if (!grass && mode == 2)
+								continue;
+							const bool enabled = mode != 0;
+							features.SetMember("SharedData::snowCoverSettings", "EnableSnowCover", mode == 2 ? 0u : 1u);
 							features.SetMember("SharedData::snowCoverSettings", "EnableGlints", static_cast<uint32_t>(enabled));
 							features.SetMember("SharedData::foliageLightingSettings", "EnableFoliageScattering", static_cast<uint32_t>(enabled));
 							features.SetMember("SharedData::foliageLightingSettings", "EnableFoliageAmbientBoost", static_cast<uint32_t>(enabled));

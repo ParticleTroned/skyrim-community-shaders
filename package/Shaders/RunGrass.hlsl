@@ -580,6 +580,9 @@ cbuffer AlphaTestRefCB : register(b11)
 #		define BASIC_SNOW_COVER
 #		define SampColorSampler SampBaseSampler
 #		include "SnowCover/SnowCover.hlsli"
+#		if defined(WETTERNESS)
+#			include "Wetterness/SnowMelt.hlsli"
+#		endif
 #	endif
 
 #	define LinearSampler SampBaseSampler
@@ -592,6 +595,24 @@ float3 ApplyGrassWetDarkening(float3 baseColor)
 	                           saturate(SharedData::wetternessSettings.GrassWetDarkeningStrength);
 	return baseColor * (1.0 - wetDarkening);
 }
+
+#	if defined(SNOW_COVER)
+float3 ApplyGrassSnowMeltDarkening(float3 color, SnowCover::CoverageInputs footprint)
+{
+#		if defined(WETTERNESS)
+	float rainWetness = saturate(SharedData::wetternessSettings.GrassWetnessPhase);
+	float strength = saturate(SharedData::wetternessSettings.GrassWetDarkeningStrength);
+	[branch] if (strength > 0 && rainWetness < 1)
+	{
+		float localWetness = Wetterness::GetSnowMeltWetness(footprint, float3(0, 1, 0)).x;
+		// Rain darkening is already applied; only add the stronger local melt response.
+		if (localWetness > rainWetness)
+			color *= (1 - localWetness * strength) / (1 - rainWetness * strength);
+	}
+#		endif
+	return color;
+}
+#	endif
 
 #	ifdef GRASS_OPTIMIZATIONS
 #		define GRASS_DETAILED(condition) (!(input.VertexMult < 0) && (condition))
@@ -796,7 +817,9 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 #			else
 		float snowSkyVisibility = 1.0;
 #			endif
-		SnowCover::ApplyGrassSnow(albedo, normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, complex, eyeIndex, TexBaseSampler, pbrTexture, billboard);
+		SnowCover::GrassSnowState snow = SnowCover::GetGrassSnowState(normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, complex, eyeIndex, TexBaseSampler, pbrTexture);
+		albedo = ApplyGrassSnowMeltDarkening(albedo, snow.footprint);
+		SnowCover::ApplyGrassSnow(albedo, snow, pbrTexture, billboard);
 	}
 #		endif
 
@@ -992,7 +1015,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				else
 		float snowSkyVisibility = 1.0;
 #				endif
-		SnowCover::ApplyGrassSnow(albedo, normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, complex, eyeIndex, TexBaseSampler);
+		SnowCover::GrassSnowState snow = SnowCover::GetGrassSnowState(normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, complex, eyeIndex, TexBaseSampler);
+		albedo = ApplyGrassSnowMeltDarkening(albedo, snow.footprint);
+		SnowCover::ApplyGrassSnow(albedo, snow);
 	}
 #			endif
 

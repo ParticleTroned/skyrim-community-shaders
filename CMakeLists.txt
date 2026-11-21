@@ -3246,6 +3246,44 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(WetternessHighlights PROPERTIES TIMEOUT 300)
     include("${PROJECT_SOURCE_DIR}/tests/wetterness_runtime.cmake")
+    add_controller_test(
+        wetterness_snow_history_test WetternessSnowHistory
+        tests/wetterness_snow_history_test.cpp
+    )
+    set(_snow_melt_runtime_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/snow-melt-runtime"
+    )
+    set(_snow_melt_runtime_header
+        "${_snow_melt_runtime_dir}/snow_melt_runtime.h"
+    )
+    add_custom_command(
+        OUTPUT "${_snow_melt_runtime_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_snow_melt_runtime_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_snow_melt_runtime.cmake"
+        DEPENDS
+            src/Features/Wetterness/SnowMelt.cpp
+            tests/extract_snow_melt_runtime.cmake
+        VERBATIM
+    )
+    add_controller_test(
+        wetterness_snow_world_test WetternessSnowWorld
+        tests/wetterness_snow_world_test.cpp
+    )
+    target_sources(
+        wetterness_snow_world_test
+        PRIVATE "${_snow_melt_runtime_header}"
+    )
+    target_include_directories(
+        wetterness_snow_world_test
+        PRIVATE "${_snow_melt_runtime_dir}"
+    )
+    add_d3d_shader_test(
+        wetterness_snow_melt_test WetternessSnowMelt
+        tests/wetterness_snow_melt_test.cpp
+    )
+    set_tests_properties(WetternessSnowMelt PROPERTIES TIMEOUT 300)
     add_d3d_shader_test(
         snow_cover_color_test SnowCoverColor tests/snow_cover_color_test.cpp
     )

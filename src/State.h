@@ -379,6 +379,7 @@ public:
 		SnowLODTree = 1u << 27,
 		SnowInactive = 1u << 28,
 		SnowFoliage = 1u << 29,
+		NoSnowMelt = 1u << 30,
 
 		CharacterFace = 0b01 << CharacterCategoryShift,
 		CharacterSkin = 0b10 << CharacterCategoryShift,

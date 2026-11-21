@@ -1,6 +1,7 @@
 #include "SnowCover.h"
 
 #include "Utils/UI.h"
+#include "Wetterness/SnowMelt.h"
 
 void SnowCover::DrawSettings()
 {
@@ -47,6 +48,7 @@ void SnowCover::DrawSettings()
 	Util::AddTooltip("Saves the current region's snow settings and applies any edited texture paths.");
 	ImGui::SameLine();
 	if (ImGui::Button("Region defaults")) {
+		WetternessSnowMelt::Reset();
 		const auto enabled = wsettings.EnableSnowCover;
 		ResetWorldConfig();
 		wsettings.EnableSnowCover = enabled;
@@ -174,6 +176,9 @@ void SnowCover::DrawPerformanceSettings(bool advanced)
 	Util::AddTooltip("On: exposed roofs can collect extra snow. Off: roofs follow the same snow line as other surfaces.");
 	Util::Widgets::CheckboxFlags("Seasonal foliage tint", &settings.EnableFoliageTint, 1u);
 	Util::AddTooltip("On: grass and plants can change color with the season. Off: keeps their original colors. Snow coverage is unaffected.");
+	if (ImGui::Checkbox("Snowmelt wetness", &meltWetnessEnabled))
+		WetternessSnowMelt::Reset();
+	Util::AddTooltip("Leaves local wet surfaces and puddles as snow melts, including around fires. Uses Wetterness drying controls and requires Wetterness to be enabled.");
 	ImGui::Checkbox("Melt snow near fires", &fireMeltSettings.Enabled);
 	if (auto tooltip = Util::HoverTooltipWrapper())
 		ImGui::TextUnformatted("On: nearby fires clear patches of snow. Off: fires leave snow untouched. Applies to placed fires, not spells or projectiles.");

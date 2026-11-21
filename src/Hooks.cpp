@@ -6,6 +6,7 @@
 #include "Api/AcceptedDrawService.h"
 #include "Deferred.h"
 #include "EngineFixes/VRAlphaPassListFix.h"
+#include "EngineFixes/VRAlphaSort.h"
 #include "EngineFixes/VRShadowBatch.h"
 #include "Features/TerrainSeams.h"
 
@@ -3307,6 +3308,7 @@ namespace Hooks
 	{
 		VRShadowBatch::Install();
 		VRAlphaPassListFix::Install();
+		VRAlphaSort::Install();
 		Util::VRLoadingMenuClear::Install();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		// Construct the inert collector away from render-thread first use. Capture

@@ -2156,6 +2156,17 @@ if(BUILD_CONTROLLER_TESTS)
     include("${PROJECT_SOURCE_DIR}/cmake/StateDrawTests.cmake")
 
     add_controller_test(alpha_pass_list_test AlphaPassList tests/alpha_pass_list_test.cpp)
+    add_controller_test(alpha_sort_test AlphaSort tests/alpha_sort_test.cpp)
+    target_link_libraries(alpha_sort_test PRIVATE xbyak::xbyak)
+    target_compile_options(
+        alpha_sort_test
+        PRIVATE "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/fp:fast>"
+    )
+    target_compile_definitions(
+        alpha_sort_test
+        PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+    set_tests_properties(AlphaSort PROPERTIES TIMEOUT 30)
     target_link_libraries(
         alpha_pass_list_test
         PRIVATE unordered_dense::unordered_dense

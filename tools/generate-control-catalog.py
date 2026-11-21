@@ -353,8 +353,9 @@ def collect(sources: list[Source]):
                 label = raw.split("##", 1)[0].strip()
                 if label and len(label) <= 160 and "\n" not in label and "%" not in label:
                     group = environment.get("field.group", "")
-                    identity = (feature, page, active_section, *navigation, group, raw)
-                    entries[identity] = dict(feature=feature, page=page, section=active_section, label=label, raw=raw,
+                    section = environment.get("field.section", active_section)
+                    identity = (feature, page, section, *navigation, group, raw)
+                    entries[identity] = dict(feature=feature, page=page, section=section, label=label, raw=raw,
                                              selector=navigation[0], choice=navigation[1], group=group)
             return
         if name.startswith(("ImGui::", "std::", "logger::")):

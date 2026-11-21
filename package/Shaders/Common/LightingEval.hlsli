@@ -101,6 +101,24 @@ float3 VanillaSpecular(DirectContext context, float shininess, float2 uv, float2
 	return lightColorMultiplier;
 }
 
+#if !defined(TRUE_PBR)
+void AddSoftLighting(DirectContext context, MaterialProperties material, float normalization, inout DirectLightingOutput lightingOutput)
+{
+	const uint shadingFlags = Lighting::GetShadingFlags(Permutation::PixelShaderDescriptor);
+	[branch] if ((shadingFlags & (Permutation::LightingFlags::SoftLighting | Permutation::LightingFlags::RimLighting | Permutation::LightingFlags::BackLighting)) != 0)
+	{
+		const float NdotL = dot(context.worldNormal, context.lightDir);
+		float3 softLightColor = context.lightColor * context.softShadow;
+		if (Lighting::HasSoftLighting())
+			lightingOutput.diffuse += softLightColor * GetSoftLightMultiplier(NdotL) * material.rimSoftLightColor * normalization;
+		if (Lighting::HasRimLighting())
+			lightingOutput.diffuse += softLightColor * GetRimLightMultiplier(context.lightDir, context.viewDir, context.worldNormal) * material.rimSoftLightColor * normalization;
+		if (Lighting::HasBackLighting())
+			lightingOutput.diffuse += softLightColor * saturate(-NdotL) * material.backLightColor * normalization;
+	}
+}
+#endif
+
 void EvaluateLighting(DirectContext context, MaterialProperties material, float3x3 tbnTr, float2 uv, float2 uv_ddx, float2 uv_ddy, out DirectLightingOutput lightingOutput)
 {
 	lightingOutput = (DirectLightingOutput)0;
@@ -111,6 +129,10 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
 	[branch] if (Skin::IsEnabled())
 	{
 		Skin::SkinDirectLightInput(lightingOutput, context, material);
+#		if !defined(DEFERRED)
+		// Forward draws do not receive the deferred screen-space diffusion pass.
+		AddSoftLighting(context, material, 1.0, lightingOutput);
+#		endif
 		return;
 	}
 #	endif
@@ -129,19 +151,7 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
 		lightingOutput.transmission += material.BaseColor * GetFoliageTransmission(NdotL, dot(context.viewDir, context.lightDir)) * diffuseLightColor * Color::VanillaNormalization();
 	}
 #	endif
-	const uint shadingFlags = Lighting::GetShadingFlags(Permutation::PixelShaderDescriptor);
-	[branch] if ((shadingFlags & (Permutation::LightingFlags::SoftLighting | Permutation::LightingFlags::RimLighting | Permutation::LightingFlags::BackLighting)) != 0)
-	{
-		float3 softLightColor = context.lightColor * context.softShadow;
-		if (Lighting::HasSoftLighting())
-			lightingOutput.diffuse += softLightColor * GetSoftLightMultiplier(NdotL) * material.rimSoftLightColor * Color::VanillaNormalization();
-
-		if (Lighting::HasRimLighting())
-			lightingOutput.diffuse += softLightColor * GetRimLightMultiplier(context.lightDir, context.viewDir, context.worldNormal) * material.rimSoftLightColor * Color::VanillaNormalization();
-
-		if (Lighting::HasBackLighting())
-			lightingOutput.diffuse += softLightColor * saturate(-NdotL) * material.backLightColor * Color::VanillaNormalization();
-	}
+	AddSoftLighting(context, material, Color::VanillaNormalization(), lightingOutput);
 	lightingOutput.specular = VanillaSpecular(context, material.Shininess, uv, uv_ddx, uv_ddy) * material.SpecularColor * material.Glossiness * diffuseLightColor * Color::VanillaNormalization();
 #endif
 }

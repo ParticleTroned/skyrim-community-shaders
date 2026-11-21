@@ -6,6 +6,13 @@
 
 namespace SkinWetness
 {
+	/** The pause-aware renderer clock also advances while an actor is offscreen. */
+	inline float Elapsed(float a_previous, float a_current)
+	{
+		const float elapsed = a_current - a_previous;
+		return Util::IsFinite(elapsed) ? std::max(0.0f, elapsed) : 0.0f;
+	}
+
 	/** Independent stamina sliders define an ordered ramp; equal endpoints disable sweat. */
 	inline float Sweat(float a_stamina, float a_start, float a_full)
 	{

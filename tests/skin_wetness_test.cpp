@@ -3,6 +3,7 @@
 #include <array>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 
 namespace
@@ -37,6 +38,10 @@ int main()
 		Require(Fade(.2f, .8f, .01f, 10, 1) == .8f, "Renewed sweat must take effect immediately");
 		Require(Fade(1, .4f, 50, 10, 1) == .4f, "Drying cannot undershoot current sweat");
 		Require(Fade(2, 0, .01f, 0, 2) == 0, "Zero fade time must dry immediately");
+		Require(Fade(2, 0, Elapsed(10, 25), 10, 2) == 0, "Actors must finish drying while offscreen");
+		Require(Fade(2, 0, Elapsed(10, 10), 10, 2) == 2, "Paused game time must preserve wetness");
+		Require(Elapsed(10, 0) == 0, "Clock resets must not reverse drying");
+		Require(Elapsed(0, std::numeric_limits<float>::infinity()) == 0, "Invalid time must not enter wetness state");
 		std::cout << "Skin sweat thresholds and drying duration passed\n";
 		return 0;
 	} catch (const std::exception& error) {

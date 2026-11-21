@@ -2979,21 +2979,31 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float skinThickness = 1;
 	const bool hasSkinExtra = Skin::skinMaterialFlags.x > 0.5;
 	const bool hasSkinWetness = Skin::skinMaterialFlags.y > 0.5;
+	const float skinBodyTiling = Skin::skinMaterialFlags.z >= 2.0 ? 1.0 : skinData.skinDetailParams.y;
+#		if defined(WETTERNESS) || defined(WETNESS_EFFECTS)
+	const bool skinNeedsWetness = skinData.physicalParams.w > 0 &&
+	                              (Skin::skinPerGeometry.x > 0 || Skin::skinPerGeometry.y > 0 || skinData.skinParams2.y > 0);
+#		else
+	const bool skinNeedsWetness = false;
+#		endif
 	[branch] if (skinEnabled)
 	{
 		baseColor.xyz *= skinData.skinParams2.w;
 		if (hasSkinExtra)
 			skinExtra = Skin::TexSkinExtra.Sample(SampColorSampler, uv);
-		if (Skin::skinMaterialFlags.w > 0.5)
+		if (Skin::skinMaterialFlags.w > 0.5 && skinData.sssParams.w > 0 && skinData.sssParams.x > 0)
 			skinThickness = 1 - saturate(Skin::TexSkinThickness.Sample(SampColorSampler, uv).x);
-		if (hasSkinWetness) {
+#		if defined(WETTERNESS) || defined(WETNESS_EFFECTS)
+		if (hasSkinWetness && skinData.physicalParams.w > 0 && (skinNeedsWetness || CS_WETNESS_SETTINGS.EnableWetnessEffects != 0)) {
 			skinWetnessNormal = Skin::TexSkinWetness.Sample(SampColorSampler, uv);
-			// Released grayscale masks remain valid alongside packed normal/alpha maps.
-			bool grayscale = Skin::skinMaterialFlags.y > 1.5 || all(abs(skinWetnessNormal.rgb - skinWetnessNormal.rrr) < 1.0 / 255.0);
+			// Opaque grayscale/red masks store wetness in red; packed normals use alpha.
+			bool grayscale = Skin::skinMaterialFlags.y > 1.5 || (skinWetnessNormal.a >= 0.99 &&
+																	(all(abs(skinWetnessNormal.rgb - skinWetnessNormal.rrr) < 1.0 / 255.0) || all(skinWetnessNormal.yz < 1.0 / 255.0)));
 			skinWetMask = saturate(grayscale ? skinWetnessNormal.r : skinWetnessNormal.a);
 			if (grayscale)
 				skinWetnessNormal.xyz = float3(0.5, 0.5, 1);
 		}
+#		endif
 	}
 #	endif
 
@@ -3252,6 +3262,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(MODELSPACENORMALS)
+#		if defined(CS_SKIN_SHADING) && !defined(SKINNED)
+	if (skinEnabled)
+		worldNormal = SafeNormalize3(worldNormal, float3(0, 0, 1));
+#		endif
 	float3 vertexNormal = worldNormal;
 #	endif
 
@@ -3259,60 +3273,49 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if (defined(WETTERNESS) || defined(WETNESS_EFFECTS))
 	float3 skinWetNormal = worldNormal.xyz;
 	float skinWetness = 0.0f;
-	const bool skinNeedsWetness = skinData.physicalParams.w > 0 &&
-	                              (Skin::skinPerGeometry.x > 0 || Skin::skinPerGeometry.y > 0 || skinData.skinParams2.y > 0);
-#		else
-	const bool skinNeedsWetness = false;
 #		endif
 	[branch] if (skinEnabled && (skinData.skinDetailParams.w > 0 || skinNeedsWetness))
 	{
 #		if (defined(WETTERNESS) || defined(WETNESS_EFFECTS))
-#			if defined(FACEGEN)
-		float2 wetUV = uv;
-#			else
-		float2 wetUV = uv * skinData.skinDetailParams.y;
-#			endif
+		float2 wetUV = uv * skinBodyTiling;
 		float2 dynamicWet = Skin::GetWetness(input.WorldPosition.z + FrameBuffer::CameraPosAdjust[eyeIndex].z, worldNormal.xyz);
 		skinWetness = skinNeedsWetness ? Skin::PerlinNoise(wetUV, skinData.wetParams.x, skinData.wetParams.y, skinData.wetParams.z, clamp(dynamicWet.x + dynamicWet.y + skinData.skinParams2.y, 0.f, 2.f)) * skinWetMask : 0;
 		float3 heightWetNormal = Skin::NormalFromHeight(skinWetness, skinData.wetParams.w * 0.0005, uv);
 #		endif
-		float2 detailUV = uv * skinData.skinDetailParams.x;
-#		if !defined(FACEGEN)
-		detailUV *= skinData.skinDetailParams.y;
-#		endif
+		float2 detailUV = uv * skinData.skinDetailParams.x * skinBodyTiling;
 #		if defined(MODELSPACENORMALS)
 		const float3x3 tbnTr = Skin::SurfaceBasis(input.WorldPosition.xyz, worldNormal, uv);
 		const float3x3 tbn = transpose(tbnTr);
-		const float3 tangentNormal = mul(tbnTr, worldNormal.xyz);
+		const float3 tangentNormal = float3(0, 0, 1);
 #		else
-		const float3 tangentNormal = normal.xyz;
+		const float3 tangentNormal = SafeNormalize3(normal.xyz, float3(0, 0, 1));
 #		endif  // MODELSPACENORMALS
 		float3 combinedTangentNormal = tangentNormal;
 		if (skinData.skinDetailParams.w > 0.0f) {
 			float3 detailNormal = Skin::TexSkinDetailNormal.SampleBias(Skin::DetailSampler, detailUV, SharedData::MipBias).rgb * 2.0f - 1.0f;
-			bool normalOnly = Skin::skinMaterialFlags.z > 0.5f;
+			bool normalOnly = (uint(Skin::skinMaterialFlags.z) & 1u) != 0;
 			if (normalOnly)
 				detailNormal.z = sqrt(saturate(1.0f - dot(detailNormal.xy, detailNormal.xy)));
 			float detailMask = normalOnly ? 1.0f : saturate(Skin::TexSkinDetailNormal.SampleBias(Skin::DetailSampler, uv, SharedData::MipBias).a);
 			float detailWeight = skinData.skinDetailParams.z * detailMask;
 			if (detailWeight != 0.0f) {
 				detailNormal = normalize(float3(detailNormal.xy * detailWeight, max(detailNormal.z, 1e-4f)));
-				combinedTangentNormal = normalize(NormalBlending::Reorient(tangentNormal, detailNormal));
-				worldNormal.xyz = normalize(mul(tbn, combinedTangentNormal));
+				combinedTangentNormal = SafeNormalize3(NormalBlending::Reorient(tangentNormal, detailNormal), tangentNormal);
+				worldNormal.xyz = SafeNormalize3(mul(tbn, combinedTangentNormal), worldNormal.xyz);
 			}
 		}
 #		if (defined(WETTERNESS) || defined(WETNESS_EFFECTS))
 		if (skinWetness > 0.0f) {
 			float3 wetNormal = heightWetNormal;
 			if (hasSkinWetness) {
-				float3 wetMaskNormal = (skinWetnessNormal.xyz * 2.0 - 1.0);
+				float3 wetMaskNormal = SafeNormalize3(skinWetnessNormal.xyz * 2.0 - 1.0, float3(0, 0, 1));
 				wetNormal = NormalBlending::Reorient(wetMaskNormal, wetNormal);
 			}
 			if (skinData.skinParams2.y > 1.0f) {
 				wetNormal = lerp(wetNormal, tangentNormal, saturate(skinData.skinParams2.y - 1.0f));
 			}
-			float3 combinedWetNormal = normalize(NormalBlending::Reorient(combinedTangentNormal, wetNormal));
-			skinWetNormal = normalize(lerp(worldNormal.xyz, mul(tbn, combinedWetNormal), saturate(skinWetness)));
+			float3 combinedWetNormal = SafeNormalize3(NormalBlending::Reorient(combinedTangentNormal, wetNormal), combinedTangentNormal);
+			skinWetNormal = SafeNormalize3(lerp(worldNormal.xyz, mul(tbn, combinedWetNormal), saturate(skinWetness)), worldNormal.xyz);
 		}
 #		endif
 	}
@@ -3804,14 +3807,22 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		,
 		snowMeltWetness);
 
+#		if defined(CS_SKIN_SHADING)
+	if (skinEnabled) {
+		wetnessSurface.lightingStrength *= skinWetMask;
+		wetnessSurface.glossinessSpecular *= skinWetMask;
+		wetnessSurface.roughnessSpecular = lerp(1.0, wetnessSurface.roughnessSpecular, skinWetMask);
+		wetnessSurface.normal = SafeNormalize3(lerp(worldNormal.xyz, wetnessSurface.normal, skinWetMask), worldNormal.xyz);
+	}
+#		endif
 #		if defined(CS_SKIN)
 	if (actorWetness > 0) {
 		wetnessSurface.enabled = 1;
 		wetnessSurface.lightingStrength = max(wetnessSurface.lightingStrength, actorWetness);
 		wetnessSurface.glossinessSpecular = max(wetnessSurface.glossinessSpecular, actorWetness);
-		wetnessSurface.roughnessSpecular = max(0.05, 1 - saturate(wetnessSurface.glossinessSpecular));
+		wetnessSurface.roughnessSpecular = min(wetnessSurface.roughnessSpecular, max(0.05, 1 - actorWetness));
 #			if defined(CS_SKIN_SHADING)
-		wetnessSurface.normal = skinWetNormal;
+		wetnessSurface.normal = SafeNormalize3(NormalBlending::Reorient(wetnessSurface.normal, skinWetNormal, worldNormal.xyz), skinWetNormal);
 #			endif
 	}
 #		endif
@@ -3922,11 +3933,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// optically perfect; the ripple normal map adds micro-variation but GGX still peaks
 	// sharply without this floor.
 	static const float wetnessMinPuddleRoughness = 0.05;
+#		if defined(CS_SKIN_SHADING)
+	if (skinEnabled) {
+		wetnessGlossinessAlbedo *= skinWetMask;
+		wetnessGlossinessSpecular *= skinWetMask;
+		wetnessNormal = SafeNormalize3(lerp(worldNormal.xyz, wetnessNormal, skinWetMask), worldNormal.xyz);
+	}
+#		endif
 #		if defined(CS_SKIN)
 	wetnessGlossinessSpecular = max(wetnessGlossinessSpecular, actorWetness);
 #			if defined(CS_SKIN_SHADING)
 	if (actorWetness > 0)
-		wetnessNormal = skinWetNormal;
+		wetnessNormal = SafeNormalize3(NormalBlending::Reorient(wetnessNormal, skinWetNormal, worldNormal.xyz), skinWetNormal);
 #			endif
 #		endif
 	waterRoughnessSpecular = max(saturate(1.0 - wetnessGlossinessSpecular), wetnessMinPuddleRoughness);

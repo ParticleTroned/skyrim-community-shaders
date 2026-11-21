@@ -1,6 +1,7 @@
 #include "Features/Skin.h"
 
 #include "Globals.h"
+#include "ShaderCache.h"
 #include "State.h"
 #include "Utils/DdsResource.h"
 #include "Utils/StringUtils.h"
@@ -76,6 +77,38 @@ namespace
 			if (Util::IEndsWithAsciiInsensitive(normal, suffix))
 				return normal.substr(0, normal.size() - suffix.size());
 		return {};
+	}
+
+	const RE::BSLightingShaderMaterialBase* SkinMaterial(const RE::BSShaderProperty* a_property)
+	{
+		const auto* material = a_property ? a_property->material : nullptr;
+		using Feature = RE::BSShaderMaterial::Feature;
+		return material && material->GetType() == RE::BSShaderMaterial::Type::kLighting &&
+		               (material->GetFeature() == Feature::kFaceGen || material->GetFeature() == Feature::kFaceGenRGBTint) ?
+		           static_cast<const RE::BSLightingShaderMaterialBase*>(material) :
+		           nullptr;
+	}
+
+	bool HasThickness(const RE::BSLightingShaderMaterialBase& a_material)
+	{
+		auto* set = a_material.textureSet.get();
+		if (!set)
+			return false;
+		// Mesh slot 2 and TXST entry 3 address the same skin thickness input.
+		if (auto* form = skyrim_cast<RE::BGSTextureSet*>(set))
+			return !form->textures[3].textureName.empty();
+		const auto* path = set->GetTexturePath(RE::BSTextureSet::Texture::kSubsurfaceTint);
+		return path && *path;
+	}
+
+	bool IsHead(const RE::BSRenderPass& a_pass)
+	{
+		if (a_pass.shaderProperty->material->GetFeature() == RE::BSShaderMaterial::Feature::kFaceGen)
+			return true;
+		for (auto* node = a_pass.geometry->parent; node; node = node->parent)
+			if (netimmerse_cast<RE::BSFaceGenNiNode*>(node))
+				return true;
+		return false;
 	}
 }
 
@@ -204,6 +237,8 @@ Skin::ExtraTextures* Skin::FindExtraTextures(const RE::BSLightingShaderMaterialB
 
 bool Skin::IsOverlay(const RE::BSRenderPass& a_pass)
 {
+	if (!SkinMaterial(a_pass.shaderProperty) || !a_pass.shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kSkinned))
+		return false;
 	const auto& geometry = *a_pass.geometry;
 	const auto* alpha = geometry.GetGeometryRuntimeData().alphaProperty.get();
 	if (!alpha || !alpha->GetAlphaBlending())
@@ -233,7 +268,8 @@ bool Skin::IsOverlay(const RE::BSRenderPass& a_pass)
 void Skin::BeginPass(RE::BSRenderPass* a_pass)
 {
 	EndPass();
-	if (!loaded || !settings.EnableSkin || !perGeometryCB || !resourceError.empty())
+	if (!loaded || !settings.EnableSkin || !perGeometryCB || !resourceError.empty() ||
+		!globals::shaderCache->IsEnabled() || globals::state->selectedCustomPixelShaderType != RE::BSShader::Type::Lighting)
 		return;
 	pendingViews = {};
 	pendingThickness = nullptr;
@@ -242,21 +278,19 @@ void Skin::BeginPass(RE::BSRenderPass* a_pass)
 	data.flags.w = -1;
 	if (a_pass && a_pass->geometry && a_pass->shaderProperty && !IsOverlay(*a_pass)) {
 		if (IsWetnessEnabled())
-			data.wetness = GetWetness(a_pass->geometry);
-		const auto* material = a_pass->shaderProperty->material;
-		using MaterialFeature = RE::BSShaderMaterial::Feature;
-		if (material && material->GetType() == RE::BSShaderMaterial::Type::kLighting &&
-			(material->GetFeature() == MaterialFeature::kFaceGen || material->GetFeature() == MaterialFeature::kFaceGenRGBTint)) {
-			const auto& lighting = *static_cast<const RE::BSLightingShaderMaterialBase*>(material);
+			data.wetness = GetWetness(a_pass->geometry, a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kSkinned));
+		if (const auto* material = SkinMaterial(a_pass->shaderProperty)) {
+			const auto& lighting = *material;
 			bool grayscale = false;
 			if (const auto* textures = FindExtraTextures(lighting)) {
 				pendingViews = textures->views;
 				grayscale = textures->wetnessIsGrayscale;
 			}
 			const auto* thickness = lighting.rimSoftLightingTexture.get();
-			if (thickness && thickness->rendererTexture && !thickness->name.empty())
+			if (thickness && thickness->rendererTexture && !thickness->name.empty() && HasThickness(lighting))
 				pendingThickness.copy_from(REX::W32::AsReal(thickness->rendererTexture->resourceView));
-			data.flags = float4(float(bool(pendingViews[1])), pendingViews[0] ? (grayscale ? 2.0f : 1.0f) : 0.0f, float(detailReconstructZ), float(bool(pendingThickness)));
+			const float detailFlags = float(detailReconstructZ) + (IsHead(*a_pass) ? 2.0f : 0.0f);
+			data.flags = float4(float(bool(pendingViews[1])), pendingViews[0] ? (grayscale ? 2.0f : 1.0f) : 0.0f, detailFlags, float(bool(pendingThickness)));
 			useDetailSampler = settings.EnableSkinDetail && settings.SkinDetailStrength != 0 && detailTexture && detailSampler;
 		}
 	}

@@ -33,7 +33,7 @@ int main()
 		for (bool vr : { false, true })
 			for (bool pbr : { false, true })
 				for (bool deferred : { false, true })
-					for (bool modelNormals : { false, true })
+					for (unsigned geometryFlags : { 0u, 1u, 2u, 3u })
 						for (const char* material : { "FACEGEN", "FACEGEN_RGB_TINT" })
 							for (const char* wetness : { "", "WETTERNESS", "WETNESS_EFFECTS" }) {
 								auto includes = PackageIncludes::AllFeatures(".");
@@ -48,9 +48,9 @@ int main()
 									defines.push_back({ "TRUE_PBR", "1" });
 								if (deferred)
 									defines.push_back({ "DEFERRED", "1" });
-								if (modelNormals)
+								if (geometryFlags & 1u)
 									defines.push_back({ "MODELSPACENORMALS", "1" });
-								else
+								if (geometryFlags & 2u)
 									defines.push_back({ "SKINNED", "1" });
 								if (*wetness)
 									defines.push_back({ wetness, "1" });

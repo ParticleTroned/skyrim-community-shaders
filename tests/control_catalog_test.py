@@ -80,11 +80,33 @@ void Sample::DrawLight() { ImGui::SliderFloat("Brightness", &v, 0, 1); }
         self.assertTrue(all(e["choice"] == "Lighting" for e in entries if e["label"] == "Brightness"))
         self.assertTrue(all(not e["selector"] for e in entries if e["label"] == "Conditional"))
 
+    def test_table_controls_reveal_their_declared_section(self):
+        entries = extract('''
+for (const auto& field : Numbers)
+ if (page.Is(field.section)) Util::Widgets::SliderFloat(field.label, &v, 0, 1);
+''', helpers='''
+struct Number { const char* label; const char* section; float minimum; };
+constexpr std::array Numbers { Number{"Roughness", "lighting", 0}, Number{"Tiling", "detail", 1} };
+''')
+        self.assertEqual({e["label"]: e["section"] for e in entries}, {"Roughness": "lighting", "Tiling": "detail"})
+
     def test_identity_is_stable_across_unrelated_source_order_changes(self):
         first = extract('ImGui::Button("Alpha"); ImGui::Button("Beta");')
         second = extract('ImGui::Button("New"); ImGui::Button("Beta"); ImGui::Button("Alpha");')
         ids = {e["label"]: e["id"] for e in second}
         self.assertTrue(all(e["id"] == ids[e["label"]] for e in first))
+
+    def test_skin_controls_have_visible_destinations(self):
+        root = Path(__file__).resolve().parents[1]
+        sources = [catalog.Source(name, (root / name).read_text(encoding="utf-8"))
+                   for name in ("src/Features/Skin.h", "src/Features/Skin.cpp")]
+        entries = catalog.collect(sources)
+        by_label = {e["label"]: e["section"] for e in entries}
+        for label, section in {"Fresnel Reflectance": "lighting", "Body Tiling Multiplier": "detail",
+                               "Transmission Depth": "transmission", "Wetness Fade Time": "wetness"}.items():
+            self.assertEqual(by_label[label], section)
+        self.assertEqual(sum(e["label"] == "Enable Skin Detail" for e in entries), 1)
+        self.assertEqual(sum(e["label"] == "Enable Skin Transmission" for e in entries), 1)
 
     def test_recursive_helpers_terminate_and_deduplicate(self):
         entries = extract('Helper(); Helper();', 'void Sample::Helper() { ImGui::Button("Once"); Helper(); }')

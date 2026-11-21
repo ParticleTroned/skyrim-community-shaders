@@ -20,7 +20,7 @@ struct Skin : Feature
 	std::string GetName() override { return "Advanced Skin"; }
 	std::string GetShortName() override { return "Skin"; }
 	std::string_view GetShaderDefineName() override { return "CS_SKIN"; }
-	std::string_view GetShaderCacheAbiVersion() override { return "1"; }
+	std::string_view GetShaderCacheAbiVersion() override { return "2"; }
 	std::string_view GetCategory() const override { return FeatureCategories::kCharacters; }
 	bool SupportsVR() override { return true; }
 	bool HasShaderDefine(RE::BSShader::Type a_type) override { return a_type == RE::BSShader::Type::Lighting; }
@@ -103,6 +103,7 @@ private:
 	struct alignas(16) PerGeometryData
 	{
 		float4 wetness{};
+		// Map presence/encoding, BC5/head bits, then thickness (-1 disables skin shading).
 		float4 flags{};
 	};
 	static_assert(sizeof(PerGeometryData) == 32);
@@ -117,6 +118,7 @@ private:
 	{
 		float4 value{};
 		uint32_t frame = 0;
+		float time = 0;
 	};
 	struct SamplerState
 	{
@@ -131,7 +133,7 @@ private:
 	bool IsWetnessEnabled() const;
 	void LoadDetailTexture();
 	ExtraTextures* FindExtraTextures(const RE::BSLightingShaderMaterialBase& a_material);
-	float4 GetWetness(RE::BSGeometry* a_geometry);
+	float4 GetWetness(RE::BSGeometry* a_geometry, bool a_skinned);
 	static float GetWaterHeight(const RE::TESObjectREFR* a_actor, const RE::NiPoint3& a_position);
 	static bool IsOverlay(const RE::BSRenderPass& a_pass);
 	std::unique_ptr<ConstantBuffer> perGeometryCB;

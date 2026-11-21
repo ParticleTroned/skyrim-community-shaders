@@ -8,6 +8,7 @@
 #include "Utils/UI.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <stdexcept>
 
@@ -19,40 +20,38 @@ namespace
 		const char* path;
 		const char* label;
 		const char* section;
-		float minimum, maximum;
+		float minimum;
+		float maximum;
 		float& (*value)(Settings&);
 	};
-#define SKIN_NUMBER(member, path, label, section, minimum, maximum) \
-	{ path, label, section, minimum, maximum, [](Settings& s) -> float& { return s.member; } }
-	constexpr Number Numbers[] = {
-		SKIN_NUMBER(SkinMainRoughness, "/SkinMainRoughness", "Primary Roughness", "lighting", 0, 1),
-		SKIN_NUMBER(SkinSecondRoughness, "/SkinSecondRoughness", "Secondary Roughness", "lighting", 0, 1),
-		SKIN_NUMBER(SkinSpecularTexMultiplier, "/SkinSpecularTexMultiplier", "Specular Texture Multiplier", "lighting", 0, 10),
-		SKIN_NUMBER(SecondarySpecularStrength, "/SecondarySpecularStrength", "Secondary Specular Strength", "lighting", 0, 1),
-		SKIN_NUMBER(F0, "/F0", "Fresnel Reflectance", "lighting", 0, .1f),
-		SKIN_NUMBER(BaseColorMultiplier, "/BaseColorMultiplier", "Base Color Multiplier", "lighting", 0, 2),
-		SKIN_NUMBER(PhysicalMainRoughnessMultiplier, "/PhysicalMainRoughnessMultiplier", "Physical Primary Roughness", "lighting", 0, 2),
-		SKIN_NUMBER(PhysicalSecondRoughnessMultiplier, "/PhysicalSecondRoughnessMultiplier", "Physical Secondary Roughness", "lighting", 0, 2),
-		SKIN_NUMBER(PhysicalSpecularStrength, "/PhysicalSpecularStrength", "Physical Specular Strength", "lighting", 0, 2),
-		SKIN_NUMBER(ExtraEdgeRoughness, "/ExtraEdgeRoughness", "Extra Edge Roughness", "lighting", 0, 1),
-		SKIN_NUMBER(FuzzStrength, "/FuzzStrength", "Fuzz Strength", "lighting", 0, 2),
-		SKIN_NUMBER(FuzzRoughness, "/FuzzRoughness", "Fuzz Roughness", "lighting", .1f, 1),
-		SKIN_NUMBER(FuzzF0, "/FuzzF0", "Fuzz Reflectance", "lighting", 0, .5f),
-		SKIN_NUMBER(Translucency, "/Translucency", "Transmission Strength", "transmission", 0, 1),
-		SKIN_NUMBER(sssWidth, "/sssWidth", "Transmission Depth", "transmission", .001f, 1),
-		SKIN_NUMBER(SkinDetailStrength, "/SkinDetailStrength", "Skin Detail Strength", "detail", -2, 2),
-		SKIN_NUMBER(SkinDetailTiling, "/SkinDetailTiling", "Skin Detail Tiling", "detail", 1, 50),
-		SKIN_NUMBER(BodyTilingMultiplier, "/BodyTilingMultiplier", "Body Tiling Multiplier", "detail", .5f, 5),
-		SKIN_NUMBER(ExtraSkinWetness, "/ExtraSkinWetness", "Extra Skin Wetness", "wetness", 0, 2),
-		SKIN_NUMBER(WetFadeTime, "/WetFadeTime", "Wetness Fade Time", "wetness", 0, 50),
-		SKIN_NUMBER(StartSweat, "/StartSweat", "Sweat Starts Below Stamina", "wetness", 0, 1),
-		SKIN_NUMBER(FullSweat, "/FullSweat", "Full Sweat Below Stamina", "wetness", 0, 1),
-		SKIN_NUMBER(WetParams.x, "/WetParams/0", "Wetness Noise Scale", "wetness", 0, 1024),
-		SKIN_NUMBER(WetParams.y, "/WetParams/1", "Wetness Noise Lacunarity", "wetness", 0, 2),
-		SKIN_NUMBER(WetParams.z, "/WetParams/2", "Wetness Noise Persistence", "wetness", 0, 20),
-		SKIN_NUMBER(WetParams.w, "/WetParams/3", "Wetness Normal Strength", "wetness", 0, 20)
+	constexpr std::array Numbers{
+		Number{ "/SkinMainRoughness", "Primary Roughness", "lighting", 0, 1, [](Settings& s) -> float& { return s.SkinMainRoughness; } },
+		Number{ "/SkinSecondRoughness", "Secondary Roughness", "lighting", 0, 1, [](Settings& s) -> float& { return s.SkinSecondRoughness; } },
+		Number{ "/SkinSpecularTexMultiplier", "Specular Texture Multiplier", "lighting", 0, 10, [](Settings& s) -> float& { return s.SkinSpecularTexMultiplier; } },
+		Number{ "/SecondarySpecularStrength", "Secondary Specular Strength", "lighting", 0, 1, [](Settings& s) -> float& { return s.SecondarySpecularStrength; } },
+		Number{ "/F0", "Fresnel Reflectance", "lighting", 0, .1f, [](Settings& s) -> float& { return s.F0; } },
+		Number{ "/BaseColorMultiplier", "Base Color Multiplier", "lighting", 0, 2, [](Settings& s) -> float& { return s.BaseColorMultiplier; } },
+		Number{ "/PhysicalMainRoughnessMultiplier", "Physical Primary Roughness", "lighting", 0, 2, [](Settings& s) -> float& { return s.PhysicalMainRoughnessMultiplier; } },
+		Number{ "/PhysicalSecondRoughnessMultiplier", "Physical Secondary Roughness", "lighting", 0, 2, [](Settings& s) -> float& { return s.PhysicalSecondRoughnessMultiplier; } },
+		Number{ "/PhysicalSpecularStrength", "Physical Specular Strength", "lighting", 0, 2, [](Settings& s) -> float& { return s.PhysicalSpecularStrength; } },
+		Number{ "/ExtraEdgeRoughness", "Extra Edge Roughness", "lighting", 0, 1, [](Settings& s) -> float& { return s.ExtraEdgeRoughness; } },
+		Number{ "/FuzzStrength", "Fuzz Strength", "lighting", 0, 2, [](Settings& s) -> float& { return s.FuzzStrength; } },
+		Number{ "/FuzzRoughness", "Fuzz Roughness", "lighting", .1f, 1, [](Settings& s) -> float& { return s.FuzzRoughness; } },
+		Number{ "/FuzzF0", "Fuzz Reflectance", "lighting", 0, .5f, [](Settings& s) -> float& { return s.FuzzF0; } },
+		Number{ "/Translucency", "Transmission Strength", "transmission", 0, 1, [](Settings& s) -> float& { return s.Translucency; } },
+		Number{ "/sssWidth", "Transmission Depth", "transmission", .001f, 1, [](Settings& s) -> float& { return s.sssWidth; } },
+		Number{ "/SkinDetailStrength", "Skin Detail Strength", "detail", -2, 2, [](Settings& s) -> float& { return s.SkinDetailStrength; } },
+		Number{ "/SkinDetailTiling", "Skin Detail Tiling", "detail", 1, 50, [](Settings& s) -> float& { return s.SkinDetailTiling; } },
+		Number{ "/BodyTilingMultiplier", "Body Tiling Multiplier", "detail", .5f, 5, [](Settings& s) -> float& { return s.BodyTilingMultiplier; } },
+		Number{ "/ExtraSkinWetness", "Extra Skin Wetness", "wetness", 0, 2, [](Settings& s) -> float& { return s.ExtraSkinWetness; } },
+		Number{ "/WetFadeTime", "Wetness Fade Time", "wetness", 0, 50, [](Settings& s) -> float& { return s.WetFadeTime; } },
+		Number{ "/StartSweat", "Sweat Starts Below Stamina", "wetness", 0, 1, [](Settings& s) -> float& { return s.StartSweat; } },
+		Number{ "/FullSweat", "Full Sweat Below Stamina", "wetness", 0, 1, [](Settings& s) -> float& { return s.FullSweat; } },
+		Number{ "/WetParams/0", "Wetness Noise Scale", "wetness", 0, 1024, [](Settings& s) -> float& { return s.WetParams.x; } },
+		Number{ "/WetParams/1", "Wetness Noise Lacunarity", "wetness", 0, 2, [](Settings& s) -> float& { return s.WetParams.y; } },
+		Number{ "/WetParams/2", "Wetness Noise Persistence", "wetness", 0, 20, [](Settings& s) -> float& { return s.WetParams.z; } },
+		Number{ "/WetParams/3", "Wetness Normal Strength", "wetness", 0, 20, [](Settings& s) -> float& { return s.WetParams.w; } }
 	};
-#undef SKIN_NUMBER
 	struct Toggle
 	{
 		const char* name;
@@ -76,8 +75,8 @@ namespace
 
 	Settings Parse(const json& a_json, Settings a_settings, bool a_strict)
 	{
-		if (!a_json.is_object())
-			throw std::invalid_argument("Advanced Skin settings must be an object");
+		if (!a_json.is_object() || (a_strict && a_json.empty()))
+			throw std::invalid_argument("Advanced Skin settings must be a nonempty object");
 		const auto known = Serialize(a_settings);
 		if (a_strict)
 			for (const auto& [key, value] : a_json.items())
@@ -105,6 +104,12 @@ namespace
 			field.value(a_settings) = static_cast<float>(std::clamp(value, double(field.minimum), double(field.maximum)));
 		}
 		return a_settings;
+	}
+
+	void DrawEnableControl(Settings& a_settings)
+	{
+		Util::Widgets::Checkbox("Enable Advanced Skin", &a_settings.EnableSkin);
+		Util::AddTooltip("Enables skin lighting, detail normals and actor wetness. Changes apply without shader recompilation.");
 	}
 }
 
@@ -145,8 +150,7 @@ void Skin::RestorePerformanceToggleState(const json& a_state)
 
 void Skin::DrawPerformanceSettings(bool a_advanced)
 {
-	Util::Widgets::Checkbox("Enable Advanced Skin", &settings.EnableSkin);
-	Util::AddTooltip("Enables skin lighting, detail normals and actor wetness. Changes apply without shader recompilation.");
+	DrawEnableControl(settings);
 	if (a_advanced) {
 		const auto disabled = Util::DisableGuard(!settings.EnableSkin);
 		Util::Widgets::Checkbox("Enable Skin Detail", &settings.EnableSkinDetail);
@@ -162,7 +166,7 @@ void Skin::DrawSettings()
 										  { "detail", "Detail", "Add fine surface normals.", "Skin texture detail", true, true, nullptr },
 										  { "transmission", "Transmission", "Control light passing through thin skin.", "Backlit skin", true, true, nullptr },
 										  { "wetness", "Wetness", "Tune sweat and drying after leaving water.", "Requires Wetterness or Wetness Effects", true, true, nullptr } });
-	DrawPerformanceSettings(false);
+	DrawEnableControl(settings);
 	if (!resourceError.empty())
 		ImGui::TextWrapped("%s", resourceError.c_str());
 	const auto disabled = Util::DisableGuard(!settings.EnableSkin);

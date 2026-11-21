@@ -6,7 +6,29 @@
 #include "Utils/Finite.h"
 
 #include <algorithm>
-#include <limits>
+
+namespace
+{
+	RE::Actor* GeometryOwner(RE::BSGeometry* a_geometry, bool a_skinned)
+	{
+		auto* reference = a_geometry->GetUserData();
+		auto* actor = reference && reference->IsActor() ? reference->As<RE::Actor>() : nullptr;
+		if (!actor && !a_skinned)
+			return nullptr;
+		auto* player = RE::PlayerCharacter::GetSingleton();
+		const auto* actorRoot = actor ? actor->Get3D(false) : nullptr;
+		const auto* playerRoot = actor == player ? actorRoot : (player ? player->Get3D(false) : nullptr);
+		const auto* firstPerson = player ? player->Get3D(true) : nullptr;
+		// First-person arms can lack user data; detached preview meshes are not live actors.
+		for (const auto* node = static_cast<RE::NiAVObject*>(a_geometry); node; node = node->parent) {
+			if (node == actorRoot)
+				return actor;
+			if (node == playerRoot || node == firstPerson)
+				return player;
+		}
+		return nullptr;
+	}
+}
 
 // Water-bound fallback follows powerof3's Splashes of Skyrim water-height lookup.
 float Skin::GetWaterHeight(const RE::TESObjectREFR* a_actor, const RE::NiPoint3& a_position)
@@ -31,15 +53,12 @@ void Skin::ResetRuntimeStateAfterGameLoad()
 	lastPruneFrame = 0;
 }
 
-float4 Skin::GetWetness(RE::BSGeometry* a_geometry)
+float4 Skin::GetWetness(RE::BSGeometry* a_geometry, bool a_skinned)
 {
 	// Geometry setup precedes State::Draw, which consumes the pending load reset.
 	if (globals::state->pendingPostLoadRuntimeReset)
 		ResetRuntimeStateAfterGameLoad();
-	auto* reference = a_geometry->GetUserData();
-	if (!reference || !reference->IsActor())
-		return {};
-	auto* actor = reference->As<RE::Actor>();
+	auto* actor = GeometryOwner(a_geometry, a_skinned);
 	if (!actor)
 		return {};
 	const auto frame = globals::state->frameCount;
@@ -52,6 +71,9 @@ float4 Skin::GetWetness(RE::BSGeometry* a_geometry)
 	if (!inserted && cached.frame == frame)
 		return cached.value;
 	cached.frame = frame;
+	const float time = globals::state->timer;
+	const float elapsed = SkinWetness::Elapsed(cached.time, time);
+	cached.time = Util::IsFinite(time) ? time : 0.0f;
 	const auto position = actor->GetPosition();
 	float4 wetness{ 0.0f, 0.0f, position.z, 0.0f };
 	auto* values = actor->AsActorValueOwner();
@@ -71,10 +93,8 @@ float4 Skin::GetWetness(RE::BSGeometry* a_geometry)
 		}
 	}
 	if (!inserted) {
-		const float frameDelta = globals::game::deltaTime ? *globals::game::deltaTime : 0.0f;
-		const float delta = Util::IsFinite(frameDelta) ? std::clamp(frameDelta, 0.0f, 10.0f) : 0.0f;
-		wetness.x = SkinWetness::Fade(cached.value.x, wetness.x, delta, settings.WetFadeTime, 1.0f);
-		wetness.y = SkinWetness::Fade(cached.value.y, wetness.y, delta, settings.WetFadeTime, 2.0f);
+		wetness.x = SkinWetness::Fade(cached.value.x, wetness.x, elapsed, settings.WetFadeTime, 1.0f);
+		wetness.y = SkinWetness::Fade(cached.value.y, wetness.y, elapsed, settings.WetFadeTime, 2.0f);
 		if (wetness.y > 0.0f)
 			wetness.w = std::max(wetness.w, cached.value.w);
 	}

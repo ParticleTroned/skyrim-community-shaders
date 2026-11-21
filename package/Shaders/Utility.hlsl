@@ -384,18 +384,9 @@ float SampleShadowPCF(Texture2DArray<float4> tex, SamplerComparisonState samp, f
 	return visibility / 8.0;
 }
 
-float SampleDualParaboloidShadowPCF(Texture2DArray<float4> tex, SamplerComparisonState samp, float2 baseUV, float layerIndex, float compareValue, float2x2 rotationMatrix, float radius, bool lowerHalf)
-{
-	float visibility = 0.0;
-	[unroll] for (int i = 0; i < 8; i++)
-	{
-		float2 offset = mul(Random::SpiralSampleOffsets8[i], rotationMatrix) * radius;
-		float2 uv = baseUV + offset;
-		uv.y = lowerHalf ? max(uv.y, 0.5) : min(uv.y, 0.5);
-		visibility += tex.SampleCmpLevelZero(samp, float3(uv, layerIndex), compareValue).x;
-	}
-	return visibility / 8.0;
-}
+#	if defined(RENDER_SHADOWMASKPB) || defined(RENDER_SHADOWMASKDPB)
+#		include "Utility/ParaboloidSampling.hlsli"
+#	endif
 
 PS_OUTPUT main(PS_INPUT input)
 {
@@ -636,16 +627,8 @@ PS_OUTPUT main(PS_INPUT input)
 		float3 lightDirection = normalize(normalize(positionLS) + float3(0, 0, 1));
 		float2 shadowMapUv = lightDirection.xy / lightDirection.z * 0.5 + 0.5;
 		float shadowMapCompareValue = saturate(length(positionLS) / ShadowLightParam.x) - AlphaTestRef.y;
-#			if SHADOWFILTER == 0
-		float shadowMapValue = TexShadowMapSampler.Sample(SampShadowMapSampler, float3(shadowMapUv, EndSplitDistances.x)).x;
-		if (shadowMapValue >= shadowMapCompareValue) {
-			shadowVisibility = 1;
-		}
-#			elif SHADOWFILTER == 1
-		shadowVisibility = TexShadowMapSamplerComp.SampleCmpLevelZero(SampShadowMapSamplerComp, float3(shadowMapUv, EndSplitDistances.x), shadowMapCompareValue).x;
-#			elif SHADOWFILTER == 3
-		shadowVisibility = SampleDualParaboloidShadowPCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, shadowMapUv, EndSplitDistances.x, shadowMapCompareValue, rotationMatrix, ShadowSampleParam.z, false);
-#			endif
+		shadowVisibility = SampleParaboloidShadow(shadowMapUv, EndSplitDistances.x, shadowMapCompareValue,
+			rotationMatrix, ShadowSampleParam.z, false, false);
 	} else {
 		shadowVisibility = 1;
 	}
@@ -665,17 +648,8 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 shadowMapUv = lightDirection.xy / lightDirection.z * 0.5 + 0.5;
 	shadowMapUv.y = lowerHalf ? 1.0 - 0.5 * shadowMapUv.y : 0.5 * shadowMapUv.y;
 
-	float shadowVisibility = 0;
-#			if SHADOWFILTER == 0
-	float shadowMapValue = TexShadowMapSampler.Sample(SampShadowMapSampler, float3(shadowMapUv, EndSplitDistances.x)).x;
-	if (shadowMapValue >= shadowMapCompareValue) {
-		shadowVisibility = 1;
-	}
-#			elif SHADOWFILTER == 1
-	shadowVisibility = TexShadowMapSamplerComp.SampleCmpLevelZero(SampShadowMapSamplerComp, float3(shadowMapUv, EndSplitDistances.x), shadowMapCompareValue).x;
-#			elif SHADOWFILTER == 3
-	shadowVisibility = SampleDualParaboloidShadowPCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, shadowMapUv, EndSplitDistances.x, shadowMapCompareValue, rotationMatrix, ShadowSampleParam.z, lowerHalf);
-#			endif
+	float shadowVisibility = SampleParaboloidShadow(shadowMapUv, EndSplitDistances.x, shadowMapCompareValue,
+		rotationMatrix, ShadowSampleParam.z, true, lowerHalf);
 
 	shadowColor.xyzw = fadeFactor * shadowVisibility;
 #		endif

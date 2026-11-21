@@ -192,6 +192,7 @@ namespace
 		uint32_t applied = 1;
 		int quality = 7;
 		bool reject = false;
+		bool failRestore = false;
 		bool IsPerformanceToggleEnabled() const { return enabled.Get(); }
 		nlohmann::json CapturePerformanceCostMeasurementState() const
 		{
@@ -204,6 +205,8 @@ namespace
 		}
 		void RestorePerformanceToggleState(const nlohmann::json& state)
 		{
+			if (failRestore)
+				throw std::runtime_error("restore failed");
 			enabled.Set(state.at("Enabled").get<bool>());
 			quality = state.at("Quality").get<int>();
 		}
@@ -245,6 +248,20 @@ try {
 	configurations["selected"] = original;
 	configurations["unrelated"] = original;
 	const auto beforeReplacement = feature.CapturePerformanceCostMeasurementState();
+	DeferredFeature broken;
+	broken.failRestore = true;
+	bool rollbackThrew = false;
+	try {
+		ApplyTransaction(std::vector{ &feature, &broken }, configurations, [&] {
+			feature.quality = 99;
+			configurations.clear();
+			return false; });
+	} catch (const std::exception&) {
+		rollbackThrew = true;
+	}
+	Require(rollbackThrew && feature.CapturePerformanceCostMeasurementState() == beforeReplacement &&
+				configurations.at("selected")->enabledState == original.enabledState && configurations.contains("unrelated"),
+		"One failed rollback must not prevent other features and toggle history from being restored");
 	Require(!ApplyTransaction(std::vector{ &feature }, configurations, [&] {
 		feature.quality = 33;
 		configurations.erase("selected");

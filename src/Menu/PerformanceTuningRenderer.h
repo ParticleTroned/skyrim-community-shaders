@@ -14,12 +14,20 @@ class PerformanceTuningRenderer
 {
 public:
 	static void Render();
+	/** Apply a preset switch through the existing reversible runtime control. */
+	static bool SetFeatureEnabled(Feature* a_feature, bool a_enabled);
+	/** Shared admission reason for a runtime feature switch. */
+	static const char* GetFeatureControlBlockReason(Feature* a_feature);
+	/** Resolve legacy comparison/scan links to the corresponding radio selection. */
+	static void SelectView(std::string_view a_section);
 	/** Scene ownership also applies to selections that do not switch a feature off. */
 	static const char* GetFeatureSceneControlBlockReason(Feature* a_feature);
 	/** Apply settings while preserving reversible toggle history on failure. */
 	static bool ApplyFeatureSettingsTransaction(const std::vector<Feature*>& a_features, const std::function<bool()>& a_apply, bool a_replaceToggleHistory = false);
 	/** Draws the reversible feature switch; custom help never replaces a blocking reason. */
 	static void RenderFeatureEnabledControl(Feature* a_feature, const char* a_tooltip = nullptr);
+	/** Persistent toggle failure for the header or the feature's profiling row. */
+	static const char* GetFeatureToggleFailureReason(Feature* a_feature);
 	/** Restores temporary profiling when no tuning panel or comparison is active. */
 	static void NotifyOverviewInactive();
 	/** Draws live counters, measurement controls and results; null compares all features. */

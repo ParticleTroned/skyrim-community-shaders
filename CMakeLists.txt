@@ -1917,6 +1917,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_page_under_test.h"
             "${_settings_ui_dir}/settings_widget_under_test.h"
             "${_settings_ui_dir}/settings_widget_declarations.h"
+            "${_settings_ui_dir}/settings_notices_under_test.h"
             "${_settings_ui_dir}/settings_lighting_pages_under_test.h"
             "${_settings_ui_dir}/settings_grass_under_test.h"
             "${_settings_ui_dir}/settings_shadow_culling_under_test.h"
@@ -1944,6 +1945,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_shell_under_test.h"
             "${_settings_ui_dir}/settings_capture_feedback_under_test.h"
             "${_settings_ui_dir}/settings_constraint_warning_under_test.h"
+            "${_settings_ui_dir}/settings_performance_navigation_under_test.h"
             "${_settings_ui_dir}/settings_adaptive_presets_under_test.h"
             "${_settings_ui_dir}/settings_preset_files_under_test.h"
         COMMAND
@@ -1989,6 +1991,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_page_under_test.h"
             "${_settings_ui_dir}/settings_widget_under_test.h"
             "${_settings_ui_dir}/settings_widget_declarations.h"
+            "${_settings_ui_dir}/settings_notices_under_test.h"
             "${_settings_ui_dir}/settings_lighting_pages_under_test.h"
             "${_settings_ui_dir}/settings_grass_under_test.h"
             "${_settings_ui_dir}/settings_shadow_culling_under_test.h"
@@ -2016,6 +2019,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_shell_under_test.h"
             "${_settings_ui_dir}/settings_capture_feedback_under_test.h"
             "${_settings_ui_dir}/settings_constraint_warning_under_test.h"
+            "${_settings_ui_dir}/settings_performance_navigation_under_test.h"
             "${_settings_ui_dir}/settings_adaptive_presets_under_test.h"
             "${_settings_ui_dir}/settings_preset_files_under_test.h"
     )
@@ -2091,6 +2095,41 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_link_libraries(
         vr_interface_settings_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+
+    add_controller_test(performance_profiles_test PerformanceProfiles tests/performance_profiles_test.cpp)
+    set(_performance_profiles_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/performance-profiles"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_performance_profiles_dir}/performance_profile_actions_under_test.h"
+            "${_performance_profiles_dir}/ssgi_presets_under_test.h"
+        COMMAND
+            ${CMAKE_COMMAND} -DPROJECT_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+            -DOUTPUT_DIRECTORY=${_performance_profiles_dir} -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/extract_performance_profiles.cmake"
+        DEPENDS
+            src/Menu/PerformancePage.cpp
+            src/Features/ScreenSpaceGI.cpp
+            src/Features/ScreenSpaceGI.h
+            tests/extract_performance_profiles.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    target_sources(
+        performance_profiles_test
+        PRIVATE
+            "${_performance_profiles_dir}/performance_profile_actions_under_test.h"
+            "${_performance_profiles_dir}/ssgi_presets_under_test.h"
+    )
+    target_include_directories(
+        performance_profiles_test
+        PRIVATE "${_performance_profiles_dir}"
+    )
+    target_link_libraries(
+        performance_profiles_test
         PRIVATE nlohmann_json::nlohmann_json
     )
 

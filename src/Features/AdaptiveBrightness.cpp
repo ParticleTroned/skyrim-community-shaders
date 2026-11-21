@@ -1405,7 +1405,7 @@ namespace
 				return &*it;
 		}
 
-		for (const auto* featureName : { AdaptiveBrightness::kFeatureName.data(), AdaptiveBrightness::kFeatureShortName.data(), SettingsMigrations::kLegacyAdaptiveBrightnessSettingsName.data(), "AdaptiveBalance" }) {
+		for (const auto* featureName : { AdaptiveBrightness::kFeatureName.data(), AdaptiveBrightness::kFeatureShortName.data(), SettingsMigrations::kLegacyAdaptiveBalanceSettingsName.data(), SettingsMigrations::kLegacyAdaptiveBrightnessSettingsName.data(), "AdaptiveBalance" }) {
 			if (auto it = a_json.find(featureName); it != a_json.end() && it->is_object()) {
 				if (auto profilesIt = it->find(kProfilesFieldName.data()); profilesIt != it->end() && profilesIt->is_array())
 					return &*it;
@@ -1466,7 +1466,7 @@ namespace
 		if (auto it = a_json.find(kLocationOverridesFieldName.data()); it != a_json.end())
 			return &*it;
 
-		for (const auto* featureName : { AdaptiveBrightness::kFeatureName.data(), AdaptiveBrightness::kFeatureShortName.data(), SettingsMigrations::kLegacyAdaptiveBrightnessSettingsName.data(), "AdaptiveBalance" }) {
+		for (const auto* featureName : { AdaptiveBrightness::kFeatureName.data(), AdaptiveBrightness::kFeatureShortName.data(), SettingsMigrations::kLegacyAdaptiveBalanceSettingsName.data(), SettingsMigrations::kLegacyAdaptiveBrightnessSettingsName.data(), "AdaptiveBalance" }) {
 			if (auto it = a_json.find(featureName); it != a_json.end() && it->is_object()) {
 				if (auto overridesIt = it->find(kLocationOverridesFieldName.data()); overridesIt != it->end())
 					return &*overridesIt;
@@ -1536,13 +1536,6 @@ namespace
 	{
 		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
 		ImGui::TextUnformatted(a_text);
-		ImGui::PopTextWrapPos();
-	}
-
-	void DrawHintText(const char* a_text)
-	{
-		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
-		ImGui::TextDisabled("%s", a_text);
 		ImGui::PopTextWrapPos();
 	}
 
@@ -1636,6 +1629,14 @@ namespace
 
 void AdaptiveBrightness::DrawSettingsHeaderControls()
 {
+	if (settings.enabled) {
+		const auto contextLabel = GetContextLabel();
+		ImGui::TextWrapped("%s", contextLabel.c_str());
+	}
+}
+
+void AdaptiveBrightness::DrawSettings()
+{
 	const auto contextSectionToSelect = SyncContextSection();
 	// Keep exchange navigation stable while the player crosses contextual boundaries.
 	if (MenuUI::SettingsPage::Selected("AdaptiveBrightness") != "presets") {
@@ -1645,18 +1646,8 @@ void AdaptiveBrightness::DrawSettingsHeaderControls()
 			MenuUI::SettingsPage::Select("AdaptiveBrightness", "locations");
 	}
 
-	if (settings.enabled) {
-		const auto contextLabel = GetContextLabel();
-		ImGui::TextWrapped("%s", contextLabel.c_str());
-	} else {
-		ImGui::TextDisabled("Adaptive Balance is off. Saved adjustments are preserved.");
-	}
-}
-
-void AdaptiveBrightness::DrawSettings()
-{
 	MenuUI::SettingsPage page("AdaptiveBrightness", {
-														{ "global", "Global", "Start with shared lighting, colour, bloom, water and depth of field.", "Shared appearance and depth of field", true, true, "Build the shared look" },
+														{ "global", "Global", "Start with shared lighting, colour, bloom, water and depth of field.", "Shared appearance and depth of field", true, true, "Build the shared look", nullptr, nullptr, true, true, nullptr, "profiles" },
 														{ "profiles", "Profiles", "Refine the shared look for time and location types.", "Time and location profiles", true, true, nullptr },
 														{ "weather", "Weather", "Refine the outdoor look for individual weathers.", "Blended weather adjustments", true, true, nullptr },
 														{ "locations", "Locations", "Add precise changes for individual places.", "Exact places and cells", true, true, "Refine local changes" },
@@ -1668,9 +1659,7 @@ void AdaptiveBrightness::DrawSettings()
 	}
 
 	if (page.Is("profiles")) {
-		ImGui::TextWrapped("Tune lighting, atmosphere, bloom and water by time and location type. Context profiles are ordered Worldspace > Location > City. Use Locations for exact places and cells.");
-		if (!settings.enabled)
-			ImGui::TextDisabled("Adaptive Balance is off. Saved profile values can still be reviewed.");
+		MenuUI::SectionHeading("Time and location profiles", "Context profiles are ordered Worldspace > Location > City. Use Locations for exact places and cells.");
 
 		ImGui::BeginDisabled(!settings.enabled);
 		DrawExteriorTimeSettings();
@@ -1707,19 +1696,16 @@ void AdaptiveBrightness::DrawSettings()
 	}
 
 	if (page.Is("weather")) {
-		ImGui::TextWrapped("Tune lighting, colour, bloom and water for each weather in the weather editor. These adjustments blend with weather transitions and apply after the active time and location profiles. Unset values are neutral; interiors keep their own profiles.");
 		auto* sky = globals::game::sky;
 		const auto disabled = Util::DisableGuard(!sky || !sky->currentWeather);
 		if (ImGui::Button("Edit Current Weather"))
 			EditorWindow::GetSingleton()->OpenWeatherFeatureSetting(sky->currentWeather, GetShortName(), "brightness");
+		Util::AddTooltip("Tune lighting, colour, bloom and water for each weather. Adjustments blend with weather transitions after the active time and location profiles. Unset values are neutral; interiors keep their own profiles. Requires an active weather.");
 		if (!sky || !sky->currentWeather)
 			ImGui::TextDisabled("Load an outdoor scene to select its weather.");
 	}
 
 	if (page.Is("locations")) {
-		ImGui::TextWrapped("Create precise profile overrides for worldspaces, regional locations, cities, specific locations, or exact cells.");
-		if (!settings.enabled)
-			ImGui::TextDisabled("Adaptive Balance is off. Saved overrides can still be reviewed.");
 		DrawLocationOverrides(false, true, settings.enabled);
 	}
 
@@ -1773,7 +1759,7 @@ void AdaptiveBrightness::DrawProfileControls(
 
 void AdaptiveBrightness::DrawGodraySettings()
 {
-	MenuUI::DetailNote("These exterior and interior bases control separated light shafts. Global, time and location appearance profiles adjust them further. Disabling Adaptive Balance bypasses all godray tuning and Atmospheric Clarity.");
+	MenuUI::SectionHeading("Light shafts", "These exterior and interior bases control separated light shafts. Global, time and location appearance profiles adjust them further. Disabling Visuals bypasses all godray tuning and Atmospheric Clarity.");
 	Util::Widgets::SliderFloat("Atmospheric Clarity", &settings.volumetricClarity,
 		AdaptiveBalanceGodray::kClarityMin, AdaptiveBalanceGodray::kClarityMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
@@ -2063,7 +2049,7 @@ std::optional<AdaptiveBrightness::ContextSection> AdaptiveBrightness::SyncContex
 
 void AdaptiveBrightness::DrawExteriorTimeSettings()
 {
-	ImGui::SeparatorText("Exterior Schedule");
+	MenuUI::SectionHeading("Exterior Schedule");
 	Util::Widgets::SliderFloat("Day Blend Start", &settings.dayStartHour, 0.0f, 24.0f, "%.1f h");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Hour when the Exterior Day profile starts blending in.");
@@ -2100,7 +2086,8 @@ void AdaptiveBrightness::DrawLocationOverrideProfileEditor(
 	bool a_closeWhenFinished)
 {
 	ImGui::PushID(a_locationOverride.key.c_str());
-	ImGui::TextDisabled(
+	ImGui::TextDisabled("%s", a_locationOverride.layered ? "Adjustment layer" : "Legacy profile");
+	Util::AddTooltip(
 		a_locationOverride.layered ?
 			"Adjustment layer: applied after broader location layers." :
 			"Legacy profile: replaces broader contextual layers to preserve its saved appearance.");
@@ -2146,28 +2133,25 @@ void AdaptiveBrightness::DrawCurrentContextProfileControls(
 	const auto* target = GetContextTarget(targets, a_scope);
 	if (!target) {
 		ImGui::TextDisabled("The current cell has no associated %s scope.", GetContextScopeName(a_scope));
-		ImGui::TextWrapped("This profile stays visible during cell loading and when its scope is absent from the current location hierarchy.");
+		Util::AddTooltip("This profile stays visible during cell loading and when its scope is absent from the current location hierarchy.");
 		return;
 	}
 
 	ImGui::TextWrapped("Current %s: %s", GetContextScopeName(a_scope), target->name.c_str());
+	Util::AddTooltip(GetContextScopeDescription(a_scope));
 	ImGui::TextDisabled("%s form %s", target->type.c_str(), target->key.c_str());
-	ImGui::TextWrapped("%s", GetContextScopeDescription(a_scope));
 
 	auto* contextProfile = FindLocationOverride(target->key);
 	const auto* inheritedProfile = contextProfile ? nullptr : GetInheritedLocationOverride(*target);
 
 	if (!contextProfile) {
-		if (inheritedProfile) {
-			ImGui::TextWrapped("%s inherits saved broader profile %s. Add a layer here to adjust Lighting, Color, Bloom and Water.", target->name.c_str(), inheritedProfile->name.c_str());
-		} else {
-			ImGui::TextWrapped("%s inherits base profile %s. Add a layer here to adjust Lighting, Color, Bloom and Water.", target->name.c_str(), GetProfileName(target->defaultProfile));
-		}
+		ImGui::TextWrapped("Inherited profile: %s", inheritedProfile ? inheritedProfile->name.c_str() : GetProfileName(target->defaultProfile));
 		ImGui::BeginDisabled(!a_allowEdits);
 		const auto createLabel = std::format("Create {} Profile", GetContextScopeName(a_scope));
 		if (ImGui::Button(createLabel.c_str()))
 			SaveCurrentLocationOverride(*target);
 		ImGui::EndDisabled();
+		Util::AddTooltip("Add a profile for this scope to adjust Lighting, Color, Bloom and Water on top of the inherited values.", ImGuiHoveredFlags_AllowWhenDisabled);
 		DrawPresetShortcut(a_scope);
 		return;
 	}
@@ -2205,10 +2189,9 @@ void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const c
 
 void AdaptiveBrightness::DrawColorSettings(ProfileSettings& a_profile)
 {
-	ImGui::TextWrapped("Adjust the whole scene, including sky, lighting and bloom. One is neutral; Global and active profile adjustments multiply.");
 	Util::Widgets::SliderFloat("Contrast", &a_profile.contrast, kContrastMin, kContrastMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextUnformatted("Adjust luminance around middle gray without shifting hue. Lower softens contrast; higher deepens shadows and brightens highlights.");
+		ImGui::TextUnformatted("Adjust luminance around middle gray without shifting hue. Lower softens contrast; higher deepens shadows and brightens highlights. Affects the whole scene, including sky, lighting and bloom. One is neutral; Global and active profile adjustments multiply.");
 	Util::Widgets::SliderFloat("Saturation", &a_profile.saturation, 0.0f, kSaturationMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextUnformatted("0 = monochrome; 1 = original colors; higher = stronger color. Works with Linear Lighting on or off.");
@@ -2221,22 +2204,24 @@ namespace
 		constexpr std::array groups{ "Direct and Ambient Lighting", "Fog and Clouds", "Sky Gradient",
 			"Stars", "Auroras", "Sky Static Mist", "Particles and Glow Sprites", "Godrays and Cloud Shadows", "Eyes",
 			"Scene Colour", "Point Light Colour", "Material Colour", "Atmosphere Colour" };
-		MenuUI::SectionHeading("Appearance controls");
-		ImGui::TextWrapped("Gamma offsets are neutral at zero; negative values lift midtones and positive values darken them. Saturation is neutral at one. Point-light subtype adjustments compose with the shared Point Lights controls.");
+		MenuUI::SectionHeading("Appearance controls", "Gamma offsets are neutral at zero; negative values lift midtones and positive values darken them. Saturation is neutral at one. Point-light subtype adjustments compose with the shared Point Lights controls.");
 		for (const auto* group : groups) {
 			MenuUI::SettingsSearch::PrepareGroup(group);
-			if (!ImGui::CollapsingHeader(group))
+			const bool expanded = ImGui::CollapsingHeader(group);
+			if (auto tooltip = Util::HoverTooltipWrapper()) {
+				if (std::string_view(group) == "Eyes")
+					ImGui::TextWrapped("Specular Brightness adjusts eye highlights and reflections. Eye Brightness scales all eye lighting. One preserves the original appearance; zero removes that contribution. Applies to eye materials in the scene, including reflections.");
+				else if (std::string_view(group) == "Auroras")
+					ImGui::TextWrapped("Intensity scales aurora RGB brightness; zero removes its colour contribution while preserving alpha and the model's blend mode. Colour Curve shapes dim colours and HDR highlights before intensity. One preserves the original appearance. Applies to sky objects in the game's aurora slot, including replacement models.");
+				else if (std::string_view(group) == "Godrays and Cloud Shadows")
+					ImGui::TextWrapped("Godray profile adjustments compose over the exterior or interior base in Global > Godrays. Scale 1 and colour contribution 0 preserve that base. Atmospheric Clarity controls broad haze separately. Cloud shadow strength adjusts the active Cloud Shadows feature.");
+				else if (std::string_view(group) == "Particles and Glow Sprites")
+					ImGui::TextWrapped("Glow sprites include additive non-fire effects, such as some magic. Particle influence adjusts received light; fire has separate controls.");
+				else
+					ImGui::TextWrapped("One and white are neutral. Colour curves below one lift dim colours; above one deepen them and strengthen HDR highlights.");
+			}
+			if (!expanded)
 				continue;
-			if (std::string_view(group) == "Eyes")
-				ImGui::TextWrapped("Specular Brightness adjusts eye highlights and reflections. Eye Brightness scales all eye lighting. One preserves the original appearance; zero removes that contribution. Applies to eye materials in the scene, including reflections.");
-			else if (std::string_view(group) == "Auroras")
-				ImGui::TextWrapped("Intensity scales aurora RGB brightness; zero removes its colour contribution while preserving alpha and the model's blend mode. Colour Curve shapes dim colours and HDR highlights before intensity. One preserves the original appearance. Applies to sky objects in the game's aurora slot, including replacement models.");
-			else if (std::string_view(group) == "Godrays and Cloud Shadows")
-				ImGui::TextWrapped("Godray profile adjustments compose over the exterior or interior base in Global > Godrays. Scale 1 and colour contribution 0 preserve that base. Atmospheric Clarity controls broad haze separately. Cloud shadow strength adjusts the active Cloud Shadows feature.");
-			else if (std::string_view(group) == "Particles and Glow Sprites")
-				ImGui::TextWrapped("Glow sprites include additive non-fire effects, such as some magic. Particle influence adjusts received light; fire has separate controls.");
-			else
-				ImGui::TextWrapped("One and white are neutral. Colour curves below one lift dim colours; above one deepen them and strengthen HDR highlights.");
 			MenuUI::DetailGrid grid(group, 2, ImGui::GetFontSize() * 32);
 			const Util::Widgets::ControlLayout controls(true);
 			for (const auto& field : AdaptiveBalanceAppearance::kScalars) {
@@ -2323,17 +2308,14 @@ void AdaptiveBrightness::DrawLightingSettings(
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Adjust point-light channels before intensity and saturation. 1 is neutral; lower lifts dim channels; higher deepens them and strengthens HDR channels. Global and active profiles multiply.");
 
-		MenuUI::SectionHeading("Point-light balance");
-		ImGui::TextWrapped("Subtype values multiply the Point Lights adjustment after the active layers are composed.");
+		MenuUI::SectionHeading("Point-light balance", "Subtype values multiply the Point Lights adjustment after the active layers are composed. Linear values target lights authored with linear falloff; they do not require Linear Lighting.");
 		Util::Widgets::SliderFloat("Spotlights", &a_profile.spotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		Util::Widgets::SliderFloat("Omnidirectional Bulbs", &a_profile.omnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-		ImGui::TextWrapped("Linear values target lights authored with linear falloff; they do not require Linear Lighting.");
 		Util::Widgets::SliderFloat("Linear Point Lights", &a_profile.linearPointLightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		Util::Widgets::SliderFloat("Linear Spotlights", &a_profile.linearSpotlightMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		Util::Widgets::SliderFloat("Linear Omnidirectional Bulbs", &a_profile.linearOmnidirectionalBulbMult, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
-		MenuUI::SectionHeading("Fire");
-		ImGui::TextWrapped("Adjusts visible flame effects. Cast lights remain independent; some similarly authored effects also respond.");
+		MenuUI::SectionHeading("Fire", "Adjusts visible flame effects. Cast lights remain independent; some similarly authored effects also respond.");
 		Util::Widgets::SliderFloat("Intensity##Fire", &a_profile.fireIntensity, 0.0f, kGlobalLightingMultiplierMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Scales visible flame color. One preserves brightness; zero removes its color contribution.");
@@ -2371,11 +2353,9 @@ void AdaptiveBrightness::DrawBloomSettings(
 {
 	if (a_globalLayer) {
 		Util::Widgets::Checkbox("Enable Bloom Enhancement", &settings.bloomEnabled);
-		Util::AddTooltip("Adds a soft glow around bright areas using your bloom profiles. Off removes this extra glow while keeping the game's original bloom.");
+		Util::AddTooltip("Adds a soft glow around bright areas using your bloom profiles. Off removes this extra glow while keeping the game's original bloom. Global Bloom strength adds to every active profile; detailed shaping can also adjust inherited Bloom.");
 	}
 	Bloom::DrawProfileControls(a_profile.bloom, a_profile.bloomPresets);
-	if (a_globalLayer)
-		ImGui::TextDisabled("Global Bloom strength adds to every active profile; detailed shaping can also adjust inherited Bloom.");
 	if (!a_showAdvancedControls)
 		return;
 
@@ -2399,9 +2379,8 @@ void AdaptiveBrightness::DrawWaterSettings(
 	if (!a_showAdvancedControls)
 		return;
 
-	ImGui::SeparatorText("Waves and Wind");
+	MenuUI::SectionHeading("Waves and Wind", "Wind Response multiplies Base Wave Amplitude between the calm and strong-wind scales. Wind off uses the base alone.");
 	WaterAppearance::DrawWaveAmplitudeControl(a_profile.water);
-	DrawHintText("Wind Response multiplies Base Wave Amplitude between the calm and strong-wind scales. Wind off uses the base alone.");
 	DrawWaterWindSettings(a_profile, a_globalLayer);
 
 	ImGui::Separator();
@@ -2457,11 +2436,7 @@ void AdaptiveBrightness::DrawWaterWindSettings(ProfileSettings& a_profile, bool 
 
 void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, bool a_showAdvancedControls, bool a_allowEdits)
 {
-	ImGui::SeparatorText("Location Override Profiles");
-	DrawHintText("Layers apply after the base profile, from broad to specific: parent/current worldspaces > location hierarchy > exact cell. Legacy profiles replace broader context layers at their position to preserve their saved look.");
-	if (a_includePresetControls) {
-		DrawHintText("Import adds overrides from a preset to the override list below. Later edits change this list, not the preset file.");
-	}
+	MenuUI::SectionHeading("Location Override Profiles", "Layers apply after the base profile, from broad to specific: parent/current worldspaces > location hierarchy > exact cell. Legacy profiles replace broader context layers at their position to preserve their saved look.");
 
 	const auto targets = GetCurrentLocationOverrideTargets();
 	const auto* activeOverride = GetActiveLocationOverride();
@@ -2475,7 +2450,7 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 	} else if (currentProfile) {
 		ImGui::TextWrapped("Using base profile %s here. No saved override matches this place.", GetProfileName(*currentProfile));
 	} else {
-		ImGui::TextDisabled("Current location context is unavailable while no cell is loaded.");
+		MenuUI::AvailabilityNotice("Current location context is unavailable while no cell is loaded.");
 	}
 
 	const auto drawTargetAction = [&](const std::optional<LocationOverrideTarget>& a_target, const char* a_scope, const char* a_description) {
@@ -2531,16 +2506,17 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 	}
 	ImGui::TextDisabled("%zu saved override%s.", settings.locationOverrides.size(), settings.locationOverrides.size() == 1 ? "" : "s");
 
-	if (a_includePresetControls)
+	if (a_includePresetControls) {
 		if (ImGui::Button("Import / export location presets")) {
 			presetUI.collection = MenuUI::AdaptiveBalancePresets::Collection::Locations;
 			presetFilesDirty = true;
 			MenuUI::SettingsPage::Select("AdaptiveBrightness", "presets");
 		}
-	ImGui::SeparatorText("Saved Overrides");
-	DrawHintText(a_allowEdits ?
-					 "Overrides match worldspace, region, city, specific location or cell. Select a row to edit it." :
-					 "Overrides match worldspace, region, city, specific location or cell. Select a row to review it.");
+		Util::AddTooltip("Import adds overrides from a preset to the override list below. Later edits change this list, not the preset file.");
+	}
+	MenuUI::SectionHeading("Saved Overrides", a_allowEdits ?
+												  "Overrides match worldspace, region, city, specific location or cell. Select a row to edit it." :
+												  "Overrides match worldspace, region, city, specific location or cell. Select a row to review it.");
 	if (const auto* status = locationTeleportStatus.load(std::memory_order_acquire))
 		ImGui::TextWrapped("%s", status);
 
@@ -2728,7 +2704,7 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 	}
 
 	if (auto* selectedOverride = FindLocationOverride(selectedLocationOverrideKey)) {
-		ImGui::SeparatorText(a_allowEdits ? "Edit Location Override Profile" : "View Location Override Profile");
+		MenuUI::SectionHeading(a_allowEdits ? "Edit Location Override Profile" : "View Location Override Profile");
 		ImGui::TextWrapped("%s (%s, %s)", selectedOverride->name.c_str(), selectedOverride->type.c_str(), selectedOverride->key.c_str());
 		DrawLocationOverrideProfileEditor(
 			*selectedOverride,
@@ -2789,14 +2765,14 @@ bool AdaptiveBrightness::TeleportToLocationOverride(const std::string& a_key, st
 				}
 				if (const auto* error = GetCellTeleportRuntimeError()) {
 					locationTeleportStatus.store(error, std::memory_order_release);
-					logger::warn("Adaptive Balance: skipped teleport to {}: {}", editorID, error);
+					logger::warn("Visuals: skipped teleport to {}: {}", editorID, error);
 					return;
 				}
 				RE::Console::ExecuteCommand(std::format("coc {}", editorID).c_str());
 				locationTeleportStatus.store("Teleport command dispatched.", std::memory_order_release);
 			} catch (const std::exception& exception) {
 				locationTeleportStatus.store("Teleport command failed. See the CSX log for details.", std::memory_order_release);
-				logger::error("Adaptive Balance: teleport to {} failed: {}", editorID, exception.what());
+				logger::error("Visuals: teleport to {} failed: {}", editorID, exception.what());
 			}
 		});
 	} catch (const std::exception& exception) {
@@ -2807,7 +2783,7 @@ bool AdaptiveBrightness::TeleportToLocationOverride(const std::string& a_key, st
 		locationTeleportStatus.store("Unable to queue the teleport command.", std::memory_order_release);
 		locationTeleportPending.store(false, std::memory_order_release);
 		a_error = "Unable to queue the teleport command.";
-		logger::error("Adaptive Balance: teleport queue failed: {}", exception.what());
+		logger::error("Visuals: teleport queue failed: {}", exception.what());
 		return false;
 	}
 	a_error.clear();
@@ -2886,7 +2862,7 @@ void AdaptiveBrightness::DrawPresets()
 	else if (!importing && collectionIndex >= static_cast<std::size_t>(Presets::Collection::Worldspace) && !profile)
 		unavailable = "Create and apply this scope's profile before exporting it.";
 	else if (importing && target && !settings.enabled)
-		unavailable = "Enable Adaptive Balance before importing a contextual profile.";
+		unavailable = "Enable Visuals before importing a contextual profile.";
 	else if (!importing && presetUI.collection == Presets::Collection::Locations && settings.locationOverrides.empty())
 		unavailable = "No location overrides are saved. Complete setup is still available.";
 	const auto& colors = importing ? importPalette : exportPalette;
@@ -2948,7 +2924,7 @@ bool AdaptiveBrightness::ExportGlobalPreset()
 			globalPresetName,
 			PresetKind::Global,
 			"global",
-			"Adaptive Balance global preset");
+			"Visuals global preset");
 
 		std::string error;
 		if (!WriteJsonFileAtomic(path, exportJson, error)) {
@@ -3002,7 +2978,7 @@ bool AdaptiveBrightness::ExportLocationOverrides()
 			locationOverridePresetName,
 			PresetKind::Location,
 			"locations",
-			"Adaptive Balance location override preset");
+			"Visuals location override preset");
 
 		std::string error;
 		if (!WriteJsonFileAtomic(path, exportJson, error)) {
@@ -3110,7 +3086,7 @@ bool AdaptiveBrightness::ExportContextProfile(
 							   contextPresetNames[scopeIndex],
 							   presetKind,
 							   a_target.type,
-							   std::format("Adaptive Balance {} profile", GetContextScopeName(a_scope))) }
+							   std::format("Visuals {} profile", GetContextScopeName(a_scope))) }
 		};
 
 		std::string error;
@@ -3217,7 +3193,7 @@ bool AdaptiveBrightness::ExportFullPreset()
 			fullPresetName,
 			PresetKind::Full,
 			"full",
-			"Adaptive Balance full preset");
+			"Visuals full preset");
 		exportJson["locationOverrides"] = settings.locationOverrides;
 
 		std::string error;

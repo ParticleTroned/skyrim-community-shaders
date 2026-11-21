@@ -845,7 +845,7 @@ def format_metadata_summary(feature_metadata):
                      f"{cell(info['description'])} | {cell(', '.join(info['key_features']))} |")
     lines.extend([
         "\n### Built-in CSX systems\n",
-        "The module inventory also includes Adaptive Balance. Its Lighting, Bloom and Water profiles are core CSX features.",
+        "The module inventory also includes Visuals. Its Lighting, Bloom and Water profiles are core CSX features.",
         "Performance Tuning is built into the menu: feature-cost controls, CPU/GPU comparisons and saving/restoring tuned defaults. It is separate from Performance Overlay and does not require DevBench.",
         "Shader-cache management, rendering controls and integration APIs are also built in; they follow the CSX release version instead of a separate feature-module version.",
         "Hardware/runtime support and optional companion-plugin dependencies still apply; bundled does not mean enabled by default.",

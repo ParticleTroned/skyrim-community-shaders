@@ -306,7 +306,7 @@ namespace
 			ImGui::PopID();
 		};
 
-		ImGui::SeparatorText("Upscaling");
+		MenuUI::SectionHeading("Upscaling");
 		if (ImGui::BeginTable("##VRFpsStabilizerUpscalingProfiles", 3, tableFlags)) {
 			SetupVRFpsStabilizerProfileTableColumns(currentCellIsInterior);
 
@@ -354,7 +354,7 @@ namespace
 		}
 
 		ImGui::Spacing();
-		ImGui::SeparatorText("Features");
+		MenuUI::SectionHeading("Features");
 		if (ImGui::BeginTable("##VRFpsStabilizerFeatureProfiles", 3, tableFlags)) {
 			SetupVRFpsStabilizerProfileTableColumns(currentCellIsInterior);
 
@@ -430,24 +430,22 @@ namespace
 		auto& upscaling = globals::features::upscaling;
 		auto& uiState = ProfileEditor();
 
-		ImGui::TextUnformatted("Interior and Exterior Profiles");
-		ImGui::TextWrapped("Choose the VR FPS Stabilizer settings for each location type.");
+		MenuUI::SectionHeading("Interior and Exterior Profiles", "Choose the VR FPS Stabilizer settings for each location type. The matching profile column is marked below. Save Interior/Exterior profiles and transition fade here; other tabs cover performance, LOD, quality levels, locations and commands.");
 		ImGui::Spacing();
 		const bool currentCellIsInterior = Util::IsInterior();
 		ImGui::TextDisabled(
-			"Current location: %s. The matching profile column is marked below.",
+			"Current location: %s",
 			currentCellIsInterior ? "Interior" : "Exterior");
 		if (!uiState.config.path.empty())
 			ImGui::TextDisabled("INI file: %s", uiState.config.path.string().c_str());
 
 		if (!uiState.loadFailed && !uiState.profilesDefinedInIni) {
 			ImGui::Spacing();
+			Util::Text::WrappedWarning("No Interior/Exterior profiles in this INI.");
 			if (uiState.config.upscalingSwitchingEnabled) {
-				Util::Text::WrappedWarning(
-					"No Interior/Exterior profiles in this INI. Choose both Methods and remaining settings, then Save INI. Save & Apply reloads profiles if the live interface is available.");
+				Util::AddTooltip("Choose both Methods and remaining settings, then Save INI. Save & Apply reloads profiles if the live interface is available.");
 			} else {
-				Util::Text::WrappedWarning(
-					"No Interior/Exterior profiles in this INI. Switching is inactive and applies no profile values. Enable switching to configure them.");
+				Util::AddTooltip("Switching is inactive and applies no profile values. Enable switching to configure them.");
 			}
 		}
 
@@ -465,8 +463,8 @@ namespace
 			ImGui::TextUnformatted("It does not disable VR FPS Stabilizer or edit its other settings and conditional profiles.");
 		}
 		if (!uiState.config.upscalingSwitchingEnabled && uiState.profilesDefinedInIni) {
-			Util::Text::WrappedWarning(
-				"Interior/Exterior switching is off. Saving disables this managed group and keeps other Stabilizer settings.");
+			Util::Text::WrappedWarning("Interior/Exterior switching is off.");
+			Util::AddTooltip("Saving disables this managed group and keeps other Stabilizer settings.");
 		}
 
 		if (uiState.loadFailed) {
@@ -493,22 +491,20 @@ namespace
 		const bool openCompositeBlocksUpscaling = upscaling.IsOpenCompositeUpscalingBlocked();
 		const auto& sessionConfig = upscaling.GetVRFpsStabilizerSessionConfig();
 		if (!VRFpsStabilizer::IsLoaded()) {
-			ImGui::TextDisabled("VR FPS Stabilizer profile sync: Inactive because the plugin is not loaded.");
+			MenuUI::AvailabilityNotice("VR FPS Stabilizer profile sync: Inactive because the plugin is not loaded.");
 		} else if (openCompositeBlocksUpscaling) {
-			Util::Text::WrappedWarning(
+			MenuUI::AvailabilityNotice(
 				"VR FPS Stabilizer profile sync: Inactive because Open Composite owns upscaling for this session.");
 		} else if (upscaling.IsVRFpsStabilizerSyncActive()) {
-			ImGui::TextColored(
-				Util::Colors::GetSuccess(),
-				"VR FPS Stabilizer profile sync: Active for this session.");
+			MenuUI::PageNotice("VR FPS Stabilizer profile sync: Active for this session.", MenuUI::NoticeKind::Information);
 		} else if (!sessionConfig.fileExists) {
-			ImGui::TextDisabled("VR FPS Stabilizer profile sync: Inactive; VRFpsStabilizer.ini was not found when profiles were loaded.");
+			MenuUI::AvailabilityNotice("VR FPS Stabilizer profile sync: Inactive; VRFpsStabilizer.ini was not found when profiles were loaded.");
 		} else if (!sessionConfig.fileReadable) {
-			ImGui::TextDisabled("VR FPS Stabilizer profile sync: Inactive; VRFpsStabilizer.ini was not readable when profiles were loaded.");
+			MenuUI::AvailabilityNotice("VR FPS Stabilizer profile sync: Inactive; VRFpsStabilizer.ini was not readable when profiles were loaded.");
 		} else if (!sessionConfig.upscalingSwitchingEnabled) {
-			ImGui::TextDisabled("VR FPS Stabilizer profile sync: Inactive because Interior/Exterior switching is off in the loaded profiles.");
+			MenuUI::AvailabilityNotice("VR FPS Stabilizer profile sync: Inactive because Interior/Exterior switching is off in the loaded profiles.");
 		} else {
-			ImGui::TextDisabled("VR FPS Stabilizer sync inactive: no Interior or Exterior upscaling profile in the loaded INI.");
+			MenuUI::AvailabilityNotice("VR FPS Stabilizer sync inactive: no Interior or Exterior upscaling profile in the loaded INI.");
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Sync starts automatically with loaded Stabilizer and an active Interior/Exterior profile in its INI.");
@@ -519,28 +515,29 @@ namespace
 		const uint32_t invalidSettingCount = uiState.config.GetInvalidSettingCount();
 		if (uiState.config.hasMixedUpscalingSwitchingActivation) {
 			ImGui::Spacing();
-			Util::Text::WrappedWarning(
-				"Managed profiles/fade mix active and UI-disabled entries. Active entries win; saving makes the whole group match this toggle.");
+			Util::Text::WrappedWarning("Mixed profile and fade states.");
+			Util::AddTooltip("Managed profiles/fade mix active and UI-disabled entries. Active entries win; saving makes the whole group match the switching toggle.");
 		}
 		if (invalidSettingCount > 0) {
 			ImGui::Spacing();
 			Util::Text::WrappedWarning(
-				"%u profile value(s) or combination(s) are invalid/out of range. Safe resolved values are shown; saving normalizes them.",
+				"%u invalid profile value(s) or combination(s).",
 				invalidSettingCount);
+			Util::AddTooltip("Safe resolved values are shown. Saving normalizes invalid or out-of-range values and combinations.");
 		}
 		if (!completeProfiles && uiState.profilesDefinedInIni) {
 			ImGui::Spacing();
-			Util::Text::WrappedWarning(
-				"Missing profile values inherit runtime settings. Saving writes complete upscaling and feature settings for both profiles.");
+			Util::Text::WrappedWarning("Incomplete profiles.");
+			Util::AddTooltip("Missing profile values inherit runtime settings. Saving writes complete upscaling and feature settings for both profiles.");
 		}
 		if (!uiState.config.hasFadeDuration && uiState.profilesDefinedInIni) {
 			ImGui::Spacing();
-			Util::Text::WrappedWarning(
-				"Transition fade is missing. CSX owns transition coverage; saving writes the recommended 0 seconds.");
+			Util::Text::WrappedWarning("Transition fade not configured.");
+			Util::AddTooltip("CSX owns transition coverage; saving writes the recommended 0 seconds.");
 		}
 
 		ImGui::Spacing();
-		ImGui::SeparatorText("Render Scale Transition Fade");
+		MenuUI::SectionHeading("Render Scale Transition Fade");
 		{
 			auto disabledGuard = Util::DisableGuard(!uiState.config.upscalingSwitchingEnabled);
 			double fadeDuration = uiState.config.fadeDuration;
@@ -558,15 +555,8 @@ namespace
 		}
 
 		if (!uiState.message.empty()) {
-			ImGui::Spacing();
-			if (uiState.messageIsError) {
-				Util::Text::WrappedError("%s", uiState.message.c_str());
-			} else {
-				ImGui::TextColored(Util::Colors::GetSuccess(), "%s", uiState.message.c_str());
-			}
+			MenuUI::PageNotice(uiState.message, uiState.messageIsError ? MenuUI::NoticeKind::Error : MenuUI::NoticeKind::Information);
 		}
-		Util::Text::WrappedDisabled(
-			"Save Interior/Exterior profiles and transition fade here. Other tabs cover performance, LOD, quality levels, locations and commands.");
 	}
 
 	MenuUI::SettingsFooter ProfileFooter()
@@ -676,10 +666,10 @@ namespace MenuUI
 	Feature::SettingsHeaderStatus StabilizerPage::GetSettingsHeaderStatus() const
 	{
 		if (!IsAvailable())
-			return { "Inactive", true };
+			return { "Inactive", true, Availability().message };
 		const auto runtime = VRFpsStabilizer::Status();
-		return runtime.pending         ? SettingsHeaderStatus{ "Applying", true } :
-		       runtime.restartRequired ? SettingsHeaderStatus{ "Restart required", true } :
+		return runtime.pending         ? SettingsHeaderStatus{ "Applying", true, "VR FPS Stabilizer is applying its settings. Wait for the update to finish.", true } :
+		       runtime.restartRequired ? SettingsHeaderStatus{ "Restart required", true, "VR FPS Stabilizer needs a game restart to apply these changes. Save its INI settings first.", true } :
 		                                 SettingsHeaderStatus{};
 	}
 
@@ -693,7 +683,9 @@ namespace MenuUI
 
 	std::string_view StabilizerPage::GetSettingsFooterText() const
 	{
-		return "Requires VR FPS Stabilizer and its installed INI. Settings are saved separately from CSX.";
+		if (!IsAvailable())
+			return {};
+		return "Settings are saved separately from CSX.";
 	}
 
 	bool StabilizerPage::HasUnsavedChanges() const
@@ -704,17 +696,15 @@ namespace MenuUI
 	void StabilizerPage::DrawSettings()
 	{
 		const bool available = IsAvailable();
-		if (!available)
-			Util::Text::WrappedWarning("%s", Availability().message.c_str());
-		else
-			VRFpsStabilizer::DrawStatus();
 		if (!HasUnsavedChanges())
 			blockedDraftNavigation = false;
 		if (blockedDraftNavigation)
 			Util::Text::WrappedWarning("Save or discard the current draft before switching to another INI editor.");
-		SettingsPage page("VRFpsStabilizer", { { "profiles", "Profiles", "Choose compatible interior and exterior quality profiles.", "Upscaling and CSX feature profiles", true, true, "Choose automatic behavior", nullptr, nullptr, available }, { "targets", "Frame targets", "Choose frame-time targets and automatic quality behavior.", "Frame-time targets and response", true, true, nullptr, nullptr, nullptr, available }, { "lod", "LOD & Grass", "Balance distance and density as quality changes.", "Grass, distant LOD and fade distances", true, true, "Refine scene detail", nullptr, nullptr, available }, { "levels", "Quality Levels", "Configure the settings used by each automatic quality level.", "Level 0 through level 9", true, true, nullptr, nullptr, nullptr, available }, { "locations", "Locations", "Choose quality rules for individual locations.", "Location tiers and interior rules", true, true, "Refine location and event rules", nullptr, nullptr, available }, { "commands", "Commands", "Edit commands that run on game events and conditions.", "Startup, loading and conditional commands", true, true, nullptr, nullptr, nullptr, available } }, "Your Stabilizer setup", "Choose a step, then save its INI changes.", CanSelectEditor);
+		SettingsPage page("VRFpsStabilizer", { { "profiles", "Profiles", "Choose compatible interior and exterior quality profiles.", "Upscaling and CSX feature profiles", true, true, "Choose automatic behavior", nullptr, nullptr, available }, { "targets", "Frame targets", "Choose frame-time targets and automatic quality behavior.", "Frame-time targets and response", true, true, nullptr, nullptr, nullptr, available }, { "lod", "LOD & Grass", "Balance distance and density as quality changes.", "Grass, distant LOD and fade distances", true, true, "Refine scene detail", nullptr, nullptr, available }, { "levels", "Quality Levels", "Configure the settings used by each automatic quality level.", "Level 0 through level 9", true, true, nullptr, nullptr, nullptr, available }, { "locations", "Locations", "Choose quality rules for individual locations.", "Location tiers and interior rules", true, true, "Refine location and event rules", nullptr, nullptr, available }, { "commands", "Commands", "Edit commands that run on game events and conditions.", "Startup, loading and conditional commands", true, true, nullptr, nullptr, nullptr, available } }, "", "", CanSelectEditor);
 		if (!available)
 			return;
+		if (!page.Is("overview"))
+			VRFpsStabilizer::DrawStatus();
 		if (page.Is("profiles"))
 			DrawVRFpsStabilizerSettings();
 		else if (page.Is("targets"))
@@ -731,11 +721,13 @@ namespace MenuUI
 
 	SettingsFooter StabilizerPage::GetSettingsFooter()
 	{
-		if (!IsAvailable())
-			return { HasUnsavedChanges(), true, "Stabilizer inactive", Availability().message,
+		if (!IsAvailable()) {
+			const bool dirty = HasUnsavedChanges();
+			return { dirty, false, dirty ? "Unsaved INI changes" : "INI settings", "Separate from CSX settings.",
 				{ SettingsAction{ "Save INI", "Requires the installed INI and loaded mod.", false, {}, nullptr, "Save" },
 					{ "Read INI", "Requires the installed INI and loaded mod.", false, {}, nullptr, "Read" },
 					{ "Apply saved INI", "Requires the installed INI and loaded mod.", false, {}, nullptr, "Apply" } } };
+		}
 		return editorGroup == "profiles" ? ProfileFooter() : VRFpsStabilizer::GetSettingsFooter(editorGroup == "locations" ? VRFpsStabilizer::ConfigFile::Locations : VRFpsStabilizer::ConfigFile::Main);
 	}
 }

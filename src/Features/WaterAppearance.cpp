@@ -1,4 +1,5 @@
 #include "WaterAppearance.h"
+#include "Menu/SettingsPage.h"
 
 #include <algorithm>
 #include <cmath>
@@ -89,9 +90,7 @@ void WaterAppearance::DrawAdvancedProfileSettings(Profile& a_profile)
 {
 	SanitizeProfile(a_profile);
 
-	ImGui::TextWrapped("Identity values leave this layer neutral. Processing stops if the composed water appearance is also neutral.");
-
-	ImGui::SeparatorText("Surface");
+	MenuUI::SectionHeading("Surface", "Identity values leave this layer neutral. Processing stops if the composed water appearance is also neutral.");
 	DrawWaterSlider(
 		"Fresnel Minimum",
 		a_profile.FresnelMin,
@@ -105,7 +104,7 @@ void WaterAppearance::DrawAdvancedProfileSettings(Profile& a_profile)
 		kWaterFresnelMax,
 		"Sets the upper bound of the water reflection response at grazing view angles.");
 
-	ImGui::SeparatorText("Reflections");
+	MenuUI::SectionHeading("Reflections");
 	DrawWaterSlider(
 		"Global Reflection Amount",
 		a_profile.GlobalReflectionAmount,
@@ -119,7 +118,7 @@ void WaterAppearance::DrawAdvancedProfileSettings(Profile& a_profile)
 		kWaterSunSpecularMax,
 		"Scales the direct sun highlight reflected by the water surface.");
 
-	ImGui::SeparatorText("Refraction and Clarity");
+	MenuUI::SectionHeading("Refraction and Clarity");
 	DrawWaterSlider(
 		"Refraction Amount",
 		a_profile.RefractionAmount,
@@ -133,7 +132,7 @@ void WaterAppearance::DrawAdvancedProfileSettings(Profile& a_profile)
 		kWaterAmountMax,
 		"Scales the tinted water composition over the refracted scene without changing shallow-fallback detection.");
 
-	ImGui::SeparatorText("Caustics");
+	MenuUI::SectionHeading("Caustics");
 	DrawWaterSlider("Caustics Strength", a_profile.CausticsStrength, kWaterAmountMin, kWaterAmountMax,
 		"Scales underwater light-pattern contrast. One preserves the current appearance; zero disables caustics.");
 	DrawWaterSlider("Caustics Tiling", a_profile.CausticsTiling, kCausticsTilingMin, kCausticsTilingMax,
@@ -143,7 +142,7 @@ void WaterAppearance::DrawAdvancedProfileSettings(Profile& a_profile)
 	DrawWaterSlider("Caustics Color Dispersion", a_profile.CausticsDispersion, kWaterAmountMin, kWaterAmountMax,
 		"Scales the color separation in caustics. Zero removes color separation.");
 
-	ImGui::SeparatorText("Parallax");
+	MenuUI::SectionHeading("Parallax");
 	DrawWaterSlider("Parallax Strength", a_profile.ParallaxStrength, kWaterAmountMin, kWaterAmountMax,
 		"Scales the apparent depth of water waves, including flowmaps. Zero disables water parallax.");
 	Util::Widgets::SliderInt("Parallax Quality", &a_profile.ParallaxQuality, Profile::kMinParallaxQuality, Profile::kMaxParallaxQuality, "%d", ImGuiSliderFlags_AlwaysClamp);

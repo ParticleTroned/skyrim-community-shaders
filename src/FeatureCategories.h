@@ -7,7 +7,7 @@ namespace FeatureCategories
 	inline constexpr std::string_view kCharacters = "Characters";
 	inline constexpr std::string_view kDisplay = "Display";
 	inline constexpr std::string_view kFoliage = "Foliage";
-	inline constexpr std::string_view kLandscapeAndTextures = "Landscape & Textures";
+	inline constexpr std::string_view kLandscapeAndTextures = "Landscapes";
 	inline constexpr std::string_view kLighting = "Lighting";
 	inline constexpr std::string_view kMaterials = "Materials";
 	inline constexpr std::string_view kOther = "Other";
@@ -16,10 +16,10 @@ namespace FeatureCategories
 	inline constexpr std::string_view kUtility = "Utility";
 	inline constexpr std::string_view kWater = "Water";
 
-	/** Primary rendering and utility controls stay directly accessible. */
+	/** Primary display controls stay directly accessible. */
 	constexpr bool AlwaysExpanded(std::string_view category)
 	{
-		return category == kDisplay || category == kUtility;
+		return category == kDisplay;
 	}
 
 	inline constexpr std::array kMenuOrder{

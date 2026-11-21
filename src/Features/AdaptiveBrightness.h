@@ -30,7 +30,7 @@ namespace RE
 
 struct AdaptiveBrightness : Feature
 {
-	static constexpr std::string_view kFeatureName = "Adaptive Balance";
+	static constexpr std::string_view kFeatureName = "Visuals";
 	static constexpr std::string_view kFeatureShortName = "AdaptiveBrightness";
 	static constexpr std::string_view kFeatureDisplayName = kFeatureName;
 

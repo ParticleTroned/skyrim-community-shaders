@@ -94,7 +94,8 @@ foreach(_index RANGE 0 ${_action_last})
     )
     list(APPEND _registered_actions "${_action}")
 endforeach()
-foreach(_required_action IN ITEMS start_quick_scan start_feature_costs set_feature_enabled)
+foreach(_required_action IN ITEMS start_quick_scan start_feature_costs set_feature_enabled
+    included_features select_included_feature restore_included_features save_included_features)
     list(FIND _registered_actions "${_required_action}" _required_action_index)
     if(_required_action_index EQUAL -1)
         message(FATAL_ERROR "Missing registered tuning action: ${_required_action}")
@@ -103,7 +104,7 @@ endforeach()
 
 set(_excluded_features WeatherPicker PerformanceOverlay Screenshot UnifiedWater)
 string(JSON _excluded_count LENGTH
-    "${_descriptor}" inputSchema properties featureShortName not enum
+    "${_descriptor}" inputSchema allOf 0 then properties featureShortName not enum
 )
 list(LENGTH _excluded_features _expected_excluded_count)
 if(NOT _excluded_count EQUAL _expected_excluded_count)
@@ -112,7 +113,7 @@ endif()
 math(EXPR _excluded_last "${_excluded_count} - 1")
 foreach(_index RANGE 0 ${_excluded_last})
     string(JSON _excluded_feature GET
-        "${_descriptor}" inputSchema properties featureShortName not enum ${_index}
+        "${_descriptor}" inputSchema allOf 0 then properties featureShortName not enum ${_index}
     )
     list(FIND _excluded_features "${_excluded_feature}" _excluded_position)
     if(_excluded_position EQUAL -1)
@@ -126,12 +127,25 @@ foreach(_index RANGE 0 ${_excluded_last})
     file(READ "${PROJECT_ROOT}/src/Features/${_feature_file}.h" _feature_header)
     file(READ "${PROJECT_ROOT}/src/Features/${_feature_file}.cpp" _feature_source)
     if("${_feature_header}${_feature_source}" MATCHES
-        "SupportsPerformanceCostMeasurement|IsPerformanceCostMeasurement|SetPerformanceCostMeasurement|GetPerformanceCostMeasurement|IsPerformanceToggleEnabled|HasPerformanceSettings|DrawPerformanceSettings|CapturePerformanceSettingsState")
-        message(FATAL_ERROR "${_excluded_feature} still has a tuning adapter")
+        "SupportsPerformanceCostMeasurement|HasPerformanceSettings|DrawPerformanceSettings|CapturePerformanceSettingsState")
+        message(FATAL_ERROR "${_excluded_feature} must not expose measurement controls")
+    endif()
+    string(FIND "${_feature_header}" "SupportsPerformanceProfileToggle() const override { return true; }" _profile_toggle)
+    if(_profile_toggle EQUAL -1 AND NOT _excluded_feature STREQUAL "UnifiedWater")
+        message(FATAL_ERROR "${_excluded_feature} must still support MyPreset Enabled selections")
     endif()
     string(FIND "${_renderer}" "\"${_excluded_feature}\"" _feature_position)
     if(NOT _feature_position EQUAL -1)
         message(FATAL_ERROR "Tuning still registers ${_excluded_feature}")
+    endif()
+endforeach()
+
+foreach(_restart_only_feature IN ITEMS UnifiedWater ReverseZ)
+    file(READ "${PROJECT_ROOT}/src/Features/${_restart_only_feature}.h" _feature_header)
+    string(FIND "${_feature_header}" "GetPerformanceProfileReadOnlyReason() const override" _read_only)
+    string(FIND "${_feature_header}" "SupportsPerformanceProfileToggle() const override { return true; }" _profile_toggle)
+    if(_read_only EQUAL -1 OR NOT _profile_toggle EQUAL -1)
+        message(FATAL_ERROR "${_restart_only_feature} must expose only a read-only Included Features tile")
     endif()
 endforeach()
 

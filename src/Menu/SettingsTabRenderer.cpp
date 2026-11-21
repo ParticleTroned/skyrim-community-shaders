@@ -4,6 +4,7 @@
 #include "Utils/UI.h"
 #include "Utils/WinApi.h"
 
+#include <format>
 #include <set>
 #include <string>
 #include <windows.h>
@@ -28,16 +29,30 @@ namespace
 {
 	using FontRoleGuard = MenuFonts::FontRoleGuard;  // Convenience alias
 
-	void DrawReadOnlyKeybinding(const char* label, const char* binding, const char* description)
+	void DrawReadOnlyKeybinding(const char* label, const char* binding, const char* description, bool inlineBinding = false)
 	{
+		const float startX = ImGui::GetCursorPosX();
+		const float available = ImGui::GetContentRegionAvail().x;
+		const float buttonWidth = ImGui::CalcTextSize(binding).x + ImGui::GetStyle().FramePadding.x * 2;
+		if (inlineBinding)
+			ImGui::AlignTextToFramePadding();
 		ImGui::TextUnformatted(label);
-		ImGui::TextDisabled("(hardcoded)");
-		ImGui::BeginDisabled();
-		ImGui::Button(binding);
-		ImGui::EndDisabled();
+		if (inlineBinding) {
+			if (ImGui::CalcTextSize(label).x + ImGui::GetStyle().ItemSpacing.x + buttonWidth <= available)
+				ImGui::SameLine(startX + available - buttonWidth);
+		} else {
+			ImGui::TextDisabled("(hardcoded)");
+		}
+		{
+			const auto disabled = Util::DisableGuard(true);
+			ImGui::Button(binding);
+		}
 
 		if (description && description[0] != '\0') {
-			ImGui::TextWrapped("%s", description);
+			if (inlineBinding)
+				Util::AddTooltip(description, ImGuiHoveredFlags_AllowWhenDisabled);
+			else
+				ImGui::TextWrapped("%s", description);
 		}
 		ImGui::Spacing();
 	}
@@ -175,17 +190,6 @@ namespace
 		}
 	}
 
-	void SeparatorTextWithFont(const char* text, Menu::FontRole role)
-	{
-		MenuFonts::FontRoleGuard guard(role);
-		ImGui::SeparatorText(text);
-	}
-
-	void SeparatorTextWithFont(const std::string& text, Menu::FontRole role)
-	{
-		SeparatorTextWithFont(text.c_str(), role);
-	}
-
 	bool BeginTabItemWithFont(const char* label, Menu::FontRole role, ImGuiTabItemFlags flags = ImGuiTabItemFlags_None)
 	{
 		return MenuFonts::BeginTabItemWithFont(label, role, flags);
@@ -205,13 +209,9 @@ namespace
 
 	void RenderSaveInfoText()
 	{
-		auto& ts = globals::menu->GetSettings().Theme;
-		ImGui::PushStyleColor(ImGuiCol_Text, ts.StatusPalette.InfoColor);
-		ImGui::TextWrapped(globals::menu->HasUnsavedTheme() ?
-							   "Theme edits are applied but not saved. Use Save Theme or Save As New Theme in Themes." :
-							   "Theme appearance is up to date. Global Save Settings stores your theme selection; Themes saves appearance edits.");
-		ImGui::PopStyleColor();
-		ImGui::Spacing();
+		if (!globals::menu->HasUnsavedTheme())
+			return;
+		MenuUI::PageNotice("Theme edits are not saved. Use Save Theme or Save As New Theme in Settings > Theme.", MenuUI::NoticeKind::Pending);
 	}
 
 	void ColorEditWithTooltip(const char* label, ImVec4& color, const char* tooltip, ImGuiColorEditFlags flags = 0)
@@ -226,16 +226,14 @@ namespace
 void SettingsTabRenderer::RenderGeneralSettings(SettingsState& state, const std::function<void()>& drawStartup)
 {
 	MenuUI::SettingsPage page("Settings", {
-											  { "hotkeys", "Controls", "Choose keyboard shortcuts.", "Keyboard shortcuts", true, true, nullptr },
+											  { "startup", "Startup", "Choose which features load when the game starts.", "Features loaded at startup" },
 											  { "vr_menu", "VR Menu", "Choose headset menu placement and size.", "Headset placement and presentation", globals::game::isVR },
 											  { "vr_controls", "VR Controls", "Choose controller navigation and shortcuts.", "Controller bindings and pointer response", globals::game::isVR },
 											  { "desktop", "Desktop Mirror", "Choose VR desktop presentation and focus.", "Desktop mirror and window behaviour", globals::game::isVR },
-											  { "startup", "Startup", "Choose which features load when the game starts.", "Features loaded at startup" },
-											  { "behaviour", "Behaviour", "Choose how the menu opens and responds.", "Opening, focus and interaction", true, true, "Choose interaction and appearance" },
-											  { "themes", "Theme", "Choose the overall appearance first.", "Overall appearance", true, true, nullptr },
+											  { "hotkeys", "Bindings", "Choose keyboard shortcuts.", "Keyboard shortcuts", true, true, nullptr },
+											  { "behaviour", "Interface", "Choose menu behaviour, spacing, shape and opacity.", "Behaviour and layout", true, true, "Choose interaction and appearance" },
+											  { "themes", "Theme", "Choose a theme, then refine its colours.", "Theme presets and palette", true, true, nullptr },
 											  { "fonts", "Fonts", "Refine text size and font choices.", "Font families and sizes", true, true, "Refine readability" },
-											  { "layout", "Layout", "Refine spacing, shape and menu layout.", "Spacing, shape and placement", true, true, nullptr },
-											  { "colours", "Colours", "Refine the selected theme colours.", "Theme palette", true, true, "Refine the palette" },
 										  });
 	if (page.Is("vr_menu"))
 		VR::DrawMenuInterfaceSettings();
@@ -247,22 +245,27 @@ void SettingsTabRenderer::RenderGeneralSettings(SettingsState& state, const std:
 		drawStartup();
 	if (page.Is("hotkeys"))
 		RenderKeybindingsTab(state);
-	if (page.Is("behaviour"))
+	if (page.Is("behaviour")) {
 		RenderBehaviorTab();
-	if (page.Is("themes"))
+		RenderStylingTab();
+	}
+	if (page.Is("themes")) {
 		RenderThemesTab();
+		RenderColorsTab();
+	}
 	if (page.Is("fonts"))
 		RenderFontsTab();
-	if (page.Is("layout"))
-		RenderStylingTab();
-	if (page.Is("colours"))
-		RenderColorsTab();
+	RenderSaveInfoText();
 }
 
 void SettingsTabRenderer::RenderShaderSettings()
 {
+	MenuUI::SectionHeading("Shader compilation");
 	RenderShadersTab();
-	MenuUI::SectionHeading("Cache actions");
+}
+
+void SettingsTabRenderer::RenderShaderCacheActions()
+{
 	auto& menuSettings = globals::menu->GetSettings();
 	bool skipConfirmation = menuSettings.SkipClearCacheConfirmation;
 	if (Util::Widgets::Checkbox("Skip Clear Cache Confirmation", &skipConfirmation)) {
@@ -280,8 +283,10 @@ void SettingsTabRenderer::RenderShaderSettings()
 		ImGui::TextWrapped(
 			"Checked: click clears current-scene shaders; Shift-click clears all. Unchecked reverses these actions. Useful for controller-only VR.");
 	}
+}
 
-	MenuUI::SectionHeading("Compilation shortcut");
+void SettingsTabRenderer::RenderShaderShortcuts()
+{
 	auto& menu = *globals::menu;
 	Util::InputComboWidget("Skip Compilation Key:", menu.GetSettings().SkipCompilationKey, menu.settingSkipCompilationKey, "Change##skip");
 }
@@ -432,17 +437,18 @@ void SettingsTabRenderer::RenderKeybindingsTab(
 		"Neural Rendering Toggle Key:", settings.NeuralRenderingToggleKey,
 		state.settingNeuralRenderingToggleKey, "Change##NeuralRenderingToggle");
 	if (auto tooltip = Util::HoverTooltipWrapper())
-		ImGui::TextUnformatted("Toggle NR without losing settings. Off removes NR rendering cost. Requires the NR DLL; unbound by default. Controller bindings: Settings > VR Controls > Controller shortcuts.");
+		ImGui::TextUnformatted(globals::game::isVR ?
+								   "Toggle NR without losing settings. Off removes NR rendering cost. Requires the NR DLL; unbound by default. Controller bindings: Settings > VR Controls > Controller shortcuts." :
+								   "Toggle NR without losing settings. Off removes NR rendering cost. Requires the NR DLL; unbound by default.");
 
 	Util::InputComboWidget(
 		"Overlay Toggle Key:",
 		settings.OverlayToggleKey,
 		state.settingOverlayToggleKey,
 		"Change##OverlayToggle");
-	ImGui::TextWrapped("Shows or hides overlay windows enabled by individual features. Default key: F10.");
+	Util::AddTooltip("Shows or hides overlay windows enabled by individual features. Default key: F10.");
 
-	ImGui::Separator();
-	ImGui::TextUnformatted("Hardcoded Bindings");
+	MenuUI::SectionHeading("Fixed shortcuts");
 	DrawReadOnlyKeybinding("Reset Menu:", "Ctrl+Shift+End",
 		"Reopen and restore menu geometry, sidebar, zoom and font sizing, including headset placement. Works while the menu is closed or locked.");
 }
@@ -450,9 +456,8 @@ void SettingsTabRenderer::RenderKeybindingsTab(
 void SettingsTabRenderer::RenderBehaviorTab()
 {
 	auto& themeSettings = globals::menu->GetSettings().Theme;
-	RenderSaveInfoText();
 
-	SeparatorTextWithFont("UI Behavior", Menu::FontRole::Subheading);
+	MenuUI::SectionHeading("Menu behaviour");
 
 	Util::Widgets::Checkbox("Show Icon Buttons in Header", &themeSettings.ShowActionIcons);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -501,19 +506,11 @@ void SettingsTabRenderer::RenderBehaviorTab()
 		ImGui::TextUnformatted("Hover delay in seconds before a tooltip appears.");
 	}
 
-	SeparatorTextWithFont("Visual Effects", Menu::FontRole::Subheading);
-
-	ImGui::BeginDisabled(globals::game::isVR);
-	if (Util::Widgets::Checkbox("Background Blur", &themeSettings.BackgroundBlurEnabled)) {
-		BackgroundBlur::SetEnabled(themeSettings.BackgroundBlurEnabled);
-	}
-	ImGui::EndDisabled();
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		if (globals::game::isVR) {
-			ImGui::Text("Background Blur is unavailable in VR.");
-		} else {
-			ImGui::Text("Applies a blur effect to the background behind the menu window.");
-		}
+	if (!globals::game::isVR) {
+		MenuUI::SectionHeading("Visual Effects");
+		if (Util::Widgets::Checkbox("Background Blur", &themeSettings.BackgroundBlurEnabled))
+			BackgroundBlur::SetEnabled(themeSettings.BackgroundBlurEnabled);
+		Util::AddTooltip("Applies a blur effect to the background behind the menu window.");
 	}
 }
 
@@ -522,7 +519,6 @@ void SettingsTabRenderer::RenderThemesTab()
 	static MenuUI::ActionFeedback feedback;
 	const auto showFeedback = SKSE::stl::scope_exit([&] { feedback.Draw(); });
 	auto& themeSettings = globals::menu->GetSettings().Theme;
-	RenderSaveInfoText();
 
 	// Static variables for popup state and new theme creation
 	static Util::ConfirmationPopup deleteThemePopup("Delete Theme", "", "Delete", "Cancel");
@@ -546,7 +542,7 @@ void SettingsTabRenderer::RenderThemesTab()
 	static bool updateSuccess = false;
 
 	// Theme Preset Selection
-	SeparatorTextWithFont("Theme Preset", Menu::FontRole::Subheading);
+	MenuUI::SectionHeading("Theme Preset");
 
 	// Get theme manager
 	auto themeManager = ThemeManager::GetSingleton();
@@ -632,11 +628,6 @@ void SettingsTabRenderer::RenderThemesTab()
 		ImGui::Text("Opens the Themes folder where you can add custom theme files.");
 	}
 
-	ImGui::Spacing();
-	ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.InfoColor);
-	ImGui::TextWrapped("If you changed the theme above, save your selection using the global \"Save Settings\" button.");
-	ImGui::PopStyleColor();
-
 	// Selected theme section: name + description
 	ImGui::Spacing();
 	ImGui::Separator();
@@ -646,8 +637,10 @@ void SettingsTabRenderer::RenderThemesTab()
 		ImGui::Text("Selected Theme: ");
 		ImGui::SameLine(0, 0);
 		ImGui::TextColored(themeSettings.StatusPalette.InfoColor, "%s", selectedTheme.displayName.c_str());
-		if (!selectedTheme.description.empty()) {
-			ImGui::TextWrapped("%s", selectedTheme.description.c_str());
+		if (auto tooltip = Util::HoverTooltipWrapper()) {
+			if (!selectedTheme.description.empty())
+				ImGui::TextWrapped("%s", selectedTheme.description.c_str());
+			ImGui::TextUnformatted("Save CSX settings to keep your theme selection.");
 		}
 	}
 	ImGui::Spacing();
@@ -751,27 +744,15 @@ void SettingsTabRenderer::RenderThemesTab()
 		}
 	}
 
-	// Display update feedback below the buttons
 	if (showUpdateFeedback) {
-		ImGui::Spacing();
-		ImGui::Separator();
-
 		if (updateSuccess) {
-			if (changedSettings.empty()) {
-				ImGui::TextColored(themeSettings.StatusPalette.SuccessColor, "Theme updated successfully - no changes detected");
-			} else {
-				ImGui::TextColored(themeSettings.StatusPalette.SuccessColor, "Theme updated successfully! Changed settings:");
-				ImGui::Indent();
-				for (const auto& change : changedSettings) {
-					ImGui::BulletText("%s: %s -> %s", change.path.c_str(), change.oldValue.c_str(), change.newValue.c_str());
-				}
-				ImGui::Unindent();
-			}
+			std::string details;
+			for (const auto& change : changedSettings)
+				details += std::format("{}: {} -> {}\n", change.path, change.oldValue, change.newValue);
+			MenuUI::PageNotice(changedSettings.empty() ? "Theme saved. No changes detected." : "Theme saved.", MenuUI::NoticeKind::Information, details);
 		} else {
-			ImGui::TextColored(themeSettings.StatusPalette.Error, "Failed to update theme");
+			MenuUI::PageNotice("Failed to update theme.", MenuUI::NoticeKind::Error);
 		}
-
-		ImGui::Separator();
 	}
 
 	// Create Theme Popup
@@ -919,9 +900,8 @@ void SettingsTabRenderer::RenderFontsTab()
 {
 	auto* menuInstance = globals::menu;
 	auto& themeSettings = menuInstance->GetSettings().Theme;
-	RenderSaveInfoText();
 
-	SeparatorTextWithFont("Font", Menu::FontRole::Subheading);
+	MenuUI::SectionHeading("Font");
 
 	bool& useAutoFont = menuInstance->GetSettings().UseResolutionFont;
 	if (Util::Widgets::Checkbox("Use resolution-based font size", &useAutoFont)) {
@@ -957,7 +937,7 @@ void SettingsTabRenderer::RenderFontsTab()
 	}
 
 	ImGui::Spacing();
-	SeparatorTextWithFont("Font Roles", Menu::FontRole::Subheading);
+	MenuUI::SectionHeading("Font Roles");
 
 	if (fontCatalog.families.empty()) {
 		Util::Text::Warning("No fonts found. Place .ttf files in Interface/CommunityShaders/Fonts/");
@@ -969,10 +949,7 @@ void SettingsTabRenderer::RenderFontsTab()
 		auto& roleSettings = themeSettings.FontRoles[roleIndex];
 
 		ImGui::PushID(static_cast<int>(roleIndex));
-		{
-			FontRoleGuard headingFont(Menu::FontRole::Subheading);
-			ImGui::TextUnformatted(descriptor.displayName.data());
-		}
+		MenuUI::SectionHeading(descriptor.displayName.data());
 
 		int familyIndex = 0;
 		if (!fontCatalog.families.empty()) {
@@ -1106,9 +1083,8 @@ void SettingsTabRenderer::RenderStylingTab()
 {
 	auto& themeSettings = globals::menu->GetSettings().Theme;
 	auto& style = themeSettings.Style;
-	RenderSaveInfoText();
 
-	SeparatorTextWithFont("Main", Menu::FontRole::Subheading);
+	MenuUI::SectionHeading("Menu size");
 	if (ImGui::Button("Reset Menu"))
 		globals::menu->RequestLayoutReset();
 	Util::AddTooltip("Restore menu geometry, sidebar, zoom and font sizing. Emergency shortcut: Ctrl+Shift+End.");
@@ -1119,7 +1095,7 @@ void SettingsTabRenderer::RenderStylingTab()
 	ImGui::Text("Effective zoom: %.0f%%", ImGui::GetStyle().FontScaleMain * 100.0f);
 	Util::AddTooltip("Zoom is limited to keep the menu usable on the current display. Zero on the slider means 100%.");
 
-	SeparatorTextWithFont("Layout", Menu::FontRole::Subheading);
+	MenuUI::SectionHeading("Layout");
 
 	Util::Widgets::SliderFloat2("Window Padding", (float*)&style.WindowPadding, 0.0f, 20.0f, "%.0f");
 	Util::Widgets::SliderFloat2("Frame Padding", (float*)&style.FramePadding, 0.0f, 40.0f, "%.0f");
@@ -1134,7 +1110,7 @@ void SettingsTabRenderer::RenderStylingTab()
 	Util::Widgets::SliderFloat("Grab Min Size", &style.GrabMinSize, 1.0f, 64.0f, "%.0f");
 	Util::AddTooltip("Applied immediately. Detail sliders also enforce a text-sized minimum handle.");
 
-	SeparatorTextWithFont("Scrollbar Opacity", Menu::FontRole::Subheading);
+	MenuUI::SectionHeading("Scrollbar Opacity");
 	Util::Widgets::SliderFloat("Track Opacity", &themeSettings.ScrollbarOpacity.Background, 0.0f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Scrollbar track opacity: background behind the draggable thumb.");
@@ -1148,7 +1124,7 @@ void SettingsTabRenderer::RenderStylingTab()
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("Controls the opacity of the scrollbar thumb when being dragged.");
 
-	SeparatorTextWithFont("Borders", Menu::FontRole::Subheading);
+	MenuUI::SectionHeading("Borders");
 	Util::Widgets::SliderFloat("Window Border Size", &style.WindowBorderSize, 0.0f, 5.0f, "%.0f");
 	Util::Widgets::SliderFloat("Child Border Size", &style.ChildBorderSize, 0.0f, 5.0f, "%.0f");
 	Util::Widgets::SliderFloat("Popup Border Size", &style.PopupBorderSize, 0.0f, 5.0f, "%.0f");
@@ -1156,7 +1132,7 @@ void SettingsTabRenderer::RenderStylingTab()
 	Util::Widgets::SliderFloat("Tab Border Size", &style.TabBorderSize, 0.0f, 5.0f, "%.0f");
 	Util::Widgets::SliderFloat("Tab Bar Border Size", &style.TabBarBorderSize, 0.0f, 5.0f, "%.0f");
 
-	SeparatorTextWithFont("Rounding", Menu::FontRole::Subheading);
+	MenuUI::SectionHeading("Rounding");
 	Util::Widgets::SliderFloat("Window Rounding", &style.WindowRounding, 0.0f, 12.0f, "%.0f");
 	Util::Widgets::SliderFloat("Child Rounding", &style.ChildRounding, 0.0f, 12.0f, "%.0f");
 	Util::Widgets::SliderFloat("Frame Rounding", &style.FrameRounding, 0.0f, 12.0f, "%.0f");
@@ -1165,11 +1141,11 @@ void SettingsTabRenderer::RenderStylingTab()
 	Util::Widgets::SliderFloat("Grab Rounding", &style.GrabRounding, 0.0f, 12.0f, "%.0f");
 	Util::Widgets::SliderFloat("Tab Rounding", &style.TabRounding, 0.0f, 12.0f, "%.0f");
 
-	SeparatorTextWithFont("Tables", Menu::FontRole::Subheading);
+	MenuUI::SectionHeading("Tables");
 	Util::Widgets::SliderFloat2("Cell Padding", (float*)&style.CellPadding, 0.0f, 20.0f, "%.0f");
 	Util::Widgets::SliderAngle("Table Angled Headers Angle", &style.TableAngledHeadersAngle, -50.0f, +50.0f);
 
-	SeparatorTextWithFont("Widgets", Menu::FontRole::Subheading);
+	MenuUI::SectionHeading("Widgets");
 	{
 		FontRoleGuard comboFont(Menu::FontRole::Body);
 		Util::Widgets::Combo("Color Button Position", (int*)&style.ColorButtonPosition, "Left\0Right\0");
@@ -1185,7 +1161,7 @@ void SettingsTabRenderer::RenderStylingTab()
 	Util::Widgets::SliderFloat2("Separator Text Padding", (float*)&style.SeparatorTextPadding, 0.0f, 40.0f, "%.0f");
 	Util::Widgets::SliderFloat("Log Slider Deadzone", &style.LogSliderDeadzone, 0.0f, 12.0f, "%.0f");
 
-	SeparatorTextWithFont("Docking", Menu::FontRole::Subheading);
+	MenuUI::SectionHeading("Docking");
 	Util::Widgets::SliderFloat("Docking Splitter Size", &style.DockingSeparatorSize, 0.0f, 12.0f, "%.0f");
 }
 
@@ -1193,7 +1169,7 @@ void SettingsTabRenderer::RenderColorsTab()
 {
 	auto& themeSettings = globals::menu->GetSettings().Theme;
 	auto& colors = themeSettings.FullPalette;
-	RenderSaveInfoText();
+	MenuUI::SectionHeading("Colours");
 
 	// Color filter at the top with search icon
 	static ImGuiTextFilter colorFilter;
@@ -1266,9 +1242,9 @@ void SettingsTabRenderer::RenderColorsTab()
 		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNode("Full Palette")) {
-		ImGui::TextWrapped("Advanced fallback colors for ImGui elements that are not driven by the semantic palette above.");
-
+	const bool fullPalette = ImGui::TreeNode("Full Palette");
+	Util::AddTooltip("Advanced fallback colors for ImGui elements that are not driven by the semantic palette above.");
+	if (fullPalette) {
 		for (int i = 0; i < ImGuiCol_COUNT; i++) {
 			const char* friendlyName = GetFriendlyColorName(i);
 			if (!colorFilter.PassFilter(friendlyName))
@@ -1281,11 +1257,11 @@ void SettingsTabRenderer::RenderColorsTab()
 
 void SettingsTabRenderer::RenderCaptureShortcuts()
 {
-	ImGui::TextWrapped("RenderDoc captures graphics frames for debugging. Requires loaded RenderDoc capture support.");
+	MenuUI::SectionHeading("Capture");
 	DrawReadOnlyKeybinding(
-		"RenderDoc Capture:",
-		"F12 / Print Screen",
-		"Captures the configured frame count. These capture hotkeys are fixed and cannot be changed here.");
+		"Shortcut",
+		"F12/Print Screen",
+		"Captures the configured frame count when RenderDoc is ready. These capture hotkeys are fixed and cannot be changed here.", true);
 }
 
 void SettingsTabRenderer::RenderDeveloperShortcuts()

@@ -31,7 +31,6 @@ void HairSpecular::DrawSettings()
 	MenuUI::SettingsPage page("HairSpecular", {
 												  { "model", "Model", "Choose the hair lighting model first.", "Kajiya-Kay or Marschner", true, true, "Choose model and appearance" },
 												  { "look", "Look", "Balance brightness, colour and shine.", "Brightness, colour and shine", true, true, nullptr },
-												  { "highlights", "Highlights", "Refine the highlights along hair strands.", "Strand highlight direction", true, true, "Refine highlights and shadows" },
 												  { "shadows", "Shadows", "Refine how hair shadows itself.", "Screen-space self-shadowing", true, true, nullptr },
 											  });
 
@@ -66,8 +65,6 @@ void HairSpecular::DrawSettings()
 		Util::Widgets::SliderFloat("Transmission", &settings.Transmission, 0.0f, 1.0f, "%.2f");
 		Util::AddTooltip("Amount of light that passes through hair. Higher values make backlit strands brighter.");
 		ImGui::Spacing();
-	}
-	if (page.Is("highlights")) {
 		Util::UIntCheckbox("Enable Tangent Shift", settings.EnableTangentShift);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(

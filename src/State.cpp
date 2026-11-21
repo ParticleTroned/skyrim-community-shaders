@@ -1,5 +1,6 @@
 #include "State.h"
 #include "Diagnostics/PerformanceCostExperiments.h"
+#include "FeatureSettingsScope.h"
 #include "Features/GrassPlacement.h"
 #include "Features/ReverseZ.h"
 #include "Features/Skin.h"
@@ -61,6 +62,7 @@
 #include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
 #include "Menu.h"
+#include "Menu/PerformancePage.h"
 #include "Menu/PerformanceTuningRenderer.h"
 #include "PresetCompatibility.h"
 #include "Profiler.h"
@@ -1365,6 +1367,7 @@ void State::Load(
 	}
 	if (loadedDefaultFromDisk) {
 		canonicalizeConfig(defaultConfigFilePath, settings);
+		SettingsMigrations::MigrateEditorSettingsRootLayer(settings);
 		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(settings);
 		if (auto adaptiveIt = settings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
 			adaptiveIt != settings.end())
@@ -1388,11 +1391,13 @@ void State::Load(
 					logger::info("Accepted marked preset: {}", presetCompatibility.message);
 				canonicalizeConfig(configPath, userSettings);
 				const auto adaptiveBalanceIt = userSettings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
-				const auto legacyAdaptiveBrightnessIt =
-					userSettings.find(SettingsMigrations::kLegacyAdaptiveBrightnessSettingsName.data());
 				const bool userDefinedAdaptiveBalance =
 					(adaptiveBalanceIt != userSettings.end() && adaptiveBalanceIt->is_object()) ||
-					(legacyAdaptiveBrightnessIt != userSettings.end() && legacyAdaptiveBrightnessIt->is_object());
+					std::ranges::any_of(SettingsMigrations::kLegacyAppearanceSettingsNames, [&](std::string_view name) {
+						const auto legacy = userSettings.find(name.data());
+						return legacy != userSettings.end() && legacy->is_object();
+					});
+				SettingsMigrations::MigrateEditorSettingsRootLayer(userSettings);
 				SettingsMigrations::MigrateAdaptiveBalanceRootLayer(userSettings, true);
 				if (const auto sourceAdaptiveIt = userSettings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
 					sourceAdaptiveIt != userSettings.end() && SettingsMigrations::HasForcedLegacyWaterAppearance(*sourceAdaptiveIt)) {
@@ -1579,6 +1584,7 @@ void State::SaveToJson(
 	const auto shaderCache = globals::shaderCache;
 
 	globals::menu->Save(settings["Menu"]);
+	MenuUI::PerformancePage::Save(settings);
 
 	json advanced;
 	advanced["Dump Shaders"] = shaderCache->IsDump();
@@ -1656,9 +1662,12 @@ void State::LoadFromJson(
 	PerformanceTuningRenderer::NotifyConfigurationChanging();
 	std::lock_guard<std::mutex> lock(m_mutex);
 	SettingsMigrations::MigrateReverseZStartup(settings);
+	SettingsMigrations::MigrateEditorSettingsRootLayer(settings);
 	if (a_loadFeatureSettings)
 		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(settings);
 	const auto shaderCache = globals::shaderCache;
+
+	MenuUI::PerformancePage::Load(settings);
 
 	// Load Menu settings
 	if (settings.contains("Menu") && settings["Menu"].is_object()) {
@@ -1787,6 +1796,8 @@ bool State::Save(ConfigMode a_configMode, Feature* a_feature)
 	if (readResult == Util::FileHelpers::JsonFileReadResult::Success) {
 		if (existingSettings.is_object()) {
 			settings = std::move(existingSettings);
+			if (!a_feature)
+				SettingsMigrations::MigrateEditorSettingsRootLayer(settings);
 		} else {
 			return reportFailure(
 				std::format("Refusing to overwrite config which is not a JSON object: {}", configPath.string()),
@@ -1802,9 +1813,13 @@ bool State::Save(ConfigMode a_configMode, Feature* a_feature)
 
 	try {
 		if (a_feature) {
+			json featureSettings = json::object();
+			FeatureSettingsScope::Copy(featureSettings, settings, a_feature->GetName());
 			const auto activeVariables = WeatherManager::GetSingleton()->GetActiveVariablesForFeature(a_feature->GetShortName());
 			WeatherVariables::GlobalWeatherRegistry::GetSingleton()->SerializeFeatureUserSettings(
-				a_feature->GetShortName(), activeVariables, [&] { a_feature->Save(settings); });
+				a_feature->GetShortName(), activeVariables, [&] { a_feature->Save(featureSettings); });
+			globals::menu->CaptureFeatureMenuSettings(a_feature->GetName(), featureSettings);
+			FeatureSettingsScope::Copy(settings, featureSettings, a_feature->GetName());
 		} else {
 			SaveToJson(settings, a_configMode == ConfigMode::DEFAULT);
 		}

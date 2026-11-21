@@ -76,19 +76,19 @@ int main(int argc, char** argv)
 		const json interior = VolumetricLightingTuning::Profile{ .ShaftIntensity = 0.6f, .Opacity = 1.2f, .Saturation = 0.4f };
 		json source = { { "ExteriorGodrays", exterior }, { "InteriorGodrays", interior }, { "ExteriorEnabled", false }, { "InteriorQuality", 3 } };
 		json root = { { "Volumetric Lighting", source } };
-		root["Adaptive Balance"] = { { "enabled", false } };
-		root["Adaptive Balance"]["globalProfile"]["appearance"]["godrayIntensity"] = 0.7;
+		root["Visuals"] = { { "enabled", false } };
+		root["Visuals"]["globalProfile"]["appearance"]["godrayIntensity"] = 0.7;
 		Check(SettingsMigrations::MigrateAdaptiveBalanceRootLayer(root), "Context godray migration did not run");
-		Check(root["Adaptive Balance"]["godrays"] == json({ { "exterior", exterior }, { "interior", interior } }), "Context godray values changed");
-		Check(root["Adaptive Balance"]["enabled"] == false && root["Adaptive Balance"]["globalProfile"]["appearance"]["godrayIntensity"] == 0.7, "Migration changed master or profile tuning");
+		Check(root["Visuals"]["godrays"] == json({ { "exterior", exterior }, { "interior", interior } }), "Context godray values changed");
+		Check(root["Visuals"]["enabled"] == false && root["Visuals"]["globalProfile"]["appearance"]["godrayIntensity"] == 0.7, "Migration changed master or profile tuning");
 		Check(root["Volumetric Lighting"] == json({ { "ExteriorEnabled", false }, { "InteriorQuality", 3 } }), "Renderer settings changed or duplicate appearance remains");
 		Check(!SettingsMigrations::MigrateAdaptiveBalanceRootLayer(root), "Godray migration repeats");
 		root["Volumetric Lighting"] = source;
-		root["Adaptive Balance"]["godrays"]["exterior"]["ShaftIntensity"] = 0.25;
-		root["Adaptive Balance"]["godrays"]["interior"]["Opacity"] = "invalid";
+		root["Visuals"]["godrays"]["exterior"]["ShaftIntensity"] = 0.25;
+		root["Visuals"]["godrays"]["interior"]["Opacity"] = "invalid";
 		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(root);
-		Check(root["Adaptive Balance"]["godrays"]["exterior"]["ShaftIntensity"] == 0.25, "Canonical context did not win");
-		Check(root["Adaptive Balance"]["godrays"]["interior"]["Opacity"] == interior["Opacity"], "Malformed destination did not recover");
+		Check(root["Visuals"]["godrays"]["exterior"]["ShaftIntensity"] == 0.25, "Canonical context did not win");
+		Check(root["Visuals"]["godrays"]["interior"]["Opacity"] == interior["Opacity"], "Malformed destination did not recover");
 		json flat = { { "GodrayIntensity", 1.5 }, { "GodrayShaftIntensity", 2.0 }, { "GodrayOpacity", 0.6 }, { "CustomColorRed", 0.2 }, { "ExteriorQuality", 1 } };
 		const auto patch = SettingsMigrations::ExtractAdaptiveBalanceGodrayFeaturePatch(flat);
 		Check(patch["godrays"]["exterior"] == patch["godrays"]["interior"], "Flat godray settings did not seed both contexts");
@@ -104,9 +104,19 @@ int main(int argc, char** argv)
 		json imported;
 		std::string status;
 		Check(ReadJsonPresetFile(path, imported, status), "Legacy settings preset did not import");
-		Check(imported["Adaptive Balance"]["godrays"] == json({ { "exterior", { { "Opacity", 0.4 } } }, { "interior", { { "Saturation", 0.3 } } } }), "Preset import lost legacy context tuning");
-		Check(imported["Adaptive Balance"]["volumetricClarity"] == 0.25 && imported["Adaptive Balance"].contains("profiles"), "Preset import lost existing Adaptive Balance values");
+		Check(imported["Visuals"]["godrays"] == json({ { "exterior", { { "Opacity", 0.4 } } }, { "interior", { { "Saturation", 0.3 } } } }), "Preset import lost legacy context tuning");
+		Check(imported["Visuals"]["volumetricClarity"] == 0.25 && imported["Visuals"].contains("profiles"), "Preset import lost existing Visuals values");
 		Check(Read(path) == legacy, "Import rewrote the source preset");
+		json mixed = {
+			{ "Visuals", { { "enabled", false }, { "globalProfile", { { "ambientMult", 0.5 } } } } },
+			{ "Adaptive Balance", { { "enabled", true }, { "globalProfile", { { "ambientMult", 0.8 }, { "brightnessMult", 1.2 } } } } },
+			{ "Adaptive Brightness", { { "globalProfile", { { "brightnessMult", 1.5 }, { "saturationMult", 0.9 } } } } }
+		};
+		Check(SettingsMigrations::MigrateAdaptiveBalanceRootLayer(mixed), "Legacy appearance names did not migrate");
+		Check(!mixed.contains("Adaptive Balance") && !mixed.contains("Adaptive Brightness"), "Legacy names remain after migration");
+		Check(mixed["Visuals"]["enabled"] == false && mixed["Visuals"]["globalProfile"] == json({ { "ambientMult", 0.5 }, { "brightnessMult", 1.2 }, { "saturationMult", 0.9 } }),
+			"Visuals must retain canonical values and recover missing legacy adjustments in priority order");
+		Check(!SettingsMigrations::MigrateAdaptiveBalanceRootLayer(mixed), "Appearance rename migration repeats");
 	} else if (test == "godray-context-renderer-reset") {
 		const json appearance = { { "ExteriorGodrays", { { "Opacity", 0.4 } } }, { "InteriorGodrays", { { "Saturation", 0.3 } } } };
 		auto legacy = appearance;
@@ -136,7 +146,7 @@ int main(int argc, char** argv)
 	} else if (test == "godray-context-providers") {
 		Write(providers / "Rays_VolumetricLighting.json", { { "ExteriorGodrays", { { "ShaftIntensity", 1.8 }, { "Opacity", 0.4 } } }, { "InteriorGodrays", { { "Saturation", 0.6 } } }, { "ExteriorQuality", 1 } });
 		manager.DiscoverOverrides();
-		Check(manager.HasFeatureOverrides(adaptive), "Volumetric provider did not route to Adaptive Balance");
+		Check(manager.HasFeatureOverrides(adaptive), "Volumetric provider did not route to Visuals");
 		json current;
 		Check(manager.ApplyOverrides(adaptive, current) == 1, "Godray provider did not apply");
 		Check(current["godrays"]["exterior"]["ShaftIntensity"] == 1.8 && current["godrays"]["interior"]["Saturation"] == 0.6, "Routed context values changed");
@@ -192,47 +202,47 @@ int main(int argc, char** argv)
 		json layer = { { "CS Utility", legacy } };
 		Check(SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer), "DOF-only settings were not migrated");
 		Check(!layer.contains("CS Utility"), "Recognized legacy settings retained duplicate ownership");
-		Check(layer.at("Adaptive Balance").at("depthOfField") == legacy, "Saved DOF values or independent boolean flags changed");
-		Check(!layer.at("Adaptive Balance").contains("globalLightingEnabled"), "DOF-only migration changed the lighting gate");
+		Check(layer.at("Visuals").at("depthOfField") == legacy, "Saved DOF values or independent boolean flags changed");
+		Check(!layer.at("Visuals").contains("globalLightingEnabled"), "DOF-only migration changed the lighting gate");
 		Check(!SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer), "Canonical migration is not idempotent");
 		layer = { { "CS Utility", legacy } };
 		layer["CS Utility"]["skyBrightness"] = 2.0;
 		layer["CS Utility"]["bloomEnhancement"]["Enabled"] = 1;
 		Check(SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer), "Renderer and DOF migration failed");
-		Check(layer["Adaptive Balance"]["globalProfile"]["advanced"] == false, "Legacy renderer enable value changed");
-		Check(layer["Adaptive Balance"]["globalProfile"]["skyBrightnessMult"] == 2.0, "Legacy lighting migration regressed");
+		Check(layer["Visuals"]["globalProfile"]["advanced"] == false, "Legacy renderer enable value changed");
+		Check(layer["Visuals"]["globalProfile"]["skyBrightnessMult"] == 2.0, "Legacy lighting migration regressed");
 		Check(layer["CS Utility"]["bloomEnhancement"]["Enabled"] == 1, "Legacy Bloom migration regressed");
-		Check(layer["Adaptive Balance"]["depthOfField"] == legacy, "Mixed renderer migration lost DOF");
+		Check(layer["Visuals"]["depthOfField"] == legacy, "Mixed renderer migration lost DOF");
 	} else if (test == "precedence") {
 		json layer = { { "CS Utility", Legacy() } };
-		layer["Adaptive Balance"]["depthOfField"]["enabled"] = true;
-		layer["Adaptive Balance"]["depthOfField"]["sceneDof"]["values"]["strength"] = 0.9f;
+		layer["Visuals"]["depthOfField"]["enabled"] = true;
+		layer["Visuals"]["depthOfField"]["sceneDof"]["values"]["strength"] = 0.9f;
 		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer);
-		Check(layer["Adaptive Balance"]["depthOfField"]["enabled"] == true, "Explicit destination enabled did not win");
-		Check(layer["Adaptive Balance"]["depthOfField"]["sceneDof"]["values"]["strength"] == 0.9f, "Explicit nested destination did not win");
-		Check(layer["Adaptive Balance"]["depthOfField"]["sceneDof"]["baseline"]["distance"] == 144.0f, "Missing destination baseline was not migrated");
+		Check(layer["Visuals"]["depthOfField"]["enabled"] == true, "Explicit destination enabled did not win");
+		Check(layer["Visuals"]["depthOfField"]["sceneDof"]["values"]["strength"] == 0.9f, "Explicit nested destination did not win");
+		Check(layer["Visuals"]["depthOfField"]["sceneDof"]["baseline"]["distance"] == 144.0f, "Missing destination baseline was not migrated");
 		json higher = { { "OS Utility", { { "enabled", false }, { "sceneDof", { { "values", { { "strength", 0.7f } } } } } } } };
 		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(higher);
 		layer.merge_patch(higher);
-		Check(layer["Adaptive Balance"]["depthOfField"]["enabled"] == false, "Higher priority legacy flag did not override lower canonical source");
-		Check(layer["Adaptive Balance"]["depthOfField"]["sceneDof"]["values"]["strength"] == 0.7f, "Higher priority legacy nested value did not win");
+		Check(layer["Visuals"]["depthOfField"]["enabled"] == false, "Higher priority legacy flag did not override lower canonical source");
+		Check(layer["Visuals"]["depthOfField"]["sceneDof"]["values"]["strength"] == 0.7f, "Higher priority legacy nested value did not win");
 		layer = { { "CS Utility", { { "enabled", true }, { "skyBrightness", 2.0 } } } };
-		layer["Adaptive Balance"]["lighting"]["skyBrightness"] = 3.0;
-		layer["Adaptive Balance"]["globalLightingEnabled"] = false;
+		layer["Visuals"]["lighting"]["skyBrightness"] = 3.0;
+		layer["Visuals"]["globalLightingEnabled"] = false;
 		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer);
-		Check(layer["Adaptive Balance"]["globalProfile"]["skyBrightnessMult"] == 3.0, "Historical canonical lighting lost same-source precedence");
-		Check(layer["Adaptive Balance"]["globalProfile"]["advanced"] == false, "Historical canonical lighting gate lost same-source precedence");
+		Check(layer["Visuals"]["globalProfile"]["skyBrightnessMult"] == 3.0, "Historical canonical lighting lost same-source precedence");
+		Check(layer["Visuals"]["globalProfile"]["advanced"] == false, "Historical canonical lighting gate lost same-source precedence");
 	} else if (test == "malformed") {
 		json layer = { { "CS Utility", Legacy() } };
-		layer["Adaptive Balance"]["depthOfField"]["enabled"] = "bad";
-		layer["Adaptive Balance"]["depthOfField"]["sceneDof"]["values"] = { { "strength", false }, { "distance", 100.0 } };
+		layer["Visuals"]["depthOfField"]["enabled"] = "bad";
+		layer["Visuals"]["depthOfField"]["sceneDof"]["values"] = { { "strength", false }, { "distance", 100.0 } };
 		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer);
-		const auto& depth = layer["Adaptive Balance"]["depthOfField"];
+		const auto& depth = layer["Visuals"]["depthOfField"];
 		Check(depth["enabled"] == false && depth["sceneDof"]["values"]["strength"] == 0.4f, "Malformed destination did not recover usable legacy values");
 		Check(depth["sceneDof"]["values"]["distance"] == 100.0, "Recovering malformed sibling discarded valid destination");
-		layer = { { "CS Utility", Legacy() }, { "Adaptive Balance", false } };
+		layer = { { "CS Utility", Legacy() }, { "Visuals", false } };
 		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer);
-		Check(layer["Adaptive Balance"]["depthOfField"] == Legacy(), "Malformed destination root prevented recovery");
+		Check(layer["Visuals"]["depthOfField"] == Legacy(), "Malformed destination root prevented recovery");
 	} else if (test == "disabled-at-boot") {
 		for (const auto* alias : { "CSUtility", "OSUtility" }) {
 			json lower = { { "CS Utility", Legacy() } };
@@ -241,13 +251,13 @@ int main(int argc, char** argv)
 			json higher = { { "Disable at Boot", { { alias, true } } } };
 			Check(SettingsMigrations::MigrateAdaptiveBalanceRootLayer(higher), "Legacy boot-disable choice was not migrated");
 			lower.merge_patch(higher);
-			const auto& depth = lower["Adaptive Balance"]["depthOfField"];
+			const auto& depth = lower["Visuals"]["depthOfField"];
 			Check(depth["enabled"] == false && depth["fixUnderwaterFogDofBlur"] == false, "Removed boot feature unexpectedly became active");
-			Check(depth["sceneDof"] == Legacy()["sceneDof"] && !lower["Adaptive Balance"].contains("enabled"), "Boot migration changed saved values or the master gate");
+			Check(depth["sceneDof"] == Legacy()["sceneDof"] && !lower["Visuals"].contains("enabled"), "Boot migration changed saved values or the master gate");
 			Check(!SettingsMigrations::MigrateAdaptiveBalanceRootLayer(higher), "Boot migration is not idempotent");
-			json explicitChoice = { { "Disable at Boot", { { alias, true } } }, { "CS Utility", Legacy() }, { "Adaptive Balance", { { "depthOfField", { { "enabled", true }, { "fixUnderwaterFogDofBlur", true } } } } } };
+			json explicitChoice = { { "Disable at Boot", { { alias, true } } }, { "CS Utility", Legacy() }, { "Visuals", { { "depthOfField", { { "enabled", true }, { "fixUnderwaterFogDofBlur", true } } } } } };
 			SettingsMigrations::MigrateAdaptiveBalanceRootLayer(explicitChoice);
-			Check(explicitChoice["Adaptive Balance"]["depthOfField"]["enabled"] == true && explicitChoice["Adaptive Balance"]["depthOfField"]["fixUnderwaterFogDofBlur"] == true, "Explicit canonical choices did not win over obsolete boot data");
+			Check(explicitChoice["Visuals"]["depthOfField"]["enabled"] == true && explicitChoice["Visuals"]["depthOfField"]["fixUnderwaterFogDofBlur"] == true, "Explicit canonical choices did not win over obsolete boot data");
 		}
 	} else if (test == "dof-retained-invalid") {
 		json legacy = Legacy();
@@ -256,24 +266,24 @@ int main(int argc, char** argv)
 		legacy["underwaterDof"]["values"]["mode"] = -1;
 		legacy["underwaterDof"]["values"]["blurRadius"] = 2.5;
 		legacy["underwaterDof"]["baseline"]["distance"] = 1e100;
-		json layer = { { "CS Utility", legacy }, { "Adaptive Balance", { { "depthOfField", { { "sceneDof", { { "values", { { "strength", 0.9 } } } } } } } } } };
+		json layer = { { "CS Utility", legacy }, { "Visuals", { { "depthOfField", { { "sceneDof", { { "values", { { "strength", 0.9 } } } } } } } } } };
 		Check(SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer), "Mixed usable DOF settings did not migrate");
 		const auto remaining = layer.at("CS Utility");
 		Check(remaining["sceneDof"]["values"]["strength"] == "broken" && remaining["sceneDof"]["values"]["future"] == legacy["sceneDof"]["values"]["future"], "Malformed or unknown scene values were discarded");
 		Check(remaining["underwaterDof"]["values"]["mode"] == -1 && remaining["underwaterDof"]["values"]["blurRadius"] == 2.5 && remaining["underwaterDof"]["baseline"]["distance"] == 1e100, "Invalid numeric DOF values were consumed");
-		Check(layer["Adaptive Balance"]["depthOfField"]["sceneDof"]["values"]["strength"] == 0.9, "Explicit valid canonical value lost precedence");
+		Check(layer["Visuals"]["depthOfField"]["sceneDof"]["values"]["strength"] == 0.9, "Explicit valid canonical value lost precedence");
 		Check(!SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer) && layer.at("CS Utility") == remaining, "Retained DOF values are not idempotent");
 		for (const double invalid : { 1e100, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN() }) {
 			json recovery = { { "CS Utility", { { "sceneDof", { { "values", { { "strength", 0.4 } } } } } } },
-				{ "Adaptive Balance", { { "depthOfField", { { "sceneDof", { { "values", { { "strength", invalid } } } } } } } } } };
-			Check(SettingsMigrations::MigrateAdaptiveBalanceRootLayer(recovery) && recovery["Adaptive Balance"]["depthOfField"]["sceneDof"]["values"]["strength"] == 0.4, "Invalid canonical numeric value blocked usable legacy recovery");
+				{ "Visuals", { { "depthOfField", { { "sceneDof", { { "values", { { "strength", invalid } } } } } } } } } };
+			Check(SettingsMigrations::MigrateAdaptiveBalanceRootLayer(recovery) && recovery["Visuals"]["depthOfField"]["sceneDof"]["values"]["strength"] == 0.4, "Invalid canonical numeric value blocked usable legacy recovery");
 		}
 	} else if (test == "appearance-invalid-numeric") {
 		json legacy = { { "skyBrightness", 1e100 }, { "cloudBrightness", 0.7 }, { "water", { { "parallaxQuality", -1 }, { "reflectionAmount", 0.5 } } } };
 		json layer = { { "CS Utility", legacy } };
 		Check(SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer), "Usable appearance fields did not migrate");
 		Check(layer["CS Utility"]["skyBrightness"] == 1e100 && layer["CS Utility"]["water"]["parallaxQuality"] == -1, "Unrepresentable appearance values were consumed");
-		Check(layer["Adaptive Balance"]["globalProfile"]["cloudBrightnessMult"] == 0.7, "Valid sibling appearance value did not migrate");
+		Check(layer["Visuals"]["globalProfile"]["cloudBrightnessMult"] == 0.7, "Valid sibling appearance value did not migrate");
 		Check(!SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer), "Invalid retained appearance values keep replaying");
 	} else if (test == "upstream-appearance") {
 		json legacy = json::object();
@@ -286,50 +296,50 @@ int main(int argc, char** argv)
 		json layer = { { "CS Utility", legacy } };
 		Check(SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer), "Upstream settings were not migrated");
 		for (const auto& [sourceName, destinationName] : SettingsMigrations::kLegacyUtilityAppearanceFields) {
-			Check(layer.at("Adaptive Balance").at(json::json_pointer{ std::string(destinationName) }) == legacy.at(json::json_pointer{ std::string(sourceName) }), "Upstream appearance field was lost or redirected incorrectly");
+			Check(layer.at("Visuals").at(json::json_pointer{ std::string(destinationName) }) == legacy.at(json::json_pointer{ std::string(sourceName) }), "Upstream appearance field was lost or redirected incorrectly");
 		}
-		Check(layer["Adaptive Balance"]["globalProfile"]["advanced"] == true, "Upstream appearance values remain gated off");
-		Check(layer["Adaptive Balance"]["depthOfField"]["enabled"] == true, "Upstream locked DOF was not activated");
-		Check(!layer.contains("CS Utility") && layer["Adaptive Balance"]["godrayFinalBrightness"] == 4.0, "Upstream final godray brightness did not move into its global setting");
+		Check(layer["Visuals"]["globalProfile"]["advanced"] == true, "Upstream appearance values remain gated off");
+		Check(layer["Visuals"]["depthOfField"]["enabled"] == true, "Upstream locked DOF was not activated");
+		Check(!layer.contains("CS Utility") && layer["Visuals"]["godrayFinalBrightness"] == 4.0, "Upstream final godray brightness did not move into its global setting");
 		legacy["enabled"] = false;
 		layer = { { "CS Utility", legacy } };
-		layer["Adaptive Balance"]["globalProfile"]["ambientMult"] = 2.0;
+		layer["Visuals"]["globalProfile"]["ambientMult"] = 2.0;
 		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer);
-		Check(layer["Adaptive Balance"]["globalProfile"]["advanced"] == false, "Explicit legacy renderer disable was lost");
-		Check(layer["Adaptive Balance"]["globalProfile"]["ambientMult"] == 2.0, "Canonical appearance did not override upstream value");
-		Check(layer["Adaptive Balance"]["depthOfField"]["enabled"] == false, "Lock inference overrode explicit disabled DOF");
+		Check(layer["Visuals"]["globalProfile"]["advanced"] == false, "Explicit legacy renderer disable was lost");
+		Check(layer["Visuals"]["globalProfile"]["ambientMult"] == 2.0, "Canonical appearance did not override upstream value");
+		Check(layer["Visuals"]["depthOfField"]["enabled"] == false, "Lock inference overrode explicit disabled DOF");
 		layer = { { "CS Utility", { { "underwaterDof", { { "locked", true } } } } } };
-		layer["Adaptive Balance"]["depthOfField"]["enabled"] = false;
+		layer["Visuals"]["depthOfField"]["enabled"] = false;
 		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer);
-		Check(layer["Adaptive Balance"]["depthOfField"]["enabled"] == false, "Lock inference overrode canonical disabled DOF");
+		Check(layer["Visuals"]["depthOfField"]["enabled"] == false, "Lock inference overrode canonical disabled DOF");
 	} else if (test == "godray-migration") {
 		for (const auto* alias : { "CS Utility", "OS Utility" }) {
 			for (const auto& value : { json(0), json(1.0), json(5.0) }) {
 				json layer = { { alias, { { "vlIntensity", value } } } };
 				Check(SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer), "Retained legacy godray brightness did not migrate");
-				Check(layer == json({ { "Adaptive Balance", { { "godrayFinalBrightness", value } } } }), "Godray brightness affected a profile or another global control");
+				Check(layer == json({ { "Visuals", { { "godrayFinalBrightness", value } } } }), "Godray brightness affected a profile or another global control");
 				Check(!SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer), "Godray brightness migration is not idempotent");
 			}
 		}
 		json layer = { { "CS Utility", { { "vlIntensity", 5.0 } } } };
-		layer["Adaptive Balance"] = { { "enabled", false }, { "godrayFinalBrightness", 0.0 } };
+		layer["Visuals"] = { { "enabled", false }, { "godrayFinalBrightness", 0.0 } };
 		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer);
-		Check(layer["Adaptive Balance"]["godrayFinalBrightness"] == 0.0 && layer["Adaptive Balance"]["enabled"] == false,
+		Check(layer["Visuals"]["godrayFinalBrightness"] == 0.0 && layer["Visuals"]["enabled"] == false,
 			"Legacy godray brightness overwrote explicit canonical values or enabled the feature");
 		Check(!layer.contains("CS Utility"), "Canonical godray override retained an obsolete duplicate");
 		json higher = { { "OS Utility", { { "vlIntensity", 5.0 } } } };
 		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(higher);
 		layer.merge_patch(higher);
-		Check(layer["Adaptive Balance"]["godrayFinalBrightness"] == 5.0, "Higher-priority legacy godray override did not win");
+		Check(layer["Visuals"]["godrayFinalBrightness"] == 5.0, "Higher-priority legacy godray override did not win");
 		for (const auto& malformed : { json(nullptr), json(false), json("5"), json::array({ 1 }), json({ { "value", 5 } }) }) {
 			layer = { { "CS Utility", { { "vlIntensity", malformed }, { "enabled", false } } } };
 			SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer);
 			Check(layer["CS Utility"]["vlIntensity"] == malformed, "Malformed legacy godray value was destroyed");
-			Check(!layer["Adaptive Balance"].contains("godrayFinalBrightness"), "Malformed legacy godray value was applied");
+			Check(!layer["Visuals"].contains("godrayFinalBrightness"), "Malformed legacy godray value was applied");
 			layer = { { "CS Utility", { { "vlIntensity", 1.0 } } } };
-			layer["Adaptive Balance"]["godrayFinalBrightness"] = malformed;
+			layer["Visuals"]["godrayFinalBrightness"] = malformed;
 			SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer);
-			Check(layer["Adaptive Balance"]["godrayFinalBrightness"] == 1.0, "Valid legacy godray value did not repair malformed destination");
+			Check(layer["Visuals"]["godrayFinalBrightness"] == 1.0, "Valid legacy godray value did not repair malformed destination");
 		}
 	} else if (test == "godray-invalid-numeric") {
 		for (const double invalid : { -1.0, 5.01, 1e100, std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN() }) {
@@ -337,11 +347,11 @@ int main(int argc, char** argv)
 			SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer);
 			const auto& retained = layer["CS Utility"]["vlIntensity"];
 			Check(retained.is_number() && (std::isnan(invalid) ? std::isnan(retained.get<double>()) : retained == invalid), "Unrepresentable legacy godray number was destroyed");
-			Check(!layer["Adaptive Balance"].contains("godrayFinalBrightness"), "Unrepresentable legacy godray number was applied");
+			Check(!layer["Visuals"].contains("godrayFinalBrightness"), "Unrepresentable legacy godray number was applied");
 			layer = { { "CS Utility", { { "vlIntensity", 1.0 } } } };
-			layer["Adaptive Balance"]["godrayFinalBrightness"] = invalid;
+			layer["Visuals"]["godrayFinalBrightness"] = invalid;
 			SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer);
-			Check(layer["Adaptive Balance"]["godrayFinalBrightness"] == 1.0 && !layer.contains("CS Utility"), "Valid legacy godray number did not repair unrepresentable destination");
+			Check(layer["Visuals"]["godrayFinalBrightness"] == 1.0 && !layer.contains("CS Utility"), "Valid legacy godray number did not repair unrepresentable destination");
 		}
 		for (const double invalid : { -1.0, 5.01, 1e100 }) {
 			Write(users / "CSUtility.user.json", { { "vlIntensity", invalid }, { "enabled", false } });
@@ -387,16 +397,16 @@ int main(int argc, char** argv)
 		};
 		json layer = { { "CS Utility", { { "bloomEnhancement", blob } } } };
 		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer);
-		Check(layer["Adaptive Balance"]["globalProfile"]["bloom"]["EnhancementIntensity"] == 3.5, "Selected Bloom did not migrate into global controls");
-		Check(layer["Adaptive Balance"]["globalProfile"]["bloom"]["HaloRadius"] == 6.0, "Selected Bloom parameters changed");
+		Check(layer["Visuals"]["globalProfile"]["bloom"]["EnhancementIntensity"] == 3.5, "Selected Bloom did not migrate into global controls");
+		Check(layer["Visuals"]["globalProfile"]["bloom"]["HaloRadius"] == 6.0, "Selected Bloom parameters changed");
 		Check(layer["CS Utility"]["bloomEnhancement"] == blob, "Inactive/custom Bloom presets were discarded");
-		layer["Adaptive Balance"]["globalProfile"]["bloom"]["EnhancementIntensity"] = 1.5;
+		layer["Visuals"]["globalProfile"]["bloom"]["EnhancementIntensity"] = 1.5;
 		Check(!SettingsMigrations::MigrateAdaptiveBalanceRootLayer(layer), "Retained Bloom source keeps rewriting migrated settings");
-		Check(layer["Adaptive Balance"]["globalProfile"]["bloom"]["EnhancementIntensity"] == 1.5, "Retained Bloom source overrode newer canonical choices");
+		Check(layer["Visuals"]["globalProfile"]["bloom"]["EnhancementIntensity"] == 1.5, "Retained Bloom source overrode newer canonical choices");
 		json historical = { { "CS Utility", { { "bloomEnhancement", blob } } } };
-		historical["Adaptive Balance"]["bloomEnhancement"] = { { "Enabled", 0 }, { "SelectedPreset", 0 } };
+		historical["Visuals"]["bloomEnhancement"] = { { "Enabled", 0 }, { "SelectedPreset", 0 } };
 		SettingsMigrations::MigrateAdaptiveBalanceRootLayer(historical);
-		Check(!historical["Adaptive Balance"].contains("globalProfile"), "Legacy canonical Bloom was composed twice with utility fallback");
+		Check(!historical["Visuals"].contains("globalProfile"), "Legacy canonical Bloom was composed twice with utility fallback");
 		Write(providers / "Bloom_CSUtility.json", { { "bloomEnhancement", blob } });
 		Write(users / "CSUtility.user.json", { { "bloomEnhancement", blob }, { "vlIntensity", 4.0 } });
 		manager.DiscoverOverrides();
@@ -415,9 +425,9 @@ int main(int argc, char** argv)
 	} else if (test == "providers") {
 		Write(providers / "Scene_CSUtility.json", { { "enabled", false }, { "sceneDof", { { "values", { { "strength", 0.4 } } } } } });
 		Write(providers / "Underwater_OSUtility.json", { { "fixUnderwaterFogDofBlur", true }, { "underwaterDof", { { "locked", false } } }, { "vlIntensity", 5.0 } });
-		Write(providers / "Global_Global.json", { { "OS Utility", { { "enabled", true } } }, { "Adaptive Balance", { { "depthOfField", { { "enabled", false } } } } } });
+		Write(providers / "Global_Global.json", { { "OS Utility", { { "enabled", true } } }, { "Visuals", { { "depthOfField", { { "enabled", false } } } } } });
 		Check(manager.DiscoverOverrides() == 3, "Legacy provider discovery failed");
-		Check(manager.HasFeatureOverrides(adaptive), "Legacy utility provider was not mapped to Adaptive Balance");
+		Check(manager.HasFeatureOverrides(adaptive), "Legacy utility provider was not mapped to Visuals");
 		json target = json::object();
 		Check(manager.ApplyOverrides(adaptive, target) == 2, "Both aliases were not routed");
 		Check(target["depthOfField"]["sceneDof"]["values"]["strength"] == 0.4 && target["depthOfField"]["underwaterDof"]["locked"] == false, "Routed data missing");
@@ -425,7 +435,7 @@ int main(int argc, char** argv)
 		Check(target["godrayFinalBrightness"] == 5.0 && !target.contains("globalProfile"), "Legacy provider godray value did not remain a global control");
 		Check(!manager.GetCombinedOverrideHash(adaptive).empty(), "Routed overrides lack source hash identity");
 		json global = json::object();
-		Check(manager.ApplyGlobalOverrides(global) == 1 && global["Adaptive Balance"]["depthOfField"]["enabled"] == false, "Global alias/canonical precedence failed");
+		Check(manager.ApplyGlobalOverrides(global) == 1 && global["Visuals"]["depthOfField"]["enabled"] == false, "Global alias/canonical precedence failed");
 	} else if (test == "user-migration" || test == "user-failure") {
 		Write(providers / "Scene_CSUtility.json", { { "enabled", true } });
 		const auto legacy = Legacy();
@@ -496,7 +506,7 @@ int main(int argc, char** argv)
 		const auto retained = Read(users / "CSUtility.user.json");
 		Check(retained["opaque"] == legacy["opaque"] && retained["sceneDof"]["values"]["future"] == "preserved" && retained["underwaterDof"]["values"]["strength"] == "invalid", "Reset discarded unsupported user data");
 		Check(retained["bloomEnhancement"]["Default"] == legacy["bloomEnhancement"]["Default"] && retained["bloomEnhancement"]["Fantasy"] == legacy["bloomEnhancement"]["Fantasy"], "Reset lost retained Bloom presets");
-		Check(!manager.HasUserOverride(adaptive), "Opaque retained data masquerades as an Adaptive Balance user override");
+		Check(!manager.HasUserOverride(adaptive), "Opaque retained data masquerades as an Visuals user override");
 		manager.DiscoverOverrides();
 		json current = json::object();
 		Check(!manager.LoadUserOverride(adaptive, current) && current.empty(), "Retained Bloom or unsupported fields replayed after reset");

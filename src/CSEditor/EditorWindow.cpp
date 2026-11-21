@@ -3,6 +3,7 @@
 #include "Features/CSEditor.h"
 #include "Features/VR.h"
 #include "InteriorOnlyPanel.h"
+#include "Layout.h"
 #include "Menu.h"
 #include "PaletteWindow.h"
 #include "State.h"
@@ -189,7 +190,7 @@ std::string EditorWindow::ResolveEditorId(RE::TESForm* form, const WidgetVec& wi
 
 void EditorWindow::ShowObjectsWindow()
 {
-	Util::BeginWithRoundedClose("CS Editor Browser", nullptr);
+	Util::BeginWithRoundedClose(CSXEditorLayout::BrowserTitle, nullptr);
 
 	// Reset filter state when the user switches categories so stale column
 	// selections (e.g. Status) don't hide all items in the new category.
@@ -939,10 +940,16 @@ void EditorWindow::ShowWidgetWindow()
 
 void EditorWindow::RenderUI()
 {
+	viewportImageRect = {};
 	// Apply editor UI scale
 	ImGuiIO& io = ImGui::GetIO();
+	if (!std::isfinite(io.DisplaySize.x) || !std::isfinite(io.DisplaySize.y) || io.DisplaySize.x <= 0 || io.DisplaySize.y <= 0)
+		return;
 	float previousScale = ImGui::GetStyle().FontScaleMain;
 	ImGui::GetStyle().FontScaleMain = settings.editorUIScale;
+	const SKSE::stl::scope_exit restoreScale([previousScale] { ImGui::GetStyle().FontScaleMain = previousScale; });
+	const auto* mainViewport = ImGui::GetMainViewport();
+	float menuBottom = mainViewport->WorkPos.y;
 
 	if (settings.showViewport) {
 		// Dim the game scene using the theme's modal dim background color
@@ -957,6 +964,7 @@ void EditorWindow::RenderUI()
 	}
 
 	if (ImGui::BeginMainMenuBar()) {
+		menuBottom = ImGui::GetWindowPos().y + ImGui::GetWindowSize().y;
 		// Tighten bottom clip rect to prevent content bleeding over the bottom border
 		{
 			auto* window = ImGui::GetCurrentWindowRead();
@@ -1070,7 +1078,7 @@ void EditorWindow::RenderUI()
 			ImGui::EndMenu();
 		}
 		if (ImGui::BeginMenu("Help")) {
-			ImGui::Text("CS Editor");
+			ImGui::Text("CSX Editor");
 			ImGui::Separator();
 			ImGui::TextUnformatted("Keyboard Shortcuts:");
 			ImGui::BulletText("Ctrl+F: Focus search");
@@ -1304,7 +1312,7 @@ void EditorWindow::RenderUI()
 		ImGui::SetCursorScreenPos(ImVec2(xButtonX, cursorY));
 		if (Util::ErrorButton("X", ImVec2(closeButtonSize, closeButtonSize)))
 			open = false;
-		Util::AddTooltip("Close CS Editor (Esc)");
+		Util::AddTooltip("Close CSX Editor (Esc)");
 
 		ImGui::PopClipRect();  // End bottom-border clip rect
 
@@ -1328,32 +1336,21 @@ void EditorWindow::RenderUI()
 	auto height = ImGui::GetIO().DisplaySize.y;
 	const float scale = Util::GetUIScale();
 	const float pad = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
-	const float menuBarHeight = ImGui::GetFrameHeight();
-	const float availableWidth = width - pad * 3.0f;  // left pad + gap + right pad
-	const float availableHeight = (height - menuBarHeight - pad * 2.0f) * 0.85f;
+	const ImVec2 origin{ mainViewport->WorkPos.x, std::max(mainViewport->WorkPos.y, menuBottom) };
+	const ImVec2 available{ mainViewport->WorkSize.x, mainViewport->WorkPos.y + mainViewport->WorkSize.y - origin.y };
+	const auto& windowPadding = ImGui::GetStyle().WindowPadding;
+	const auto layout = CSXEditorLayout::Defaults(origin, available, pad, 960.0f * scale, width / height,
+		{ windowPadding.x * 2, ImGui::GetFrameHeight() + windowPadding.y * 2 }, settings.showViewport, PaletteWindow::GetSingleton()->open);
+	if (!layout)
+		return;
 	const auto layoutCond = resetLayout ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
-	// Browser gets up to half the available width, capped so ultrawide gives extra to viewport
-	const float maxBrowserWidth = 960.0f * scale;
-	const float browserWidth = std::min(availableWidth * 0.5f, maxBrowserWidth);
-	const float viewportWidth = availableWidth - browserWidth;
-	ImGui::SetNextWindowSize(ImVec2(browserWidth, availableHeight), layoutCond);
-	ImGui::SetNextWindowPos(ImVec2(pad, menuBarHeight + pad), layoutCond);
+	CSXEditorLayout::ApplyDefaults(layout->browser, layoutCond);
 	lightEditor.GatherLights();
 	ShowObjectsWindow();
 
-	viewportImageRect = {};
 	if (settings.showViewport) {
-		// Size viewport height to match game aspect ratio so the preview fits snugly
-		const float aspectRatio = width / height;
-		const float imageHeight = viewportWidth / aspectRatio;
-		const float chromeHeight = ImGui::GetFrameHeight() + ImGui::GetStyle().WindowPadding.y * 2.0f;
-		const float viewportHeight = imageHeight + chromeHeight;
-		ImGui::SetNextWindowSize(ImVec2(viewportWidth, viewportHeight), layoutCond);
-		ImGui::SetNextWindowPos(ImVec2(pad + browserWidth + pad, menuBarHeight + pad), layoutCond);
-		viewportBottomY = menuBarHeight + pad + viewportHeight;
+		CSXEditorLayout::ApplyDefaults(layout->viewport, layoutCond);
 		ShowViewportWindow();
-	} else {
-		viewportBottomY = menuBarHeight + pad;
 	}
 
 	// Picker input needs the exact preview-image mapping published this frame.
@@ -1370,7 +1367,7 @@ void EditorWindow::RenderUI()
 	ShowWidgetWindow();
 
 	// Show palette window
-	PaletteWindow::GetSingleton()->Draw();
+	PaletteWindow::GetSingleton()->Draw(layout->palette, layoutCond);
 
 	if (resetLayout)
 		ResetWidgetTypeSizes();
@@ -1378,9 +1375,6 @@ void EditorWindow::RenderUI()
 
 	// Render notifications on top of everything
 	RenderNotifications();
-
-	// Restore previous font scale
-	ImGui::GetStyle().FontScaleMain = previousScale;
 }
 
 void EditorWindow::OpenWeatherFeatureSetting(RE::TESWeather* weather, const std::string& featureName, const std::string& settingName)

@@ -32,9 +32,15 @@ string(SUBSTRING "${color_rest}" 0 ${color_length} secondary_text)
 file(WRITE "${OUTPUT_DIRECTORY}/settings_widget_declarations.h"
     "#pragma once\nnamespace Util { ${declarations} }")
 
+file(READ "${PROJECT_ROOT}/src/Utils/UI.cpp" color_source)
+string(FIND "${color_source}" "\t\tImVec4 Readiness(bool ready)" readiness_start)
+string(FIND "${color_source}" "\t\tImVec4 PerformanceDelta(" readiness_end)
+math(EXPR readiness_length "${readiness_end} - ${readiness_start}")
+string(SUBSTRING "${color_source}" ${readiness_start} ${readiness_length} readiness)
+
 file(READ "${OUTPUT_DIRECTORY}/settings_page_under_test.h" page_body)
 file(WRITE "${OUTPUT_DIRECTORY}/settings_page_under_test.h"
-    "#include \"settings_widget_declarations.h\"\nnamespace Util::Color { ${secondary_text} }\n${page_body}")
+    "#include \"settings_widget_declarations.h\"\nnamespace Util::Color { ${secondary_text} ${readiness} }\n${page_body}")
 
 file(READ "${PROJECT_ROOT}/src/Features/VolumetricLighting.cpp" source)
 set(prefixes "")
@@ -146,6 +152,7 @@ endif()
 string(SUBSTRING "${source}" ${warning_start} -1 warning_body)
 string(REPLACE "ImGui::Selectable(" "TrackedSelectable(" warning_body "${warning_body}")
 file(WRITE "${OUTPUT_DIRECTORY}/settings_constraint_warning_under_test.h" "${warning_body}")
+extract_between("${source}" "void FeatureListRenderer::RenderPerformancePage(" "void FeatureListRenderer::SetSidebarVisible(" "settings_performance_navigation_under_test.h")
 
 file(READ "${PROJECT_ROOT}/src/State.cpp" source)
 extract_between("${source}" "bool State::RestoreDefaultSettings(" "void State::Load(" "settings_restore_under_test.h")
@@ -184,3 +191,9 @@ file(READ "${OUTPUT_DIRECTORY}/settings_preset_files_under_test.h" constants)
 extract_between("${source}" "\tbool EndsWithCaseInsensitive(" "\tstd::string GetPresetNotFoundMessage(" "settings_preset_files_under_test.h")
 file(READ "${OUTPUT_DIRECTORY}/settings_preset_files_under_test.h" functions)
 file(WRITE "${OUTPUT_DIRECTORY}/settings_preset_files_under_test.h" "${constants}\n${functions}")
+
+# Exercise shared warning/error routing through the production notice functions.
+extract_between("${color_source}" "\t\tstatic void PageNoticeV(" "#undef UTIL_TEXT_WRAPPED" "settings_notices_under_test.h")
+file(READ "${OUTPUT_DIRECTORY}/settings_notices_under_test.h" notices)
+string(REGEX REPLACE "\n[\t ]+UTIL_TEXT[^\n]+" "" notices "${notices}")
+file(WRITE "${OUTPUT_DIRECTORY}/settings_notices_under_test.h" "namespace Util::Text {\n${notices}\n#undef UTIL_TEXT_WRAPPED\n}\n")

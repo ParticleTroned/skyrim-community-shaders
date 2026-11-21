@@ -193,11 +193,10 @@ std::pair<std::string, std::vector<std::string>> PerformanceOverlay::GetFeatureS
 
 	std::vector<std::string> keyFeatures = {
 		"Real-time FPS and frame time monitoring with configurable update intervals",
-		"Interactive draw call analysis with per-shader type performance breakdown",
-		"VRAM usage monitoring with visual progress bars",
+		"Optional draw-call and CSX render-pass counters",
+		"VRAM monitoring and render-target inspection",
 		"Frame time graphs for pre and post-frame generation analysis",
-		"A/B testing support for performance comparison between configurations",
-		"Color-coded performance metrics with customizable thresholds",
+		"Adjustable text size, background opacity and border",
 		"Movable overlay window with persistent positioning"
 	};
 
@@ -212,6 +211,11 @@ bool PerformanceOverlay::HideFromDesktopWhenSubmittedToVR() const
 	       vr.openVRInfo.runtimeType == VRDetection::RuntimeType::OpenComposite;
 }
 
+Feature::SettingsHeaderStatus PerformanceOverlay::GetSettingsHeaderStatus() const
+{
+	return settings.ShowInOverlay ? SettingsHeaderStatus{} : SettingsHeaderStatus{ "Off", true, "The performance overlay is hidden. Use Enabled to show it; its counter settings are preserved." };
+}
+
 void PerformanceOverlay::DrawSettingsEnabledControl()
 {
 	Util::Widgets::Checkbox("Enabled", &settings.ShowInOverlay);
@@ -220,17 +224,9 @@ void PerformanceOverlay::DrawSettingsEnabledControl()
 
 void PerformanceOverlay::DrawSettings()
 {
-	MenuUI::SettingsPage page("PerformanceOverlay", {
-														{ "counters", "Counters", "Choose which performance counters and graphs to show.", "FPS, draw calls and graphs", true, true, "Choose information and layout", nullptr, nullptr, settings.ShowInOverlay },
-														{ "appearance", "Appearance", "Refine size, placement and update speed.", "Size, opacity and position", true, true, nullptr, nullptr, nullptr, settings.ShowInOverlay },
-													});
-
-	if (!page.Is("counters") && !page.Is("appearance"))
-		return;
-
 	{
 		const auto disabled = Util::DisableGuard(!settings.ShowInOverlay);
-		if (page.Is("counters")) {
+		{
 			// Display options
 			MenuUI::SectionHeading("Counters and graphs");
 
@@ -263,7 +259,7 @@ void PerformanceOverlay::DrawSettings()
 			ImGui::Spacing();
 			ImGui::Spacing();
 		}
-		if (page.Is("appearance")) {
+		{
 			// Appearance settings
 			MenuUI::SectionHeading("Size and timing");
 
@@ -277,8 +273,7 @@ void PerformanceOverlay::DrawSettings()
 			Util::Widgets::SliderInt("Frame History Size", &this->settings.FrameHistorySize,
 				this->settings.kMinFrameHistorySize, this->settings.kMaxFrameHistorySize, "%d", ImGuiSliderFlags_AlwaysClamp);
 
-			ImGui::Separator();
-			ImGui::Text("Position:");
+			MenuUI::SectionHeading("Position");
 			if (ImGui::Button("Reset Position")) {
 				ResetWindowPosition();
 			}
@@ -561,18 +556,17 @@ void PerformanceOverlay::DrawRenderTargetProfiling()
 void PerformanceOverlay::DrawRenderTargets(bool profilingView)
 {
 	if (!loaded || !globals::profiler || !globals::profiler->IsInitialized()) {
-		ImGui::TextDisabled("Render target profiler is unavailable.");
+		MenuUI::AvailabilityNotice("Render target profiler is unavailable.");
 		return;
 	}
 	if (!globals::profiler->IsUserEnabled()) {
-		ImGui::TextDisabled("Render target profiling is off. Enable Profiling to collect.");
+		MenuUI::AvailabilityNotice("Render target profiling is off. Enable Profiling to collect.");
 		return;
 	}
 	(profilingView ? profilingRenderTargetsRequested : overlayRenderTargetsRequested) = true;
 	const auto& stats = globals::profiler->GetRenderTargetStats();
-	ImGui::TextUnformatted("Render targets: approximate D3D11 GPU intervals");
+	ImGui::TextUnformatted("Render target timings");
 	Util::AddTooltip(RenderTargetStats::kCoverage);
-	ImGui::TextDisabled("Includes intervening work and waits. NR queues excluded.");
 	if (stats.HasResourceFailure())
 		ImGui::TextDisabled("Target collection failed. Toggle Show Render Targets off to retry.");
 	if (stats.IsSpanLimitHit() || stats.IsBindingLimitHit())

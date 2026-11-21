@@ -5,11 +5,11 @@ class HomePageRenderer
 {
 public:
 	// Social links
-	static constexpr const char* DISCORD_URL = "https://discord.gg/utSWStYTx2";
+	static constexpr const char* DISCORD_URL = "https://discord.com/invite/WjSUaSPaQZ";
 	static constexpr const char* GITHUB_URL = "https://github.com/ParticleTroned/skyrim-community-shaders/tree/main-VR";
+	static constexpr const char* NEXUS_MODS_URL = "https://www.nexusmods.com/skyrimspecialedition/mods/166950";
 
 	// Font scales
-	static constexpr float TITLE_FONT_SCALE = 2.0f;
 	static constexpr float TITLE_PRIMARY_LINE_FONT_SCALE = 1.85f;
 	static constexpr float TITLE_SECONDARY_LINE_FONT_SCALE = 0.85f;
 	static constexpr float SETUP_DIALOG_FONT_SCALE = 0.75f;
@@ -31,9 +31,7 @@ public:
 	static constexpr float FAULTIER_MAX_HEIGHT = 320.0f;
 	static constexpr float HOME_LINK_BUTTON_HEIGHT = 42.0f;
 	static constexpr float HOME_LINK_BUTTON_SPACING = 16.0f;
-	static constexpr float HOME_LINK_GITHUB_BUTTON_WIDTH = 140.0f;
-	static constexpr float HOME_LINK_DISCORD_BUTTON_MIN_WIDTH = 120.0f;
-	static constexpr float HOME_LINK_DISCORD_BUTTON_MAX_WIDTH = 220.0f;
+	static constexpr float HOME_LINK_BUTTON_WIDTH = 140.0f;
 	static constexpr float HOME_LINK_ROW_PADDING_MARGIN = 40.0f;
 
 	static void RenderHomePage();
@@ -46,7 +44,6 @@ public:
 
 private:
 	static void RenderWelcomeSection();
-	static void RenderCacheMismatchSection();
 	static void MarkFirstTimeSetupComplete(uint32_t closingKey, bool skipNextKeyRelease = true);
 
 	// State

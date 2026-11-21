@@ -70,7 +70,10 @@ namespace Util
 		RestoreDefaults,
 		ClearCache,
 		Teleport,
-		Close
+		Close,
+		Performance,
+		Camera,
+		Visuals
 	};
 	/** Draw an action symbol within its button bounds using the current theme colour. */
 	void DrawActionGlyph(ImDrawList* a_draw, ActionGlyph a_glyph, ImVec2 a_minimum, ImVec2 a_maximum, ImU32 a_color, bool a_selected = false);
@@ -544,18 +547,6 @@ namespace Util
 		return clicked;
 	}
 
-	/** Resolve switch dimensions so callers can align its track and hit area. */
-	ImVec2 FeatureToggleSize(const ImVec2& size = ImVec2(0, 0));
-
-	/**
-	 * Clean, minimalist toggle switch for feature enable/disable state
-	 * @param label Label text to display next to the toggle
-	 * @param enabled Reference to the boolean state to toggle
-	 * @param size Toggle size (optional, defaults to automatic sizing)
-	 * @return True if the toggle state was changed
-	 */
-	bool FeatureToggle(const char* label, bool* enabled, const ImVec2& size = ImVec2(0, 0));
-
 	/**
 	 * RAII wrapper for creating collapsible UI sections.
 	 * Automatically handles the TreeNode creation, styling, and cleanup.
@@ -566,7 +557,7 @@ namespace Util
 		/**
 		 * Creates a section wrapper for organizing UI content.
 		 * @param title The section title
-		 * @param description Optional description text shown below the title
+		 * @param description Optional help shown when hovering the title
 		 * @param titleColor Color for the section title
 		 * @param isVisible Whether the section should be visible (used for conditional sections)
 		 */
@@ -1141,6 +1132,8 @@ namespace Util
 		ImVec4 WithAlpha(ImVec4 color, float alpha);
 		ImVec4 Blend(const ImVec4& from, const ImVec4& to, float amount, float alpha);
 		ImVec4 Lift(ImVec4 color, float amount, float alpha);
+		/** Green for ready; magenta for off or attention, paired with visible status text. */
+		ImVec4 Readiness(bool ready);
 		ImVec4 PerformanceDelta(int direction);
 	}
 
@@ -1747,6 +1740,7 @@ namespace Util
 	 * @param combo The vector of InputCombo to record into
 	 * @param isRecording Reference to boolean tracking active recording state
 	 * @param recordingLabel Unique label ID for the recording button
+	 * @param bindingDisplay Optional display label for the current binding, including aliases
 	 *
 	 * @return true if the combo was modified
 	 */
@@ -1754,7 +1748,8 @@ namespace Util
 		const char* label,
 		std::vector<InputCombo>& combo,
 		bool& isRecording,
-		const char* recordingLabel);
+		const char* recordingLabel,
+		const char* bindingDisplay = nullptr);
 
 	/**
 	 * @brief Displays a DLL version information table with a clickable folder link.

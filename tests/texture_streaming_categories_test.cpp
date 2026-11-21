@@ -349,7 +349,17 @@ namespace MenuUI
 	void DetailText(const char*) {}
 	void SectionHeading(const char*) {}
 }
-struct TextureStreaming
+struct Feature
+{
+	struct SettingsHeaderStatus
+	{
+		std::string_view label = "Ready";
+		bool needsAttention = false;
+		std::string message;
+		bool pendingChange = false;
+	};
+};
+struct TextureStreaming : Feature
 {
 	bool loaded = true;
 	std::string failedLoadedMessage;
@@ -398,7 +408,11 @@ struct TextureStreaming
 	void RestoreDefaultSettings();
 	void PostPostLoad();
 	void DrawSettingsEnabledControl();
+	SettingsHeaderStatus GetSettingsHeaderStatus() const;
 	void DrawSettings();
+	bool IsPerformanceCostMeasurementEnabled() const;
+	void SetPerformanceCostMeasurementEnabled(bool value);
+	const char* GetPerformanceToggleBlockReason() const;
 };
 #define GetModuleHandleW FixtureModuleHandle
 #define LoadDDS FixtureLoadDDS
@@ -611,7 +625,7 @@ void CheckStreamingConflict()
 	blocked.DrawSettingsEnabledControl();
 	blocked.DrawSettings();
 	Require(!blocked.state->enabled && blocked.state->requestedEnabled && !blocked.state->modes.onPressure &&
-				Util::Text::warning == streamingConflictWarning && !Util::disabled,
+				blocked.GetSettingsHeaderStatus().message == streamingConflictWarning && !Util::disabled,
 		"Blocked UI bypassed SPS, hid its warning or leaked disabled state");
 	Util::Widgets::clicks.clear();
 	blocked.RestoreDefaultSettings();
@@ -642,7 +656,7 @@ void CheckStreamingConflict()
 	Util::Widgets::clicks = { { "Enabled", false }, { "On pressure", true } };
 	rejected.DrawSettingsEnabledControl();
 	rejected.DrawSettings();
-	Require(!rejected.state->enabled && rejected.state->requestedEnabled && Util::Text::warning == rejected.state->inventoryFailure && !Util::disabled,
+	Require(!rejected.state->enabled && rejected.state->requestedEnabled && rejected.GetSettingsHeaderStatus().message == rejected.state->inventoryFailure && !Util::disabled,
 		"Suspended inventory controls hid the failure or bypassed the session latch");
 	Util::Widgets::clicks.clear();
 	rejected.RestoreDefaultSettings();

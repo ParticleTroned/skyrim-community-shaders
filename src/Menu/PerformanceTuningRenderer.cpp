@@ -1,5 +1,8 @@
 #include "PerformanceTuningRenderer.h"
+#include "Menu/FeatureListRenderer.h"
 #include "Menu/SettingsPage.h"
+#include "Menu/SettingsSearch.h"
+#include "PerformancePage.h"
 
 #include <algorithm>
 #include <array>
@@ -266,6 +269,8 @@ namespace
 	static std::unordered_map<std::string, std::optional<DisabledFeatureConfiguration>> g_disabledFeatureConfigurations;
 	static FeatureCostBatchState g_featureCostBatch;
 	static std::string g_featureCostUiMessage;
+	static Feature* failedToggleFeature = nullptr;
+	static int tuningView = 0;
 
 	struct QuickScanRow
 	{
@@ -1928,6 +1933,7 @@ namespace
 		ImGui::TableNextRow();
 		ImGui::TableSetColumnIndex(0);
 		ImGui::TextColored(Util::Color::SecondaryText(), "%s", label);
+		Util::AddTooltip("* marks a statistically significant difference (p <= 0.05). A dagger and number identify one or two missing raw samples; three or more make that timing unavailable (--).");
 		ImGui::TableSetColumnIndex(1);
 		if (!metric.available || !metric.hasStandardError) {
 			RenderFeatureCostValue("--", ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
@@ -1986,19 +1992,22 @@ namespace
 		auto background = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
 		background.w *= MenuUI::SettingsSurfaceOpacityScale;
 		ImGui::PushStyleColor(ImGuiCol_ChildBg, background);
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { font * .75f, font * .6f });
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { font * .4f, font * .6f });
 		const SKSE::stl::scope_exit restoreStyle([] { ImGui::PopStyleVar(); ImGui::PopStyleColor(); });
-		const float height = font * 5.0f + ImGui::GetStyle().ItemSpacing.y;
+		const float height = font * 5.0f + ImGui::GetStyle().ItemSpacing.y * 2;
 		const bool visible = ImGui::BeginChild("##Counter", { 0, height }, ImGuiChildFlags_AlwaysUseWindowPadding,
 			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-		const SKSE::stl::scope_exit endChild([] { ImGui::EndChild(); });
+		const SKSE::stl::scope_exit endChild([tooltip] {
+			ImGui::EndChild();
+			if (tooltip)
+				Util::AddTooltip(tooltip);
+		});
 		if (!visible)
 			return;
 		ImGui::TextColored(Util::Color::SecondaryText(), "%s", label);
-		if (tooltip)
-			Util::AddTooltip(tooltip);
 		char text[64];
 		std::snprintf(text, sizeof(text), valid ? format : "--", value);
+		const float valueY = ImGui::GetCursorPosY();
 		const float textWidth = ImGui::GetFont()->CalcTextSizeA(font * 1.6f, FLT_MAX, 0, text).x;
 		const float textScale = std::min(1.0f, ImGui::GetContentRegionAvail().x / std::max(1.0f, textWidth));
 		{
@@ -2009,8 +2018,14 @@ namespace
 			else
 				ImGui::TextDisabled("%s", text);
 		}
-		if (valid && peak >= 0.0f)
-			ImGui::TextColored(Util::Color::SecondaryText(), "Peak %.2f ms", peak);
+		if (valid && peak >= 0.0f) {
+			ImGui::SetCursorPosY(valueY + font * 1.6f + ImGui::GetStyle().ItemSpacing.y);
+			std::snprintf(text, sizeof(text), "Peak %.2f ms", peak);
+			const float peakScale = std::min(1.0f, ImGui::GetContentRegionAvail().x / std::max(1.0f, ImGui::CalcTextSize(text).x));
+			ImGui::PushFont(ImGui::GetFont(), ImGui::GetStyle().FontSizeBase * peakScale);
+			const SKSE::stl::scope_exit restoreFont([] { ImGui::PopFont(); });
+			ImGui::TextColored(Util::Color::SecondaryText(), "%s", text);
+		}
 	}
 
 	void RenderTopPerformanceCounters(const ProfilingRenderer::PerformanceTimingSummary& summary)
@@ -2020,39 +2035,58 @@ namespace
 		float displayCpuMs = 0.0f;
 		const bool hasDisplayCpu = TryGetDisplayCpuMs(summary, displayCpuMs);
 
-		MenuUI::DetailText(summary.vrTiming ?
-							   "Live averages over 1 s; peaks use the same window. Hover a timing label for details." :
-							   "Live averages over 60 samples. Frame and FPS show application cadence.");
+		const char* averagingDetails = summary.vrTiming ?
+		                                   "Live average over the last 1 second. Peak is the highest timing in that same window." :
+		                                   "Live average over up to 60 recent samples.";
+		const auto frameDetails = fmt::format(
+			"Application frame interval in milliseconds. CPU and GPU work can overlap; their timings are not added to obtain Frame.\n\n"
+			"{}\n-- means no valid timing is available.",
+			averagingDetails);
+		const auto fpsDetails = fmt::format(
+			"Application frames per second: 1000 divided by the average Frame interval in milliseconds. "
+			"This is application cadence, not the display refresh rate or a count of generated or reprojected frames.\n\n"
+			"{}\n-- means no valid frame timing is available.",
+			summary.vrTiming ? "Calculated from the last 1 second of frame timings." : "Calculated from up to 60 recent frame timings.");
 		const auto& stats = summary.vrDisplay;
-		const std::string gpuDetails = summary.vrTiming ? fmt::format(
-															  "SteamVR total GPU interval, including application and compositor work.\nScene GPU: {}\n"
-															  "fpsVR displays a peak; compare the peak below with its refresh interval set to 1 s.",
-															  stats.sceneGpu.count ? fmt::format("{:.2f} ms average / {:.2f} ms peak", stats.sceneGpu.Average(), stats.sceneGpu.peak) : "unavailable") :
-		                                                  "Whole-frame D3D11 GPU timing. Unavailable with the D3D12 frame-generation path.";
-		const std::string cpuDetails = summary.vrTiming ? fmt::format(
-															  "Poses ready to submission, plus compositor CPU time. Excludes pose waiting; does not measure all CPU threads.\n"
-															  "Pose wait: {}\nfpsVR displays the peak over its refresh interval.",
-															  stats.poseWait.count ? fmt::format("{:.2f} ms average / {:.2f} ms peak", stats.poseWait.Average(), stats.poseWait.peak) : "unavailable") :
-		                                                  "Elapsed CPU render-to-present interval.";
-		const float minimumWidth = ImGui::GetFontSize() * 12;
-		const float availableWidth = ImGui::GetContentRegionAvail().x;
-		const float gap = ImGui::GetStyle().ItemSpacing.x;
-		const int columns = availableWidth >= minimumWidth * 4 + gap * 3 ? 4 :
-		                    availableWidth >= minimumWidth * 2 + gap     ? 2 :
-		                                                                   1;
-		MenuUI::DetailGrid counters("##PerformanceTuningTopCounters", columns, minimumWidth);
-		counters.Next();
+		std::string gpuDetails = summary.vrTiming ? fmt::format(
+														"SteamVR total GPU interval, including application and compositor work.\nScene GPU: {}\n"
+														"fpsVR displays a peak; compare the peak below with its refresh interval set to 1 s.",
+														stats.sceneGpu.count ? fmt::format("{:.2f} ms average / {:.2f} ms peak", stats.sceneGpu.Average(), stats.sceneGpu.peak) : "unavailable") :
+		                                            "Whole-frame D3D11 GPU timing. Unavailable with the D3D12 frame-generation path.";
+		std::string cpuDetails = summary.vrTiming ? fmt::format(
+														"Poses ready to submission, plus compositor CPU time. Excludes pose waiting; does not measure all CPU threads.\n"
+														"Pose wait: {}\nfpsVR displays the peak over its refresh interval.",
+														stats.poseWait.count ? fmt::format("{:.2f} ms average / {:.2f} ms peak", stats.poseWait.Average(), stats.poseWait.peak) : "unavailable") :
+		                                            "Elapsed CPU render-to-present interval. Unavailable with the D3D12 frame-generation path.";
+		const auto timingDetails = fmt::format("\n\n{}\n-- means no valid timing is available.", averagingDetails);
+		gpuDetails += timingDetails;
+		cpuDetails += timingDetails;
+
+		const float font = ImGui::GetFontSize();
+		ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, { font * .3f, font * .22f });
+		const SKSE::stl::scope_exit restoreStyle([] { ImGui::PopStyleVar(); });
+		if (!ImGui::BeginTable("##PerformanceTuningTopCounters", 4, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoPadOuterX))
+			return;
+		const SKSE::stl::scope_exit endTable([] { ImGui::EndTable(); });
+		ImGui::TableNextColumn();
+		RenderMetricCounter("FPS", summary.fps, "%.0f", summary.fps > 0.0f, -1.0f, fpsDetails.c_str());
+		ImGui::TableNextColumn();
 		RenderMetricCounter("Frame", summary.frameMs, "%.2f ms", summary.frameMs > 0.0f,
 			summary.vrTiming && stats.frame.count ? stats.frame.peak : -1.0f,
-			"Application frame interval. FPS is the reciprocal of its average; CPU and GPU timings do not clamp it.");
-		counters.Next();
-		RenderMetricCounter(summary.vrTiming ? "VR GPU total" : "GPU", displayGpuMs, "%.2f ms", hasDisplayGpu,
+			frameDetails.c_str());
+		ImGui::TableNextColumn();
+		RenderMetricCounter("GPU", displayGpuMs, "%.2f ms", hasDisplayGpu,
 			summary.vrTiming && stats.gpu.count ? stats.gpu.peak : -1.0f, gpuDetails.c_str());
-		counters.Next();
-		RenderMetricCounter(summary.vrTiming ? "VR CPU" : "CPU", displayCpuMs, "%.2f ms", hasDisplayCpu,
+		ImGui::TableNextColumn();
+		RenderMetricCounter("CPU", displayCpuMs, "%.2f ms", hasDisplayCpu,
 			summary.vrTiming && stats.cpu.count ? stats.cpu.peak : -1.0f, cpuDetails.c_str());
-		counters.Next();
-		RenderMetricCounter("FPS", summary.fps, "%.0f", summary.fps > 0.0f);
+	}
+
+	void RenderTopPerformanceCounters()
+	{
+		if (globals::profiler && globals::profiler->IsUserEnabled())
+			globals::profiler->RequestCapture();
+		RenderTopPerformanceCounters(ProfilingRenderer::CaptureFrameTimingSummary(false));
 	}
 
 	bool RenderMeasureButton(bool canStart)
@@ -2103,7 +2137,7 @@ namespace
 		if (shortName == "VR")
 			return "depth culling, screen-space stereo sync, screen-space FOV, stereo blend, shader FOV, and dynamic cubemap throttle are switched off.";
 		if (shortName == "AdaptiveBrightness")
-			return "all Adaptive Balance Lighting, Bloom, Water appearance, profile/location, and wind contributions are bypassed together.";
+			return "all Visuals Lighting, Bloom, Water appearance, profile/location, and wind contributions are bypassed together.";
 		if (shortName == "LinearLighting")
 			return "Linear Lighting color-space conversions and per-geometry updates are switched off.";
 		if (shortName == "ScreenSpaceShadows")
@@ -2162,7 +2196,6 @@ namespace
 			feature->IsPerformanceCostMeasurementEnabled() && feature->IsPerformanceCostMeasurementReady() && !blockReason &&
 			GetFeatureCostStartError(currentTime) == nullptr;
 		MenuUI::SectionHeading("Measurement");
-		MenuUI::DetailText(fmt::format("Compare current settings with {}. Your settings are restored after the run.", GetFeatureCostComparisonLabel(feature)).c_str());
 		if (RenderMeasureButton(canStartMeasurement))
 			StartFeatureCostMeasurement(feature, state, currentTime);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -2210,15 +2243,13 @@ namespace
 
 		MenuUI::SectionHeading("Results");
 		if (state.phase != FeatureCostMeasurementPhase::Complete) {
-			MenuUI::DetailText("No measurement yet. Choose Measure to compare this feature in the current scene.");
+			MenuUI::DetailText("No measurement yet");
+			Util::AddTooltip("Choose Measure to compare this feature in the current scene. Your settings are restored after the run.");
 			return;
 		}
 
 		if (!state.failureMessage.empty()) {
-			ImGui::Spacing();
-			ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetWarning());
-			ImGui::TextWrapped("%s", state.failureMessage.c_str());
-			ImGui::PopStyleColor();
+			MenuUI::PageNotice(state.failureMessage, MenuUI::NoticeKind::Error);
 			return;
 		}
 
@@ -2266,12 +2297,6 @@ namespace
 				false);
 			ImGui::EndTable();
 		}
-		ImGui::PushStyleColor(ImGuiCol_Text, Util::Color::SecondaryText());
-		const SKSE::stl::scope_exit restoreFootnoteColor([] { ImGui::PopStyleColor(); });
-		ImGui::TextWrapped(
-			"* p <= 0.05    \xE2\x80\xA0"
-			"1/\xE2\x80\xA0"
-			"2: raw samples missing; 3+ = --");
 	}
 
 	int GetFeatureOrder(Feature* feature)
@@ -2409,7 +2434,7 @@ namespace
 
 	bool SetRuntimeFeatureEnabled(Feature* feature, bool enabled)
 	{
-		if (!feature || !feature->loaded || !feature->SupportsPerformanceCostMeasurement() ||
+		if (!feature || !feature->loaded || !feature->SupportsPerformanceProfileToggle() ||
 			GetFeatureToggleBlockReason(feature) || PerformanceTuningRenderer::HasActiveMeasurements())
 			return false;
 		if (feature->IsPerformanceToggleEnabled() == enabled)
@@ -2421,6 +2446,7 @@ namespace
 		if (!saved)
 			g_disabledFeatureConfigurations.erase(shortName);
 		InvalidateFeatureCostResults();
+		globals::menu->RequestSettingsDirtyCheck();
 		return true;
 	}
 
@@ -2820,6 +2846,16 @@ namespace
 
 }
 
+bool PerformanceTuningRenderer::SetFeatureEnabled(Feature* a_feature, bool a_enabled)
+{
+	return SetRuntimeFeatureEnabled(a_feature, a_enabled);
+}
+
+const char* PerformanceTuningRenderer::GetFeatureControlBlockReason(Feature* a_feature)
+{
+	return GetFeatureToggleBlockReason(a_feature);
+}
+
 const char* PerformanceTuningRenderer::GetFeatureSceneControlBlockReason(Feature* a_feature)
 {
 	if (!a_feature)
@@ -2838,6 +2874,13 @@ bool PerformanceTuningRenderer::ApplyFeatureSettingsTransaction(const std::vecto
 	return applied;
 }
 
+const char* PerformanceTuningRenderer::GetFeatureToggleFailureReason(Feature* a_feature)
+{
+	return a_feature && failedToggleFeature == a_feature ?
+	           "This feature could not change state. Check its settings and runtime requirements." :
+	           nullptr;
+}
+
 void PerformanceTuningRenderer::RenderFeatureEnabledControl(Feature* a_feature, const char* a_tooltip)
 {
 	const bool supported = a_feature->SupportsPerformanceCostMeasurement();
@@ -2848,21 +2891,24 @@ void PerformanceTuningRenderer::RenderFeatureEnabledControl(Feature* a_feature, 
 		auto guard = Util::DisableGuard(!a_feature->loaded || !supported || reason || busy);
 		if (Util::Widgets::Checkbox("Enabled", &enabled)) {
 			const bool applied = SetRuntimeFeatureEnabled(a_feature, enabled);
-			g_featureCostUiMessage = applied ? "" : "This feature could not change state. Check its settings and runtime requirements.";
+			failedToggleFeature = applied ? nullptr : a_feature;
+			g_featureCostUiMessage = applied ? "" : GetFeatureToggleFailureReason(a_feature);
 		}
 	}
-	if (!ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled))
+	const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+	if (!hovered)
 		return;
-	const char* tooltip = reason ? reason : busy   ? "Wait for the current measurement to finish." :
-	                                    !supported ? "Change startup in Settings > Startup, save settings and restart to enable or disable this feature." :
-	                                                 a_tooltip;
+	const char* tooltip = reason ? reason : busy           ? "Wait for the current measurement to finish." :
+	                                    !a_feature->loaded ? "Enable this feature in Settings > Startup, save settings and restart." :
+	                                    !supported         ? "Change startup in Settings > Startup, save settings and restart to enable or disable this feature." :
+	                                                         a_tooltip;
 	std::string featureHelp;
 	if (!tooltip) {
 		featureHelp = a_feature->GetFeatureSummary().first;
 		if (const auto newline = featureHelp.find_first_of("\r\n"); newline != std::string::npos)
 			featureHelp.resize(newline);
 		if (featureHelp.empty())
-			featureHelp = "Applies " + a_feature->GetName() + " to the scene.";
+			featureHelp = "Applies " + a_feature->GetDisplayName() + " to the scene.";
 		featureHelp += " Turn off to stop these effects while keeping your settings.";
 		tooltip = featureHelp.c_str();
 	}
@@ -2873,24 +2919,24 @@ namespace
 {
 	void RenderQuickScan()
 	{
-		MenuUI::SectionHeading("Quick scan");
-		MenuUI::DetailText("Keep the scene still. The menu closes; CSX waits five seconds, then captures 300 frames for all instrumented features.");
-		MenuUI::DetailText("Instrumented CPU/GPU self times, not on/off savings. Existing on/off comparisons are unchanged.");
+		RenderTopPerformanceCounters();
+		MenuUI::SectionHeading("Quick scan", "Instrumented CPU/GPU self times, not on/off savings. Existing on/off comparisons are unchanged. Keep the scene still. The menu closes; CSX waits five seconds, then captures 300 frames for all instrumented features.");
 		{
 			auto disabled = Util::DisableGuard(PerformanceTuningRenderer::HasActiveMeasurements());
 			if (ImGui::Button("Start quick scan")) {
 				const char* error = StartQuickScan(false);
 				g_featureCostUiMessage = error ? fmt::format("Quick scan could not start: {}", error) : "";
 			}
+			Util::AddTooltip("Keep the scene and headset still. The menu closes, waits five seconds and captures 300 frames for all instrumented features, then reopens with results.");
 		}
 		if (!g_featureCostUiMessage.empty())
-			MenuUI::DetailText(g_featureCostUiMessage.c_str());
+			MenuUI::PageNotice(g_featureCostUiMessage, MenuUI::NoticeKind::Error);
 		if (!g_quickScan.failure.empty())
-			MenuUI::DetailText(g_quickScan.failure.c_str());
+			MenuUI::PageNotice(g_quickScan.failure, MenuUI::NoticeKind::Error);
 		if (g_quickScan.controller.phase != PerformanceQuickScan::Phase::Complete)
 			return;
 		ImGui::Text("Captured %u frames in %.1f seconds after settling.", g_quickScan.resolvedFrames, g_quickScan.captureSeconds);
-		MenuUI::DetailText("Sorted by GPU time. -- = shared-only, inactive or incomplete coverage. Excludes shared shader work and other GPU queues.");
+		MenuUI::SectionHeading("Results", "Sorted by GPU time. -- = shared-only, inactive or incomplete coverage. Excludes shared shader work and other GPU queues.");
 		if (ImGui::BeginTable("##QuickScanResults", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp)) {
 			const SKSE::stl::scope_exit endTable([] { ImGui::EndTable(); });
 			ImGui::TableSetupColumn("Feature");
@@ -2916,13 +2962,42 @@ namespace
 	}
 }
 
+void PerformanceTuningRenderer::SelectView(std::string_view a_section)
+{
+	if (!HasActiveMeasurements()) {
+		if (a_section == "quick_scan")
+			tuningView = 1;
+		else if (a_section == "compare" || a_section == "performance")
+			tuningView = 0;
+	}
+}
+
 void PerformanceTuningRenderer::Render()
 {
-	MenuUI::SettingsPage page("PerformanceTuning", { { "quick_scan", "Quick scan", "Capture feature timings together without changing settings.", "Find expensive rendering work", true, true, "Scan your setup" }, { "compare", "Compare total feature set", "Measure each enabled feature against Off or None in the current scene.", "Frame times, FPS and individual feature costs", true, true, "Compare your setup" } }, "Performance tuning", "Scan feature timings or measure individual on/off savings.");
-	if (page.Is("compare"))
-		RenderMeasurementSuite();
-	else if (page.Is("quick_scan"))
-		RenderQuickScan();
+	FeatureListRenderer::RenderPerformancePage("PerformanceTuning", [] {
+		MenuUI::PerformancePage::DrawSaveChoice();
+		const char* modes[] = { "Compare", "Quick scan all features" };
+		{
+			const bool busy = HasActiveMeasurements();
+			const auto disabled = Util::DisableGuard(busy);
+			if (!busy)
+				MenuUI::SettingsSearch::SelectNavigationChoice("Tuning mode", tuningView, modes, 2);
+			const float width = ImGui::GetContentRegionAvail().x;
+			ImGui::RadioButton(modes[0], &tuningView, 0);
+			const float nextWidth = ImGui::CalcTextSize(modes[1]).x + ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x;
+			if (ImGui::GetItemRectSize().x + ImGui::GetStyle().ItemSpacing.x + nextWidth <= width)
+				ImGui::SameLine();
+			ImGui::RadioButton(modes[1], &tuningView, 1);
+		}
+		switch (tuningView) {
+		case 0:
+			RenderMeasurementSuite();
+			break;
+		case 1:
+			RenderQuickScan();
+			break;
+		}
+	});
 }
 
 namespace
@@ -2933,7 +3008,6 @@ namespace
 			return feature->IsPerformanceCostMeasurementEnabled() && !GetFeatureToggleBlockReason(feature);
 		});
 		MenuUI::SectionHeading("Measurement");
-		MenuUI::DetailText("Measure each active feature against Off or None, one at a time. Your settings are restored after every comparison.");
 		if (RenderMeasureButton(GetFeatureCostStartError(ImGui::GetTime()) == nullptr && anyEnabled)) {
 			const char* error = StartFeatureCostBatch(false);
 			g_featureCostUiMessage = error ? "Measurement could not start. Check that a game is loaded, the editor is closed, and the features are ready." : "";
@@ -2942,11 +3016,10 @@ namespace
 			ImGui::TextWrapped("CSX compares each active, editable feature with Off/None, skips inactive or scene/weather-controlled features, and restores exact settings after each comparison. The menu closes and reopens with results. Keep the scene still; allow about 41 seconds per feature. Cancel with the menu shortcut.");
 		RenderMeasurementStatus(g_featureCostBatch.active);
 		if (!g_featureCostUiMessage.empty())
-			MenuUI::DetailText(g_featureCostUiMessage.c_str());
+			MenuUI::PageNotice(g_featureCostUiMessage, MenuUI::NoticeKind::Error);
 		if (!g_featureCostBatch.failureMessage.empty())
-			MenuUI::DetailText(g_featureCostBatch.failureMessage.c_str());
-		MenuUI::SectionHeading("Features and results");
-		MenuUI::DetailText("Select enabled features below. Comparisons use means with standard errors. Individual on/off costs do not add up to a total. -- = unmeasured or unavailable.");
+			MenuUI::PageNotice(g_featureCostBatch.failureMessage, MenuUI::NoticeKind::Error);
+		MenuUI::SectionHeading("Features and results", "Select enabled features below. Comparisons use means with standard errors. Individual on/off costs do not add up to a total. -- = unmeasured or unavailable.");
 		const bool busy = PerformanceTuningRenderer::HasActiveMeasurements();
 		if (ImGui::BeginTable("##PerformanceFeatureCosts", 5,
 				ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_SizingStretchProp)) {
@@ -3024,9 +3097,7 @@ void PerformanceTuningRenderer::RenderMeasurementSuite(Feature* a_feature)
 	if (a_feature && !a_feature->SupportsPerformanceCostMeasurement())
 		return;
 	const auto features = a_feature ? std::vector<Feature*>{ a_feature } : BuildPerformanceFeatureList();
-	if (globals::profiler && globals::profiler->IsUserEnabled())
-		globals::profiler->RequestCapture();
-	RenderTopPerformanceCounters(ProfilingRenderer::CapturePerformanceTimingSummary(BuildPerformanceFeaturePrefixes(features), false));
+	RenderTopPerformanceCounters();
 	if (!a_feature) {
 		MeasurementTableStyle tableStyle;
 		RenderFeatureSetMeasurement(features);
@@ -3288,6 +3359,7 @@ void PerformanceTuningRenderer::NotifyConfigurationChanging()
 	g_featureCostBatch = {};
 	g_upscalingCostSweep = {};
 	g_featureCostUiMessage.clear();
+	failedToggleFeature = nullptr;
 	ResetFeatureCostTrace();
 }
 

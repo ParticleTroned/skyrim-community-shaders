@@ -13,6 +13,7 @@
 
 #include "Features/LightLimitFix.h"
 #include "Features/LightLimitFix/ParticleLights.h"
+#include "Features/ScreenshotFeature.h"
 #include "Features/VR.h"
 #include "Fonts.h"
 #include "Globals.h"
@@ -28,6 +29,17 @@ namespace
 	constexpr float kHeaderActionIconScale = 0.75f;
 	constexpr const char* kShaderFailureTooltip =
 		"Show/hide the shader failure message. Errors may appear in game. Check feature versions and load order, then CSX.log. Use the Nexus Mods page or Discord for help.";
+	constexpr const char* kScreenshotTooltip =
+		"Take one screenshot using the current Screenshot source, eye, crop, format and destination settings.";
+
+	const char* GetScreenshotBlockReason()
+	{
+		if (!globals::features::screenshotFeature.IsRuntimeEnabled())
+			return "Enable Screenshot to take a snapshot using its current capture settings.";
+		if (PerformanceTuningRenderer::HasActiveMeasurements())
+			return "Finish or cancel the performance comparison before taking a screenshot.";
+		return nullptr;
+	}
 
 	struct HeaderContentAlignment
 	{
@@ -179,7 +191,7 @@ void MenuHeaderRenderer::RenderHeader(
 	// If icons are disabled or missing, show action buttons as text between separators (only when not docked)
 	auto shaderCache = globals::shaderCache;
 	if (!canShowIcons && renderedInlineHeader) {
-		if (ImGui::BeginTable("##ActionButtons", 4, ImGuiTableFlags_SizingStretchSame)) {
+		if (ImGui::BeginTable("##ActionButtons", 3, ImGuiTableFlags_SizingStretchSame)) {
 			// Save Settings Button
 			ImGui::TableNextColumn();
 			MenuUI::DrawGlobalSettingsButton(MenuUI::GlobalSettingsAction::Save, "Save CSX Settings", { -1, 0 });
@@ -187,12 +199,16 @@ void MenuHeaderRenderer::RenderHeader(
 			// Restore Saved Settings Button
 			ImGui::TableNextColumn();
 			MenuUI::DrawGlobalSettingsButton(MenuUI::GlobalSettingsAction::Load, "Restore Saved Settings", { -1, 0 });
-			ImGui::TableNextColumn();
-			MenuUI::DrawGlobalSettingsButton(MenuUI::GlobalSettingsAction::RestoreDefaults, "Restore CSX Defaults", { -1, 0 });
 
-			// Clear Shader Cache Button
+			// Capture through the same settings-based action as the screenshot hotkey.
 			ImGui::TableNextColumn();
-			MenuUI::DrawGlobalSettingsButton(MenuUI::GlobalSettingsAction::ClearShaderCache, "Clear Shader Cache", { -1, 0 });
+			{
+				const auto* reason = GetScreenshotBlockReason();
+				const auto disabled = Util::DisableGuard(reason != nullptr);
+				if (ImGui::Button("Take Screenshot", { -1, 0 }))
+					globals::features::screenshotFeature.RequestUiCapture();
+				Util::AddTooltip(reason ? reason : kScreenshotTooltip, ImGuiHoveredFlags_AllowWhenDisabled);
+			}
 
 			// Error message toggle if needed
 			if (shaderCache->GetFailedTasks()) {
@@ -232,23 +248,19 @@ void MenuHeaderRenderer::RenderHeader(
 	}
 }
 
-std::array<MenuHeaderRenderer::ActionIcon, 2> MenuHeaderRenderer::NavigationIcons()
+std::array<MenuHeaderRenderer::ActionIcon, 3> MenuHeaderRenderer::NavigationIcons()
 {
 	return { ActionIcon{ "HeaderHome", nullptr, nullptr, "Home", [] {
-							if (!PerformanceTuningRenderer::HasActiveMeasurements() && MenuUI::SettingsPage::Select("Home", "welcome"))
+							if (!PerformanceTuningRenderer::HasActiveMeasurements() && MenuUI::SettingsPage::Select("Home", "overview"))
 								globals::menu->SelectFeatureMenu("builtin:Home");
 						},
 				 ActionIcon::Glyph::Home },
-		ActionIcon{ "HeaderSearch", nullptr, nullptr, "Search features and settings", [] { FeatureListRenderer::ToggleSearch(); }, ActionIcon::Glyph::Search } };
+		ActionIcon{ "HeaderSearch", nullptr, nullptr, "Search features and settings", [] { FeatureListRenderer::ToggleSearch(); }, ActionIcon::Glyph::Search }, ActionIcon{ "HeaderSidebar", nullptr, nullptr, FeatureListRenderer::IsSidebarVisible() ? "Hide feature list" : "Show feature list", [] { FeatureListRenderer::SetSidebarVisible(!FeatureListRenderer::IsSidebarVisible()); }, ActionIcon::Glyph::Sidebar } };
 }
 
 std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons(bool canShowIcons, const Menu::UIIcons& uiIcons)
 {
-	std::vector<ActionIcon> actionIcons{
-		{ "HeaderSidebar", nullptr, nullptr,
-			FeatureListRenderer::IsSidebarVisible() ? "Hide feature list" : "Show feature list",
-			[] { FeatureListRenderer::SetSidebarVisible(!FeatureListRenderer::IsSidebarVisible()); }, ActionIcon::Glyph::Sidebar }
-	};
+	std::vector<ActionIcon> actionIcons;
 
 	if (!canShowIcons) {
 		return actionIcons;
@@ -259,7 +271,7 @@ std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons
 		actionIcons.push_back({ "HeaderSaveSettings",
 			"HeaderSaveSettings",
 			uiIcons.saveSettings.texture,
-			"Save Settings",
+			"Save CSX settings",
 			[]() {
 				MenuUI::InvokeGlobalSettingsAction(MenuUI::GlobalSettingsAction::Save);
 			},
@@ -269,25 +281,14 @@ std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons
 		actionIcons.push_back({ "HeaderRestoreSavedSettings",
 			"HeaderRestoreSavedSettings",
 			uiIcons.loadSettings.texture,
-			"Restore Saved Settings",
+			"Restore saved CSX settings",
 			[]() {
 				MenuUI::InvokeGlobalSettingsAction(MenuUI::GlobalSettingsAction::Load);
 			},
 			ActionIcon::Glyph::LoadSettings, MenuUI::GlobalSettingsAction::Load });
 	}
-	actionIcons.push_back({ "HeaderRestoreDefaults", nullptr, nullptr, "Restore all CSX defaults",
-		[] { MenuUI::InvokeGlobalSettingsAction(MenuUI::GlobalSettingsAction::RestoreDefaults); },
-		ActionIcon::Glyph::RestoreDefaults, MenuUI::GlobalSettingsAction::RestoreDefaults });
-	if (uiIcons.clearCache.texture) {
-		actionIcons.push_back({ "HeaderClearShaderCache",
-			nullptr,
-			uiIcons.clearCache.texture,
-			Util::GetClearShaderCacheTooltip(),
-			[]() {
-				MenuUI::InvokeGlobalSettingsAction(MenuUI::GlobalSettingsAction::ClearShaderCache);
-			},
-			ActionIcon::Glyph::ClearCache, MenuUI::GlobalSettingsAction::ClearShaderCache });
-	}
+	actionIcons.push_back({ "HeaderScreenshot", "HeaderScreenshot", nullptr, kScreenshotTooltip,
+		[] { globals::features::screenshotFeature.RequestUiCapture(); }, ActionIcon::Glyph::Camera });
 
 	return actionIcons;
 }
@@ -315,7 +316,7 @@ void MenuHeaderRenderer::DrawActionButton(const ActionIcon& icon, ImVec2 minimum
 	auto* window = ImGui::GetCurrentWindow();
 	if (window->SkipItems || (!icon.texture && icon.glyph == ActionIcon::Glyph::Texture))
 		return;
-	const auto* reason = MenuUI::GetGlobalSettingsActionBlockReason(icon.action);
+	const auto* reason = icon.glyph == ActionIcon::Glyph::Camera ? GetScreenshotBlockReason() : MenuUI::GetGlobalSettingsActionBlockReason(icon.action);
 	const auto disabled = Util::DisableGuard(reason != nullptr);
 	auto& context = *ImGui::GetCurrentContext();
 	auto* hoveredWindow = context.HoveredWindow;
@@ -332,13 +333,11 @@ void MenuHeaderRenderer::DrawActionButton(const ActionIcon& icon, ImVec2 minimum
 	auto* draw = window->DrawList;
 	const bool flash = icon.flashId && Util::IsButtonFlashActive(icon.flashId);
 	const bool dirty = icon.action == MenuUI::GlobalSettingsAction::Save && globals::menu->HasUnsavedSettings();
-	if (hovered || held || flash || dirty) {
+	if (hovered || held || flash) {
 		auto color = ImGui::GetStyleColorVec4(held ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered);
-		if (dirty)
-			color = globals::menu->GetTheme().StatusPalette.Warning;
 		if (flash)
 			color = Util::GetButtonFlashColor(color);
-		color.w *= held || flash || dirty ? .34f : .18f;
+		color.w *= held || flash ? .34f : .18f;
 		draw->AddRectFilled(minimum, maximum, ImGui::GetColorU32(color));
 	}
 	ImVec4 tint = icon.glyph != ActionIcon::Glyph::Texture ? Util::Color::SecondaryText() : globals::menu->GetTheme().UseMonochromeIcons ? globals::menu->GetTheme().Palette.Text :
@@ -581,13 +580,14 @@ void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showL
 	const std::string version = title.starts_with("CSX ") ? title.substr(4) : title;
 	const float versionSize = currentFontSize * 1.25f;
 	const ImVec2 brandSize = titleFont->CalcTextSizeA(titleFontSize, FLT_MAX, 0, brand.data());
-	const ImVec2 versionTextSize = titleFont->CalcTextSizeA(versionSize, FLT_MAX, 0, version.c_str());
+	const ImVec2 versionTextSize = ImGui::GetFont()->CalcTextSizeA(versionSize, FLT_MAX, 0, version.c_str());
 	const ImVec2 titleSize(brandSize.x + style.ItemSpacing.x + versionTextSize.x, std::max(brandSize.y, versionTextSize.y));
 
 	const float brandBlockHeight = titleFontSize + currentFontSize * 1.05f;
 	const float logoSize = brandBlockHeight;
-	const float logoAspectRatio = showLogo && uiIcons.logo.size.y > 0.0f ? uiIcons.logo.size.x / uiIcons.logo.size.y : 1.0f;
-	const float logoWidth = showLogo ? logoSize * logoAspectRatio : 0.0f;
+	const bool drawLogo = showLogo && uiIcons.logo.texture;
+	const float logoAspectRatio = drawLogo && uiIcons.logo.size.y > 0.0f ? uiIcons.logo.size.x / uiIcons.logo.size.y : 1.0f;
+	const float logoWidth = drawLogo ? logoSize * logoAspectRatio : 0.0f;
 	const float iconsWidth = actionIcons.empty() ? 0.0f :
 	                                               (static_cast<float>(actionIcons.size()) * actionIconSize) +
 	                                                   (static_cast<float>(actionIcons.size() - 1) * iconSpacing);
@@ -597,23 +597,29 @@ void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showL
 	const ImVec2 screenStart = ImGui::GetCursorScreenPos();
 	const float availableWidth = ImGui::GetContentRegionAvail().x;
 	const float subtitleWidth = ImGui::CalcTextSize("Community Shaders Expanded").x;
-	const float navigationWidth = (actionIconSize + iconSpacing) * 2;
-	const float brandWidth = std::max(titleSize.x, subtitleWidth) + logoWidth + style.ItemSpacing.x + navigationWidth;
-	const bool stackedActions = availableWidth < brandWidth + iconsWidth + dockReserve + paddingX * 2 + currentFontSize;
-	const float headerHeight = brandRowHeight + (stackedActions ? actionIconSize + paddingY : 0);
+	const auto navigation = NavigationIcons();
+	const float navigationWidth = static_cast<float>(navigation.size()) * actionIconSize + static_cast<float>(navigation.size() - 1) * iconSpacing;
+	const float brandWidth = std::max(titleSize.x, subtitleWidth) + (drawLogo ? logoWidth + style.ItemSpacing.x : 0);
 	const float rightLimit = screenStart.x + availableWidth;
 	const float iconStartX = rightLimit - paddingX - iconsWidth - dockReserve;
-	float titleX = screenStart.x + paddingX + (showSteamVRDockHandle ? GetSteamVRResizeHandleSize(uiScale) : 0);
-	const float centerY = screenStart.y + brandRowHeight * 0.5f;
+	const float navigationStartX = screenStart.x + paddingX + (showSteamVRDockHandle ? GetSteamVRResizeHandleSize(uiScale) : 0);
+	const float brandStartX = screenStart.x + (availableWidth - brandWidth) * .5f;
+	// Keep branding centred; narrow headers put both control groups on the next row.
+	const bool stackedActions = brandStartX < navigationStartX + navigationWidth + style.ItemSpacing.x ||
+	                            brandStartX + brandWidth + style.ItemSpacing.x > iconStartX;
+	const float headerHeight = brandRowHeight + (stackedActions ? actionIconSize + paddingY : 0);
+	const float centerY = screenStart.y + brandRowHeight * .5f;
 	const float actionsY = stackedActions ? screenStart.y + brandRowHeight + actionIconSize * .5f : centerY;
-	for (const auto& icon : NavigationIcons()) {
-		const ImVec2 minimum{ titleX, centerY - actionIconSize * .5f };
+	float navigationX = navigationStartX;
+	for (const auto& icon : navigation) {
+		const ImVec2 minimum{ navigationX, actionsY - actionIconSize * .5f };
 		ImGui::SetCursorScreenPos(minimum);
 		ImGui::ItemSize({ actionIconSize, actionIconSize });
-		const auto disabled = Util::DisableGuard(PerformanceTuningRenderer::HasActiveMeasurements());
+		const auto disabled = Util::DisableGuard(icon.glyph != ActionIcon::Glyph::Sidebar && PerformanceTuningRenderer::HasActiveMeasurements());
 		DrawActionButton(icon, minimum, { minimum.x + actionIconSize, minimum.y + actionIconSize }, paddingReduction * .5f);
-		titleX += actionIconSize + iconSpacing;
+		navigationX += actionIconSize + iconSpacing;
 	}
+	float titleX = brandStartX;
 
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	ImU32 logoTint = IM_COL32_WHITE;
@@ -621,7 +627,7 @@ void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showL
 		logoTint = ImGui::GetColorU32(menu->GetSettings().Theme.Palette.Text);
 	}
 
-	if (showLogo && uiIcons.logo.texture) {
+	if (drawLogo) {
 		const ImVec2 logoMin(titleX, centerY - logoSize * 0.5f);
 		const ImVec2 logoMax(logoMin.x + logoWidth, logoMin.y + logoSize);
 		drawList->AddImage(uiIcons.logo.texture, logoMin, logoMax, ImVec2(0, 0), ImVec2(1, 1), logoTint);
@@ -639,16 +645,6 @@ void MenuHeaderRenderer::RenderStableHeader(const std::string& title, bool showL
 	drawList->AddText(ImGui::GetFont(), currentFontSize, { titleX, centerY + brandBlockHeight * .5f - currentFontSize }, ImGui::GetColorU32(Util::Color::SecondaryText()), "Community Shaders Expanded");
 	drawList->PopClipRect();
 
-	const char* runtime = globals::game::isVR ? "Skyrim VR" : "Skyrim SE / AE";
-	const float badgeWidth = ImGui::CalcTextSize(runtime).x + currentFontSize * 1.2f;
-	const float badgeRight = iconStartX - currentFontSize * 1.4f;
-	if (!stackedActions && badgeRight - badgeWidth > titleX + std::max(titleSize.x, subtitleWidth) + currentFontSize) {
-		const ImVec2 badgeMin{ badgeRight - badgeWidth, centerY - currentFontSize };
-		const ImVec2 badgeMax{ badgeRight, centerY + currentFontSize };
-		drawList->AddRectFilled(badgeMin, badgeMax, ImGui::GetColorU32(ImGuiCol_FrameBg), currentFontSize * .25f);
-		drawList->AddRect(badgeMin, badgeMax, ImGui::GetColorU32(ImGuiCol_Border), currentFontSize * .25f);
-		drawList->AddText({ badgeMin.x + currentFontSize * .6f, centerY - currentFontSize * .5f }, textColor, runtime);
-	}
 	if (showSteamVRDockHandle) {
 		ImGui::SetCursorScreenPos({ rightLimit - paddingX - GetSteamVRDockHandleSize() - GetSteamVRHeaderRightInset(uiScale), actionsY - GetSteamVRDockHandleSize() * .5f });
 		RenderSteamVRDockHandle(steamVRDockSpaceId);

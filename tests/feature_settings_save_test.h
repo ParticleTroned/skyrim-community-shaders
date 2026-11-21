@@ -29,6 +29,7 @@ namespace FeatureSettingsSaveTest
 			bool PrepareSettingsMutation() { return true; }
 			void ReportSettingsSaveResult(bool, std::string value) { message = std::move(value); }
 			void AcceptCurrentFeatureSettingsAsClean(const std::string& name) { accepted = name; }
+			void CaptureFeatureMenuSettings(const std::string&, json&) const {}
 			void ResetSettingsDirtyState() { ++resets; }
 		} storage;
 		auto* menu = &storage;
@@ -104,6 +105,7 @@ namespace FeatureSettingsSaveTest
 	std::string globalSection;
 	namespace SettingsMigrations
 	{
+		using ::SettingsMigrations::MigrateEditorSettingsRootLayer;
 		constexpr std::string_view kAdaptiveBalanceFeatureName = "AdaptiveBrightness";
 	}
 	struct SettingsOverrideManager

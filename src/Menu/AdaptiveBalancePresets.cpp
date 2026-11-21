@@ -1,4 +1,5 @@
 #include "AdaptiveBalancePresets.h"
+#include "SettingsPage.h"
 
 #include "Utils/StringUtils.h"
 #include "Utils/UI.h"
@@ -188,7 +189,8 @@ namespace MenuUI::AdaptiveBalancePresets
 		{
 			ImGui::SetCursorScreenPos(a_start);
 			const bool selected = a_state.collection == a_collection;
-			auto colors = Util::StyledButtonWrapper(selected ? a_palette.active : a_palette.normal, a_palette.hovered, a_palette.active);
+			const auto tileColor = [](ImVec4 color) { color.w *= SettingsTileOpacityScale; return color; };
+			auto colors = Util::StyledButtonWrapper(tileColor(selected ? a_palette.active : a_palette.normal), tileColor(a_palette.hovered), tileColor(a_palette.active));
 			if (ImGui::Button(std::format("##{}", CollectionId(a_collection)).c_str(), a_size))
 				a_state.collection = a_collection;
 			Util::AddTooltip(a_detail);
@@ -295,7 +297,7 @@ namespace MenuUI::AdaptiveBalancePresets
 		const char* impact = "";
 		switch (a_state.collection) {
 		case Collection::Full:
-			impact = importing ? "Replaces base + every saved location." : "Includes all Adaptive Balance appearance settings.";
+			impact = importing ? "Replaces base + every saved location." : "Includes all Visuals appearance settings.";
 			break;
 		case Collection::Base:
 			impact = importing ? "Replaces base; keeps saved locations." : "Includes the global layer, five profiles, lighting, DoF and timing.";

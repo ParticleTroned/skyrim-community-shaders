@@ -1153,7 +1153,7 @@
         "Use FileWatcher": false,
         "PBR Verbose JSON Logging": false
     },
-    "CS Editor": null,
+    "CSX Editor": null,
     "Cloud Shadows": {
         "Enabled": 1,
         "Opacity": 0.800000011920929
@@ -1735,6 +1735,8 @@
         "ShowInOverlay": false
     },
     "Wetterness": {
+        "PreserveWetnessHighlights": true,
+        "RestrictPuddleSlopes": true,
         "DebugSettings": {
             "EnableIntExOverride": false,
             "EnablePuddleOverride": false,

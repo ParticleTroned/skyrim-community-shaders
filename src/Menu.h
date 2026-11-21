@@ -139,8 +139,12 @@ public:
 	bool PrepareSettingsMutation() { return EnsureSettingsDirtyBaseline(); }
 	void ResetSettingsDirtyState();
 	void AcceptCurrentFeatureSettingsAsClean(const std::string& a_featureSettingsName);
-	/** Copies this session's last successfully loaded or saved feature values. */
+	/** Copies saved feature values and owned Menu fields in their root-settings shape. */
 	bool CopySavedFeatureSettings(const std::string& a_name, json& a_settings);
+	/** Capture feature-owned shortcuts while retaining their existing Menu storage. */
+	void CaptureFeatureMenuSettings(const std::string& a_name, json& a_settings) const;
+	/** Load captured shortcuts, or use their defaults when no snapshot is supplied. */
+	void ApplyFeatureMenuSettings(const std::string& a_name, const json* a_settings);
 	void ReportSettingsSaveResult(bool a_success, std::string a_message);
 	void ClearSettingsSaveResult();
 	const std::string& GetSettingsSaveMessage() const { return settingsSaveMessage; }
@@ -149,13 +153,13 @@ public:
 	// Search bar state
 	std::string featureSearch;  // For left pane feature search
 	void DrawOverlay();
-	/// True while either the main menu or its CS Editor surface is open.
+	/// True while either the main menu or its CSX Editor surface is open.
 	bool IsMenuSessionOpen() const;
 	/// True when a status-only overlay must remain visible with the menu closed.
 	bool HasClosedMenuOverlay() const;
 	/// Opens a fresh main-menu session and prepares VR positioning/input state.
 	void OpenMenu(bool a_cancelUserMeasurement = false);
-	/// Closes the main menu and any active CS Editor surface as one UI session.
+	/// Closes the main menu and any active CSX Editor surface as one UI session.
 	void CloseMenu();
 
 	/** @brief Translates raw Skyrim input events into the internal key event queue. */
@@ -176,7 +180,7 @@ public:
 	bool settingOverlayToggleKey = false;
 	bool settingShaderBlockPrevKey = false;  // Debug: capture shader block prev key
 	bool settingShaderBlockNextKey = false;  // Debug: capture shader block next key
-	bool settingCSEditorToggleKey = false;   // CS Editor toggle key
+	bool settingCSEditorToggleKey = false;   // CSX Editor toggle key
 	bool settingScreenshotKey = false;       // Screenshot capture key
 
 	// Font caching (made public for ThemeManager and OverlayRenderer access)
@@ -243,11 +247,11 @@ public:
 		UIIcon logo;                  // New logo icon
 		UIIcon search;                // Search icon for search bars
 		UIIcon featureSettingRevert;  // Feature revert settings icon
-		UIIcon applyToGame;           // Apply changes to game icon (CS editor)
-		UIIcon pauseTime;             // Pause time icon (CS editor)
-		UIIcon undo;                  // Undo icon (CS editor)
-		UIIcon freeCamera;            // Free camera preview icon (CS editor)
-		UIIcon playMode;              // Play mode preview icon (CS editor)
+		UIIcon applyToGame;           // Apply changes to game icon (CSX Editor)
+		UIIcon pauseTime;             // Pause time icon (CSX Editor)
+		UIIcon undo;                  // Undo icon (CSX Editor)
+		UIIcon freeCamera;            // Free camera preview icon (CSX Editor)
+		UIIcon playMode;              // Play mode preview icon (CSX Editor)
 
 		// Social media/external link icons
 		UIIcon faultier;
@@ -444,7 +448,7 @@ public:
 		std::vector<InputCombo> OverlayToggleKey = { InputCombo::Keyboard(VK_F10) };                                   // Global overlay toggle key for all overlays
 		std::vector<InputCombo> ShaderBlockPrevKey = { InputCombo::Keyboard(VK_PRIOR) };                               // Debug: cycle backward through shaders (PageUp)
 		std::vector<InputCombo> ShaderBlockNextKey = { InputCombo::Keyboard(VK_NEXT) };                                // Debug: cycle forward through shaders (PageDown)
-		std::vector<InputCombo> CSEditorToggleKey = { InputCombo::Keyboard(VK_SHIFT), InputCombo::Keyboard(VK_END) };  // CS Editor toggle key
+		std::vector<InputCombo> CSEditorToggleKey = { InputCombo::Keyboard(VK_SHIFT), InputCombo::Keyboard(VK_END) };  // CSX Editor toggle key
 		std::vector<InputCombo> NeuralRenderingToggleKey{};
 		std::vector<InputCombo> ScreenshotKey = { InputCombo::Keyboard(VK_SNAPSHOT) };  // Screenshot capture key
 		bool EnableShaderBlocking = false;                                              // Enable shader blocking hotkeys for debugging

@@ -47,10 +47,11 @@ namespace Util::Subrect
 		// texture; crop UV stays in [0,1] of that window. imageRenderCallback,
 		// when non-null, is queued via ImDrawList::AddCallback around the
 		// preview Image draw (paired with ImDrawCallback_ResetRenderState) so
-		// hosts can override blend state for the image specifically.
+		// hosts can override blend state for the image specifically. Disabling
+		// showPreview keeps the preset and numeric crop controls available.
 		void DrawEditor(ID3D11ShaderResourceView* previewSrv, ID3D11Texture2D* previewTexture,
 			float uvVisibleWidth = 1.0f, float uvStartX = 0.0f,
-			ImDrawCallback imageRenderCallback = nullptr);
+			ImDrawCallback imageRenderCallback = nullptr, bool showPreview = true);
 
 		// Resolves the crop UV against an arbitrary pixel size.
 		PixelRegion GetPixelRegion(uint32_t width, uint32_t height) const;

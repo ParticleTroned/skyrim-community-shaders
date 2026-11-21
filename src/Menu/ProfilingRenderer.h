@@ -135,6 +135,7 @@ private:
 		float avgMs;
 		float p95Ms;
 		float p99Ms;
+		bool hasSamples = true;
 	};
 	enum class TimingAttribution
 	{
@@ -158,6 +159,8 @@ private:
 		double updatedAt = -1.0;
 		uint64_t historyEpoch = 0;
 		uint64_t externalEpoch = 0;
+		uint64_t captureEpoch = 0;
+		double lastDrawAt = -1.0;
 	};
 	static inline std::unordered_map<std::string, std::array<FeatureStatistics, 2>> featureStatistics;
 	static inline std::unordered_map<std::string, FeatureGraphState> featureGraphs;
@@ -169,8 +172,12 @@ private:
 	static void TextHeat(const char* fmt, float value, float maxValue);
 	static void RenderTimingModeToggle();
 	static void SetupTimingTableColumns(float passColumnWidth, bool includePercentColumn);
-	static void RenderGraph();
-	static bool RenderFeatureOverview();
+	static void RenderGraph(float height = 0);
+	static void RenderTimingDetails();
+	static void RenderPassTable(float height);
+	static bool RenderFeatureSwitches();
+	/** Refresh values by pass identity while retaining row positions for the open view. */
+	static void UpdateStableFeatureStatistics(FeatureTimingData& retained, FeatureTimingData current);
 	static FeatureTimingData CollectFeatureTimingData(
 		const std::string& featurePrefix,
 		bool cpuMode,
@@ -183,6 +190,6 @@ private:
 		bool useSelfTimesForTotal = false,
 		const std::vector<Profiler::TimerResult>* timingResults = nullptr);
 	static bool RenderFeatureTimingGraph(const std::string& featurePrefix, const FeatureTimingData& data, ImGuiUtils::ProfilerGraph& graph, Util::GraphSampleGate& gate, int graphHeight);
-	static bool RenderTimingSection(const std::string& key, const FeatureTimingData& data, bool cpuMode, bool showTable, const FeatureTimingData* statistics = nullptr);
+	static bool RenderTimingSection(const std::string& key, const FeatureTimingData& data, bool cpuMode, bool showTable);
 	static bool RenderFeatureTimingData(const std::string& featurePrefix, FeatureTimingMode featureMode, bool showTable);
 };

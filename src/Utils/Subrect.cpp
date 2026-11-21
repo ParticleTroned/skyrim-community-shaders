@@ -206,7 +206,7 @@ namespace Util::Subrect
 		ClampCurrentUV();
 	}
 
-	void Controller::DrawEditor(ID3D11ShaderResourceView* previewSrv, ID3D11Texture2D* previewTexture, float uvVisibleWidth, float uvStartX, ImDrawCallback imageRenderCallback)
+	void Controller::DrawEditor(ID3D11ShaderResourceView* previewSrv, ID3D11Texture2D* previewTexture, float uvVisibleWidth, float uvStartX, ImDrawCallback imageRenderCallback, bool showPreview)
 	{
 		// Hosts that render without first calling LoadSettings would otherwise
 		// see an empty presets vector and the combo would mislabel as "(Custom)".
@@ -230,8 +230,13 @@ namespace Util::Subrect
 			}
 		}
 
-		ImGui::InputText("Save As", newPresetName, sizeof(newPresetName));
-		ImGui::SameLine();
+		Util::Widgets::InputText("Save As", newPresetName, sizeof(newPresetName));
+		const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+		auto continueActions = [&](const char* label) {
+			const float width = ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2;
+			if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + width <= right)
+				ImGui::SameLine();
+		};
 		if (ImGui::Button("Save Preset")) {
 			std::string presetName = newPresetName;
 			if (!presetName.empty()) {
@@ -242,14 +247,14 @@ namespace Util::Subrect
 		}
 
 		if (selectedPresetIndex > 0) {
-			ImGui::SameLine();
+			continueActions("Delete Preset");
 			if (ImGui::Button("Delete Preset")) {
 				presets.erase(presets.begin() + selectedPresetIndex);
 				ApplyPreset(0);
 			}
 		}
 
-		ImGui::SameLine();
+		continueActions("Reset Crop");
 		if (ImGui::Button("Reset Crop")) {
 			ApplyPreset(0);
 		}
@@ -267,7 +272,12 @@ namespace Util::Subrect
 		}
 
 		ImGui::Spacing();
-		ImGui::Text("Interactive Cropping (Drag on the image to select)");
+		if (!showPreview) {
+			isDraggingCrop = false;
+			return;
+		}
+		ImGui::TextUnformatted("Interactive Cropping");
+		Util::AddTooltip("Drag on the preview image to select the crop.");
 
 		if (!previewSrv || !previewTexture) {
 			ImGui::TextDisabled("Preview unavailable.");

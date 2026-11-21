@@ -190,7 +190,7 @@ namespace InteriorOnlyPanel
 		// Active/Pause toggle
 		ImGui::SameLine();
 		bool active = !entry.paused;
-		if (Util::FeatureToggle("##active", &active))
+		if (Util::Widgets::Checkbox("##active", &active))
 			manager->TogglePauseEntry(kSceneType, index);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text(entry.paused ? "Paused - click to resume" : "Active - click to pause");
@@ -257,11 +257,7 @@ namespace InteriorOnlyPanel
 			ImGui::Spacing();
 			ImGui::TextColored(theme.StatusPalette.Disable,
 				"No interior-only settings configured.");
-			ImGui::TextColored(theme.StatusPalette.Disable,
-				"Click + to add settings that will only apply in interiors.");
-			ImGui::Spacing();
-			ImGui::TextWrapped(
-				"Overrides feature defaults in interior cells. Original values return when you leave.");
+			Util::AddTooltip("Click + to add settings that only apply in interiors. These override feature defaults in interior cells; original values return when you leave.");
 			return;
 		}
 

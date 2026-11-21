@@ -1,7 +1,9 @@
 #include "FeatureListRenderer.h"
+#include "Menu/AdvancedSettingsRenderer.h"
 #include "Menu/Layout.h"
 #include "Menu/MenuHeaderRenderer.h"
 #include "Menu/SettingsActions.h"
+#include "Menu/SettingsNavigation.h"
 #include "Menu/SettingsPage.h"
 #include "Menu/SettingsSearch.h"
 #include "Menu/StabilizerPage.h"
@@ -25,6 +27,7 @@
 #include "Feature.h"
 #include "FeatureConstraints.h"
 #include "FeatureIssues.h"
+#include "Features/AdaptiveBrightness.h"
 #include "Features/CSEditor.h"
 #include "Features/LightLimitFix/ParticleLights.h"
 #include "Features/PerformanceOverlay.h"
@@ -36,6 +39,7 @@
 #include "Globals.h"
 #include "Menu.h"
 #include "Menu/HomePageRenderer.h"
+#include "Menu/PerformancePage.h"
 #include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/ProfilingRenderer.h"
 #include "Menu/ThemeManager.h"
@@ -48,6 +52,7 @@
 
 namespace
 {
+	constexpr const char* PERFORMANCE_PRESETS_MENU_NAME = "Performance Presets";
 	constexpr const char* PERFORMANCE_TUNING_MENU_NAME = "Performance Tuning";
 	// Core built-in menu names that always appear before the feature list.
 	constexpr std::array<const char*, 3> CORE_MENU_NAMES = { "Performance", "Settings", "Dev Tools" };
@@ -56,6 +61,7 @@ namespace
 	bool focusSearch = false;
 
 	constexpr float sidebarTextScale = 14.0f / 12.0f;
+	constexpr float sidebarIconTextInset = 1.9f;
 	struct SidebarFontScope
 	{
 		MenuFonts::FontRoleGuard role{ Menu::FontRole::Subheading };
@@ -63,19 +69,46 @@ namespace
 		~SidebarFontScope() { ImGui::PopFont(); }
 	};
 
+	void DrawSidebarLabel(const char* label, Util::ActionGlyph glyph, ImVec2 minimum, ImVec2 maximum, ImVec4 color)
+	{
+		const float font = ImGui::GetFontSize();
+		const float middle = (minimum.y + maximum.y) * .5f;
+		const float textLeft = minimum.x + font * sidebarIconTextInset;
+		auto* draw = ImGui::GetWindowDrawList();
+		Util::DrawActionGlyph(draw, glyph, { minimum.x + font * .15f, middle - font * .75f }, { minimum.x + font * 1.65f, middle + font * .75f }, ImGui::GetColorU32(color));
+		if (textLeft < maximum.x) {
+			draw->PushClipRect({ textLeft, minimum.y }, maximum, true);
+			const SKSE::stl::scope_exit restoreClip([draw] { draw->PopClipRect(); });
+			draw->AddText({ textLeft, middle - ImGui::GetTextLineHeight() * .5f }, ImGui::GetColorU32(color), label);
+		}
+		if (ImGui::CalcTextSize(label).x > maximum.x - textLeft)
+			Util::AddTooltip(label);
+	}
+
+	void DrawSidebarSelection(ImVec2 minimum, ImVec2 maximum)
+	{
+		auto* draw = ImGui::GetWindowDrawList();
+		draw->AddRectFilled(minimum, maximum, ImGui::GetColorU32(ImGuiCol_Header));
+		draw->AddRectFilled(minimum, { minimum.x + ImGui::GetStyle().FramePadding.x, maximum.y },
+			ImGui::GetColorU32(globals::menu->GetTheme().StatusPalette.InfoColor), ImGui::GetStyle().FrameRounding);
+	}
+
 	constexpr float featureDescriptionScale = 1.4f;
 	constexpr float featureTitleScale = (4.0f / 3.0f) * .82f;
-	constexpr float footerTextScale = 14.0f / 12.0f;
+	constexpr float footerTextScale = 1.0f;
 	constexpr size_t footerActionCount = 3;
 	constexpr float footerButtonPadding = 1.85f;
-	constexpr float footerButtonHeight = 2.1f;
 	constexpr float footerDetailTextScale = .95f;
 	constexpr float footerStatusLineGap = .05f;
 	constexpr float footerStatusHeight = footerTextScale + footerStatusLineGap + footerDetailTextScale;
 	constexpr float footerVerticalPadding = .15f;
 	constexpr float footerStackGap = .5f;
-	constexpr float footerOpacity = MenuUI::SettingsSurfaceOpacityScale;
 	constexpr std::array footerStatusLabels{ "CSX settings not saved", "Unsaved CSX settings", "CSX settings saved" };
+
+	float SettingsActionButtonHeight()
+	{
+		return MenuUI::SettingsBarHeight() - ImGui::GetFontSize() * footerVerticalPadding * 2;
+	}
 	constexpr std::array featureStatusLabels{ "Feature action failed", "Unsaved feature settings", "Feature settings saved" };
 
 	float SettingsActionTextWidth(const char* label)
@@ -133,7 +166,7 @@ namespace
 		ImGui::PushID(static_cast<int>(a_index));
 		const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
 		const std::string buttonLabel = std::string(label) + "###SettingsAction";
-		const bool clicked = ImGui::Button(buttonLabel.c_str(), { width, font * footerButtonHeight });
+		const bool clicked = ImGui::Button(buttonLabel.c_str(), { width, SettingsActionButtonHeight() });
 		const auto minimum = ImGui::GetItemRectMin();
 		const float extent = std::min(font, std::max(1.0f, width - font * .6f));
 		const float x = minimum.x + (*label ? font * .3f : (width - extent) * .5f);
@@ -195,24 +228,24 @@ namespace
 		for (size_t index = 0; index < count; ++index) {
 			if (external && index && x + buttonWidths[index] > right - inset + .01f) {
 				x = 0;
-				y += font * footerButtonHeight + ImGui::GetStyle().ItemSpacing.y;
+				y += SettingsActionButtonHeight() + ImGui::GetStyle().ItemSpacing.y;
 				++rows;
 			}
 			offsets[index] = { x, y };
 			x += buttonWidths[index] + actionSpacing;
 		}
-		return { backgroundLeft, cardInsets.y, availableActionWidth, inset, statusLeft, std::max(1.0f, statusWidth), y + font * footerButtonHeight, rows, offsets, stacked };
+		return { backgroundLeft, cardInsets.y, availableActionWidth, inset, statusLeft, std::max(1.0f, statusWidth), y + SettingsActionButtonHeight(), rows, offsets, stacked };
 	}
 
-	float SettingsFooterContentHeight(const SettingsFooterLayout& layout)
+	float SettingsFooterContentHeight(const SettingsFooterLayout& layout, bool external)
 	{
-		const float statusHeight = ImGui::GetFontSize() * footerStatusHeight;
+		const float statusHeight = ImGui::GetFontSize() * (external ? footerStatusHeight : footerTextScale);
 		return layout.stacked ? layout.actionsHeight + ImGui::GetFontSize() * footerStackGap + statusHeight : std::max(layout.actionsHeight, statusHeight);
 	}
 
 	float SettingsFooterHeight(const char* a_page, const MenuUI::SettingsFooter* external = nullptr)
 	{
-		return 1 + ImGui::GetFontSize() * footerVerticalPadding * 2 + SettingsFooterContentHeight(GetSettingsFooterLayout(a_page, external));
+		return std::max(MenuUI::SettingsBarHeight(), ImGui::GetFontSize() * footerVerticalPadding * 2 + SettingsFooterContentHeight(GetSettingsFooterLayout(a_page, external), external != nullptr));
 	}
 
 	void DrawExternalAction(size_t index, const MenuUI::SettingsFooter& footer, float availableWidth)
@@ -252,22 +285,17 @@ namespace
 		const auto layout = GetSettingsFooterLayout(a_page, external);
 		const float font = ImGui::GetFontSize();
 		const float height = SettingsFooterHeight(a_page, external);
-		const auto background = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
-		const bool light = background.x + background.y + background.z > 1.5f;
-		const ImVec4 lift = light ? ImVec4(-.02f, -.02f, -.02f, 0) : ImVec4(.09f, .105f, .11f, 0);
-		const ImVec4 footerColor{ std::clamp(background.x + lift.x, 0.0f, 1.0f), std::clamp(background.y + lift.y, 0.0f, 1.0f), std::clamp(background.z + lift.z, 0.0f, 1.0f), footerOpacity };
+		const auto footerColor = MenuUI::SettingsBarColor(ImGuiCol_FrameBg, true);
 		ImGui::GetWindowDrawList()->AddRectFilled({ footerStart.x + layout.backgroundLeft, footerStart.y },
 			{ footerStart.x + ImGui::GetContentRegionAvail().x - layout.backgroundRight, footerStart.y + height }, ImGui::GetColorU32(footerColor));
-		ImGui::GetWindowDrawList()->AddLine({ footerStart.x + layout.backgroundLeft, footerStart.y },
-			{ footerStart.x + ImGui::GetContentRegionAvail().x - layout.backgroundRight, footerStart.y }, ImGui::GetColorU32(ImGuiCol_Separator));
-		const float contentHeight = SettingsFooterContentHeight(layout);
-		const ImVec2 start{ footerStart.x, footerStart.y + 1 + font * footerVerticalPadding };
+		const float contentHeight = SettingsFooterContentHeight(layout, external != nullptr);
+		const ImVec2 start{ footerStart.x, footerStart.y + font * footerVerticalPadding };
 		const float actionsY = start.y + (layout.stacked ? 0 : (contentHeight - layout.actionsHeight) * .5f);
 		const float statusHeight = font * (external ? footerStatusHeight : footerTextScale);
 		const ImVec2 statusStart{ start.x + layout.statusLeft, start.y + (layout.stacked ? layout.actionsHeight + font * footerStackGap : (contentHeight - statusHeight) * .5f) };
 		const auto& menu = *globals::menu;
 		const auto& palette = menu.GetTheme().StatusPalette;
-		const auto* featureResult = feature ? &MenuUI::GetFeatureSettingsFeedback(feature) : nullptr;
+		const auto* featureResult = feature && !external ? &MenuUI::GetFeatureSettingsFeedback(feature) : nullptr;
 		const bool error = external ? external->error : featureResult ? featureResult->error :
 		                                                                menu.IsSettingsSaveMessageError() && !menu.GetSettingsSaveMessage().empty();
 		const bool dirty = external ? external->dirty : feature ? menu.HasUnsavedFeatureSettings(feature->GetName()) :
@@ -295,7 +323,12 @@ namespace
 		}
 		ImGui::SetCursorScreenPos(statusStart);
 		ImGui::Dummy({ layout.statusWidth, statusHeight });
-		const std::string statusHelp = external ? detail : std::string(status) + "\n" + detail;
+		std::string statusHelp = external ? detail : std::string(status) + "\n" + detail;
+		if (feature) {
+			const auto help = feature->GetSettingsFooterText();
+			if (!help.empty())
+				statusHelp += "\n" + std::string(help);
+		}
 		Util::AddTooltip(statusHelp.c_str());
 		const char* blockedHelp = external ? nullptr : feature ? MenuUI::GetFeatureSettingsActionBlockReason(feature) :
 		                                                         MenuUI::GetGlobalSettingsActionBlockReason(MenuUI::GlobalSettingsAction::Save);
@@ -311,13 +344,14 @@ namespace
 		};
 		ImGui::SetCursorScreenPos({ start.x + layout.actionsLeft, actionsY });
 		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, { font * .35f, font * .35f });
-		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, font * .3f);
-		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1);
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0);
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0);
 		const SKSE::stl::scope_exit restoreStyle([] { ImGui::PopStyleVar(3); });
-		const float contrast = light ? -.04f : .05f;
-		const ImVec4 secondary{ std::clamp(footerColor.x + contrast, 0.0f, 1.0f), std::clamp(footerColor.y + contrast, 0.0f, 1.0f), std::clamp(footerColor.z + contrast, 0.0f, 1.0f), footerOpacity };
+		const ImVec4 secondary{ 0, 0, 0, 0 };
+		const auto hovered = MenuUI::SettingsBarColor(ImGuiCol_TabHovered);
+		const auto active = MenuUI::SettingsBarColor(ImGuiCol_Header);
 		{
-			const auto primary = Util::StyledButtonWrapper(dirty ? palette.Warning : secondary, ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered), ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+			const auto primary = Util::StyledButtonWrapper(dirty ? palette.Warning : secondary, hovered, active);
 			const auto accent = palette.Warning;
 			const float brightness = accent.x * .299f + accent.y * .587f + accent.z * .114f;
 			ImGui::PushStyleColor(ImGuiCol_Text, dirty ? (brightness > .55f ? ImVec4(.08f, .08f, .08f, 1) : ImVec4(1, 1, 1, 1)) : ImGui::GetStyleColorVec4(ImGuiCol_Text));
@@ -331,7 +365,7 @@ namespace
 			addActionTooltip(feature ? "Save only this feature's settings." : MenuUI::GetGlobalSettingsActionHelp(MenuUI::GlobalSettingsAction::Save));
 		ImGui::SetCursorScreenPos({ start.x + layout.actionsLeft + layout.actionOffsets[1].x, actionsY + layout.actionOffsets[1].y });
 		{
-			const auto secondaryStyle = Util::StyledButtonWrapper(secondary, ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered), ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+			const auto secondaryStyle = Util::StyledButtonWrapper(secondary, hovered, active);
 			if (external)
 				DrawExternalAction(1, *external, layout.availableActionWidth);
 			else if (SettingsActionButton(1, nullptr, layout.availableActionWidth))
@@ -341,7 +375,7 @@ namespace
 			addActionTooltip(feature ? "Restore only this feature's last successfully loaded or saved settings." : MenuUI::GetGlobalSettingsActionHelp(MenuUI::GlobalSettingsAction::Load));
 		ImGui::SetCursorScreenPos({ start.x + layout.actionsLeft + layout.actionOffsets[2].x, actionsY + layout.actionOffsets[2].y });
 		{
-			const auto outlineStyle = Util::StyledButtonWrapper({ 0, 0, 0, 0 }, ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered), ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+			const auto outlineStyle = Util::StyledButtonWrapper(secondary, hovered, active);
 			if (external)
 				DrawExternalAction(2, *external, layout.availableActionWidth);
 			else if (a_defaults) {
@@ -419,13 +453,57 @@ namespace
 		return std::find(CORE_MENU_NAMES.begin(), CORE_MENU_NAMES.end(), menuName) != CORE_MENU_NAMES.end();
 	}
 
+	bool IsTopLevelFeature(const Feature* feature)
+	{
+		return feature == &globals::features::adaptiveBrightness || feature == &globals::features::screenshotFeature;
+	}
+
 	bool IsFeatureVisible(Feature* feature)
 	{
 		return feature &&
-		       feature != &globals::features::screenshotFeature && feature != &globals::features::renderDoc &&
+		       !IsTopLevelFeature(feature) && feature != &globals::features::renderDoc &&
 		       feature != &globals::features::performanceOverlay &&
 		       !feature->IsHiddenFromUserView() &&
 		       feature->IsInMenu();
+	}
+
+	float MeasureSidebarWidth(const std::vector<FeatureListRenderer::MenuFuncInfo>& menuList)
+	{
+		SidebarFontScope fontGuard;
+		const float font = ImGui::GetFontSize();
+		const float trailingSpace = std::max(ImGui::GetStyle().FramePadding.x, font * .5f);
+		float width = 0.0f;
+		for (const auto& entry : menuList) {
+			if (const auto* menu = std::get_if<FeatureListRenderer::BuiltInMenu>(&entry)) {
+				if (IsCoreMenu(menu->name) || menu->name == "Feature Issues")
+					width = std::max(width, ImGui::CalcTextSize(menu->name.c_str()).x + font * sidebarIconTextInset + trailingSpace);
+			} else if (const auto* category = std::get_if<FeatureListRenderer::CategoryHeader>(&entry)) {
+				// Include the icon, a short separator, count and expansion arrow.
+				width = std::max(width, ImGui::CalcTextSize(category->name.c_str()).x +
+											ImGui::CalcTextSize(std::to_string(category->count).c_str()).x + font * 5.2f);
+			} else if (const auto* label = std::get_if<std::string>(&entry)) {
+				width = std::max(width, ImGui::CalcTextSize(label->c_str()).x + trailingSpace);
+			}
+		}
+		// Collapsed groups must not narrow the sidebar and clip names when reopened.
+		for (auto* feature : FeatureListRenderer::GetMenuFeatures()) {
+			if (!feature || (!IsTopLevelFeature(feature) && (!IsFeatureVisible(feature) ||
+																(!feature->loaded && FeatureIssues::IsObsoleteFeature(feature->GetShortName()) && !globals::state->IsDeveloperMode()))))
+				continue;
+			const float inset = IsTopLevelFeature(feature) ? font * sidebarIconTextInset : ImGui::CalcTextSize("     ").x;
+			width = std::max(width, ImGui::CalcTextSize(feature->GetDisplayName().c_str()).x + inset + trailingSpace);
+		}
+		return width + ImGui::GetStyle().FramePadding.x * 2 + ImGui::GetStyle().ScrollbarSize;
+	}
+
+	void DrawWeatherOverrideControl(Feature* feature)
+	{
+		const auto name = feature->GetShortName();
+		bool paused = WeatherVariables::GlobalWeatherRegistry::GetSingleton()->IsFeaturePaused(name);
+		if (Util::Widgets::Checkbox("Pause Weather Overrides", &paused))
+			WeatherManager::GetSingleton()->SetFeaturePaused(name, paused);
+		if (auto tooltip = Util::HoverTooltipWrapper())
+			ImGui::Text("Temporarily disable weather-based setting adjustments for this feature.\nThis state is not saved.");
 	}
 
 	bool IsPerformanceMeasurementNavigationLocked(size_t listId, size_t selectedMenu)
@@ -435,8 +513,9 @@ namespace
 
 	const char* BuiltInPageId(const FeatureListRenderer::BuiltInMenu& menu)
 	{
-		return menu.name == PERFORMANCE_TUNING_MENU_NAME ? "PerformanceTuning" : menu.name == "Dev Tools" ? "DevTools" :
-		                                                                                                    menu.name.c_str();
+		return menu.name == PERFORMANCE_PRESETS_MENU_NAME ? "PerformancePresets" : menu.name == PERFORMANCE_TUNING_MENU_NAME ? "PerformanceTuning" :
+		                                                                       menu.name == "Dev Tools"                      ? "DevTools" :
+		                                                                                                                       menu.name.c_str();
 	}
 
 	std::string GetSelectableMenuEntryId(const FeatureListRenderer::MenuFuncInfo& menuInfo)
@@ -561,7 +640,7 @@ namespace
 	void SeparatorTextWithFont(const char* text, Menu::FontRole role)
 	{
 		MenuFonts::FontRoleGuard guard(role);
-		ImGui::SeparatorText(text);
+		MenuUI::SectionHeading(text);
 	}
 
 	void SeparatorTextWithFont(const std::string& text, Menu::FontRole role)
@@ -656,6 +735,28 @@ std::vector<Feature*> FeatureListRenderer::GetMenuFeatures()
 	return features;
 }
 
+void FeatureListRenderer::RenderPerformancePage(const char* a_page, const std::function<void()>& a_draw)
+{
+	const auto current = MenuUI::SettingsNavigation::PerformanceSection(a_page);
+	const MenuUI::FeatureScope builtinScope(nullptr);
+	MenuUI::SettingsPage page(a_page, { { "presets", "Presets", "Choose Performance, Balanced, Quality or MyPreset.", "Shared performance choices" }, { "timings", "Profiling", "Inspect live CPU and GPU timings for the active scene.", "Live CPU and GPU timings" }, { "tuning", "Performance Tuning", "Scan feature timings or measure individual on/off savings.", "Feature costs and comparisons" }, { "overlay", "Performance Overlay", "Choose in-game counters, graphs, and their appearance.", "Counters, graphs and appearance" } }, "Performance", "Choose presets, inspect timings, compare feature costs, or configure the overlay.", [current](std::string_view section) {
+		return section == current || !PerformanceTuningRenderer::HasActiveMeasurements();
+	});
+	if (page.Is(current)) {
+		a_draw();
+		return;
+	}
+	for (const auto& [section, destination] : { std::pair{ "overview", "Performance" }, std::pair{ "presets", "PerformancePresets" },
+			 std::pair{ "timings", "Profiling" }, std::pair{ "tuning", "PerformanceTuning" }, std::pair{ "overlay", "PerformanceOverlay" } }) {
+		if (!page.Is(section))
+			continue;
+		MenuUI::SettingsPage::Select(destination, section);
+		const auto entry = GetBuiltInPageMenuEntryId(destination);
+		globals::menu->SelectFeatureMenu(entry.empty() ? destination : entry);
+		break;
+	}
+}
+
 void FeatureListRenderer::SetSidebarVisible(bool a_visible)
 {
 	sidebarVisibilityOverride = a_visible;
@@ -718,11 +819,11 @@ void FeatureListRenderer::RenderFeatureList(
 
 	// Create the table with appropriate number of columns based on visibility
 	int numColumns = leftPanelVisible ? 2 : 1;
-	if (ImGui::BeginTable(leftPanelVisible ? "Menus Table" : "Menus Table Hidden", numColumns, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
+	if (ImGui::BeginTable(leftPanelVisible ? "Menus Table" : "Menus Table Hidden", numColumns, ImGuiTableFlags_SizingStretchProp)) {
 		if (leftPanelVisible) {
 			ImGui::TableSetupColumn("##ListOfMenus", 0, MenuUI::Layout::DefaultSidebarRatio);
 			ImGui::TableSetupColumn("##MenuConfig", 0, 1.0f - MenuUI::Layout::DefaultSidebarRatio);
-			MenuUI::Layout::ConstrainSidebar(resetSidebarLayout);
+			MenuUI::Layout::ConstrainSidebar(resetSidebarLayout, MeasureSidebarWidth(menuList));
 			resetSidebarLayout = false;
 			RenderLeftColumn(menuList, selectedMenu, featureSearch, categoryExpansionStates);
 		} else {
@@ -764,38 +865,18 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	}
 
 	auto menuList = std::vector<MenuFuncInfo>{
-		BuiltInMenu{ "Home", []() { HomePageRenderer::RenderHomePage(); } },
-		BuiltInMenu{ PERFORMANCE_TUNING_MENU_NAME, []() {
-						PerformanceTuningRenderer::Render();
-					} }
-	};  // NOTE: The menu list is rebuilt every frame, so category expansion states
-	// persist correctly. This is acceptable since the list is small and built
-	// infrequently, but could be optimized if performance becomes an issue.
-
-	menuList.insert(menuList.begin() + 1, BuiltInMenu{ "Profiling", []() {
-														  MenuUI::SettingsPage page("Profiling", { { "timings", "Timings", "Enable profiling, then inspect CPU and GPU work.", "Live CPU and GPU timings", true, true, "Choose a timing view" } });
-														  if (page.Is("timings"))
-															  ProfilingRenderer::RenderStatistics(true, true, false);
-													  } });
-
-	{
-		menuList.insert(menuList.begin() + 1, BuiltInMenu{ "Settings", drawGeneralSettings });
-		menuList.insert(menuList.begin() + 2, BuiltInMenu{ "Dev Tools", drawAdvancedSettings });
-	}
-
-	menuList.insert(menuList.begin() + 1, BuiltInMenu{ "Performance", [] {
-														  MenuUI::SettingsPage page("Performance", { { "timings", "Profiling", "Inspect CPU and GPU timings in the current scene.", "Live CPU and GPU timings" }, { "tuning", "Tuning", "Scan feature timings or measure individual on/off savings.", "Feature costs and comparisons" }, { "overlay", "Performance Overlay", "Choose the performance counters shown in game.", "Counters and appearance" } }, "Performance", "Choose a performance tool.");
-														  const char* destination = page.Is("timings") ? "builtin:Profiling" : page.Is("tuning") ? "builtin:Performance Tuning" :
-		                                                                                                                   page.Is("overlay")    ? "PerformanceOverlay" :
-		                                                                                                                                           nullptr;
-														  if (destination) {
-															  MenuUI::SettingsPage::Select("Performance", "overview");
-															  globals::menu->SelectFeatureMenu(destination);
-														  }
-													  } });
-	menuList.emplace_back(&globals::features::screenshotFeature);
-	menuList.emplace_back(&globals::features::renderDoc);
-	menuList.emplace_back(&globals::features::performanceOverlay);
+		BuiltInMenu{ "Home", [] { HomePageRenderer::RenderHomePage(); } },
+		BuiltInMenu{ "Settings", drawGeneralSettings },
+		&globals::features::adaptiveBrightness,
+		BuiltInMenu{ "Performance", [] { FeatureListRenderer::RenderPerformancePage("Performance", [] {}); } },
+		BuiltInMenu{ "Dev Tools", drawAdvancedSettings },
+		&globals::features::screenshotFeature,
+		BuiltInMenu{ PERFORMANCE_PRESETS_MENU_NAME, [] { FeatureListRenderer::RenderPerformancePage("PerformancePresets", [] { MenuUI::PerformancePage::RenderPresets(); }); } },
+		BuiltInMenu{ "Profiling", [] { FeatureListRenderer::RenderPerformancePage("Profiling", [] { ProfilingRenderer::RenderStatistics(true, true, false); }); } },
+		BuiltInMenu{ PERFORMANCE_TUNING_MENU_NAME, [] { PerformanceTuningRenderer::Render(); } },
+		&globals::features::renderDoc,
+		&globals::features::performanceOverlay
+	};
 
 	// Group features by category
 	std::map<std::string, std::vector<Feature*>> categorizedFeatures;
@@ -806,8 +887,9 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 		}
 	}
 
-	for (const auto category : { FeatureCategories::kDisplay, FeatureCategories::kUtility })
-		categoryExpansionStates[std::string(category)] = true;
+	for (const auto category : FeatureCategories::kMenuOrder)
+		if (FeatureCategories::AlwaysExpanded(category))
+			categoryExpansionStates[std::string(category)] = true;
 
 	// Add categorized features to menu with collapsible headers
 	for (const auto categoryName : FeatureCategories::kMenuOrder) {
@@ -886,6 +968,15 @@ void FeatureListRenderer::HandlePendingFeatureSelection(
 	size_t& selectedMenu)
 {
 	if (!pendingFeatureSelection.empty()) {
+		const char* performancePage = pendingFeatureSelection == "builtin:Performance Presets" ? "PerformancePresets" :
+		                              pendingFeatureSelection == "builtin:Profiling"           ? "Profiling" :
+		                              pendingFeatureSelection == "builtin:Performance Tuning"  ? "PerformanceTuning" :
+		                              pendingFeatureSelection == "PerformanceOverlay"          ? "PerformanceOverlay" :
+		                                                                                         nullptr;
+		if (performancePage)
+			MenuUI::SettingsPage::Select(performancePage, MenuUI::SettingsNavigation::PerformanceSection(performancePage).data());
+		if (pendingFeatureSelection == globals::features::renderDoc.GetShortName())
+			MenuUI::SettingsPage::Select("DevTools", "renderdoc");
 		if (pendingFeatureSelection.starts_with("builtin:") && TrySelectMenuEntryById(menuList, pendingFeatureSelection, selectedMenu)) {
 			pendingFeatureSelection.clear();
 			return;
@@ -923,8 +1014,15 @@ void FeatureListRenderer::RenderLeftColumn(
 		for (size_t i = 0; i < menuList.size(); ++i) {
 			const auto* menu = std::get_if<BuiltInMenu>(&menuList[i]);
 			const auto* feature = std::get_if<Feature*>(&menuList[i]);
-			if ((menu && IsCoreMenu(menu->name)) || (feature && *feature == &globals::features::screenshotFeature))
-				std::visit(ListMenuVisitor{ i, selectedMenu, categoryExpansionStates }, menuList[i]);
+			if ((menu && IsCoreMenu(menu->name)) || (feature && IsTopLevelFeature(*feature))) {
+				const auto* selectedBuiltIn = selectedMenu < menuList.size() ? std::get_if<BuiltInMenu>(&menuList[selectedMenu]) : nullptr;
+				const auto* selectedFeature = selectedMenu < menuList.size() ? std::get_if<Feature*>(&menuList[selectedMenu]) : nullptr;
+				const bool groupSelected = menu &&
+				                           ((menu->name == "Performance" && ((selectedBuiltIn && MenuUI::SettingsNavigation::IsPerformancePage(BuiltInPageId(*selectedBuiltIn))) ||
+																				(selectedFeature && *selectedFeature == &globals::features::performanceOverlay))) ||
+											   (menu->name == "Dev Tools" && selectedFeature && *selectedFeature == &globals::features::renderDoc));
+				std::visit(ListMenuVisitor{ i, selectedMenu, categoryExpansionStates, groupSelected }, menuList[i]);
+			}
 		}
 
 		// Add Features header and search bar after built-in settings
@@ -952,12 +1050,12 @@ void FeatureListRenderer::RenderLeftColumn(
 			for (size_t i = 0; i < menuList.size(); i++) {
 				if (std::holds_alternative<BuiltInMenu>(menuList[i])) {
 					const BuiltInMenu& menu = std::get<BuiltInMenu>(menuList[i]);
-					if (IsCoreMenu(menu.name) || menu.name == "Home" || menu.name == "Profiling" || menu.name == PERFORMANCE_TUNING_MENU_NAME) {
+					if (IsCoreMenu(menu.name) || menu.name == "Home" || MenuUI::SettingsNavigation::IsPerformancePage(BuiltInPageId(menu))) {
 						continue;
 					}
 				}
 				if (const auto* feature = std::get_if<Feature*>(&menuList[i]); feature &&
-																			   (*feature == &globals::features::screenshotFeature || *feature == &globals::features::renderDoc || *feature == &globals::features::performanceOverlay))
+																			   (IsTopLevelFeature(*feature) || *feature == &globals::features::renderDoc || *feature == &globals::features::performanceOverlay))
 					continue;
 				std::visit(ListMenuVisitor{ i, selectedMenu, categoryExpansionStates }, menuList[i]);
 			}
@@ -981,7 +1079,7 @@ void FeatureListRenderer::RenderRightColumn(
 	bool performancePanel = false;
 	if (builtInMenu) {
 		performancePanel = builtInMenu->name == PERFORMANCE_TUNING_MENU_NAME ?
-		                       MenuUI::SettingsPage::Selected("PerformanceTuning") == "compare" :
+		                       MenuUI::SettingsPage::Selected("PerformanceTuning") == "tuning" :
 		                       MenuUI::SettingsPage::Selected(builtInMenu->name.c_str()) == "performance";
 	} else if (feature && *feature && (*feature)->loaded && (*feature)->SupportsPerformanceCostMeasurement()) {
 		const auto name = (*feature)->GetShortName();
@@ -1004,34 +1102,29 @@ void FeatureListRenderer::ListMenuVisitor::operator()(const BuiltInMenu& menu)
 		std::pair{ "Home", Util::ActionGlyph::Home },
 		std::pair{ "Settings", Util::ActionGlyph::General },
 		std::pair{ "Dev Tools", Util::ActionGlyph::Advanced },
-		std::pair{ "Performance", Util::ActionGlyph::PerformanceTuning },
+		std::pair{ "Performance", Util::ActionGlyph::Performance },
 		std::pair{ "Profiling", Util::ActionGlyph::Profiling },
 		std::pair{ "Performance Tuning", Util::ActionGlyph::PerformanceTuning }
 	};
 	const auto icon = std::ranges::find_if(icons, [&](const auto& entry) { return menu.name == entry.first; });
 	const bool navigationLocked = IsPerformanceMeasurementNavigationLocked(listId, selectedMenuRef);
 	const auto guard = Util::DisableGuard(navigationLocked);
-	const float font = ImGui::GetFontSize();
 	const auto start = ImGui::GetCursorScreenPos();
-	if (ImGui::Selectable(("##" + menu.name).c_str(), selectedMenuRef == listId, ImGuiSelectableFlags_SpanAllColumns, { 0, ImGui::GetTextLineHeight() * 2 }))
+	if (selectedMenuRef == listId || groupSelected)
+		DrawSidebarSelection(start, { start.x + ImGui::GetContentRegionAvail().x, start.y + ImGui::GetTextLineHeight() * 2 });
+	if (ImGui::Selectable(("##" + menu.name).c_str(), false, ImGuiSelectableFlags_SpanAllColumns, { 0, ImGui::GetTextLineHeight() * 2 })) {
 		selectedMenuRef = listId;
+		if (menu.name == "Performance")
+			MenuUI::SettingsPage::Select("Performance", "overview");
+		else if (menu.name == "Dev Tools")
+			MenuUI::SettingsPage::Select("DevTools", "overview");
+	}
 	const auto maximum = ImGui::GetItemRectMax();
-	const float middle = (start.y + maximum.y) * .5f;
-	const float textLeft = start.x + font * 1.9f;
 	const auto& statusPalette = globals::menu->GetTheme().StatusPalette;
 	const auto color = menu.name == "Feature Issues" ?
 	                       (FeatureIssues::CountLoadFailures() ? statusPalette.Error : statusPalette.Warning) :
 	                       ImGui::GetStyleColorVec4(ImGuiCol_Text);
-	auto* draw = ImGui::GetWindowDrawList();
-	if (icon != icons.end())
-		Util::DrawActionGlyph(draw, icon->second, { start.x + font * .15f, middle - font * .75f }, { start.x + font * 1.65f, middle + font * .75f }, ImGui::GetColorU32(ImGuiCol_Text));
-	{
-		draw->PushClipRect({ textLeft, start.y }, maximum, true);
-		const SKSE::stl::scope_exit restoreClip([draw] { draw->PopClipRect(); });
-		draw->AddText({ textLeft, middle - ImGui::GetTextLineHeight() * .5f }, ImGui::GetColorU32(color), menu.name.c_str());
-	}
-	if (ImGui::CalcTextSize(menu.name.c_str()).x > maximum.x - textLeft)
-		Util::AddTooltip(menu.name.c_str());
+	DrawSidebarLabel(menu.name.c_str(), icon != icons.end() ? icon->second : Util::ActionGlyph::Texture, start, maximum, color);
 }
 
 void FeatureListRenderer::ListMenuVisitor::operator()(const std::string& label)
@@ -1089,8 +1182,8 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 			// INI file missing - treat as missing feature (grey)
 			textColor = themeSettings.StatusPalette.Disable;
 		} else {
-			// INI file exists but feature not loaded - truly pending restart (green)
-			textColor = themeSettings.StatusPalette.RestartNeeded;
+			// An installed feature awaiting restart shares the unsaved-settings color.
+			textColor = themeSettings.StatusPalette.Warning;
 		}
 	}
 
@@ -1103,11 +1196,8 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 	const float trailingSpace = std::max(ImGui::GetStyle().FramePadding.x, ImGui::GetFontSize() * .5f);
 	const float labelWidth = std::max(1.0f, rowWidth - trailingSpace);
 	const bool selected = selectedMenuRef == listId;
-	if (selected) {
-		auto* draw = ImGui::GetWindowDrawList();
-		draw->AddRectFilled(rowStart, { rowStart.x + rowWidth, rowStart.y + rowHeight }, ImGui::GetColorU32(ImGuiCol_Header));
-		draw->AddRectFilled(rowStart, { rowStart.x + ImGui::GetStyle().FramePadding.x, rowStart.y + rowHeight }, ImGui::GetColorU32(themeSettings.StatusPalette.InfoColor), ImGui::GetStyle().FrameRounding);
-	}
+	if (selected)
+		DrawSidebarSelection(rowStart, { rowStart.x + rowWidth, rowStart.y + rowHeight });
 
 	ImGui::PushStyleColor(ImGuiCol_Text, textColor);
 	{
@@ -1115,6 +1205,10 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 		const SKSE::stl::scope_exit restoreAlign([] { ImGui::PopStyleVar(); });
 		if (feat == &globals::features::csEditor) {
 			globals::features::csEditor.DrawLauncherRow(labelWidth, rowHeight);
+		} else if (IsTopLevelFeature(feat)) {
+			if (ImGui::Selectable("##TopLevelFeature", false, ImGuiSelectableFlags_None, { labelWidth, rowHeight }))
+				selectedMenuRef = listId;
+			DrawSidebarLabel(feat->GetDisplayName().c_str(), feat == &globals::features::screenshotFeature ? Util::ActionGlyph::Camera : Util::ActionGlyph::Visuals, rowStart, ImGui::GetItemRectMax(), textColor);
 		} else if (ImGui::Selectable(fmt::format("    {} ", feat->GetDisplayName()).c_str(), false, ImGuiSelectableFlags_None, { labelWidth, rowHeight })) {
 			selectedMenuRef = listId;
 		}
@@ -1137,12 +1231,19 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
 	ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
 	if (ImGui::BeginChild("##FeatureConfigFrame", { MenuHeaderRenderer::GetFeaturePanelWidth(), 0 }, true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
 		const char* pageId = BuiltInPageId(menu);
-		const char* description = menu.name == "Home"           ? "Welcome to Community Shaders Expanded." :
-		                          menu.name == "Settings"       ? "Choose how the menu looks and responds." :
-		                          menu.name == "Dev Tools"      ? "Manage shader compilation, compatibility and diagnostics." :
-		                          menu.name == "Profiling"      ? "Inspect CPU and GPU timings in the current scene." :
-		                          menu.name == "Feature Issues" ? "Review feature compatibility and available recovery actions." :
-		                                                          "Choose runtime features, then measure their cost in your scene.";
+		const bool isHome = menu.name == "Home";
+		std::optional<MenuUI::PageNoticeScope> notices;
+		if (!isHome)
+			notices.emplace();
+		const char* description = isHome                                     ? "Welcome to:" :
+		                          menu.name == "Settings"                    ? "Configure startup features, controls, display options, and menu appearance." :
+		                          menu.name == "Dev Tools"                   ? "Manage RenderDoc captures, shaders, caches, logging, and renderer tests." :
+		                          menu.name == "Performance"                 ? "Choose performance presets, inspect timings, compare feature costs, and configure the overlay." :
+		                          menu.name == "Profiling"                   ? "Inspect live CPU and GPU timings in the current scene." :
+		                          menu.name == PERFORMANCE_PRESETS_MENU_NAME ? "Choose a performance preset or build MyPreset from your saved choices." :
+		                          menu.name == PERFORMANCE_TUNING_MENU_NAME  ? "Scan rendering costs or compare enabled features in the current scene." :
+		                          menu.name == "Feature Issues"              ? "Review feature compatibility and available recovery actions." :
+		                                                                       "";
 		{
 			const float inset = MenuUI::SettingsPage::OverviewTextInset(pageId, ImGui::GetContentRegionAvail().x);
 			ImGui::Indent(inset);
@@ -1177,12 +1278,16 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
 				DrawFeatureHeader(menu.name, description);
 			}
 		}
-		if (ImGui::BeginChild("##BuiltInBody", { 0, -SettingsFooterHeight(pageId) - ImGui::GetStyle().ItemSpacing.y }, ImGuiChildFlags_None)) {
+		if (notices)
+			notices->Reserve(MenuUI::SettingsPage::OverviewTextInset(pageId, ImGui::GetContentRegionAvail().x));
+		const float footerSpace = isHome ? 0.0f : SettingsFooterHeight(pageId) + ImGui::GetStyle().ItemSpacing.y;
+		if (ImGui::BeginChild("##BuiltInBody", { 0, -footerSpace }, ImGuiChildFlags_None)) {
 			const MenuUI::SettingsSearch::PageScope searchScope(pageId);
 			menu.func();
 		}
 		ImGui::EndChild();
-		DrawSettingsFooter(pageId);
+		if (!isHome)
+			DrawSettingsFooter(pageId);
 	}
 	ImGui::EndChild();
 	ImGui::PopStyleColor();
@@ -1222,41 +1327,45 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 		// Render feature header with integrated action buttons
 		json performanceSettingsBefore;
 		feat->SaveSettings(performanceSettingsBefore);
+		featureInstalled = isLoaded || IsFeatureInstalled(featureName);
+		MenuUI::PageNoticeScope notices;
 		RenderFeatureHeader(feat, isDisabled, isLoaded, sceneControlled);
+		notices.Reserve(MenuUI::SettingsPage::OverviewTextInset(featureName.c_str(), ImGui::GetContentRegionAvail().x));
 
 		auto externalFooter = external ? std::optional(external->GetSettingsFooter()) : std::nullopt;
-		const auto requirement = feat->GetSettingsFooterText();
 		const float textInset = MenuUI::SettingsPage::OverviewTextInset(featureName.c_str(), ImGui::GetContentRegionAvail().x);
-		const float requirementWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x - textInset);
-		const float requirementHeight = requirement.empty() ? 0 : ImGui::CalcTextSize(requirement.data(), requirement.data() + requirement.size(), false, requirementWidth).y + ImGui::GetStyle().ItemSpacing.y;
+		weatherControlInFooter = feat == &globals::features::adaptiveBrightness && isLoaded && !isDisabled &&
+		                         MenuUI::SettingsPage::Selected(featureName.c_str()) == "overview" &&
+		                         WeatherVariables::GlobalWeatherRegistry::GetSingleton()->HasWeatherSupport(featureName);
+		const float weatherControlHeight = weatherControlInFooter ? std::max(ImGui::GetFrameHeight(), Util::Widgets::CheckboxSize()) + ImGui::GetStyle().ItemSpacing.y : 0.0f;
 		{
 			MenuUI::FeatureScope featureScope(feat);
-			if (ImGui::BeginChild("##FeatureBody", { 0, -SettingsFooterHeight(featureName.c_str(), externalFooter ? &*externalFooter : nullptr) - requirementHeight - ImGui::GetStyle().ItemSpacing.y }, ImGuiChildFlags_None)) {
+			if (ImGui::BeginChild("##FeatureBody", { 0, -SettingsFooterHeight(featureName.c_str(), externalFooter ? &*externalFooter : nullptr) - weatherControlHeight - ImGui::GetStyle().ItemSpacing.y }, ImGuiChildFlags_None)) {
 				const MenuUI::SettingsSearch::PageScope searchScope(featureName);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 				MenuUI::DevBenchViewport viewport(featureName, "legacy", !PerformanceTuningRenderer::HasActiveMeasurements());
 #endif
 				if (external)
 					external->DrawSettings();
+				else if (feat == &globals::features::performanceOverlay)
+					FeatureListRenderer::RenderPerformancePage("PerformanceOverlay", [&] { RenderFeatureSettings(feat, isDisabled, isLoaded, hasFailedMessage, sceneControlled); });
+				else if (feat == &globals::features::renderDoc)
+					AdvancedSettingsRenderer::RenderRenderDocSettings([&] { RenderFeatureSettings(feat, isDisabled, isLoaded, hasFailedMessage, sceneControlled); });
 				else
 					RenderFeatureSettings(feat, isDisabled, isLoaded, hasFailedMessage, sceneControlled);
 			}
 			ImGui::EndChild();
 		}
 
-		if (!requirement.empty()) {
-			ImGui::SetCursorPosX(ImGui::GetCursorPosX() + textInset);
-			const auto color = Util::Color::SecondaryText();
-			ImGui::PushStyleColor(ImGuiCol_Text, color);
-			ImGui::PushTextWrapPos(0);
-			ImGui::TextUnformatted(requirement.data(), requirement.data() + requirement.size());
-			ImGui::PopTextWrapPos();
-			ImGui::PopStyleColor();
+		if (weatherControlInFooter) {
+			ImGui::Indent(textInset);
+			const SKSE::stl::scope_exit restoreIndent([textInset] { ImGui::Unindent(textInset); });
+			DrawWeatherOverrideControl(feat);
 		}
 		// Keep save, load and feature defaults together in the fixed footer.
 		if (external) {
 			externalFooter = external->GetSettingsFooter();
-			DrawSettingsFooter(featureName.c_str(), {}, &*externalFooter);
+			DrawSettingsFooter(featureName.c_str(), {}, &*externalFooter, feat);
 		} else {
 			DrawSettingsFooter(featureName.c_str(), [&](float width) { RenderRestoreDefaultsButton(feat, isDisabled || sceneControlled, isLoaded, width); }, nullptr, feat);
 		}
@@ -1290,14 +1399,27 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	const float availableWidth = ImGui::GetContentRegionAvail().x;
 
 	auto status = feat->GetSettingsHeaderStatus();
-	if (!isLoaded)
-		status = { "Unavailable", true };
+	if (!feat->failedLoadedMessage.empty() && feat->DrawFailLoadMessage() && !FeatureIssues::IsObsoleteFeature(featureName))
+		status = { "Unavailable", true, feat->failedLoadedMessage };
+	else if (isDisabled && featureName == "WetnessEffects" && globals::features::wetterness.loaded)
+		status = { "Conflict", true, "Wetness Effects cannot run with Wetterness and is automatically disabled while Wetterness is active." };
 	else if (isDisabled)
-		status = { "Restart pending", true };
+		status = isLoaded ? Feature::SettingsHeaderStatus{ "Restart pending", true, "Save settings and restart the game to unload this feature.", true } :
+		                    Feature::SettingsHeaderStatus{ "Off", true, "Enable this feature in Settings > Startup, save settings and restart the game." };
+	else if (!isLoaded) {
+		if (!feat->conflictMessage.empty())
+			status = { "Conflict", true, feat->conflictMessage };
+		else if (featureInstalled)
+			status = { "Restart required", true, "This feature is installed but not loaded. Save settings and restart the game.", true };
+		else
+			status = { "Not installed", true, std::format("Install {}.ini version {} or later, then restart the game.", featureName, Feature::GetFeatureRequiredVersion(featureName)) };
+	} else if (!feat->conflictMessage.empty())
+		status = { "Conflict", true, feat->conflictMessage };
 	else if (sceneControlled)
-		status = { "Scene settings", true };
-	const auto& palette = globals::menu->GetTheme().StatusPalette;
-	const auto color = status.needsAttention ? palette.Warning : palette.SuccessColor;
+		status = { "Scene settings", true, "Scene-specific settings are controlling this feature. Pause Scene Specific Settings below to edit it." };
+	else if (const auto* failure = PerformanceTuningRenderer::GetFeatureToggleFailureReason(feat))
+		status = { "Attention", true, failure };
+	const auto color = status.pendingChange ? Util::Colors::GetWarning() : Util::Color::Readiness(!status.needsAttention);
 	ImFont* statusFont;
 	float statusFontSize, statusWidth, enabledTextWidth;
 	{
@@ -1331,7 +1453,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 		ImGui::SameLine(0, 0);
 		ImGui::AlignTextToFramePadding();
 		ImGui::TextColored(color, "%.*s", static_cast<int>(status.label.size()), status.label.data());
-		Util::AddTooltip("Shows whether this feature is ready. Requirements and problems are shown below.");
+		Util::AddTooltip(status.message.empty() ? "This feature is ready." : status.message.c_str());
 		ImGui::SameLine(0, statusGap);
 		{
 			auto guard = Util::DisableGuard(isDisabled || !isLoaded || sceneControlled || PerformanceTuningRenderer::HasActiveMeasurements());
@@ -1342,11 +1464,43 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 		ImGui::SetCursorScreenPos(afterTitle);
 	else
 		ImGui::Spacing();
+	if (const auto* failure = PerformanceTuningRenderer::GetFeatureToggleFailureReason(feat))
+		status = { "Attention", true, failure };
+	if (status.needsAttention && !status.message.empty())
+		MenuUI::PageNotice(status.message, status.pendingChange ? MenuUI::NoticeKind::Pending : MenuUI::NoticeKind::Unavailable);
+}
+
+bool FeatureListRenderer::DrawMenuVisitor::RenderFeatureContentControls(Feature* feat, bool sceneControlled)
+{
+	const auto featureName = feat->GetShortName();
+	auto weatherRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
+	if (!weatherControlInFooter && weatherRegistry->HasWeatherSupport(featureName)) {
+		DrawWeatherOverrideControl(feat);
+		ImGui::Spacing();
+	}
+
+	// Keep the pause control editable while scene overrides own the feature.
+	{
+		const auto& featureShortName = feat->GetShortName();
+		auto* sceneMgr = SceneSettingsManager::GetSingleton();
+		bool scenePaused = sceneMgr->IsFeaturePaused(featureShortName);
+		if (sceneControlled || scenePaused) {
+			bool active = !scenePaused;
+			if (Util::Widgets::Checkbox("Scene Specific Settings##PauseSceneSettings", &active))
+				sceneMgr->SetFeaturePaused(featureShortName, !active);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text(scenePaused ? "Paused - click to resume" : "Active - click to pause");
+			}
+			ImGui::Spacing();
+		}
+		sceneControlled = sceneMgr->HasActiveSettingsForFeature(featureShortName) && !sceneMgr->IsFeaturePaused(featureShortName);
+	}
+
 	auto* overrideManager = SettingsOverrideManager::GetSingleton();
-	if (!isDisabled && isLoaded && overrideManager && overrideManager->HasFeatureOverrides(featureName)) {
+	if (overrideManager && overrideManager->HasFeatureOverrides(featureName)) {
 		const char* label = "Apply Override";
 		const float width = ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2;
-		const float left = ImGui::GetCursorScreenPos().x + std::max(0.0f, availableWidth - width);
+		const float left = ImGui::GetCursorScreenPos().x + std::max(0.0f, ImGui::GetContentRegionAvail().x - width);
 		ImGui::SetCursorScreenPos({ left, ImGui::GetCursorScreenPos().y });
 		{
 			auto guard = Util::DisableGuard(sceneControlled || PerformanceTuningRenderer::HasActiveMeasurements());
@@ -1362,11 +1516,12 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 							 "Restore settings supplied by an installed mod, replacing your changes for this feature.");
 	}
 
-	if (!isDisabled && isLoaded) {
+	{
 		auto guard = Util::DisableGuard(sceneControlled);
 		feat->DrawSettingsHeaderControls();
 	}
 	DrawFeatureBanner(feat);
+	return sceneControlled;
 }
 
 void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, bool isDisabled, bool isLoaded, bool hasFailedMessage, bool sceneControlled)
@@ -1374,71 +1529,19 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 	auto& themeSettings = globals::menu->GetSettings().Theme;
 
 	if (isDisabled) {
-		ImGui::TextColored(themeSettings.StatusPalette.Disable, "Feature settings are hidden because this feature is disabled until restart.");
-		ImGui::Spacing();
-		ImGui::TextWrapped("Select its checkbox in Settings > Startup, save settings and restart the game.");
-		if (feat->GetShortName() == "WetnessEffects" && globals::features::wetterness.loaded) {
-			ImGui::Spacing();
-			ImGui::TextColored(
-				themeSettings.StatusPalette.Error,
-				"Wetness Effects cannot run with Wetterness and is automatically disabled while Wetterness is active.");
-		}
+		return;
 	} else {
 		if (isLoaded) {
-			auto weatherRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
-			const bool showWeatherPause = weatherRegistry->HasWeatherSupport(feat->GetShortName());
-			const bool moveWeatherPauseToBottom = showWeatherPause && feat->GetShortName() == "LODBlending";
-			auto drawWeatherPauseToggle = [&]() {
-				bool paused = weatherRegistry->IsFeaturePaused(feat->GetShortName());
-				if (Util::Widgets::Checkbox("Pause Weather Overrides", &paused)) {
-					WeatherManager::GetSingleton()->SetFeaturePaused(
-						feat->GetShortName(), paused);
-				}
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text(
-						"Temporarily disable weather-based setting adjustments for this feature.\n"
-						"This state is not saved.");
-				}
-			};
-			if (showWeatherPause && !moveWeatherPauseToBottom) {
-				drawWeatherPauseToggle();
-				ImGui::Separator();
+			MenuUI::FeatureScope contentScope(feat, [&] { return RenderFeatureContentControls(feat, sceneControlled); });
+			const ImVec2 cursorPosBefore = ImGui::GetCursorPos();
+			if (feat == &globals::features::renderDoc || feat == &globals::features::performanceOverlay) {
+				// These tools already live inside their parent section's tab content.
+				const auto disabled = Util::DisableGuard(contentScope.DrawContentControls());
+				feat->DrawSettings();
+			} else {
+				feat->DrawSettings();
 			}
-
-			// Scene-specific settings toggle (Interior Only / TimeOfDay / Weather-Specific)
-			// Show toggle whenever scene entries exist for this feature, even if feature-paused
-			{
-				const auto& featureShortName = feat->GetShortName();
-				auto* sceneMgr = SceneSettingsManager::GetSingleton();
-				bool scenePaused = sceneMgr->IsFeaturePaused(featureShortName);
-				if (sceneControlled || scenePaused) {
-					bool active = !scenePaused;
-					if (Util::FeatureToggle("##PauseSceneSettings", &active))
-						sceneMgr->SetFeaturePaused(featureShortName, !active);
-					ImGui::SameLine();
-					ImGui::Text("Scene Specific Settings");
-					if (auto _tt = Util::HoverTooltipWrapper()) {
-						ImGui::Text(scenePaused ? "Paused - click to resume" : "Active - click to pause");
-					}
-					ImGui::Separator();
-				}
-			}
-
-			// Disable feature settings while scene overrides are actively applied (not paused)
-			if (sceneControlled)
-				ImGui::BeginDisabled();
-
-			ImVec2 cursorPosBefore = ImGui::GetCursorPos();
-			feat->DrawSettings();
-			ImVec2 cursorPosAfter = ImGui::GetCursorPos();
-
-			if (sceneControlled)
-				ImGui::EndDisabled();
-
-			if (moveWeatherPauseToBottom) {
-				ImGui::Separator();
-				drawWeatherPauseToggle();
-			}
+			const ImVec2 cursorPosAfter = ImGui::GetCursorPos();
 
 			// --- Reactive constraint detection ---
 			// Compare the current full constraint set against g_knownConstraintKeys.
@@ -1490,16 +1593,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 			}
 
 		} else {
-			if (FeatureIssues::IsObsoleteFeature(feat->GetShortName())) {
-				feat->DrawUnloadedUI();
-			} else if (hasFailedMessage) {
-				// Load failures are rendered below, independently of restart state.
-			} else if (!feat->conflictMessage.empty()) {
-				feat->DrawUnloadedUI();
-			} else if (IsFeatureInstalled(feat->GetShortName())) {
-				ImGui::Text("This feature will be available after restart.");
-			} else {
-				feat->DrawUnloadedUI();
+			if (!hasFailedMessage && feat->conflictMessage.empty() && !featureInstalled) {
 				if (!feat->GetFeatureModLink().empty()) {
 					ImGui::Spacing();
 					const auto downloadText = fmt::format("Click here to download this feature ({})", feat->GetFeatureModLink());
@@ -1512,12 +1606,6 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 				}
 			}
 		}
-	}
-
-	if (hasFailedMessage && feat->DrawFailLoadMessage() && !FeatureIssues::IsObsoleteFeature(feat->GetShortName())) {
-		ImGui::Spacing();
-		SeparatorTextWithFont("Error", Menu::FontRole::Subheading);
-		Util::Text::WrappedError("%s", feat->failedLoadedMessage.c_str());
 	}
 }
 

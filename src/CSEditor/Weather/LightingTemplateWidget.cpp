@@ -1,4 +1,5 @@
 #include "LightingTemplateWidget.h"
+#include "Menu/SettingsPage.h"
 
 #include "../EditorWindow.h"
 #include "../WeatherUtils.h"
@@ -188,14 +189,14 @@ void LightingTemplateWidget::DrawDALCSettings()
 	bool changed = false;
 
 	if (MatchesAnySearch({ LightingTemplateSetting::kSpecular, LightingTemplateSetting::kFresnelPower })) {
-		ImGui::SeparatorText("Directional Ambient Lighting (DALC)");
+		MenuUI::SectionHeading("Directional Ambient Lighting (DALC)");
 		changed |= WeatherUtils::DrawColorEdit(LightingTemplateSetting::kSpecular, settings.dalc.specular);
 		changed |= WeatherUtils::DrawSliderFloat(LightingTemplateSetting::kFresnelPower, settings.dalc.fresnelPower, 0.0f, 10.0f);
 	}
 
 	if (MatchesAnySearch({ LightingTemplateSetting::kXPlus, LightingTemplateSetting::kXMinus, LightingTemplateSetting::kYPlus,
 			LightingTemplateSetting::kYMinus, LightingTemplateSetting::kZPlus, LightingTemplateSetting::kZMinus })) {
-		ImGui::SeparatorText("Directional Colors");
+		MenuUI::SectionHeading("Directional Colors");
 		changed |= WeatherUtils::DrawColorEdit(LightingTemplateSetting::kXPlus, settings.dalc.directional[0].max);
 		changed |= WeatherUtils::DrawColorEdit(LightingTemplateSetting::kXMinus, settings.dalc.directional[0].min);
 		changed |= WeatherUtils::DrawColorEdit(LightingTemplateSetting::kYPlus, settings.dalc.directional[1].max);

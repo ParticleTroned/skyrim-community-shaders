@@ -215,24 +215,25 @@ namespace
 
 	bool MigrateLegacyAdaptiveBrightnessRoot(json& a_layer)
 	{
-		auto legacyIt = a_layer.find(SettingsMigrations::kLegacyAdaptiveBrightnessSettingsName.data());
-		if (legacyIt == a_layer.end())
-			return false;
+		bool migrated = false;
+		for (const auto legacyName : SettingsMigrations::kLegacyAppearanceSettingsNames) {
+			auto legacyIt = a_layer.find(legacyName.data());
+			if (legacyIt == a_layer.end())
+				continue;
 
-		auto adaptiveIt = a_layer.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
-		if (adaptiveIt == a_layer.end()) {
-			// A malformed legacy section previously loaded defaults. Preserve that
-			// behavior with an empty canonical object instead of retaining both names.
-			a_layer[std::string(SettingsMigrations::kAdaptiveBalanceSettingsName)] =
-				legacyIt->is_object() ? *legacyIt : json::object();
-		} else if (adaptiveIt->is_object() && legacyIt->is_object()) {
-			// During the transition, settings explicitly written under the canonical
-			// name win while the old section supplies any still-missing members.
-			MergeMissingObjectMembers(*adaptiveIt, *legacyIt);
+			auto adaptiveIt = a_layer.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
+			if (adaptiveIt == a_layer.end()) {
+				// Malformed legacy data retains the established default-loading behavior.
+				a_layer[std::string(SettingsMigrations::kAdaptiveBalanceSettingsName)] =
+					legacyIt->is_object() ? *legacyIt : json::object();
+			} else if (adaptiveIt->is_object() && legacyIt->is_object()) {
+				// Canonical values win; newer legacy names supply missing members first.
+				MergeMissingObjectMembers(*adaptiveIt, *legacyIt);
+			}
+			a_layer.erase(legacyName.data());
+			migrated = true;
 		}
-
-		a_layer.erase(SettingsMigrations::kLegacyAdaptiveBrightnessSettingsName.data());
-		return true;
+		return migrated;
 	}
 
 	bool MigrateLegacyUnifiedWaterAppearanceRoot(

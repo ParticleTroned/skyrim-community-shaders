@@ -14,11 +14,11 @@ extract_between("${source}"
     "static int ScaleToUiInt" "void ProfilingRenderer::RenderTimingModeToggle"
     "profiling_helpers.h")
 extract_between("${source}"
-    "void ProfilingRenderer::SetupTimingTableColumns" "void ProfilingRenderer::RenderGraph"
+    "void ProfilingRenderer::RenderTimingModeToggle" "ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData"
     "profiling_columns.h")
 extract_between("${source}"
     "ProfilingRenderer::FeatureTimingData ProfilingRenderer::CollectFeatureTimingData"
-    "bool ProfilingRenderer::RenderEnabledControl" "profiling_views.h")
+    "void ProfilingRenderer::RenderFeatureTimers" "profiling_views.h")
 extract_between("${source}"
     "void ProfilingRenderer::RenderFeatureTimers"
     "ProfilingRenderer::PerformanceTimingSummary ProfilingRenderer::CaptureFrameTimingSummary"

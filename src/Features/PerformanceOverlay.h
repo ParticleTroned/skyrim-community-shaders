@@ -115,7 +115,11 @@ struct PerformanceOverlay : OverlayFeature
 	const char* GetOverlayWindowName() const override { return kOverlayWindowName; }
 	bool HideFromDesktopWhenSubmittedToVR() const override;
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override;
+	SettingsHeaderStatus GetSettingsHeaderStatus() const override;
 	void DrawSettingsEnabledControl() override;
+	bool SupportsPerformanceProfileToggle() const override { return true; }
+	bool IsPerformanceCostMeasurementEnabled() const override { return settings.ShowInOverlay; }
+	void SetPerformanceCostMeasurementEnabled(bool value) override { settings.ShowInOverlay = value; }
 
 	virtual void DrawSettings() override;
 	virtual void DataLoaded() override;

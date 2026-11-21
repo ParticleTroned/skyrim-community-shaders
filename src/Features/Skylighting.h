@@ -48,6 +48,9 @@ public:
 	virtual bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
 	virtual void RestoreDefaultSettings() override;
+	std::vector<std::string> GetPerformancePresetNames() const override;
+	std::string GetPerformancePresetName() const override;
+	bool ApplyPerformancePreset(std::string_view a_name) override;
 	virtual void DrawSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool a_advanced) override;

@@ -47,8 +47,9 @@ namespace MenuUI
 			++selects;
 			if (!acceptSelection)
 				return false;
-			selectedPage = a_page;
-			selectedSection = a_section;
+			const auto location = SettingsNavigation::Resolve(a_page, a_section);
+			selectedPage = location.page;
+			selectedSection = location.section;
 			return true;
 		}
 		static bool Navigate(const char* a_page, const char* a_section)
@@ -80,7 +81,7 @@ struct FeatureListRenderer
 	}
 	static std::string GetBuiltInPageMenuEntryId(const std::string& a_page)
 	{
-		return a_page == "Settings" || a_page == "DevTools" || a_page == "Home" || a_page == "Performance" ? "builtin:" + a_page : "";
+		return a_page == "Settings" || a_page == "DevTools" || a_page == "Home" || MenuUI::SettingsNavigation::IsPerformancePage(a_page) ? "builtin:" + a_page : "";
 	}
 	static bool IsSidebarVisible() { return true; }
 };

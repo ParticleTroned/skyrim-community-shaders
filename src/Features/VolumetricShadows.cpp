@@ -440,12 +440,18 @@ void VolumetricShadows::SetShaderResources(ID3D11DeviceContext* a_context, RE::B
 void VolumetricShadows::DrawSettings()
 {
 	MenuUI::SettingsPage page("VolumetricShadows", {
-													   { "appearance", "How it works", "Learn how light shafts use directional shadows.", "Shadows through light shafts", true, true, "Shape volumetric shadows" },
+													   { "appearance", "How it works", "Learn how directional shadows affect light shafts and transparent surfaces.", "Shadows in atmosphere and transparent effects", true, true, "Understand volumetric shadows" },
 													   { "diagnostics", "Diagnostics", "Inspect shadow buffers.", "Diagnostic shadow buffers", true, false, nullptr },
 												   });
 
-	if (page.Is("appearance"))
-		MenuUI::DetailText("Light shafts use the shared directional shadow maps. Use Enabled in the header to control this effect, and Diagnostics to inspect its shadow buffers.");
+	if (page.Is("appearance")) {
+		MenuUI::SectionHeading("Shadows in atmosphere and water");
+		MenuUI::DetailText("Carries directional shadows into supported light shafts, water and transparent effects. Areas behind obstacles stay shaded, helping these effects match the surrounding scene.");
+		MenuUI::SectionHeading("When it applies");
+		MenuUI::DetailText("Uses the scene's existing directional shadows. When none are available, the effect is inactive even if Enabled remains checked.");
+		MenuUI::SectionHeading("Controls");
+		MenuUI::DetailText("Use Enabled in the header to compare the effect. Tune the light shafts themselves in Volumetric Lighting; Diagnostics shows the shadow buffers used here.");
+	}
 
 	if (page.Is("diagnostics")) {
 		const auto disabled = Util::DisableGuard(!settings.Enabled);

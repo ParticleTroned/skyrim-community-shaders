@@ -312,6 +312,9 @@ private:
 	bool LoadTextures();
 	bool TryLoadTextures();
 	void ValidateSettings();
+	void DrawCoverageSettings();
+	void DrawWorldActions();
+	void DrawSeasonSettings();
 	void DrawWorldSettings();
 	void DrawMaterialSettings();
 	bool IsBuilding(RE::TESObjectREFR* ref);

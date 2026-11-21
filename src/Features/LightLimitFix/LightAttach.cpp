@@ -1,4 +1,5 @@
 #include "LightAttach.h"
+#include "Menu/SettingsPage.h"
 
 #include "Features/LightLimitFix.h"
 #include "Globals.h"
@@ -220,7 +221,7 @@ namespace LightLimitFixDetail::LightAttach
 	void DrawSettings(bool& a_enabled, int& a_refreshFrames)
 	{
 		const auto disabled = Util::DisableGuard(!installed.load(std::memory_order_acquire));
-		ImGui::SeparatorText("Experimental light updates");
+		MenuUI::SectionHeading("Experimental light updates");
 		if (Util::Widgets::Checkbox("Skip Unchanged Light Updates", &a_enabled))
 			Invalidate();
 		if (auto tooltip = Util::HoverTooltipWrapper())

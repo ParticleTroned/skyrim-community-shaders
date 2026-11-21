@@ -110,7 +110,7 @@
         "pipelineDiagnostics": false,
         "pipelineDiagnosticsStructured": false
     },
-    "CS Editor": null,
+    "CSX Editor": null,
     "Performance Overlay": {
         "BackgroundOpacity": 0.5,
         "FrameHistorySize": 600,
@@ -1735,6 +1735,8 @@
         "WaterTintStrength": 0.0
     },
     "Wetterness": {
+        "PreserveWetnessHighlights": true,
+        "RestrictPuddleSlopes": true,
         "DebugSettings": {
             "EnableIntExOverride": false,
             "EnablePuddleOverride": false,

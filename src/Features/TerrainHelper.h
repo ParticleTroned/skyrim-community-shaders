@@ -15,11 +15,9 @@ public:
 	{
 		return {
 			"Supports terrain mods with extra texture detail and surface depth.",
-			{ "Extended texture slot support for terrain materials",
-				"Parallax mapping integration for terrain textures",
-				"Automatic terrain material detection and setup",
-				"Support for advanced terrain modifications",
-				"Compatibility layer for terrain enhancement mods" }
+			{ "Uses height detail supplied by compatible landscape textures",
+				"Requires the TerrainHelper.esp companion plugin",
+				"Surface depth is adjusted in Extended Materials > Depth" }
 		};
 	}
 

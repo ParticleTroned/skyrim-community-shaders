@@ -47,7 +47,7 @@ extract_between("${_menu}" "\tconst bool lockVRMenuToCanvas" "\tif (contentsVisi
 extract_between("${_menu}" "\t\t\tstatic const std::vector<InputCombo> resetShortcut" "\t\t\tconst bool wasCapturingHotkey" "menu_recovery_shortcut_under_test.h")
 extract_between("${_menu}" "\tif (layoutResetKeyHeld)" "\t// Solves the alt+tab stuck issue" "menu_recovery_focus_under_test.h")
 file(READ "${PROJECT_ROOT}/src/Menu/FeatureListRenderer.cpp" _features)
-extract_between("${_features}" "\tconstexpr float sidebarTextScale" "\tconstexpr float featureDescriptionScale" "menu_sidebar_font_under_test.h")
+extract_between("${_features}" "\tconstexpr float sidebarTextScale" "\tvoid DrawSidebarLabel" "menu_sidebar_font_under_test.h")
 file(READ "${PROJECT_ROOT}/src/Menu/MenuHeaderRenderer.cpp" _header)
 extract_between("${_header}" "\tfloat GetHeaderIconSize()" "\tfloat GetSteamVRResizeHandleInset" "menu_header_scale_under_test.h")
 file(READ "${PROJECT_ROOT}/src/Menu/OverlayRenderer.cpp" _overlay)

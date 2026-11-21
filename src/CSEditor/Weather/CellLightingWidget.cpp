@@ -1,6 +1,7 @@
 #include "CellLightingWidget.h"
 #include "../EditorWindow.h"
 #include "../WeatherUtils.h"
+#include "Menu/SettingsPage.h"
 
 namespace
 {
@@ -207,7 +208,7 @@ void CellLightingWidget::DrawWidget()
 				BeginScrollableContent("##DALCScroll");
 
 				if (MatchesAnySearch({ CellLightingSetting::kSpecular, CellLightingSetting::kFresnelPower })) {
-					ImGui::SeparatorText("Directional Ambient Lighting (DALC)");
+					MenuUI::SectionHeading("Directional Ambient Lighting (DALC)");
 					changed |= drawInherited(settings.inheritAmbientColor, [&]() {
 						return WeatherUtils::DrawColorEdit(CellLightingSetting::kSpecular, settings.directionalSpecular);
 					});
@@ -218,7 +219,7 @@ void CellLightingWidget::DrawWidget()
 
 				if (MatchesAnySearch({ CellLightingSetting::kXPlus, CellLightingSetting::kXMinus, CellLightingSetting::kYPlus,
 						CellLightingSetting::kYMinus, CellLightingSetting::kZPlus, CellLightingSetting::kZMinus })) {
-					ImGui::SeparatorText("Directional Colors");
+					MenuUI::SectionHeading("Directional Colors");
 					changed |= drawInherited(settings.inheritAmbientColor, [&]() {
 						return WeatherUtils::DrawColorEdit(CellLightingSetting::kXPlus, settings.directionalXPlus);
 					});
@@ -245,8 +246,7 @@ void CellLightingWidget::DrawWidget()
 
 			if (ImGui::BeginTabItem(CellLightingTab::kInheritance, nullptr, inheritFlags)) {
 				BeginScrollableContent("##InheritanceScroll");
-				ImGui::TextWrapped("These flags control which lighting properties are inherited from the cell's lighting template.");
-				ImGui::Separator();
+				MenuUI::SectionHeading("Inherited properties", "These flags control which lighting properties are inherited from the cell's lighting template.");
 				changed |= WeatherUtils::DrawCheckbox(CellLightingSetting::kInheritAmbientColor, settings.inheritAmbientColor);
 				changed |= WeatherUtils::DrawCheckbox(CellLightingSetting::kInheritDirectionalColor, settings.inheritDirectionalColor);
 				changed |= WeatherUtils::DrawCheckbox(CellLightingSetting::kInheritFogColor, settings.inheritFogColor);

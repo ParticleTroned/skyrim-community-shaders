@@ -62,8 +62,8 @@ namespace MenuUI::Layout
 		return changed;
 	}
 
-	/** Apply before the first table row so persisted and dragged widths stay usable. */
-	inline void ConstrainSidebar(bool reset)
+	/** Use measured label width when supplied; otherwise bound the saved split. */
+	inline void ConstrainSidebar(bool reset, float requiredWidth = 0.0f)
 	{
 		auto* table = ImGui::GetCurrentTable();
 		if (!table || table->ColumnsCount != 2)
@@ -77,7 +77,10 @@ namespace MenuUI::Layout
 		                          table->Columns[0].StretchWeight > 0 && table->Columns[1].StretchWeight > 0;
 		const float saved = validWeights ? table->Columns[0].StretchWeight / totalWeight : DefaultSidebarRatio;
 		const float requested = reset ? DefaultSidebarRatio : saved;
-		const float ratio = std::clamp(requested, minimum, maximum);
+		const float edge = std::min(0.5f, 1.0f / width);
+		const float ratio = std::isfinite(requiredWidth) && requiredWidth > 0 ?
+		                        std::clamp(std::ceil(requiredWidth) / width, edge, 1.0f - edge) :
+		                        std::clamp(requested, minimum, maximum);
 		if (reset || !validWeights || std::abs(saved - ratio) > 0.0001f) {
 			table->Columns[0].StretchWeight = ratio;
 			table->Columns[1].StretchWeight = 1.0f - ratio;

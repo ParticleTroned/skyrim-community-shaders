@@ -1,6 +1,7 @@
 #include "VolumetricLightingWidget.h"
 #include "../EditorWindow.h"
 #include "../WeatherUtils.h"
+#include "Menu/SettingsPage.h"
 
 namespace
 {
@@ -39,7 +40,7 @@ void VolumetricLightingWidget::DrawWidget()
 		const ImGuiTabItemFlags advancedFlags = GetTabFlagsForOverride(VolumetricLightingTab::kAdvanced);
 		auto drawSection = [&](const char* settingId, const char* heading, auto draw) {
 			DrawSearchSectionIfMatches(settingId, [&](const char*) {
-				ImGui::SeparatorText(heading);
+				MenuUI::SectionHeading(heading);
 				draw();
 			});
 		};
@@ -68,7 +69,7 @@ void VolumetricLightingWidget::DrawWidget()
 		if (ImGui::BeginTabItem(VolumetricLightingTab::kDensity, nullptr, densityFlags)) {
 			BeginScrollableContent("##DensityScroll");
 			if (MatchesAnySearch({ VolumetricLightingSetting::kContribution, VolumetricLightingSetting::kSize, VolumetricLightingSetting::kWindSpeed, VolumetricLightingSetting::kFallingSpeed })) {
-				ImGui::SeparatorText("Density Settings");
+				MenuUI::SectionHeading("Density Settings");
 				changed |= WeatherUtils::DrawSliderFloat(VolumetricLightingSetting::kContribution, settings.densityContribution, 0.0f, 1.0f);
 				changed |= WeatherUtils::DrawSliderFloat(VolumetricLightingSetting::kSize, settings.densitySize, 0.1f, 10000.0f);
 				changed |= WeatherUtils::DrawSliderFloat(VolumetricLightingSetting::kWindSpeed, settings.densityWindSpeed, 0.0f, 100.0f);
@@ -81,7 +82,7 @@ void VolumetricLightingWidget::DrawWidget()
 		if (ImGui::BeginTabItem(VolumetricLightingTab::kAdvanced, nullptr, advancedFlags)) {
 			BeginScrollableContent("##AdvancedScroll");
 			if (MatchesAnySearch({ VolumetricLightingSetting::kContribution, VolumetricLightingSetting::kScattering })) {
-				ImGui::SeparatorText("Phase Function");
+				MenuUI::SectionHeading("Phase Function");
 				changed |= WeatherUtils::DrawSliderFloat(VolumetricLightingSetting::kContribution, settings.phaseFunctionContribution, 0.0f, 1.0f);
 				changed |= WeatherUtils::DrawSliderFloat(VolumetricLightingSetting::kScattering, settings.phaseFunctionScattering, -1.0f, 1.0f);
 			}

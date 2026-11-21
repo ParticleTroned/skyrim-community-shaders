@@ -138,323 +138,281 @@ void RenderDoc::Load()
 
 Feature::SettingsHeaderStatus RenderDoc::GetSettingsHeaderStatus() const
 {
-	if (enableRenderDocCapture != IsAvailable())
-		return { "Restart required", true };
-	return { IsAvailable() ? "Ready" : "Off", false };
+	if (enableRenderDocCapture && !IsAvailable())
+		return { "Restart required", true, "Save settings and restart to load RenderDoc. If it remains unavailable, check that Data/Renderdoc/renderdoc.dll is installed and loads.", true };
+	if (!enableRenderDocCapture && IsAvailable())
+		return { "Restart required", true, "RenderDoc remains loaded for this session. Save settings and restart without external injection to unload it.", true };
+	if (IsAvailable() && GetVendorOutputFailures() != 0)
+		return { "Capture error", true, std::format("Vendor output capture failed (0x{:08X}); affected captures were discarded. Check CSX.log before retrying.", static_cast<uint32_t>(GetVendorOutputError())) };
+	if (IsAvailable() && (!HasVendorOutputCapture() || !HasSafeStateRestoration()))
+		return { "Limited capture", true, "This RenderDoc DLL lacks required support for vendor upscaling captures. Install the CSX-compatible RenderDoc fork and restart." };
+	return IsAvailable() ? SettingsHeaderStatus{} : SettingsHeaderStatus{ "Off", true, "Enable RenderDoc, save settings and restart before capturing. Existing captures remain available below." };
 }
 
 void RenderDoc::DrawSettings()
 {
 	static MenuUI::ActionFeedback feedback;
 	const bool captureReady = enableRenderDocCapture && IsAvailable();
-	if (renderDocModule && !HasVendorOutputCapture())
-		Util::Text::WrappedWarning("This RenderDoc DLL cannot record DLSS/NR output boundaries. Install the compatible fork before capturing vendor upscaling.");
-	if (GetVendorOutputFailures() != 0)
-		Util::Text::WrappedWarning("Vendor output capture failed (0x%08X). Owned captures were discarded; check the log before retrying.", static_cast<uint32_t>(GetVendorOutputError()));
-	if (HasVendorOutputCapture())
-		ImGui::TextWrapped("DLSS/NR outputs are captured at opaque boundaries. CSX passes replay normally; edits do not propagate through vendor inference, and inference internals/timing are unavailable.");
-	if (renderDocModule && !safeStateRestoration)
-		Util::Text::WrappedWarning("DLSS and Render Scale capture require the CSX-compatible RenderDoc fork with D3D11 state restoration support. Install its DLL and restart.");
-	if (enableRenderDocCapture && !IsAvailable())
-		Util::Text::WrappedWarning("RenderDoc unavailable. Enable it, save settings and restart. If still unavailable, check that Data/Renderdoc/renderdoc.dll is installed and loads.");
-	else if (!enableRenderDocCapture && IsAvailable())
-		Util::Text::WrappedWarning("RenderDoc remains loaded for this session. Disable capture, save and restart without external injection to unload it.");
-	MenuUI::SettingsPage page("RenderDoc", {
-											   { "capture", "Capture", "Enable capture, then choose the frames to record.", "Capture activation and frames", true, true, "Choose capture and storage", nullptr, nullptr, captureReady },
-											   { "storage", "Storage", "Monitor storage and remove old captures.", "Disk usage and cleanup", true, true, nullptr },
-											   { "files", "Files", "Browse and open recorded captures.", "Recorded captures", true, true, "Review captured frames" },
-										   });
-
-	if (!page.Is("capture") && !page.Is("storage") && !page.Is("files"))
-		return;
-
 	const auto showFeedback = SKSE::stl::scope_exit([&] { feedback.Draw(); });
-
-	// Track section visibility for intelligent cache refreshing
-	bool isSectionVisible = false;
-
-	if (page.Is("capture") && !captureReady)
-		MenuUI::DetailNote("Enable RenderDoc in the header, save settings and restart before capturing. Existing captures remain in Storage and Files.");
 	{
-		isSectionVisible = true;
-		// Capture Control Section
-		{
-			if (page.Is("capture")) {
-				SettingsTabRenderer::RenderCaptureShortcuts();
-				const auto disabled = Util::DisableGuard(!captureReady);
-				MenuUI::SectionHeading("Capture settings");
+		SettingsTabRenderer::RenderCaptureShortcuts();
+		MenuUI::SectionHeading("Capture Settings", "DLSS/NR outputs are captured at opaque boundaries. CSX passes replay normally; edits do not propagate through vendor inference, and inference internals/timing are unavailable.");
+		const auto disabled = Util::DisableGuard(!captureReady);
 
-				// Comments input for next capture
-				static char commentsBuffer[kCommentsBufferSize] = { 0 };
+		// Comments input for next capture
+		static char commentsBuffer[kCommentsBufferSize] = { 0 };
 
-				Util::Widgets::InputTextWithHint("Comments", "Additional comments for next capture (optional)", commentsBuffer, sizeof(commentsBuffer));
-				Util::AddTooltip("Additional comments will be appended to automatic metadata and embedded in the .rdc file");
+		Util::Widgets::InputTextWithHint("Comments", "Additional comments for next capture (optional)", commentsBuffer, sizeof(commentsBuffer));
+		Util::AddTooltip("Additional comments will be appended to automatic metadata and embedded in the .rdc file");
 
-				int captureFrameCountUI = static_cast<int>(GetCaptureFrameCount());
-				if (Util::Widgets::SliderInt("Capture Frames", &captureFrameCountUI, static_cast<int>(kMinCaptureFrameCount), static_cast<int>(kMaxCaptureFrameCount), "%d", ImGuiSliderFlags_AlwaysClamp)) {
-					SetCaptureFrameCount(static_cast<uint32_t>(captureFrameCountUI));
-				}
-				Util::AddTooltip("Number of consecutive frames to capture. Compatible VR captures include both submit eyes in each frame.");
-
-				if (ImGui::Button("Create Capture")) {
-					// Check available disk space before allowing capture
-					try {
-						if (!HasSufficientDiskSpaceForConfiguredCapture()) {
-							ImGui::OpenPopup("Not enough disk space##RenderDoc");
-						} else {
-							// Set comments if provided
-							if (strlen(commentsBuffer) > 0) {
-								// Build complete comments with automatic metadata plus user input
-								std::string userComments = std::string(commentsBuffer);
-
-								std::string completeComments = BuildAutomaticCaptureComments(userComments);
-
-								SetPendingCaptureComments(completeComments);
-								memset(commentsBuffer, 0, sizeof(commentsBuffer));  // Clear the buffer
-							}
-
-							// Actual capture logic
-							logger::info("[RenderDoc] Manual capture triggered by user");
-							feedback = TriggerConfiguredCapture(false) ?
-							               MenuUI::ActionFeedback{ "Capture requested." } :
-							               MenuUI::ActionFeedback{ "Capture could not start. Check RenderDoc availability and free disk space.", true };
-						}
-					} catch (const std::exception& e) {
-						logger::error("[RenderDoc] Exception during capture logic: {}", e.what());
-						feedback = { e.what(), true };
-					}
-				}
-
-				if (ImGui::BeginPopup("Not enough disk space##RenderDoc")) {
-					ImGui::Text("Not enough free disk space to create a capture.");
-					ImGui::Text("At least %llu MB of free space is required.", static_cast<unsigned long long>(GetRequiredCaptureSpaceBytes() / (1024 * 1024)));
-					if (ImGui::Button("OK")) {
-						ImGui::CloseCurrentPopup();
-					}
-					ImGui::EndPopup();
-				}
-
-				if (ImGui::Button("Open Capture Directory")) {
-					// Open the directory where captures are saved
-					try {
-						auto capturesDir = GetCapturesDirectory();
-						if (!Util::OpenInShell(capturesDir, feedback.message))
-							throw std::runtime_error(feedback.message);
-						feedback = { "Opened capture directory." };
-					} catch (const std::exception& e) {
-						logger::error("[RenderDoc] Exception while trying to open captures directory: {}", e.what());
-						feedback = { e.what(), true };
-					}
-				}
-
-				ImGui::TextDisabled("Capture Directory: %s", GetCapturesDirectory().c_str());
-				Util::AddTooltip("Right-click to copy the directory path.");
-
-				if (ImGui::BeginPopupContextItem()) {
-					if (ImGui::MenuItem("Copy Directory Path")) {
-						// Copy the captures directory path to clipboard
-						try {
-							auto capturesDir = GetCapturesDirectory();
-							ImGui::SetClipboardText(capturesDir.c_str());
-							logger::info("[RenderDoc] Copied captures directory path to clipboard: {}", capturesDir);
-						} catch (const std::exception& e) {
-							logger::error("[RenderDoc] Exception while copying directory path: {}", e.what());
-							feedback = { e.what(), true };
-						}
-					}
-					ImGui::EndPopup();
-				}
-			}
+		int captureFrameCountUI = static_cast<int>(GetCaptureFrameCount());
+		if (Util::Widgets::SliderInt("Capture Frames", &captureFrameCountUI, static_cast<int>(kMinCaptureFrameCount), static_cast<int>(kMaxCaptureFrameCount), "%d", ImGuiSliderFlags_AlwaysClamp)) {
+			SetCaptureFrameCount(static_cast<uint32_t>(captureFrameCountUI));
 		}
+		Util::AddTooltip("Number of consecutive frames to capture. Compatible VR captures include both submit eyes in each frame.");
 
-		// Disk Usage Section
-		{
-			if (page.Is("storage")) {
-				uint32_t diskUsageMB = CalculateCapturesDiskUsage();
-				float diskUsageGB = static_cast<float>(diskUsageMB) / 1024.0f;
-
-				// Use color-coded value display for disk usage
-				Util::ColorCodedValueConfig diskUsageConfig = Util::ColorCodedValueConfig::HighIsBad(0.1f, 1.0f, 5.0f);
-				diskUsageConfig.tooltipText = "Total size of all capture files in the captures directory";
-
-				Util::DrawColorCodedValue("Capture Size", diskUsageGB, std::format("{:.2f} GB", diskUsageGB), diskUsageConfig);
-
-				if (diskUsageMB > 0) {
-					ImGui::SameLine();
-					if (ImGui::Button("Clear All Captures")) {
-						ImGui::OpenPopup("Confirm Clear Captures##RenderDoc");
-					}
-				}
-
-				if (ImGui::BeginPopup("Confirm Clear Captures##RenderDoc")) {
-					ImGui::Text("Are you sure you want to delete all capture files?");
-					ImGui::Text("This will permanently remove %u MB of capture data.", diskUsageMB);
-					ImGui::Separator();
-
-					if (ImGui::Button("Yes, Delete All")) {
-						ClearFrameCaptures();
-						ImGui::CloseCurrentPopup();
-					}
-					ImGui::SameLine();
-					if (ImGui::Button("Cancel")) {
-						ImGui::CloseCurrentPopup();
-					}
-					ImGui::EndPopup();
-				}
-			}
-		}
-
-		// Capture Files Section
-		{
-			if (page.Is("files")) {
-				// Get cached capture files (auto-refreshes every 5 seconds)
-				const auto& captureFiles = GetCachedCaptureFiles();
-
-				// Refresh button
-				if (ImGui::Button("Refresh List")) {
-					ClearFailedDeletions();
-					RefreshCaptureFileCache();
-				}
-
-				ImGui::SameLine();
-				ImGui::TextDisabled("(%zu files)", captureFiles.size());
-
-				if (captureFiles.empty()) {
-					ImGui::TextDisabled("No capture files found.");
+		if (ImGui::Button("Create Capture")) {
+			// Check available disk space before allowing capture
+			try {
+				if (!HasSufficientDiskSpaceForConfiguredCapture()) {
+					ImGui::OpenPopup("Not enough disk space##RenderDoc");
 				} else {
-					// Display custom table with double-click and hover support
-					if (ImGui::BeginTable("##RenderDocCaptures", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate)) {
-						// Setup headers
-						ImGui::TableSetupColumn("Filename", ImGuiTableColumnFlags_DefaultSort);
-						ImGui::TableSetupColumn("Size");
-						ImGui::TableSetupColumn("Created", ImGuiTableColumnFlags_DefaultSort | ImGuiTableColumnFlags_PreferSortDescending);
-						ImGui::TableHeadersRow();
+					// Set comments if provided
+					if (strlen(commentsBuffer) > 0) {
+						// Build complete comments with automatic metadata plus user input
+						std::string userComments = std::string(commentsBuffer);
 
-						// Create a sorted copy of the capture files for display
-						static std::vector<CaptureFileInfo> sortedCaptureFiles;
-						static std::chrono::steady_clock::time_point sortedCacheLastUpdate = std::chrono::steady_clock::time_point::min();
-						static ImGuiTableSortSpecs* sortSpecs = nullptr;
+						std::string completeComments = BuildAutomaticCaptureComments(userComments);
 
-						// Update sorted copy if cache has been refreshed or sorting specs changed
-						bool needsSortUpdate = (cacheLastUpdate != sortedCacheLastUpdate) || (sortedCaptureFiles.size() != cachedCaptureFiles.size());
+						SetPendingCaptureComments(completeComments);
+						memset(commentsBuffer, 0, sizeof(commentsBuffer));  // Clear the buffer
+					}
 
-						// Handle sorting
-						if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs()) {
-							sortSpecs = specs;
-							if (specs->SpecsDirty || needsSortUpdate) {
-								// Copy the current cache and sort it
-								sortedCaptureFiles = cachedCaptureFiles;
-								std::sort(sortedCaptureFiles.begin(), sortedCaptureFiles.end(),
-									[specs](const CaptureFileInfo& a, const CaptureFileInfo& b) {
-										for (int i = 0; i < specs->SpecsCount; ++i) {
-											const ImGuiTableColumnSortSpecs* spec = &specs->Specs[i];
-											int col = spec->ColumnIndex;
-											bool ascending = spec->SortDirection == ImGuiSortDirection_Ascending;
+					// Actual capture logic
+					logger::info("[RenderDoc] Manual capture triggered by user");
+					feedback = TriggerConfiguredCapture(false) ?
+					               MenuUI::ActionFeedback{ "Capture requested." } :
+					               MenuUI::ActionFeedback{ "Capture could not start. Check RenderDoc availability and free disk space.", true };
+				}
+			} catch (const std::exception& e) {
+				logger::error("[RenderDoc] Exception during capture logic: {}", e.what());
+				feedback = { e.what(), true };
+			}
+		}
 
-											int cmp = 0;
-											switch (col) {
-											case 0:  // Filename
-												cmp = a.filename.compare(b.filename);
-												break;
-											case 1:  // Size
-												cmp = (a.fileSize < b.fileSize) ? -1 : (a.fileSize > b.fileSize) ? 1 :
-											                                                                       0;
-												break;
-											case 2:  // Created (time)
-												cmp = (a.lastWriteTime < b.lastWriteTime) ? -1 : (a.lastWriteTime > b.lastWriteTime) ? 1 :
-											                                                                                           0;
-												break;
-											}
+		if (ImGui::BeginPopup("Not enough disk space##RenderDoc")) {
+			ImGui::Text("Not enough free disk space to create a capture.");
+			ImGui::Text("At least %llu MB of free space is required.", static_cast<unsigned long long>(GetRequiredCaptureSpaceBytes() / (1024 * 1024)));
+			if (ImGui::Button("OK")) {
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::EndPopup();
+		}
+	}
 
-											if (cmp != 0) {
-												return ascending ? (cmp < 0) : (cmp > 0);
-											}
-										}
-										return false;
-									});
+	{
+		MenuUI::SectionHeading("Storage");
+		if (ImGui::Button("Open Capture Directory")) {
+			// Open the directory where captures are saved
+			try {
+				auto capturesDir = GetCapturesDirectory();
+				if (!Util::OpenInShell(capturesDir, feedback.message))
+					throw std::runtime_error(feedback.message);
+				feedback = { "Opened capture directory." };
+			} catch (const std::exception& e) {
+				logger::error("[RenderDoc] Exception while trying to open captures directory: {}", e.what());
+				feedback = { e.what(), true };
+			}
+		}
 
-								specs->SpecsDirty = false;
-								sortedCacheLastUpdate = cacheLastUpdate;
-							}
-						} else if (needsSortUpdate) {
-							// No sorting specs, just copy the cache (newest first by default)
-							sortedCaptureFiles = cachedCaptureFiles;
-							sortedCacheLastUpdate = cacheLastUpdate;
-						}
+		ImGui::TextDisabled("Capture Directory: %s", GetCapturesDirectory().c_str());
+		Util::AddTooltip("Right-click to copy the directory path.");
 
-						// Display rows from the sorted copy
-						for (size_t i = 0; i < sortedCaptureFiles.size(); ++i) {
-							const auto& file = sortedCaptureFiles[i];
-							ImGui::TableNextRow();
+		if (ImGui::BeginPopupContextItem()) {
+			if (ImGui::MenuItem("Copy Directory Path")) {
+				// Copy the captures directory path to clipboard
+				try {
+					auto capturesDir = GetCapturesDirectory();
+					ImGui::SetClipboardText(capturesDir.c_str());
+					logger::info("[RenderDoc] Copied captures directory path to clipboard: {}", capturesDir);
+				} catch (const std::exception& e) {
+					logger::error("[RenderDoc] Exception while copying directory path: {}", e.what());
+					feedback = { e.what(), true };
+				}
+			}
+			ImGui::EndPopup();
+		}
 
-							// Filename column with double-click and hover
-							ImGui::TableSetColumnIndex(0);
-							bool isSelected = false;
+		uint32_t diskUsageMB = CalculateCapturesDiskUsage();
+		float diskUsageGB = static_cast<float>(diskUsageMB) / 1024.0f;
 
-							// Push red color for failed deletions
-							if (file.deletionFailed) {
-								ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetError());
-							}
+		// Use color-coded value display for disk usage
+		Util::ColorCodedValueConfig diskUsageConfig = Util::ColorCodedValueConfig::HighIsBad(0.1f, 1.0f, 5.0f);
+		diskUsageConfig.tooltipText = "Total size of all capture files in the captures directory";
 
-							if (ImGui::Selectable(file.filename.c_str(), isSelected, ImGuiSelectableFlags_AllowDoubleClick)) {
-								if (ImGui::IsMouseDoubleClicked(0)) {
-									// Double-clicked - open the file
-									try {
-										if (!Util::OpenInShell(file.fullPath, feedback.message))
-											throw std::runtime_error(feedback.message);
-										feedback = { std::format("Opened {}.", file.filename) };
-										logger::info("[RenderDoc] Opened capture file: {}", file.fullPath.string());
-									} catch (const std::exception& e) {
-										logger::error("[RenderDoc] Failed to open capture file '{}': {}", file.fullPath.string(), e.what());
-										feedback = { e.what(), true };
+		Util::DrawColorCodedValue("Capture Size", diskUsageGB, std::format("{:.2f} GB", diskUsageGB), diskUsageConfig);
+
+		if (diskUsageMB > 0) {
+			ImGui::SameLine();
+			if (ImGui::Button("Clear All Captures")) {
+				ImGui::OpenPopup("Confirm Clear Captures##RenderDoc");
+			}
+		}
+
+		if (ImGui::BeginPopup("Confirm Clear Captures##RenderDoc")) {
+			ImGui::Text("Are you sure you want to delete all capture files?");
+			ImGui::Text("This will permanently remove %u MB of capture data.", diskUsageMB);
+			ImGui::Separator();
+
+			if (ImGui::Button("Yes, Delete All")) {
+				ClearFrameCaptures();
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel")) {
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::EndPopup();
+		}
+
+		ImGui::Spacing();
+		// Get cached capture files (auto-refreshes every 5 seconds)
+		const auto& captureFiles = GetCachedCaptureFiles();
+
+		// Refresh button
+		if (ImGui::Button("Refresh List")) {
+			ClearFailedDeletions();
+			RefreshCaptureFileCache();
+		}
+
+		ImGui::SameLine();
+		ImGui::TextDisabled("(%zu files)", captureFiles.size());
+
+		if (captureFiles.empty()) {
+			ImGui::TextDisabled("No capture files found.");
+		} else {
+			// Display custom table with double-click and hover support
+			if (ImGui::BeginTable("##RenderDocCaptures", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate)) {
+				// Setup headers
+				ImGui::TableSetupColumn("Filename", ImGuiTableColumnFlags_DefaultSort);
+				ImGui::TableSetupColumn("Size");
+				ImGui::TableSetupColumn("Created", ImGuiTableColumnFlags_DefaultSort | ImGuiTableColumnFlags_PreferSortDescending);
+				ImGui::TableHeadersRow();
+
+				// Create a sorted copy of the capture files for display
+				static std::vector<CaptureFileInfo> sortedCaptureFiles;
+				static std::chrono::steady_clock::time_point sortedCacheLastUpdate = std::chrono::steady_clock::time_point::min();
+				static ImGuiTableSortSpecs* sortSpecs = nullptr;
+
+				// Update sorted copy if cache has been refreshed or sorting specs changed
+				bool needsSortUpdate = (cacheLastUpdate != sortedCacheLastUpdate) || (sortedCaptureFiles.size() != cachedCaptureFiles.size());
+
+				// Handle sorting
+				if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs()) {
+					sortSpecs = specs;
+					if (specs->SpecsDirty || needsSortUpdate) {
+						// Copy the current cache and sort it
+						sortedCaptureFiles = cachedCaptureFiles;
+						std::sort(sortedCaptureFiles.begin(), sortedCaptureFiles.end(),
+							[specs](const CaptureFileInfo& a, const CaptureFileInfo& b) {
+								for (int i = 0; i < specs->SpecsCount; ++i) {
+									const ImGuiTableColumnSortSpecs* spec = &specs->Specs[i];
+									int col = spec->ColumnIndex;
+									bool ascending = spec->SortDirection == ImGuiSortDirection_Ascending;
+
+									int cmp = 0;
+									switch (col) {
+									case 0:  // Filename
+										cmp = a.filename.compare(b.filename);
+										break;
+									case 1:  // Size
+										cmp = (a.fileSize < b.fileSize) ? -1 : (a.fileSize > b.fileSize) ? 1 :
+									                                                                       0;
+										break;
+									case 2:  // Created (time)
+										cmp = (a.lastWriteTime < b.lastWriteTime) ? -1 : (a.lastWriteTime > b.lastWriteTime) ? 1 :
+									                                                                                           0;
+										break;
+									}
+
+									if (cmp != 0) {
+										return ascending ? (cmp < 0) : (cmp > 0);
 									}
 								}
-							}
+								return false;
+							});
 
-							// Pop color if we pushed it
-							if (file.deletionFailed) {
-								ImGui::PopStyleColor();
-							}
+						specs->SpecsDirty = false;
+						sortedCacheLastUpdate = cacheLastUpdate;
+					}
+				} else if (needsSortUpdate) {
+					// No sorting specs, just copy the cache (newest first by default)
+					sortedCaptureFiles = cachedCaptureFiles;
+					sortedCacheLastUpdate = cacheLastUpdate;
+				}
 
-							// Hover tooltip for filename
-							if (ImGui::IsItemHovered()) {
-								// Calculate time ago dynamically for tooltip
-								std::string currentTimeAgo = Util::FormatTimeAgo(file.lastWriteTime);
-								std::string tooltip = std::format("File: {}\nSize: {}\nCreated: {}",
-									file.fullPath.string(), file.sizeStr, currentTimeAgo);
+				// Display rows from the sorted copy
+				for (size_t i = 0; i < sortedCaptureFiles.size(); ++i) {
+					const auto& file = sortedCaptureFiles[i];
+					ImGui::TableNextRow();
 
-								// Add deletion error message if applicable
-								if (file.deletionFailed && !file.deletionErrorMessage.empty()) {
-									tooltip += std::format("\n\nDeletion Failed: {}", file.deletionErrorMessage);
-								}
+					// Filename column with double-click and hover
+					ImGui::TableSetColumnIndex(0);
+					bool isSelected = false;
 
-								ImGui::SetTooltip("%s", tooltip.c_str());
-							}
-
-							// Size column
-							ImGui::TableSetColumnIndex(1);
-							ImGui::TextUnformatted(file.sizeStr.c_str());
-
-							// Created column - calculate time ago dynamically
-							ImGui::TableSetColumnIndex(2);
-							std::string currentTimeAgo = Util::FormatTimeAgo(file.lastWriteTime);
-							ImGui::TextUnformatted(currentTimeAgo.c_str());
-						}
-
-						ImGui::EndTable();
+					// Push red color for failed deletions
+					if (file.deletionFailed) {
+						ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetError());
 					}
 
-					ImGui::TextDisabled("Double-click a filename to open the capture file");
-					ImGui::TextDisabled("Hover over filenames for file details");
+					if (ImGui::Selectable(file.filename.c_str(), isSelected, ImGuiSelectableFlags_AllowDoubleClick)) {
+						if (ImGui::IsMouseDoubleClicked(0)) {
+							// Double-clicked - open the file
+							try {
+								if (!Util::OpenInShell(file.fullPath, feedback.message))
+									throw std::runtime_error(feedback.message);
+								feedback = { std::format("Opened {}.", file.filename) };
+								logger::info("[RenderDoc] Opened capture file: {}", file.fullPath.string());
+							} catch (const std::exception& e) {
+								logger::error("[RenderDoc] Failed to open capture file '{}': {}", file.fullPath.string(), e.what());
+								feedback = { e.what(), true };
+							}
+						}
+					}
+
+					// Pop color if we pushed it
+					if (file.deletionFailed) {
+						ImGui::PopStyleColor();
+					}
+
+					// Hover tooltip for filename
+					if (ImGui::IsItemHovered()) {
+						// Calculate time ago dynamically for tooltip
+						std::string currentTimeAgo = Util::FormatTimeAgo(file.lastWriteTime);
+						std::string tooltip = std::format("File: {}\nSize: {}\nCreated: {}\nDouble-click to open this capture.",
+							file.fullPath.string(), file.sizeStr, currentTimeAgo);
+
+						// Add deletion error message if applicable
+						if (file.deletionFailed && !file.deletionErrorMessage.empty()) {
+							tooltip += std::format("\n\nDeletion Failed: {}", file.deletionErrorMessage);
+						}
+
+						ImGui::SetTooltip("%s", tooltip.c_str());
+					}
+
+					// Size column
+					ImGui::TableSetColumnIndex(1);
+					ImGui::TextUnformatted(file.sizeStr.c_str());
+
+					// Created column - calculate time ago dynamically
+					ImGui::TableSetColumnIndex(2);
+					std::string currentTimeAgo = Util::FormatTimeAgo(file.lastWriteTime);
+					ImGui::TextUnformatted(currentTimeAgo.c_str());
 				}
+
+				ImGui::EndTable();
 			}
 		}
-
-		// Intelligent cache refreshing: refresh when section becomes visible
-		if (isSectionVisible && !wasSectionVisible) {
-			InvalidateCaptureCache();
-		}
-		wasSectionVisible = isSectionVisible;
 	}
 }
 
@@ -467,30 +425,11 @@ std::string RenderDoc::GetCapturesDirectory() const
 
 uint32_t RenderDoc::CalculateCapturesDiskUsage()
 {
-	try {
-		auto path = GetCapturesPath();
-		// Accumulate the total size of all capture files in the directory
-		uint64_t totalSize = 0;
-		std::error_code ec;
-		for (const auto& entry : std::filesystem::directory_iterator(path, ec)) {
-			if (ec) {
-				logger::warn("[RenderDoc] Failed to iterate captures directory '{}': {}", path.string(), ec.message());
-				break;
-			}
-
-			if (IsCaptureFile(entry)) {
-				totalSize += entry.file_size(ec);
-				if (ec) {
-					logger::warn("[RenderDoc] Failed to get file size for '{}': {}", entry.path().string(), ec.message());
-				}
-			}
-		}
-
-		return static_cast<uint32_t>(totalSize / (1024 * 1024));  // Return size in MB
-	} catch (const std::exception& e) {
-		logger::error("[RenderDoc] Exception in CalculateCapturesDiskUsage: {}", e.what());
-		return 0;
-	}
+	// Share the file list's refresh interval instead of walking the directory every frame.
+	uint64_t totalSize = 0;
+	for (const auto& capture : GetCachedCaptureFiles())
+		totalSize += capture.fileSize;
+	return static_cast<uint32_t>(std::min<uint64_t>(totalSize / (1024 * 1024), UINT32_MAX));
 }
 
 void RenderDoc::ClearFrameCaptures()

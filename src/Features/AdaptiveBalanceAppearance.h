@@ -308,7 +308,7 @@ inline void to_json(nlohmann::json& json, const AdaptiveBalanceAppearanceSetting
 inline void from_json(const nlohmann::json& json, AdaptiveBalanceAppearanceSettings& value)
 {
 	if (!json.is_object())
-		throw nlohmann::json::type_error::create(302, "Adaptive Balance appearance must be an object", &json);
+		throw nlohmann::json::type_error::create(302, "Visuals appearance must be an object", &json);
 	AdaptiveBalanceAppearanceSettings parsed;
 	for (const auto& field : AdaptiveBalanceAppearance::kScalars) {
 		const auto input = json.find(field.name);

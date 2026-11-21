@@ -17,6 +17,8 @@ public:
 	static void RenderGeneralSettings(SettingsState& state, const std::function<void()>& drawStartup);
 	/** Draw shared shader configuration inside Dev Tools. */
 	static void RenderShaderSettings();
+	static void RenderShaderCacheActions();
+	static void RenderShaderShortcuts();
 	/** Draw developer-owned shortcuts at their tool's point of use. */
 	static void RenderDeveloperShortcuts();
 	static void RenderCaptureShortcuts();

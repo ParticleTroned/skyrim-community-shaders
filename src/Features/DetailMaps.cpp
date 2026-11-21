@@ -140,7 +140,7 @@ void DetailMaps::DrawSettings()
 		Util::Text::WrappedWarning("%s", "No detail sets or rules found. Install the Detail Maps Pack.");
 
 	for (const auto& field : std::span(DetailMapsConfig::Numbers).first<4>())
-		ImGui::SliderFloat(field.label, &(settings.*field.member), static_cast<float>(field.minimum), static_cast<float>(field.maximum), "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat(field.label, &(settings.*field.member), static_cast<float>(field.minimum), static_cast<float>(field.maximum), "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
 	DrawDistanceSettings();
 
@@ -153,24 +153,24 @@ void DetailMaps::DrawSettings()
 	ImGui::Text("%s: %zu", "Rules", rules.size());
 	ImGui::Text("%s: %u", "Detail draws last frame", lastPassCount);
 	for (const auto& error : ruleErrors)
-		ImGui::TextColored(Util::Colors::GetError(), "%s", error.c_str());
+		MenuUI::PageNotice(error, MenuUI::NoticeKind::Error);
 }
 
 Feature::SettingsHeaderStatus DetailMaps::GetSettingsHeaderStatus() const
 {
 	if (!resourceError.empty())
-		return { "Unavailable", true };
+		return { "Unavailable", true, resourceError };
 	if (!HasContent())
-		return { "Pack required", true };
+		return { "Pack required", true, "Install the Detail Maps Pack, then use Reload Rules and Sets in this feature's settings." };
 	if (!ruleErrors.empty())
-		return { "Content errors", true };
-	return {};
+		return { "Content errors", true, ruleErrors.front() };
+	return Feature::GetSettingsHeaderStatus();
 }
 
 void DetailMaps::DrawDistanceSettings()
 {
 	for (const auto& field : std::span(DetailMapsConfig::Numbers).last<2>())
-		ImGui::SliderFloat(field.label, &(settings.*field.member), static_cast<float>(field.minimum), static_cast<float>(field.maximum), "%.0f", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat(field.label, &(settings.*field.member), static_cast<float>(field.minimum), static_cast<float>(field.maximum), "%.0f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", "Detail fades out between these distances in game units. A shorter range reduces the number of surfaces using detail.");
 	ClampSettings();

@@ -209,7 +209,7 @@ class Source:
         """Follow only explicitly UI-only selectors, never feature values."""
         t = self.tokens
         for call, name, args in calls:
-            if name.rsplit("::", 1)[-1] not in ("NavigationChoice", "NavigationRadioButton") or len(args) < 3:
+            if name.rsplit("::", 1)[-1] not in ("NavigationChoice", "NavigationRadioButton", "SelectNavigationChoice") or len(args) < 3:
                 continue
             selector = literal(args[0])
             variable = "".join(args[1]).lstrip("&")
@@ -365,6 +365,9 @@ def collect(sources: list[Source]):
             return
         if name.startswith(("ImGui::", "std::", "logger::")):
             return
+        if name in ("FeatureListRenderer::RenderPerformancePage", "FeatureListRenderer::GetBuiltInPageMenuEntryId"):
+            # Parent navigation queues another page; only the local callback owns controls.
+            return
         for target in resolve(function, name):
             # Rendering metadata never follows helpers into engine/gameplay implementations.
             if target.source.path.startswith(("src/Features/", "src/Menu/")) or target.owner in ("Menu",):
@@ -374,12 +377,16 @@ def collect(sources: list[Source]):
 
     for f in functions:
         if f.name.endswith("::DrawSettings") and f.owner in features:
-            walk(f, features[f.owner], features[f.owner], "", ("", ""), {})
+            feature = features[f.owner]
+            section = {"PerformanceOverlay": "overlay", "RenderDoc": "renderdoc", "Screenshot": "overview"}.get(feature, "")
+            page = "DevTools" if feature == "RenderDoc" else feature
+            walk(f, feature, page, section, ("", ""), {})
     for name, feature, section in (
         ("Menu::DrawGeneralSettings", "Settings", ""),
         ("Menu::DrawAdvancedSettings", "DevTools", ""),
         ("HomePageRenderer::RenderHomePage", "Home", ""),
-        ("PerformanceTuningRenderer::Render", "PerformanceTuning", ""),
+        ("PerformanceTuningRenderer::Render", "PerformanceTuning", "tuning"),
+        ("MenuUI::PerformancePage::RenderPresets", "PerformancePresets", "presets"),
         ("ProfilingRenderer::RenderStatistics", "Profiling", "timings"),
     ):
         for f in by_name.get(name, []):

@@ -6,11 +6,29 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <string>
 #include <string_view>
 #include <utility>
 
 namespace SettingsMigrations
 {
+	inline constexpr std::string_view kEditorSettingsName = "CSX Editor";
+	inline constexpr std::string_view kLegacyEditorSettingsName = "CS Editor";
+
+	/** Normalize an editor settings layer before merging; explicit current values take precedence. */
+	inline bool MigrateEditorSettingsRootLayer(nlohmann::json& settings)
+	{
+		if (!settings.is_object())
+			return false;
+		const auto legacy = settings.find(kLegacyEditorSettingsName);
+		if (legacy == settings.end())
+			return false;
+		if (!settings.contains(kEditorSettingsName))
+			settings[std::string(kEditorSettingsName)] = std::move(*legacy);
+		settings.erase(std::string(kLegacyEditorSettingsName));
+		return true;
+	}
+
 	/** Preserve a legacy Reverse Z startup disable as its single depth-mode setting. */
 	inline void MigrateReverseZStartup(nlohmann::json& settings)
 	{
@@ -42,8 +60,10 @@ namespace SettingsMigrations
 		       a_value.get<double>() <= std::numeric_limits<uint32_t>::max();
 	}
 
-	inline constexpr std::string_view kAdaptiveBalanceSettingsName = "Adaptive Balance";
+	inline constexpr std::string_view kAdaptiveBalanceSettingsName = "Visuals";
+	inline constexpr std::string_view kLegacyAdaptiveBalanceSettingsName = "Adaptive Balance";
 	inline constexpr std::string_view kLegacyAdaptiveBrightnessSettingsName = "Adaptive Brightness";
+	inline constexpr std::array kLegacyAppearanceSettingsNames{ kLegacyAdaptiveBalanceSettingsName, kLegacyAdaptiveBrightnessSettingsName };
 	inline constexpr std::string_view kAdaptiveBalanceFeatureName = "AdaptiveBrightness";
 	inline constexpr std::string_view kCSUtilitySettingsName = "CS Utility";
 	inline constexpr std::string_view kCSUtilityFeatureName = "CSUtility";
@@ -144,8 +164,8 @@ namespace SettingsMigrations
 	/** Migrate cloud controls within one Adaptive Balance source before merging. */
 	bool MigrateCloudSettingsLayer(nlohmann::json& a_settings);
 
-	// Migrates one root-settings source layer in place. The old Adaptive Brightness
-	// root is folded into Adaptive Balance, with explicit values under the new name
+	// Migrates one root-settings source layer in place. Adaptive Balance and Adaptive
+	// Brightness roots are folded into Visuals, with explicit values under the new name
 	// taking precedence. Legacy CS Utility renderer fields and Unified Water's former
 	// global appearance fields are then moved into the canonical root. The CS Utility
 	// enabled value moves into depthOfField and gates migrated global lighting when

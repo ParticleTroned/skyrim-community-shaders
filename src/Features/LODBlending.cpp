@@ -18,7 +18,7 @@ namespace
 	constexpr const char* kEnableWaterReflectionStrengthTooltip =
 		"Toggle the height-faded water reflection blend without changing its saved strength. Off uses the earlier water reflection path.";
 	constexpr const char* kWaterReflectionStrengthTooltip =
-		"Blend regular and LOD water reflections by camera height above current water level. 1.00 approaches material reflection strength at high elevation; 0.00 approaches reflection color only. Higher restores more sky/SSR. Adaptive Balance's Global Reflection Amount scales the final result.";
+		"Blend regular and LOD water reflections by camera height above current water level. 1.00 approaches material reflection strength at high elevation; 0.00 approaches reflection color only. Higher restores more sky/SSR. Visuals's Global Reflection Amount scales the final result.";
 	constexpr float kWaterReflectionStrengthDefault = 1.0f;
 	constexpr float kWaterReflectionStrengthMin = 0.0f;
 	constexpr float kWaterReflectionStrengthMax = 4.0f;

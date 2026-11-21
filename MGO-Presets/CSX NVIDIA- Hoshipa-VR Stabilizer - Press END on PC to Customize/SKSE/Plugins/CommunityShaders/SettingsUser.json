@@ -142,7 +142,7 @@
         "DALCMode": 0,
         "DALCAmount": 0.0
     },
-    "CS Editor": null,
+    "CSX Editor": null,
     "Screenshot": {
         "SdrUsePng": true,
         "CropW": 1.0,
@@ -369,6 +369,8 @@
         "UseStereoReproject": false
     },
     "Wetterness": {
+        "PreserveWetnessHighlights": true,
+        "RestrictPuddleSlopes": true,
         "SplashesMinRadius": 0.3499999940395355,
         "RaindropChance": 0.800000011920929,
         "MaxRainWetness": 1.5,

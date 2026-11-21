@@ -81,8 +81,11 @@ namespace MenuUI::SettingsSearch
 		}
 		bool Available(const Indexed& entry)
 		{
-			if (entry.control && !SettingsNavigation::SectionAvailable(entry.control->page, entry.control->section, globals::game::isVR))
-				return false;
+			if (entry.control) {
+				const auto location = SettingsNavigation::Resolve(entry.control->page, entry.control->section);
+				if (!SettingsNavigation::SectionAvailable(location.page, location.section, globals::game::isVR))
+					return false;
+			}
 			const auto& owner = owners[entry.owner];
 			return entry.control ? owner.controlsAvailable : owner.pageAvailable;
 		}
@@ -96,8 +99,9 @@ namespace MenuUI::SettingsSearch
 				for (auto* feature : FeatureListRenderer::GetMenuFeatures())
 					if (feature)
 						owners.push_back({ feature, feature->GetShortName(), feature->GetDisplayName() });
-				for (const auto* name : { "Home", "Performance", "Settings", "DevTools", "Profiling", "PerformanceTuning" })
-					owners.push_back({ nullptr, name, std::string_view(name) == "DevTools" ? "Dev Tools" : name });
+				for (const auto* name : { "Home", "Performance", "PerformancePresets", "Settings", "DevTools", "Profiling", "PerformanceTuning" })
+					owners.push_back({ nullptr, name, std::string_view(name) == "DevTools" ? "Dev Tools" : std::string_view(name) == "PerformancePresets" ? "Performance Presets" :
+																																							name });
 				index.reserve(ControlCatalog::Entries().size() + owners.size());
 				for (size_t i = 0; i < owners.size(); ++i) {
 					const auto& owner = owners[i];
@@ -207,18 +211,18 @@ namespace MenuUI::SettingsSearch
 		}
 		const auto* control = found->control;
 		const auto page = control ? std::string(control->page) : found->feature;
-		const auto section = control && !control->section.empty() ? std::string(control->section) : page == "Home" ? "welcome" :
-		                                                                                                             "overview";
+		const auto section = control && !control->section.empty() ? std::string(control->section) : std::string(SettingsNavigation::PerformanceSection(page));
+		const auto location = SettingsNavigation::Resolve(page, section);
 		if (!SettingsPage::Select(page.c_str(), section.c_str())) {
 			error = "That section is unavailable, or has an unsaved navigation draft.";
 			return false;
 		}
 		reveal = {};
 		reveal.id = found->id;
-		reveal.page = page;
+		reveal.page = location.page;
 		reveal.state = "page_queued";
 		if (control) {
-			reveal.section = section;
+			reveal.section = location.section;
 			reveal.label = found->title;
 			reveal.rawLabel = control->rawLabel;
 			reveal.selector = control->selector;
@@ -228,8 +232,9 @@ namespace MenuUI::SettingsSearch
 			reveal.deadline = std::chrono::steady_clock::now() + revealDuration;
 			reveal.active = true;
 		}
-		const auto builtIn = FeatureListRenderer::GetBuiltInPageMenuEntryId(found->feature);
-		globals::menu->SelectFeatureMenu(builtIn.empty() ? found->feature : builtIn);
+		const std::string destination(location.page);
+		const auto builtIn = FeatureListRenderer::GetBuiltInPageMenuEntryId(destination);
+		globals::menu->SelectFeatureMenu(builtIn.empty() ? destination : builtIn);
 		error.clear();
 		return true;
 	}
@@ -252,8 +257,10 @@ namespace MenuUI::SettingsSearch
 				Navigate(entry.id, navigationError);
 			ImGui::TextColored(Util::Color::SecondaryText(), "%s", entry.breadcrumb.c_str());
 		}
-		if (truncated)
-			ImGui::TextWrapped("Showing the first %zu matches. Add a feature name to narrow your search.", MaxResults);
+		if (truncated) {
+			ImGui::Text("First %zu matches", MaxResults);
+			Util::AddTooltip("Add a feature name to narrow your search.");
+		}
 		return true;
 	}
 
@@ -266,9 +273,8 @@ namespace MenuUI::SettingsSearch
 			reveal.state = "page_open";
 		if (reveal.active && page == reveal.page) {
 			++reveal.drawnFrames;
-			ImGui::TextWrapped("Search: %s", reveal.label.c_str());
-			if (!reveal.found && reveal.drawnFrames > 2)
-				ImGui::TextWrapped("This control may require another option or an expanded group on this page.");
+			PageNotice("Search: " + reveal.label, NoticeKind::Information,
+				!reveal.found && reveal.drawnFrames > 2 ? "This control may require another option or an expanded group on this page." : "");
 		}
 	}
 

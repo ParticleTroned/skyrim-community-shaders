@@ -105,7 +105,9 @@ namespace globals
 				unsigned neuralRenderingModelResolutionPercent = 100;
 				bool neuralRenderingGuidedReconstruction = true;
 				unsigned neuralRenderingConfidenceRejectionPercent = 0;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 				NeuralRendering::ReconstructionTuning neuralReconstructionTuning{};
+#endif
 				unsigned neuralRenderingPeripheralCompressionPercent = 100;
 				unsigned neuralRenderingFaceDetailProtectionPercent = 0;
 				bool neuralRenderingPauseInCombat = true;
@@ -180,6 +182,7 @@ namespace globals
 			void DrawSelectionControls();
 			void DrawNeuralRenderingEnableControl();
 			void DrawNeuralRenderingMasterControl(bool a_showDiagnostics);
+			std::string GetNeuralRenderingUpscalingWaitMessage() const;
 			NeuralRendering::CombatPauseSnapshot combatPauseSnapshot;
 			auto GetNeuralCombatPauseSnapshot() const { return combatPauseSnapshot; }
 			bool ToggleNeuralRendering(std::string* a_error = nullptr);
@@ -508,7 +511,12 @@ namespace MenuUI
 		}
 		return selected;
 	}
-	void SectionHeading(const char* text) { ImGui::TextUnformatted(text); }
+	void SectionHeading(const char* text, const char* = nullptr) { ImGui::TextUnformatted(text); }
+	bool AvailabilityNotice(const char* text, const char* link = nullptr)
+	{
+		ImGui::TextUnformatted(text);
+		return link && ImGui::Button(link);
+	}
 	void DetailText(const char* text) { ImGui::TextUnformatted(text); }
 	bool DetailNote(const char* text, const char* link = nullptr)
 	{
@@ -651,6 +659,8 @@ struct Feature
 	{
 		std::string_view label;
 		bool needsAttention;
+		std::string message;
+		bool pendingChange = false;
 	};
 };
 struct NeuralRenderingFeature
@@ -663,6 +673,89 @@ struct NeuralRenderingFeature
 };
 #include "neural_rendering_ui_under_test.h"
 
+template <class Require>
+void TestStartupAndRuntimeReset(const Require& require)
+{
+	auto& upscaling = globals::features::upscaling;
+	auto& renderer = NeuralRendering::Renderer::Instance();
+	auto& characters = NeuralRendering::CharacterRendering::Instance();
+	const auto savedUpscaling = upscaling;
+	const auto savedRenderer = renderer;
+	const auto savedCharacters = characters;
+	const auto savedState = globals::state;
+	const bool savedVR = globals::game::isVR;
+	const bool installed = NeuralRendering::runtimeInstalled;
+	const auto driver = NeuralRendering::installedDriver;
+	State state;
+	globals::state = &state;
+	NeuralRendering::runtimeInstalled = true;
+	NeuralRendering::installedDriver = { NeuralRendering::kMinimumNvidiaDriverRelease };
+	upscaling.fidelityFX.nvidia = true;
+	upscaling.settings.neuralRenderingMode = static_cast<unsigned>(NeuralRendering::RenderingMode::FullResolution);
+	upscaling.settings.neuralRenderingEnabled = true;
+	const auto draw = [&](std::string_view click = {}) {
+		ImGui::Clear(click);
+		upscaling.DrawNeuralRenderingEnableControl();
+		upscaling.DrawNeuralRenderingMasterControl(false);
+		require(ImGui::disableDepth == 0, "Normal NR controls must restore disabled scopes");
+	};
+	for (const bool vr : { false, true }) {
+		globals::game::isVR = vr;
+		for (const auto level : { spdlog::level::info, spdlog::level::debug, spdlog::level::trace }) {
+			state.level = level;
+			renderer.snapshot = {};
+			renderer.resetSucceeded = true;
+			const auto resetCalls = renderer.resetCalls;
+			const auto characterResets = characters.resetCalls;
+			const auto historyResets = upscaling.historyResets;
+			const auto header = NeuralRenderingFeature{}.GetSettingsHeaderStatus();
+			require(header.label == "Not started" && header.needsAttention && header.pendingChange &&
+						header.message == "Resume gameplay with game menus closed.",
+				"Unprobed NR must show the gameplay step as an orange header notice without claiming a confirmed blocker");
+			draw();
+			require(ImGui::checkboxValues.front() == std::pair<std::string, bool>{ "Enabled", true } &&
+						ImGui::tooltips.front().second.find("saved choice") != std::string::npos &&
+						ImGui::tooltips.front().second.find("Load a save") != std::string::npos &&
+						ImGui::tooltips.front().second.find("If it remains inactive") != std::string::npos,
+				"Enabled must describe the saved preference rather than claim runtime activation");
+			require(ImGui::Seen("Reset Neural Rendering Runtime") && !ImGui::Disabled("Reset Neural Rendering Runtime") &&
+						renderer.resetCalls == resetCalls,
+				"Normal UI must expose reset without resetting on redraw");
+			draw("Reset Neural Rendering Runtime");
+			require(renderer.resetCalls == resetCalls + 1 && characters.resetCalls == characterResets + 1 &&
+						upscaling.historyResets == historyResets + 1 && upscaling.settings.neuralRenderingEnabled,
+				"Normal reset must preserve Enabled and clear character/history state only after success");
+			renderer.snapshot = { .failureLatched = true, .detail = "Retirement pending" };
+			renderer.resetSucceeded = false;
+			draw("Reset Neural Rendering Runtime");
+			require(renderer.resetCalls == resetCalls + 2 && characters.resetCalls == characterResets + 1 &&
+						upscaling.historyResets == historyResets + 1 && renderer.snapshot.failureLatched &&
+						ImGui::Seen("Neural Rendering could not reset safely. Its resources have been retained."),
+				"Failed normal reset must retain resources and visibly report failure");
+			renderer.snapshot = { .quarantined = true, .failureLatched = true, .detail = "Unsafe GPU ownership" };
+			draw("Reset Neural Rendering Runtime");
+			require(!ImGui::Seen("Reset Neural Rendering Runtime") && renderer.resetCalls == resetCalls + 2 &&
+						NeuralRenderingFeature{}.GetSettingsHeaderStatus().message.find("Restart the game") != std::string::npos,
+				"Quarantine must block reset and retain restart instructions at every log level");
+		}
+	}
+	renderer.snapshot = {};
+	NeuralRendering::runtimeInstalled = false;
+	draw("Reset Neural Rendering Runtime");
+	require(!ImGui::Seen("Reset Neural Rendering Runtime"), "Missing runtime must not offer reset");
+	NeuralRendering::runtimeInstalled = true;
+	upscaling.fidelityFX.nvidia = false;
+	draw("Reset Neural Rendering Runtime");
+	require(ImGui::Disabled("Reset Neural Rendering Runtime"), "Unsupported hardware must not permit reset");
+	upscaling = savedUpscaling;
+	renderer = savedRenderer;
+	characters = savedCharacters;
+	globals::state = savedState;
+	globals::game::isVR = savedVR;
+	NeuralRendering::runtimeInstalled = installed;
+	NeuralRendering::installedDriver = driver;
+}
+
 int main()
 {
 	const auto require = [](bool condition, const char* message) {
@@ -670,6 +763,14 @@ int main()
 			std::fprintf(stderr, "NeuralRenderingUI: %s\n", message);
 			throw std::runtime_error(message);
 		}
+	};
+	TestStartupAndRuntimeReset(require);
+#ifdef NR_UI_RECOVERY_ONLY
+	static_assert(!NeuralRendering::kDevelopmentDiagnostics);
+	std::puts("Production NR startup and runtime-reset UI checks passed");
+#else
+	const auto statusContains = [](std::string_view text) {
+		return NeuralRenderingFeature{}.GetSettingsHeaderStatus().message.find(text) != std::string::npos;
 	};
 	{
 		auto& upscaling = globals::features::upscaling;
@@ -689,9 +790,9 @@ int main()
 			globals::game::isVR = vr;
 			upscaling.settings.neuralRenderingMode = static_cast<unsigned>(NeuralRendering::RenderingMode::FullResolution);
 			upscaling.settings.neuralRenderingEnabled = false;
-			expectWithoutSnapshot("Off");
+			expectHeader("Off", true);
 			upscaling.settings.neuralRenderingEnabled = true;
-			expectHeader("Not checked");
+			expectHeader("Not started", true);
 			renderer.snapshot.runtimeStatus = NeuralRendering::RuntimeStatus::Ready;
 			expectHeader("DLL checked");
 			renderer.snapshot.runtimeStatus = NeuralRendering::RuntimeStatus::Initialized;
@@ -714,13 +815,13 @@ int main()
 			renderer.snapshot.quarantined = true;
 			expectHeader("Paused", true);
 			upscaling.settings.neuralRenderingEnabled = false;
-			expectWithoutSnapshot("Off");
+			expectHeader("Paused", true);
 			upscaling.settings.neuralRenderingEnabled = true;
 			renderer.snapshot.quarantined = false;
 			renderer.snapshot.outputCommitted = false;
 			expectHeader("Initialized");
 			renderer.snapshot = {};
-			expectHeader("Not checked");
+			expectHeader("Not started", true);
 			for (auto failure : { NeuralRendering::RuntimeStatus::InitializationFailed, NeuralRendering::RuntimeStatus::FeatureCreateFailed,
 					 NeuralRendering::RuntimeStatus::FeatureEvaluateFailed }) {
 				renderer.snapshot.runtimeStatus = failure;
@@ -1342,7 +1443,7 @@ int main()
 	upscaling.settings.neuralRenderingEnabled = false;
 	drawMaster("Enabled");
 	require(ImGui::Disabled("Enabled") && !upscaling.settings.neuralRenderingEnabled &&
-				ImGui::Seen(NeuralRendering::Runtime::kMissingRuntimeNotice) && ImGui::Seen(NeuralRendering::Runtime::kUserRuntimeNotice),
+				statusContains("nvngx_dlssnr.dll") && statusContains("Install the bundled NR component"),
 		"Missing runtime must disable NR and name the DLL and installation path");
 	upscaling.settings.neuralRenderingEnabled = true;
 	upscaling.settings.periphery_taa_enable = true;
@@ -1356,8 +1457,8 @@ int main()
 	upscaling.settings.periphery_taa_enable = false;
 	upscaling.settings.neuralRenderingEnabled = false;
 	drawMaster();
-	require(!ImGui::Disabled("Enabled") && !ImGui::Seen(NeuralRendering::Runtime::kMissingRuntimeNotice) &&
-				!ImGui::Seen(NeuralRendering::Runtime::kUserRuntimeNotice),
+	require(!ImGui::Disabled("Enabled") && !statusContains("nvngx_dlssnr.dll") &&
+				!statusContains("Install the bundled NR component"),
 		"Installed runtime must unlock the feature controls without installation notices");
 	const auto requirePreferences = [&](const Upscaling::Settings& expected) {
 		require(upscaling.settings.neuralRenderingFovOnly == expected.neuralRenderingFovOnly &&
@@ -1392,7 +1493,7 @@ int main()
 		require(upscaling.settings.neuralRenderingEnabled == enabled,
 			"Passive redraw must preserve the master selection");
 		requirePreferences(rememberedPreferences);
-		require(ImGui::Seen("NR is off. Actor and colour preferences are retained.") == !enabled,
+		require(statusContains("turned off") == !enabled,
 			"Disabled master must explain the retained child settings");
 	}
 	for (const auto& [label, member] : {
@@ -1461,7 +1562,7 @@ int main()
 				require(ImGui::Seen("Prewarm NR while loading") && ImGui::Disabled("Prewarm NR while loading"),
 					"The VR prewarm control follows the same inactive NR guard");
 			if (blocker == 1)
-				require(ImGui::Seen(NeuralRendering::Runtime::kMissingRuntimeNotice), "Missing DLL still shows its installation warning");
+				require(statusContains("nvngx_dlssnr.dll"), "Missing DLL still shows its installation warning");
 			ImGui::Clear("Enable colour processing");
 			feature.DrawColourSettings();
 			for (const char* label : { "Enable colour processing", "Original", "Preserve source", "Lighting preservation", "Detail contribution" })
@@ -1486,8 +1587,8 @@ int main()
 	const auto historyResets = upscaling.historyResets;
 	for (unsigned redraw = 0; redraw < 2; ++redraw) {
 		drawMaster();
-		require(ImGui::Seen("NR paused after an error. Use Reset Neural Rendering Runtime below to retry. Settings are kept.") &&
-					ImGui::Seen("Reason: Recoverable NR failure") && ImGui::Seen("Reset Neural Rendering Runtime"),
+		require(statusContains("Reset Neural Rendering Runtime") &&
+					statusContains("Recoverable NR failure") && ImGui::Seen("Reset Neural Rendering Runtime"),
 			"Recoverable failures must retain their reason and reset action while NR is off");
 		require(!upscaling.settings.neuralRenderingEnabled && ImGui::Disabled("Enabled"),
 			"Recoverable failures must not silently change the stored master preference");
@@ -1511,14 +1612,14 @@ int main()
 		"Successful recovery must clear runtime failure and reset character history without enabling NR");
 	requirePreferences(recoveryPreferences);
 	drawMaster();
-	require(!ImGui::Seen("Reset Neural Rendering Runtime") && !ImGui::Seen("Reason: Recoverable NR failure"),
-		"Recovered renderer must clear stale failure feedback on the next redraw");
+	require(ImGui::Seen("Reset Neural Rendering Runtime") && !statusContains("Recoverable NR failure"),
+		"Recovered renderer must clear stale failure feedback while keeping normal runtime reset available");
 	drawMaster("Enabled");
 	require(upscaling.settings.neuralRenderingEnabled && !ImGui::Disabled("Enabled"),
 		"Recovered renderer must allow enabling NR again");
-	drawMaster("Reset Neural Rendering Runtime", true);
+	drawMaster("Reset Neural Rendering Runtime");
 	require(upscaling.settings.neuralRenderingEnabled && characterRenderer.resetCalls == characterResets + 2 && upscaling.historyResets == historyResets + 2,
-		"Explicit diagnostic reset must preserve an enabled master and reset its history");
+		"Normal runtime reset must preserve an enabled master and reset its history");
 	requirePreferences(recoveryPreferences);
 	upscaling.settings.neuralRenderingEnabled = false;
 	renderer.snapshot = { .quarantined = true, .failureLatched = true, .detail = "Pending GPU resources" };
@@ -1527,8 +1628,8 @@ int main()
 		drawMaster("Enabled", diagnostics);
 		require(ImGui::Disabled("Enabled") && !upscaling.settings.neuralRenderingEnabled,
 			"Quarantine must refuse unsafe re-enabling while NR is off");
-		require(ImGui::Seen("Neural Rendering cannot recover safely in this session. Restart the game to try again.") &&
-					ImGui::Seen("Reason: Pending GPU resources") && !ImGui::Seen("Reset Neural Rendering Runtime"),
+		require(statusContains("cannot recover safely") &&
+					statusContains("Pending GPU resources") && !ImGui::Seen("Reset Neural Rendering Runtime"),
 			"Quarantine must retain its reason without offering an unsafe reset at any UI level");
 		requirePreferences(recoveryPreferences);
 	}
@@ -1537,7 +1638,7 @@ int main()
 	upscaling.settings.neuralRenderingEnabled = true;
 	drawMaster("Enabled");
 	require(!ImGui::Disabled("Enabled") && !upscaling.settings.neuralRenderingEnabled &&
-				ImGui::Seen("Reason: Pending GPU resources"),
+				statusContains("Pending GPU resources"),
 		"Master OFF must remain available even when the renderer is quarantined");
 	requirePreferences(recoveryPreferences);
 	drawMaster();
@@ -1818,7 +1919,10 @@ int main()
 	registry.configuration.settings.mode = Mode::Managed;
 	const auto savedManaged = registry.Snapshot();
 	draw();
-	require(ImGui::Seen("Managed is experimental colour/exposure reconstruction with no validated production calibration. Preservation sliders do not apply.") && !ImGui::Seen("Managed (experimental)") &&
+	require(ImGui::Seen("Managed calibration active") && !ImGui::Seen("Managed (experimental)") &&
+				std::ranges::any_of(ImGui::tooltips, [](const auto& tooltip) {
+					return tooltip.first == "Managed calibration active" && tooltip.second.find("Preservation sliders do not apply.") != std::string::npos;
+				}) &&
 				registry.configuration.settings == savedManaged.settings && registry.configuration.revision == savedManaged.revision,
 		"A saved Managed mode must remain visible without passive migration or a normal-menu selection");
 	for (const auto* choice : { "Preserve source", "Neural lighting", "Original" }) {
@@ -2033,7 +2137,7 @@ int main()
 				require(ImGui::Disabled("Enabled") && !ImGui::Disabled("After upscaling"),
 					"Pending incompatibility greys activation without preventing Full resolution selection");
 				if (pending == Upscaling::UpscaleMethod::kFSR)
-					require(ImGui::Seen("NR Before DLSS is waiting: incompatible upscaling setting (FSR)."),
+					require(statusContains("NR Before DLSS is waiting: incompatible upscaling setting (FSR)."),
 						"The warning must name the pending incompatible setting, not the previous DLSS profile");
 			}
 		}
@@ -2108,8 +2212,8 @@ int main()
 					upscaling.DrawSelectionControls();
 					const auto master = std::find_if(ImGui::checkboxValues.begin(), ImGui::checkboxValues.end(),
 						[](const auto& value) { return value.first == "Enabled"; });
-					require(master != ImGui::checkboxValues.end() && master->second == available,
-						"A saved incompatible request must never appear active in the master checkbox");
+					require(master != ImGui::checkboxValues.end() && master->second && ImGui::Disabled("Enabled") == !available,
+						"An incompatible request must keep the saved Enabled preference and explain unavailable rendering separately");
 					if (!available) {
 						ImGui::Clear("Turn off NR");
 						upscaling.DrawSelectionControls();
@@ -2193,7 +2297,7 @@ int main()
 		upscaling.renderScaleRequested = upscaling.renderScaleLatched = upscaling.renderScaleActive = false;
 		ImGui::Clear();
 		upscaling.DrawSelectionControls();
-		require(ImGui::Seen(std::string("NR Before DLSS is waiting: incompatible upscaling setting (") + reason + ")."),
+		require(statusContains(std::string("NR Before DLSS is waiting: incompatible upscaling setting (") + reason + ")."),
 			"The NR panel must name the setting that pauses NR");
 		upscaling.stabilizerSyncActive = true;
 		for (const bool interior : { false, true }) {
@@ -2202,12 +2306,12 @@ int main()
 			profile = { method, quality, false };
 			ImGui::Clear();
 			upscaling.DrawSelectionControls();
-			require(ImGui::Seen(std::string("NR Before DLSS is waiting: incompatible upscaling setting (") + reason + ")."),
+			require(statusContains(std::string("NR Before DLSS is waiting: incompatible upscaling setting (") + reason + ")."),
 				"A matching active Stabilizer profile must report its incompatible setting");
 			profile.qualityMode = quality + 1;
 			ImGui::Clear();
 			upscaling.DrawSelectionControls();
-			require(ImGui::Seen(std::string("NR Before DLSS is waiting: incompatible upscaling setting (") + reason + ")."),
+			require(statusContains(std::string("NR Before DLSS is waiting: incompatible upscaling setting (") + reason + ")."),
 				"Manual settings must not be blamed on a different Stabilizer profile");
 		}
 		upscaling.stabilizerSyncActive = false;
@@ -2220,7 +2324,7 @@ int main()
 	ImGui::Clear();
 	upscaling.DrawSelectionControls();
 	require(!ImGui::Seen("Renderscale NR is waiting for scaling to become active.") &&
-				!ImGui::Seen("NR Before DLSS is waiting: incompatible upscaling setting (Render Scale off)."),
+				!statusContains("NR Before DLSS is waiting: incompatible upscaling setting (Render Scale off)."),
 		"Generic target wait stays out of the UI without blaming a compatible configured profile");
 	upscaling.runtimeMethod.reset();
 	upscaling.renderScaleActive = true;
@@ -2356,7 +2460,10 @@ int main()
 			require(!upscaling.IsNeuralRenderingRequested() && !upscaling.IsNeuralRenderingRenderScaleRequired() &&
 						upscaling.settings.neuralRenderingEnabled && upscaling.settings.periphery_taa_enable,
 				"Unsupported hardware preserves saved NR and ordinary FOV preferences without dispatching or locking upscaling");
-			require(ImGui::Seen(NeuralRendering::Runtime::kUnsupportedHardwareNotice) && ImGui::disableDepth == 0,
+			require(std::ranges::any_of(ImGui::tooltips, [](const auto& tooltip) {
+				return tooltip.first == "Enabled" && tooltip.second.find(NeuralRendering::Runtime::kUnsupportedHardwareNotice) != std::string::npos;
+			}) && statusContains("not supported") &&
+						ImGui::disableDepth == 0,
 				"The hardware requirement is explained and UI scopes remain balanced");
 		}
 		upscaling.settings.neuralRenderingEnabled = false;
@@ -2375,7 +2482,10 @@ int main()
 	NeuralRendering::installedDriver = { 61656u };
 	drawMaster("Enabled");
 	require(ImGui::Disabled("Enabled") && !upscaling.settings.neuralRenderingEnabled &&
-				ImGui::Seen(NeuralRendering::installedDriver.Message()) && ImGui::disableDepth == 0,
+				std::ranges::any_of(ImGui::tooltips, [](const auto& tooltip) {
+					return tooltip.first == "Enabled" && tooltip.second.find(NeuralRendering::installedDriver.Message()) != std::string::npos;
+				}) &&
+				statusContains("Update the driver") && ImGui::disableDepth == 0,
 		"Outdated driver disables activation and shows installed/required versions with update instructions");
 	std::string driverError;
 	require(!upscaling.ToggleNeuralRendering(&driverError) && driverError == NeuralRendering::installedDriver.Message(),
@@ -2417,8 +2527,7 @@ int main()
 	renderer.snapshot = {};
 	renderer.snapshot.failureLatched = true;
 	drawMaster();
-	require(ImGui::Seen("NR paused after an error. Use Reset Neural Rendering Runtime below to retry. Settings are kept.") &&
-				ImGui::Seen("Combat resume delay: %.1f seconds of active gameplay remaining.") &&
-				!ImGui::Seen("NR resumes in %.1f seconds without combat."),
+	require(statusContains("Reset Neural Rendering Runtime") && !statusContains("NR resumes"),
 		"Combat cooldown must not promise recovery while a runtime error still blocks NR");
+#endif
 }

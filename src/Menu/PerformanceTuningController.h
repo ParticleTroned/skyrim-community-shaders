@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <exception>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
@@ -26,9 +27,18 @@ namespace PerformanceTuningController
 		for (auto* feature : features)
 			previous.push_back(feature->CapturePerformanceCostMeasurementState());
 		const auto restore = [&] {
-			for (auto index = features.size(); index > 0; --index)
-				features[index - 1]->RestorePerformanceToggleState(previous[index - 1]);
+			std::exception_ptr failure;
+			for (auto index = features.size(); index > 0; --index) {
+				try {
+					features[index - 1]->RestorePerformanceToggleState(previous[index - 1]);
+				} catch (...) {
+					if (!failure)
+						failure = std::current_exception();
+				}
+			}
 			configurations = previousConfigurations;
+			if (failure)
+				std::rethrow_exception(failure);
 		};
 		try {
 			if (apply()) {

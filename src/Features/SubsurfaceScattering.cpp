@@ -80,7 +80,7 @@ namespace
 		float& a_brightness,
 		float& a_baseSaturation)
 	{
-		ImGui::SeparatorText(a_sectionTitle);
+		MenuUI::SectionHeading(a_sectionTitle);
 		ImGui::PushID(a_sectionTitle);
 		Util::Widgets::SliderFloat("SSS Intensity", &a_intensity, kHumanSkinControlMin, kHumanSkinControlMax, "%.2f");
 		Util::AddTooltip("Strength of skin softening. 0 keeps the original lighting; 1 uses the normal effect; higher values exaggerate it.");
@@ -127,7 +127,7 @@ namespace
 void SubsurfaceScattering::DrawSettings()
 {
 	MenuUI::SettingsPage page("SubsurfaceScattering", {
-														  { "model", "Model", "Choose how light passes through skin.", "Separable or Burley scattering", true, true, "Choose model and profiles" },
+														  { "model", "Model", "Choose how light passes through skin.", "Separable or Burley scattering", true, true, "Choose model and profiles", nullptr, nullptr, true, true, nullptr, "profiles" },
 														  { "profiles", "Profiles", "Refine the chosen model for ordinary and humanoid materials.", "Base and humanoid skin response", true, true, nullptr },
 													  });
 

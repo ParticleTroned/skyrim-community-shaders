@@ -185,6 +185,10 @@ namespace Util
 	namespace Widgets = ImGui;
 }
 
+namespace MenuUI
+{
+	void SectionHeading(const char* label) { ImGui::SeparatorText(label); }
+}
 #include "vr_depth_culling_settings_ui_under_test.h"
 
 namespace

@@ -136,7 +136,7 @@ def main() -> None:
             args.notes.write_text(
                 f"## Changes since {result['base']}\n\n{commits}\n\n"
                 "## CSX AIO\n\nInstall the single `CSX_AIO-*.7z` download. All shipped CSX\n"
-                "features are bundled, including Adaptive Balance, Performance Tuning,\n"
+                "features are bundled, including Visuals, Performance Tuning,\n"
                 "Wetterness, Unified Water, Hair Specular and the terrain features.\n"
                 "Separate feature or shader-cache downloads are not required.\n\n"
                 "Production universal SE/AE/VR core, DevBench and Tracy disabled.\n"

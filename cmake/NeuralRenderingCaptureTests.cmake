@@ -36,6 +36,13 @@ function(csx_add_neural_rendering_capture_tests repository_root register_test)
         target_compile_definitions(${target} PRIVATE DEVBENCH_BRIDGE_ENABLED)
     endforeach()
 
+    cmake_language(CALL ${register_test} neural_rendering_ui_off_test NeuralRenderingUI_off
+        "${repository_root}/tests/neural_rendering_ui_test.cpp")
+    target_link_libraries(neural_rendering_ui_off_test PRIVATE nlohmann_json::nlohmann_json)
+    target_include_directories(neural_rendering_ui_off_test PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/neural_rendering_ui")
+    target_compile_definitions(neural_rendering_ui_off_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN NR_UI_RECOVERY_ONLY)
+    set_tests_properties(NeuralRenderingUI_off PROPERTIES TIMEOUT 30)
+
     cmake_language(CALL ${register_test} neural_feature_settings_off_test NeuralFeatureSettings_off
         "${repository_root}/tests/neural_feature_settings_test.cpp")
     target_link_libraries(neural_feature_settings_off_test PRIVATE nlohmann_json::nlohmann_json)

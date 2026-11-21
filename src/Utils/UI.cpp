@@ -7,6 +7,8 @@
 #include "Menu.h"
 #include "Menu/Fonts.h"
 #include "Menu/IconLoader.h"
+#include "Menu/SectionDivider.h"
+#include "Menu/SettingsPage.h"
 #include "Menu/ThemeManager.h"
 #include "PerfUtils.h"
 #include "ShaderCache.h"
@@ -28,6 +30,7 @@
 #include "../Features/VR.h"
 #include "../Globals.h"
 #include "../Menu.h"
+#include "FeatureCategories.h"
 #include "FileSystem.h"
 #include "VRUtils.h"
 
@@ -83,11 +86,39 @@ namespace Util
 			}
 			break;
 		case ActionGlyph::Advanced:
-			draw->PathLineTo(point(.5f, .06f));
-			draw->PathLineTo(point(.94f, .5f));
-			draw->PathLineTo(point(.5f, .94f));
-			draw->PathLineTo(point(.06f, .5f));
+			draw->PathLineTo(point(.18f, .90f));
+			draw->PathLineTo(point(.10f, .82f));
+			draw->PathBezierCubicCurveTo(point(.08f, .78f), point(.10f, .73f), point(.14f, .70f));
+			draw->PathLineTo(point(.48f, .36f));
+			draw->PathBezierCubicCurveTo(point(.42f, .20f), point(.53f, .04f), point(.68f, .07f));
+			draw->PathLineTo(point(.60f, .23f));
+			draw->PathLineTo(point(.70f, .33f));
+			draw->PathLineTo(point(.87f, .25f));
+			draw->PathBezierCubicCurveTo(point(.93f, .43f), point(.77f, .55f), point(.62f, .50f));
+			draw->PathLineTo(point(.28f, .86f));
+			draw->PathBezierCubicCurveTo(point(.24f, .90f), point(.21f, .94f), point(.18f, .90f));
 			draw->PathStroke(color, ImDrawFlags_Closed, thickness);
+			break;
+		case ActionGlyph::Performance:
+			draw->PathArcTo(point(.5f, .58f), size * .4f, IM_PI * .8f, IM_PI * 2.2f);
+			draw->PathStroke(color, ImDrawFlags_None, thickness);
+			line(.5f, .58f, .72f, .33f);
+			draw->AddCircleFilled(point(.5f, .58f), thickness, color);
+			break;
+		case ActionGlyph::Camera:
+			for (const auto& vertex : { ImVec2{ .12f, .30f }, ImVec2{ .30f, .30f }, ImVec2{ .38f, .16f }, ImVec2{ .62f, .16f },
+					 ImVec2{ .70f, .30f }, ImVec2{ .88f, .30f }, ImVec2{ .94f, .36f }, ImVec2{ .94f, .84f },
+					 ImVec2{ .88f, .90f }, ImVec2{ .12f, .90f }, ImVec2{ .06f, .84f }, ImVec2{ .06f, .36f } })
+				draw->PathLineTo(point(vertex.x, vertex.y));
+			draw->PathStroke(color, ImDrawFlags_Closed, thickness);
+			draw->AddCircle(point(.5f, .58f), size * .19f, color, 24, thickness);
+			break;
+		case ActionGlyph::Visuals:
+			draw->PathLineTo(point(.04f, .5f));
+			draw->PathBezierCubicCurveTo(point(.3f, .08f), point(.7f, .08f), point(.96f, .5f));
+			draw->PathBezierCubicCurveTo(point(.7f, .92f), point(.3f, .92f), point(.04f, .5f));
+			draw->PathStroke(color, ImDrawFlags_Closed, thickness);
+			draw->AddCircle(point(.5f, .5f), size * .17f, color, 24, thickness);
 			break;
 		case ActionGlyph::Profiling:
 			rectangle(.05f, .12f, .95f, .88f);
@@ -701,13 +732,18 @@ namespace Util
 			return color;
 		}
 
+		ImVec4 Readiness(bool ready)
+		{
+			const auto background = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
+			const bool light = background.x + background.y + background.z > 1.5f;
+			if (light)
+				return ready ? ImVec4(0.0f, 0.40f, 0.08f, 1.0f) : ImVec4(0.65f, 0.0f, 0.60f, 1.0f);
+			return ready ? ImVec4(0.1f, 1.0f, 0.2f, 1.0f) : ImVec4(1.0f, 0.0f, 0.95f, 1.0f);
+		}
+
 		ImVec4 PerformanceDelta(int direction)
 		{
-			if (direction > 0)
-				return ImVec4(1.0f, 0.0f, 0.95f, 1.0f);
-			if (direction < 0)
-				return ImVec4(0.1f, 1.0f, 0.2f, 1.0f);
-			return ImGui::GetStyleColorVec4(ImGuiCol_Text);
+			return direction == 0 ? ImGui::GetStyleColorVec4(ImGuiCol_Text) : Readiness(direction < 0);
 		}
 
 		ImVec4 Blend(const ImVec4& from, const ImVec4& to, float amount, float alpha)
@@ -1087,12 +1123,9 @@ namespace Util
 		}
 
 		ImGui::TextColored(titleColor, "%s", title);
+		if (description && *description)
+			AddTooltip(description);
 		ImGui::Spacing();
-
-		if (description && strlen(description) > 0) {
-			ImGui::TextWrapped("%s", description);
-			ImGui::Spacing();
-		}
 	}
 
 	SectionWrapper::~SectionWrapper()
@@ -1125,7 +1158,7 @@ namespace Util
 			categoryIcon = menu.lighting.texture;
 		} else if (strcmp(categoryName, "Sky") == 0) {
 			categoryIcon = menu.sky.texture;
-		} else if (strcmp(categoryName, "Landscape & Textures") == 0) {
+		} else if (strcmp(categoryName, FeatureCategories::kLandscapeAndTextures.data()) == 0) {
 			categoryIcon = menu.landscape.texture;
 		} else if (strcmp(categoryName, "Water") == 0) {
 			categoryIcon = menu.water.texture;
@@ -1160,8 +1193,11 @@ namespace Util
 		const auto count = std::to_string(categoryCount);
 		const float countX = right - font * .8f - ImGui::CalcTextSize(count.c_str()).x;
 		const float lineStart = origin.x + font * 2.3f + ImGui::CalcTextSize(categoryName).x;
-		if (lineStart < countX - font * .4f)
-			draw->AddLine({ lineStart, y + font * .5f }, { countX - font * .4f, y + font * .5f }, ImGui::GetColorU32(ImGuiCol_Border));
+		if (lineStart < countX - font * .4f) {
+			const float lineY = y + font * .5f - MenuUI::SectionDividerThickness() * .5f;
+			const auto lineColor = ImGui::GetColorU32(ImGuiCol_Border);
+			MenuUI::DrawSectionDivider({ lineStart, lineY }, countX - font * .4f - lineStart, lineColor);
+		}
 		draw->AddText({ countX, y }, ImGui::GetColorU32(Util::Color::SecondaryText()), count.c_str());
 		const ImVec2 centre{ right, y + font * .5f };
 		const float r = font * .2f;
@@ -1216,18 +1252,18 @@ namespace Util
 			ImVec2 textSize = ImGui::CalcTextSize(sectionName);
 
 			// Calculate line positions
-			float lineY = pos.y + textSize.y * 0.5f;
+			float lineY = pos.y + (textSize.y - MenuUI::SectionDividerThickness()) * 0.5f;
 			float lineLength = (availableWidth - textSize.x - 20.0f) * 0.5f;  // 20px for padding
 
 			// Left line
 			if (lineLength > 0) {
-				drawList->AddLine(ImVec2(pos.x, lineY), ImVec2(pos.x + lineLength, lineY), lineColor, 1.0f);
+				MenuUI::DrawSectionDivider({ pos.x, lineY }, lineLength, lineColor);
 			}
 
 			// Right line
 			float rightLineStart = pos.x + lineLength + 10.0f + textSize.x + 10.0f;
 			if (rightLineStart < pos.x + availableWidth) {
-				drawList->AddLine(ImVec2(rightLineStart, lineY), ImVec2(pos.x + availableWidth, lineY), lineColor, 1.0f);
+				MenuUI::DrawSectionDivider({ rightLineStart, lineY }, pos.x + availableWidth - rightLineStart, lineColor);
 			}
 
 			// Center text
@@ -1757,6 +1793,23 @@ namespace Util
 			ImGui::PopStyleColor();
 		}
 
+		static void PageNoticeV(MenuUI::NoticeKind kind, const char* fmt, va_list args)
+		{
+			const char* text;
+			const char* end;
+			ImFormatStringToTempBufferV(&text, &end, fmt, args);
+			MenuUI::PageNotice(std::string_view(text, end), kind);
+		}
+
+#define UTIL_NOTICE(Name, Kind)                           \
+	void Name(const char* fmt, ...)                       \
+	{                                                     \
+		va_list args;                                     \
+		va_start(args, fmt);                              \
+		PageNoticeV(MenuUI::NoticeKind::Kind, fmt, args); \
+		va_end(args);                                     \
+	}
+
 #define UTIL_TEXT(Name, ColorFn)                    \
 	void Name(const char* fmt, ...)                 \
 	{                                               \
@@ -1774,18 +1827,20 @@ namespace Util
 		va_end(args);                                      \
 	}
 
-		UTIL_TEXT(Warning, GetWarning)
-		UTIL_TEXT_WRAPPED(WrappedWarning, GetWarning)
-		UTIL_TEXT(Error, GetError)
-		UTIL_TEXT_WRAPPED(WrappedError, GetError)
+		UTIL_NOTICE(Warning, Pending)
+		UTIL_NOTICE(WrappedWarning, Pending)
+		UTIL_NOTICE(Error, Error)
+		UTIL_NOTICE(WrappedError, Error)
 		UTIL_TEXT(Success, GetSuccess)
 		UTIL_TEXT_WRAPPED(WrappedSuccess, GetSuccess)
 		UTIL_TEXT(Info, GetInfo)
 		UTIL_TEXT_WRAPPED(WrappedInfo, GetInfo)
 		UTIL_TEXT(Disabled, GetDisabled)
 		UTIL_TEXT_WRAPPED(WrappedDisabled, GetDisabled)
-		UTIL_TEXT(RestartNeeded, GetRestartNeeded)
-		UTIL_TEXT_WRAPPED(WrappedRestartNeeded, GetRestartNeeded)
+		UTIL_NOTICE(RestartNeeded, Pending)
+		UTIL_NOTICE(WrappedRestartNeeded, Pending)
+
+#undef UTIL_NOTICE
 
 #undef UTIL_TEXT
 #undef UTIL_TEXT_WRAPPED
@@ -2233,87 +2288,6 @@ namespace Util
 		}
 	}
 
-	ImVec2 FeatureToggleSize(const ImVec2& size)
-	{
-		const bool isVR = globals::game::isVR;
-		const float textLineHeight = ImGui::GetTextLineHeight();
-		const float frameHeight = ImGui::GetFrameHeight();
-		ImVec2 toggleSize = size;
-		if (toggleSize.y <= 0) {
-			toggleSize.y = isVR ? std::max(10.0f, std::round(textLineHeight * 0.80f)) :
-			                      frameHeight * ThemeManager::Constants::FLAT_TOGGLE_HEIGHT_RATIO;
-		}
-		if (toggleSize.x <= 0) {
-			toggleSize.x = isVR ? std::round(toggleSize.y * 1.86f) :
-			                      frameHeight * ThemeManager::Constants::FLAT_TOGGLE_WIDTH_RATIO;
-		}
-
-		return toggleSize;
-	}
-
-	bool FeatureToggle(const char* label, bool* enabled, const ImVec2& size)
-	{
-		if (!enabled)
-			return false;
-		const bool isVR = globals::game::isVR;
-		const float textLineHeight = ImGui::GetTextLineHeight();
-		const ImVec2 toggleSize = FeatureToggleSize(size);
-
-		const ImVec2 hitSize(toggleSize.x, std::max(toggleSize.y, textLineHeight));
-
-		ImGui::PushID(label);
-		const ImGuiButtonFlags buttonFlags = isVR ? ImGuiButtonFlags_None : ImGuiButtonFlags_EnableNav;
-		bool clicked = ImGui::InvisibleButton("##FeatureToggleHit", hitSize, buttonFlags);
-		if (clicked) {
-			*enabled = !*enabled;
-		}
-
-		const bool active = *enabled;
-		const bool hovered = ImGui::IsItemHovered();
-		const bool held = ImGui::IsItemActive();
-		const auto& theme = Menu::GetSingleton()->GetTheme();
-		const ImVec4 accent = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
-		const ImVec4 trackBase = Color::Blend(theme.Palette.Background, theme.Palette.FrameBorder, active ? 0.34f : 0.28f, 1.0f);
-		const ImVec4 trackHovered = Color::Blend(trackBase, theme.Palette.FrameBorder, active ? 0.30f : 0.26f, 1.0f);
-		const ImVec4 trackActive = Color::Blend(trackBase, theme.Palette.FrameBorder, active ? 0.40f : 0.34f, 1.0f);
-		ImVec4 trackColor = held ? trackActive : (hovered ? trackHovered : trackBase);
-		ImVec4 borderColor = Color::Blend(theme.Palette.FrameBorder, theme.Palette.Background, active ? 0.02f : 0.06f, active ? 1.0f : 0.96f);
-		if (!isVR) {
-			const ImVec4 tint = active ? accent : theme.Palette.Text;
-			const float blend = active ? ThemeManager::Constants::FLAT_TOGGLE_ON_BLEND : ThemeManager::Constants::FLAT_TOGGLE_OFF_BLEND;
-			trackColor = Color::Blend(trackColor, tint, blend, trackColor.w);
-			borderColor = Color::Blend(borderColor, tint, blend, borderColor.w);
-		}
-		const ImVec4 knobColor = active ?
-		                             Color::Blend(theme.Palette.Text, trackColor, 0.08f, 0.96f) :
-		                             Color::Blend(theme.Palette.Text, trackColor, 0.18f, 0.88f);
-
-		ImDrawList* drawList = ImGui::GetWindowDrawList();
-		const ImVec2 hitMin = ImGui::GetItemRectMin();
-		const ImVec2 trackMin(hitMin.x, hitMin.y + (hitSize.y - toggleSize.y) * 0.5f);
-		const ImVec2 trackMax(trackMin.x + toggleSize.x, trackMin.y + toggleSize.y);
-		const float rounding = isVR ? std::min(toggleSize.y * 0.22f, 4.0f) : toggleSize.y * 0.5f;
-		const float borderSize = isVR ? 1.35f : ThemeManager::Constants::FLAT_TOGGLE_BORDER_SIZE;
-		const auto packColor = [isVR](const ImVec4& color) {
-			return isVR ? ImGui::ColorConvertFloat4ToU32(color) : ImGui::GetColorU32(color);
-		};
-		drawList->AddRectFilled(trackMin, trackMax, packColor(trackColor), rounding);
-		drawList->AddRect(trackMin, trackMax, packColor(borderColor), rounding, 0, borderSize);
-
-		const float knobPadding = isVR ? std::max(1.5f, std::round(toggleSize.y * 0.11f)) : ThemeManager::Constants::FLAT_TOGGLE_KNOB_PADDING;
-		const float knobRadius = std::max(3.0f, (toggleSize.y - knobPadding * 2.0f) * 0.5f);
-		const float knobTravel = toggleSize.x - (knobRadius * 2.0f) - (knobPadding * 2.0f);
-		const float knobX = active ?
-		                        trackMin.x + knobPadding + knobRadius + knobTravel :
-		                        trackMin.x + knobPadding + knobRadius;
-		const float knobY = trackMin.y + toggleSize.y * 0.5f;
-		drawList->AddCircleFilled(ImVec2(knobX, knobY), knobRadius, packColor(knobColor));
-
-		ImGui::PopID();
-
-		return clicked;
-	}
-
 	namespace WeatherUI
 	{
 		bool IsWeatherControlled(Feature* feature, const char* settingName)
@@ -2344,7 +2318,7 @@ namespace Util
 			ImGui::TextWrapped("This setting is controlled by the current weather (%s).",
 				weather ? weather->GetFormEditorID() : "Unknown");
 			ImGui::Separator();
-			Util::Text::Info("Click to open CS Editor");
+			Util::Text::Info("Click to open CSX Editor");
 			ImGui::PopTextWrapPos();
 			ImGui::EndTooltip();
 		}
@@ -2525,7 +2499,8 @@ namespace Util
 		const char* label,
 		std::vector<InputCombo>& combo,
 		bool& isRecording,
-		const char* recordingLabel)
+		const char* recordingLabel,
+		const char* bindingDisplay)
 	{
 		bool changed = false;
 		ImGui::TextUnformatted(label);
@@ -2560,7 +2535,7 @@ namespace Util
 			}
 		} else {
 			// Display current binding with unique button ID
-			std::string keyString = Util::Input::KeyIdToString(combo);
+			std::string keyString = bindingDisplay ? bindingDisplay : Util::Input::KeyIdToString(combo);
 			std::string btnLabel = keyString + "##" + recordingLabel;
 			if (ImGui::Button(btnLabel.c_str(), ImVec2(0, 0))) {
 				isRecording = true;

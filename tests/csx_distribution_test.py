@@ -34,7 +34,7 @@ class CsxDistributionTests(unittest.TestCase):
         self.assertNotIn("WetnessEffects", by_short_name)
         self.assertNotIn("CSUtility", by_short_name)
         self.assertNotIn("OSUtility", by_short_name)
-        self.assertEqual(by_short_name["AdaptiveBrightness"]["display_name"], "Adaptive Balance")
+        self.assertEqual(by_short_name["AdaptiveBrightness"]["display_name"], "Visuals")
         self.assertEqual(by_short_name["SeasonalWeather"]["display_name"], "Seasonal Weathers")
         for name in ("TruePBR", "Screenshot", "ScreenSpaceGI"):
             self.assertTrue(by_short_name[name]["description"])
@@ -46,7 +46,7 @@ class CsxDistributionTests(unittest.TestCase):
         lines, issues = audit.format_metadata_summary(metadata)
         text = "\n".join(lines)
         self.assertFalse(issues)
-        for name in ("Adaptive Balance", "Performance Tuning", "Performance Overlay"):
+        for name in ("Visuals", "Performance Tuning", "Performance Overlay"):
             self.assertIn(name, text)
         self.assertNotIn("nexusmods.com", text)
         self.assertNotIn("Is Core", text)
@@ -65,14 +65,14 @@ class CsxDistributionTests(unittest.TestCase):
 
     def test_feature_table_is_alphabetical_and_lists_performance_tuning(self):
         metadata = [
-            {"name": "zzz", "display_name": "Adaptive Balance", "description": "Profiles", "key_features": []},
+            {"name": "zzz", "display_name": "Visuals", "description": "Profiles", "key_features": []},
             {"name": "aaa", "display_name": "Performance Overlay", "description": "Timings", "key_features": []},
             {"name": "bbb", "display_name": "RenderDoc", "description": "Capture", "key_features": []},
             {"name": "Performance Tuning", "description": "Feature cost controls", "key_features": []},
         ]
         lines, _ = audit.format_metadata_summary(list(reversed(metadata)))
         rows = [line.split('|')[1].strip() for line in lines if line.startswith('| ')][2:]
-        self.assertEqual(rows, ["Adaptive Balance", "Performance Overlay", "Performance Tuning",
+        self.assertEqual(rows, ["Visuals", "Performance Overlay", "Performance Tuning",
                                 "RenderDoc", "Shader-cache management"])
         self.assertEqual(len(metadata), 4)
         report = audit.generate_audit_report('csx3.19.2', None, None, 'now', [], [], [], {},

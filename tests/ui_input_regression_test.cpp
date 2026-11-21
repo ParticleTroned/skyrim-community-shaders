@@ -79,8 +79,13 @@ struct Menu
 		{
 			ImVec4 Text{ 1, 1, 1, 1 };
 		} Palette;
+		struct
+		{
+			ImVec4 Warning{ 1, .6f, 0, 1 };
+		} StatusPalette;
 	} theme;
 	const Theme& GetTheme() const { return theme; }
+	bool HasUnsavedSettings() const { return false; }
 };
 #include "ui_escape.h"
 namespace globals
@@ -167,6 +172,10 @@ namespace MenuUI
 }
 namespace Util
 {
+	namespace Color
+	{
+		ImVec4 SecondaryText() { return { .7f, .7f, .7f, 1 }; }
+	}
 	struct DisableGuard
 	{
 		explicit DisableGuard(bool disabled) { ImGui::BeginDisabled(disabled); }
@@ -194,7 +203,8 @@ struct MenuHeaderRenderer
 		enum class Glyph
 		{
 			Texture,
-			Save
+			Save,
+			Camera
 		};
 		const char* id;
 		const char* flashId;
@@ -205,6 +215,7 @@ struct MenuHeaderRenderer
 		MenuUI::GlobalSettingsAction action = MenuUI::GlobalSettingsAction::Save;
 	};
 	static void DrawActionButton(const ActionIcon&, ImVec2, ImVec2, float = 0);
+	static const char* GetScreenshotBlockReason() { return nullptr; }
 	static void RenderDockedIcons(const std::vector<ActionIcon>&, float);
 	static void DrawActionIcon(ImDrawList*, const ActionIcon&, ImVec2, ImVec2, ImU32) {}
 };

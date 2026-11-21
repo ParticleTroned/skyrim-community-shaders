@@ -160,12 +160,12 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Controls headset rendering, performance and how you interact with the menu.",
-			{ "Depth buffer culling optimization for VR performance",
-				"Configurable occlusion culling parameters",
-				"VR-specific rendering pipeline improvements",
-				"Performance optimizations for dual-eye rendering",
-				"Enhanced VR compatibility across all shader features" }
+			"Configure headset field of view, depth culling, and stereo rendering.",
+			{ "Shared field-of-view mask and per-effect coverage",
+				"Separate exterior and interior depth-culling settings",
+				"Stereo image adjustments",
+				"Menu placement and controller bindings are in Settings",
+				"Headset and controller diagnostics are in Dev Tools" }
 		};
 	}
 

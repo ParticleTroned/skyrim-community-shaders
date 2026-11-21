@@ -230,7 +230,7 @@
     },
     "tierForbiddenPrefixes": [
         ["Advanced"],
-        ["CS Editor"],
+        ["CSX Editor"],
         ["Adaptive Balance", "depthOfField"],
         ["General"],
         ["Menu"],

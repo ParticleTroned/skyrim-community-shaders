@@ -3,6 +3,7 @@
 #include "Features/Skin.h"
 #include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/SettingsPage.h"
+#include "Utils/UI.h"
 
 #include <algorithm>
 
@@ -604,11 +605,13 @@ void Feature::DrawSettings()
 	MenuUI::SettingsPage page(GetShortName().c_str(), { { "about", "How it works", "Learn what this feature contributes to the scene.", "Automatic rendering improvements", true, true, "Review the feature" } });
 	if (page.Is("about")) {
 		const auto [description, keyFeatures] = GetFeatureSummary();
+		MenuUI::SectionHeading("What it does");
 		MenuUI::DetailText(description.c_str());
 		for (const auto& benefit : keyFeatures)
-			MenuUI::DetailNote(benefit.c_str());
-		MenuUI::DetailNote(SupportsPerformanceCostMeasurement() ?
-							   "No further tuning. Use Enabled in the header to control this feature." :
-							   "No further tuning. Change the startup setting in Settings > Startup, save settings and restart.");
+			MenuUI::DetailText(benefit.c_str());
+		MenuUI::SectionHeading("Controls");
+		MenuUI::DetailText(SupportsPerformanceCostMeasurement() ?
+							   "Use Enabled in the header to turn this feature on or off. There are no additional tuning controls on this page." :
+							   "Change this feature in Settings > Startup, save settings and restart the game to apply the change.");
 	}
 }

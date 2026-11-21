@@ -158,9 +158,7 @@ void ScreenSpaceShadows::DrawSettings()
 		bendSettings.VRCullDistance = std::clamp(bendSettings.VRCullDistance, kVRCullDistanceMin, kVRCullDistanceMax);
 	}
 
-	ImGui::Spacing();
-	ImGui::TextUnformatted("Fine-tuning");
-	ImGui::Separator();
+	MenuUI::SectionHeading("Fine-tuning");
 
 	Util::Widgets::SliderFloat("Surface Thickness", &bendSettings.SurfaceThickness, kSurfaceThicknessMin, kSurfaceThicknessMax);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -251,7 +249,7 @@ bool ScreenSpaceShadows::IsRuntimeEnabled() const
 void ScreenSpaceShadows::DrawFoveationSettings()
 {
 	if (!globals::game::isVR) {
-		ImGui::TextDisabled("Screen Space Shadows FOV is available only in VR.");
+		MenuUI::AvailabilityNotice("Screen Space Shadows FOV is available only in VR.");
 		return;
 	}
 
@@ -274,7 +272,12 @@ void ScreenSpaceShadows::DrawFoveationSettings()
 			ImGui::TextUnformatted("Requires active foveated upscaling.");
 	}
 
-	ImGui::TextDisabled("%s", foveatedEnabled && featureRuntimeActive && foveatedAvailable ? "active" : "inactive");
+	if (!featureRuntimeActive)
+		MenuUI::AvailabilityNotice("Enable Screen Space Shadows to use its FOV controls.");
+	else if (!foveatedAvailable)
+		MenuUI::AvailabilityNotice("Shadow FOV needs active foveated upscaling. Complete Display > VR > FOV setup.");
+	else if (foveatedEnabled)
+		ImGui::TextUnformatted("Shadow FOV active");
 }
 
 void ScreenSpaceShadows::InvalidateRaymarchShaders()

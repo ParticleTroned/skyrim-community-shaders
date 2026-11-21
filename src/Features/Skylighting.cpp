@@ -66,6 +66,7 @@ namespace
 		float ProbeFieldSizeCells;
 		bool EnableReducedUpdateFrequency;
 		bool EnableIncrementalProbeUpdates;
+		bool IncludeMarkedRoofOccluders = true;
 	};
 
 	constexpr std::array<SkylightingPerformancePreset, 4> kSkylightingPerformancePresets = {
@@ -303,6 +304,7 @@ namespace
 		       ClampUpdateInterval(settings.OcclusionUpdateInterval) == a_preset.OcclusionUpdateInterval &&
 		       ClampProbeUpdateIntervalAgainstOcclusion(settings, settings.ProbeUpdateInterval) == a_preset.ProbeUpdateInterval &&
 		       settings.EnableIncrementalProbeUpdates == a_preset.EnableIncrementalProbeUpdates &&
+		       settings.IncludeMarkedRoofOccluders == a_preset.IncludeMarkedRoofOccluders &&
 		       ClampStableSliceCount(settings.StableSliceCount, probeDepth) == a_preset.StableSliceCount &&
 		       std::abs(ClampProbeFieldSize(settings.ProbeFieldSize) - GetPresetProbeFieldSize(a_preset)) <= probeFieldSizeTolerance;
 	}
@@ -328,6 +330,7 @@ namespace
 		settings.OcclusionUpdateInterval = ClampUpdateInterval(a_preset.OcclusionUpdateInterval);
 		settings.ProbeUpdateInterval = ClampProbeUpdateIntervalAgainstOcclusion(settings, a_preset.ProbeUpdateInterval);
 		settings.EnableIncrementalProbeUpdates = a_preset.EnableIncrementalProbeUpdates;
+		settings.IncludeMarkedRoofOccluders = a_preset.IncludeMarkedRoofOccluders;
 		settings.StableSliceCount = ClampStableSliceCount(a_preset.StableSliceCount, GetProbeGridPreset(settings.ProbeGridQuality).Depth);
 		settings.ProbeFieldSize = GetPresetProbeFieldSize(a_preset);
 		settings.EnableSkylighting = runtimeEnabled;
@@ -666,6 +669,33 @@ void Skylighting::RestorePerformanceCostMeasurementState(const json& a_state)
 	ApplySkylightingRuntimeSettingsChange(*this, previousProbeGridQuality);
 }
 
+std::vector<std::string> Skylighting::GetPerformancePresetNames() const
+{
+	std::vector<std::string> names;
+	for (const auto& preset : kSkylightingPerformancePresets)
+		names.emplace_back(preset.Name);
+	return names;
+}
+
+std::string Skylighting::GetPerformancePresetName() const
+{
+	for (const auto& preset : kSkylightingPerformancePresets)
+		if (MatchesSkylightingPerformancePreset(*this, preset))
+			return preset.Name;
+	return {};
+}
+
+bool Skylighting::ApplyPerformancePreset(std::string_view a_name)
+{
+	for (const auto& preset : kSkylightingPerformancePresets) {
+		if (a_name == preset.Name) {
+			ApplySkylightingPerformancePreset(*this, preset);
+			return true;
+		}
+	}
+	return false;
+}
+
 void Skylighting::DrawSettings()
 {
 	MenuUI::SettingsPage page("Skylighting", {
@@ -677,10 +707,8 @@ void Skylighting::DrawSettings()
 
 	if (page.Is("quality")) {
 		DrawSkylightingPerformancePresetButtons(*this, "SkylightingSettingsPerformancePresetButtons");
-		ImGui::Separator();
 	}
 	if (page.Is("look")) {
-		MenuUI::DetailText("Diffuse visibility controls object darkness. Specular visibility controls sky reflections.");
 		Util::Widgets::SliderFloat("Diffuse Min Visibility", &settings.MinDiffuseVisibility, 0.01f, 1.f, "%.2f");
 		Util::AddTooltip("Minimum brightness allowed in sheltered areas. Higher values lighten dark corners and covered surfaces.");
 		Util::Widgets::SliderFloat("Specular Min Visibility", &settings.MinSpecularVisibility, 0.01f, 1.f, "%.2f");
@@ -691,15 +719,12 @@ void Skylighting::DrawSettings()
 			ImGui::Text("Darken skylighting under specially marked roofs. Hidden helper objects may rarely add unwanted dark patches.");
 	}
 	if (page.Is("quality")) {
-		ImGui::Separator();
-
 		if (ImGui::Button("Rebuild Skylighting"))
 			QueueResetSkylighting();
 
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("Changes below require rebuilding, a loading screen, or moving away from the current location to apply.");
 
-		ImGui::Separator();
 		MenuUI::SectionHeading("Probe resolution");
 
 		settings.ProbeGridQuality = ClampProbeGridQuality(settings.ProbeGridQuality);
@@ -820,7 +845,6 @@ void Skylighting::DrawSettings()
 void Skylighting::DrawPerformanceSettings(bool a_advanced)
 {
 	DrawSkylightingRuntimeToggle(*this);
-	ImGui::Separator();
 	DrawSkylightingPerformancePresetButtons(*this, "SkylightingPerformancePresetButtons");
 
 	if (!a_advanced) {
@@ -848,7 +872,7 @@ void Skylighting::DrawPerformanceSettings(bool a_advanced)
 	}
 	ImGui::Text("Active Probe Grid: %u x %u x %u", probeArrayDims[0], probeArrayDims[1], probeArrayDims[2]);
 
-	ImGui::SeparatorText("Update Work");
+	MenuUI::SectionHeading("Update Work");
 	DrawSkylightingUpdatePerformanceSettings(*this);
 }
 

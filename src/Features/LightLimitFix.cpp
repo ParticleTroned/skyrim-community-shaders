@@ -1115,9 +1115,6 @@ void LightLimitFix::DrawSettings()
 		if (page.Is("effects")) {
 			ImGui::Text("ImageSpace Refraction");
 			DrawHeatWarpStrengthSetting();
-
-			ImGui::Separator();
-			ImGui::Spacing();
 		}
 		if (page.Is("particles")) {
 			Util::Widgets::Checkbox("Enable Particle Lights", &settings.EnableParticleLights);
@@ -1125,7 +1122,6 @@ void LightLimitFix::DrawSettings()
 				ImGui::Text("Lets fire, magic and other compatible effects light nearby surfaces. Off keeps the visible effects but removes their added lighting.");
 			}
 
-			ImGui::Separator();
 			const auto particlesDisabled = Util::DisableGuard(!settings.EnableParticleLights);
 			MenuUI::DetailGrid particleGrid("ParticleControls", 2, ImGui::GetFontSize() * 32);
 			const Util::Widgets::ControlLayout controls(true);
@@ -1215,7 +1211,7 @@ void LightLimitFix::DrawSettings()
 			ImGui::EndDisabled();
 
 			if (!jsonPlacedLightsSupported) {
-				MenuUI::DetailNote("Placed-light adjustments require Inverse Square Lighting. Enable it in its header, or select its checkbox in Settings > Startup, save settings and restart if disabled at startup.");
+				MenuUI::AvailabilityNotice("Placed-light adjustments require Inverse Square Lighting. Enable it in its header, or select its checkbox in Settings > Startup, save settings and restart if disabled at startup.");
 			}
 
 			ImGui::Spacing();
@@ -1223,7 +1219,7 @@ void LightLimitFix::DrawSettings()
 		}
 
 		if (page.Is("shadows")) {
-			ImGui::SeparatorText("Contact shadows");
+			MenuUI::SectionHeading("Contact shadows");
 			bool contactShadows = IsContactShadowsRequested();
 			if (Util::Widgets::Checkbox("Enable Point Light Contact Shadows", &contactShadows))
 				SetContactShadowsEnabled(contactShadows);
@@ -1296,7 +1292,7 @@ void LightLimitFix::DrawSettings()
 
 	///////////////////////////////
 	if (page.Is("diagnostics"))
-		ImGui::SeparatorText("Diagnostics");
+		MenuUI::SectionHeading("Diagnostics");
 
 	if (page.Is("diagnostics")) {
 		Util::Widgets::Checkbox("Enable Lights Visualisation", &settings.EnableLightsVisualisation);
@@ -1343,7 +1339,7 @@ void LightLimitFix::DrawPerformanceSettings(bool a_advanced)
 	}
 	LightLimitFixDetail::LightAttach::DrawSettings(settings.SkipRedundantLightAttach, settings.LightAttachRefreshFrames);
 
-	ImGui::SeparatorText("Particle Lights");
+	MenuUI::SectionHeading("Particle Lights");
 	Util::Widgets::Checkbox("Enable Culling", &settings.EnableParticleLightsCulling);
 	Util::Widgets::Checkbox("Enable Optimization", &settings.EnableParticleLightsOptimization);
 	Util::Widgets::SliderFloat("Cluster Threshold", &settings.ParticleClusterThreshold, kParticleClusterThresholdMin, kParticleClusterThresholdMax, "%.1f");
@@ -1351,7 +1347,7 @@ void LightLimitFix::DrawPerformanceSettings(bool a_advanced)
 	Util::Widgets::SliderFloat("Max Particle Distance", &settings.MaxParticleDistance, 1000.0f, kMaxParticleDistanceMax, "%.0f");
 	Util::Widgets::Checkbox("Enable Detection", &settings.EnableParticleLightsDetection);
 
-	ImGui::SeparatorText("Contact Shadows");
+	MenuUI::SectionHeading("Contact Shadows");
 	const char* qualityOptions[] = { "Low", "Medium", "High" };
 	int contactShadowQuality = static_cast<int>(settings.ContactShadowQuality);
 	if (MenuUI::ChoiceSetting("Contact Shadow Quality", &contactShadowQuality, qualityOptions, kContactShadowQualityOptionCount)) {

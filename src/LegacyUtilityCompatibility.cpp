@@ -51,7 +51,7 @@ namespace
 		explicit LegacyUtilitySettings(std::string_view a_name) : name(a_name) {}
 		std::string GetName() override { return name; }
 		std::string GetShortName() override { return name; }
-		std::string GetDisplayName() override { return "Adaptive Balance"; }
+		std::string GetDisplayName() override { return "Visuals"; }
 		bool IsInMenu() const override { return false; }
 		bool IsHiddenFromUserView() const override { return true; }
 		bool SupportsVR() override { return true; }

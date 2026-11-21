@@ -7,16 +7,15 @@
 
 void AdaptiveBrightness::DrawGrassPlacementSettings(GrassPlacement::Settings& placement)
 {
-	MenuUI::DetailNote(
+	MenuUI::SectionHeading("Grass placement",
 		"Lower floating leaves, twigs and grass with a negative offset in game units. "
 		"Placement follows each grass group's source cell and stays independent of weather and time. "
 		"Location layers follow the saved inheritance mode. Large offsets can bury grass or expose gaps.");
 	if (!GrassPlacement::IsAvailable())
-		ImGui::TextDisabled("Grass placement is unavailable. Check native hook support and the plugin log.");
+		MenuUI::AvailabilityNotice("Grass placement is unavailable. Check native hook support and the plugin log.");
 	bool changed = Util::Widgets::SliderFloat("Grass Vertical Offset", &placement.verticalOffset,
 		-GrassPlacement::kMaximumOffset, GrassPlacement::kMaximumOffset, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	placement.verticalOffset = GrassPlacement::Clamp(placement.verticalOffset);
-	ImGui::TextWrapped("Mesh corrections add to this layer's vertical offset. Use the full path below meshes.");
 	for (auto it = placement.modelOffsets.begin(); it != placement.modelOffsets.end();) {
 		ImGui::PushID(it->first.c_str());
 		const SKSE::stl::scope_exit id([] { ImGui::PopID(); });
@@ -31,6 +30,7 @@ void AdaptiveBrightness::DrawGrassPlacementSettings(GrassPlacement::Settings& pl
 	}
 	static std::string path;
 	ImGui::InputText("Mesh path", &path);
+	Util::AddTooltip("Mesh corrections add to this layer's vertical offset. Use the full path below meshes.");
 	const auto key = GrassPlacement::ModelKey(path);
 	const auto disabled = Util::DisableGuard(key.empty() || placement.modelOffsets.size() >= GrassPlacement::kMaximumModels);
 	if (ImGui::Button("Add mesh correction")) {

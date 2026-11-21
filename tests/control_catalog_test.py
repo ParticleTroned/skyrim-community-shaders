@@ -34,13 +34,28 @@ void DrawSettings() { Util::Widgets::Checkbox("Skip a light's own flame holder",
         self.assertEqual([(e["section"], e["label"]) for e in entries],
                          [("shadows", "Skip a light's own flame holder")])
 
+    def test_performance_tools_preserve_control_destinations(self):
+        entries = catalog.generate(path.parents[1])
+        overlay = [e for e in entries if e["page"] == "PerformanceOverlay"]
+        self.assertTrue(overlay)
+        self.assertEqual({e["section"] for e in overlay}, {"overlay"})
+        tuning = [e for e in entries if e["page"] == "PerformanceTuning"]
+        self.assertTrue(any(e["choice"] == "Quick scan all features" for e in tuning))
+        self.assertTrue(any(e["choice"] == "Compare" for e in tuning))
+        self.assertEqual({e["section"] for e in tuning}, {"tuning"})
+        presets = [e for e in entries if e["page"] == "PerformancePresets"]
+        self.assertTrue(any(e["label"] == "Performance preset" and not e["choice"] for e in presets))
+        for label in ("Apply MyPreset", "Base preset"):
+            self.assertEqual({e["choice"] for e in presets if e["label"] == label}, {"MyPreset"})
+        self.assertEqual({e["section"] for e in presets}, {"presets"})
+
     def test_production_interface_controls_have_one_home(self):
         entries = catalog.generate(path.parents[1])
         expected = {
             "Menu Scale": ("Settings", "vr_menu"),
             "Mouse Deadzone": ("Settings", "vr_controls"),
             "Keep Desktop Game Window Focused for VR Menu": ("Settings", "desktop"),
-            "Screenshot Key:": ("Screenshot", "source"),
+            "Screenshot Key:": ("Screenshot", "overview"),
             "Skip Compilation Key:": ("DevTools", "shaders"),
             "CSX Editor Toggle Key:": ("DevTools", "shader_debug"),
         }
@@ -51,8 +66,7 @@ void DrawSettings() { Util::Widgets::Checkbox("Skip a light's own flame holder",
 
     def test_screenshot_binding_has_one_editor(self):
         source = catalog.Source("src/Features/ScreenshotFeature.cpp", (path.parents[1] / "src/Features/ScreenshotFeature.cpp").read_text())
-        draw = next(f for f in source.functions if f.name == "ScreenshotFeature::DrawSettings")
-        editors = [args for _, name, args in source.calls(draw)
+        editors = [args for draw in source.functions for _, name, args in source.calls(draw)
                    if name == "Util::InputComboWidget" and len(args) > 1 and "ScreenshotKey" in args[1]]
         self.assertEqual(len(editors), 1)
 

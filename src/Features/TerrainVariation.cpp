@@ -21,10 +21,8 @@ void TerrainVariation::DrawSettings()
 	if (!page.Is("appearance"))
 		return;
 
-	ImGui::TextWrapped(
+	MenuUI::SectionHeading("Terrain variation",
 		"Terrain Variation is enabled when installed. To disable it, clear its checkbox in Settings > Startup, save settings and restart.");
-
-	ImGui::Spacing();
 
 	bool lodTilingFix = settings.enableLODTerrainTilingFix != 0;
 	if (Util::Widgets::Checkbox("Apply to LOD Terrain", &lodTilingFix)) {

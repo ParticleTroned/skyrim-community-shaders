@@ -18,16 +18,15 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Adds moving light patterns and underwater lighting effects.",
-			{ "Realistic water caustics",
-				"Enhanced underwater lighting",
-				"Dynamic light patterns on water surfaces",
-				"Improved water visual fidelity",
-				"Atmospheric underwater effects" }
+			"Adds moving underwater light patterns and depth to water waves.",
+			{ "Animated caustics on submerged surfaces",
+				"Parallax depth on compatible water waves",
+				"Appearance controls in Visuals > Global > Water" }
 		};
 	}
 
 	bool HasShaderDefine(RE::BSShader::Type shaderType) override;
+	void DrawSettings() override;
 
 	virtual void SetupResources() override;
 

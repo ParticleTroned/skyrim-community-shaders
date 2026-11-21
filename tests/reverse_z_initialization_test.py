@@ -165,16 +165,19 @@ void TextUnformatted(const char* value) { activeLabel = value; }
 template<class... Args> void TextWrapped(const char*, Args...) { ++failures; }
 }
 namespace Util {
+namespace Widgets = ImGui;
 std::string tooltip;
 void AddTooltip(const char* value) { tooltip = value; }
 namespace Text {
 unsigned restarts = 0;
-void WrappedRestartNeeded(const char* value) {
+void Warning(const char* value) {
     assert(std::string(value).find("Restart required") != std::string::npos);
     ++restarts;
 }
+template<class... Args> void WrappedError(const char*, Args...) { ++ImGui::failures; }
 }
 }
+namespace MenuUI { void SectionHeading(const char*) {} }
 struct ReverseZ {
 SETTINGS;
     Settings settings;
@@ -281,6 +284,7 @@ struct Feature {
     bool hidden = false;
     virtual ~Feature() = default;
     virtual std::string GetShortName() { return name; }
+    std::string GetDisplayName() { return GetShortName(); }
     bool IsHiddenFromUserView() { return hidden; }
     static std::vector<Feature*> GetFeatureList();
 };
@@ -304,15 +308,20 @@ Feature clouds, grass, hidden;
 std::vector<Feature*> Feature::GetFeatureList() { return { &grass, &globals::features::reverseZ, &::hidden, &clouds }; }
 namespace ImGui {
 void Text(const char*) {}
+void TextUnformatted(const char*) {}
 void Spacing() {}
 bool CollapsingHeader(const char*) { return true; }
 }
+namespace MenuUI::SettingsSearch { void NotifyControl(const char*) {} }
+namespace Util { void AddTooltip(const char*) {} }
 namespace Util::Widgets {
 std::unordered_map<std::string, bool> shown;
 std::optional<std::pair<std::string, bool>> edit;
 bool Checkbox(const char* name, bool* value) {
-    shown[name] = *value;
-    if (!edit || edit->first != name) return false;
+    const std::string label(name);
+    const auto id = label.substr(label.find("###") + 3);
+    shown[id] = *value;
+    if (!edit || edit->first != id) return false;
     *value = edit->second;
     edit.reset();
     return true;

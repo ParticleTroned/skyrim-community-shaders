@@ -63,7 +63,7 @@ void CloudShadows::DrawPerformanceSettings(bool)
 			"Disabling skips cloud-shadow cubemap updates and projection. Measure outdoors under a full sky.");
 	}
 	if (!IsCloudShadowSceneReady())
-		ImGui::TextDisabled("Actual cost measurement requires an outdoor scene with a full sky.");
+		MenuUI::AvailabilityNotice("Actual cost measurement requires an outdoor scene with a full sky.");
 }
 
 json CloudShadows::CapturePerformanceSettingsState() const

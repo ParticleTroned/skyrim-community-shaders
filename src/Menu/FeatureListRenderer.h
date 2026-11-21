@@ -13,6 +13,8 @@ class FeatureListRenderer
 public:
 	/** Menu features plus optional companion pages, without registering companions with the renderer. */
 	static std::vector<Feature*> GetMenuFeatures();
+	/** Shared Performance tabs retain each tool's native controls and settings ownership. */
+	static void RenderPerformancePage(const char* a_page, const std::function<void()>& a_draw);
 	/** Explicit sidebar choice takes precedence over automatic hover hiding. */
 	static void SetSidebarVisible(bool a_visible);
 	static bool IsSidebarVisible();
@@ -54,6 +56,7 @@ private:
 		size_t listId;
 		size_t& selectedMenuRef;
 		std::map<std::string, bool>& categoryExpansionStates;
+		bool groupSelected = false;
 
 		void operator()(const BuiltInMenu& menu);
 		void operator()(const std::string& label);
@@ -73,10 +76,13 @@ private:
 
 	private:
 		std::string& pendingFeatureSelection;
+		bool weatherControlInFooter = false;
+		bool featureInstalled = false;
 
 		// Helper methods for Feature rendering
 		static bool IsFeatureInstalled(const std::string& featureName);
 		void RenderFeatureHeader(Feature* feat, bool isDisabled, bool isLoaded, bool sceneControlled);
+		bool RenderFeatureContentControls(Feature* feat, bool sceneControlled);
 		void RenderFeatureSettings(Feature* feat, bool isDisabled, bool isLoaded, bool hasFailedMessage, bool sceneControlled);
 		static void RenderRestoreDefaultsButton(Feature* feat, bool isDisabled, bool isLoaded, float availableWidth);
 		void RenderReactiveConstraintWarningDialog();

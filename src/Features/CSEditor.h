@@ -11,8 +11,8 @@ public:
 		return &singleton;
 	}
 
-	virtual inline std::string GetName() override { return "CS Editor"; }
-	virtual std::string GetDisplayName() override { return "CSX Editor"; }
+	virtual inline std::string GetName() override { return "CSX Editor"; }
+	virtual std::string GetDisplayName() override { return GetName(); }
 	virtual inline std::string GetShortName() override { return "CSEditor"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "CS_EDITOR"; }
 	virtual inline std::string_view GetCategory() const override { return FeatureCategories::kUtility; }

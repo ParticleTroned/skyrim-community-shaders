@@ -2579,6 +2579,8 @@ public:
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;
+	/** Runtime compatibility reason shared by the menu and Performance presets. */
+	const char* GetUpscalingSelectionBlockReason() const;
 	virtual bool SupportsPerformanceCostMeasurement() const override;
 	virtual bool IsPerformanceCostMeasurementEnabled() const override;
 	virtual bool UsesTotalPerformanceCostMeasurement() const override { return true; }
@@ -2611,6 +2613,8 @@ public:
 	/** Draw shared NR controls, optionally limited to route and character selection. */
 	/** Draws the existing NR master toggle using the shared settings transaction. */
 	void DrawNeuralRenderingEnableControl();
+	/** Explain the active or pending upscaling condition that prevents NR from running. */
+	std::string GetNeuralRenderingUpscalingWaitMessage() const;
 	void DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod,
 		const std::function<void(bool)>& a_drawColourSettings = {});
 	/** Resolve the master preference only when the optional NR provider is installed. */

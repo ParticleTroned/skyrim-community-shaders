@@ -58,7 +58,11 @@ struct ScreenshotFeature : public Feature
 	virtual bool SupportsVR() override { return true; }
 	virtual bool IsInMenu() const override;
 
+	SettingsHeaderStatus GetSettingsHeaderStatus() const override;
 	void DrawSettingsEnabledControl() override;
+	bool SupportsPerformanceProfileToggle() const override { return true; }
+	bool IsPerformanceCostMeasurementEnabled() const override { return enabled.load(std::memory_order_acquire); }
+	void SetPerformanceCostMeasurementEnabled(bool value) override { SetEnabled(value); }
 
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override { return { "Captures screenshots or image sequences from the desktop view or headset.", {} }; }
 	virtual void DrawSettings() override;
@@ -139,6 +143,11 @@ struct ScreenshotFeature : public Feature
 	SequenceDefaults sequenceDefaults{};
 
 private:
+	void DrawCaptureSourceSettings();
+	void DrawOutputSettings();
+	void DrawFramingSettings();
+	void DrawSequenceSettings();
+
 	friend class ScreenshotApi;
 	/** Expand one eye/format selection into outputs without adding other views. */
 	nlohmann::json BuildCaptureDescriptor(CaptureEye a_eye, bool a_usePng, bool a_clipboard) const;

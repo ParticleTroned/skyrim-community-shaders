@@ -1,6 +1,7 @@
 #include "ReferenceEffectWidget.h"
 #include "../EditorWindow.h"
 #include "../WeatherUtils.h"
+#include "Menu/SettingsPage.h"
 
 namespace
 {
@@ -57,7 +58,7 @@ void ReferenceEffectWidget::DrawWidget()
 			};
 
 			DrawIfMatchesSearch(ReferenceEffectSetting::kArtObject, [&](const char* label) {
-				ImGui::SeparatorText(label);
+				MenuUI::SectionHeading(label);
 				if (editorWindow->artObjectWidgets.empty()) {
 					ImGui::TextDisabled("No Art Objects available");
 					return false;
@@ -65,7 +66,7 @@ void ReferenceEffectWidget::DrawWidget()
 				return drawFormPicker(label, settings.artObject, editorWindow->artObjectWidgets);
 			});
 			DrawIfMatchesSearch(ReferenceEffectSetting::kEffectShader, [&](const char* label) {
-				ImGui::SeparatorText(label);
+				MenuUI::SectionHeading(label);
 				if (editorWindow->effectShaderWidgets.empty()) {
 					ImGui::TextDisabled("No Effect Shaders available");
 					return false;
@@ -73,7 +74,7 @@ void ReferenceEffectWidget::DrawWidget()
 				return drawFormPicker(label, settings.effectShader, editorWindow->effectShaderWidgets);
 			});
 			if (MatchesAnySearch({ ReferenceEffectSetting::kFaceTarget, ReferenceEffectSetting::kAttachToCamera, ReferenceEffectSetting::kInheritRotation })) {
-				ImGui::SeparatorText("Flags");
+				MenuUI::SectionHeading("Flags");
 				WeatherUtils::DrawCheckbox(ReferenceEffectSetting::kFaceTarget, settings.faceTarget);
 				WeatherUtils::DrawCheckbox(ReferenceEffectSetting::kAttachToCamera, settings.attachToCamera);
 				WeatherUtils::DrawCheckbox(ReferenceEffectSetting::kInheritRotation, settings.inheritRotation);

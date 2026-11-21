@@ -64,14 +64,18 @@ namespace MenuUI
 				throw std::runtime_error("Unknown feature settings action.");
 			json previous;
 			feature->SaveSettings(previous);
-			PerformanceTuningRenderer::ApplyFeatureSettingsTransaction({ feature }, [&] {
+			json previousMenu = json::object();
+			globals::menu->CaptureFeatureMenuSettings(feature->GetName(), previousMenu);
+			const bool applied = PerformanceTuningRenderer::ApplyFeatureSettingsTransaction({ feature }, [&] {
 				try {
 					if (action == GlobalSettingsAction::Load)
-						feature->LoadSettings(saved);
+						feature->LoadSettings(saved.at(feature->GetName()));
 					else
 						feature->RestoreDefaultSettings();
+					globals::menu->ApplyFeatureMenuSettings(feature->GetName(), action == GlobalSettingsAction::Load ? &saved : nullptr);
 				} catch (...) {
 					try {
+						globals::menu->ApplyFeatureMenuSettings(feature->GetName(), &previousMenu);
 						feature->LoadSettings(previous);
 					} catch (...) {
 						throw std::runtime_error("The feature action failed and its previous settings could not be recovered.");
@@ -79,6 +83,8 @@ namespace MenuUI
 					throw;
 				}
 				return true; }, true);
+			if (!applied)
+				throw std::runtime_error("The feature rejected the settings change.");
 			auto* registry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
 			if (registry->HasWeatherSupport(feature->GetShortName())) {
 				registry->CaptureFeatureUserSettings(feature->GetShortName());

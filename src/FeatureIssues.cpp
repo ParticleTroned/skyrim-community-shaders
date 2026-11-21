@@ -478,17 +478,6 @@ namespace FeatureIssues
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Clears this issue list (useful after cleanup).");
 		}
-
-		ImGui::Spacing();
-		ImGui::Separator();
-		ImGui::Spacing();
-
-		// Cleanup guidance
-		ImGui::TextColored(theme.Palette.Text, "General Actions:");
-		ImGui::BulletText("Use 'Open Features Folder' to manually review INI files");
-		ImGui::BulletText("Use 'Open Shaders Directory' to check for orphaned shader folders");
-		ImGui::BulletText("Use 'Open Logs' to manually review the logs");
-		ImGui::BulletText("Use 'Clear Issue List' to refresh after manual cleanup");
 	}
 
 	static void DrawFeatureIssue(const FeatureIssueInfo& issue, const ImVec4& color, std::string& pendingRemoval)
@@ -1501,11 +1490,11 @@ namespace FeatureIssues
 			if (sectionWrapper) {
 				const bool hasActiveTests = HasActiveTestInis();
 				if (hasActiveTests) {  // Warning section using theme colors
-					ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.RestartNeeded);
+					ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.Warning);
 					ImGui::TextWrapped("Test INI files are currently active. Restart CSX to see feature issues.");
 					ImGui::PopStyleColor();  // Show detailed test state information
 					ImGui::Spacing();
-					ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.RestartNeeded);
+					ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.Warning);
 					ImGui::TextWrapped(GetTestStateDescription().c_str());
 					ImGui::PopStyleColor();
 					ImGui::Spacing();
@@ -1516,7 +1505,7 @@ namespace FeatureIssues
 					auto disableGuard = Util::DisableGuard(hasActiveTests);
 					auto buttonStyle = Util::StyledButtonWrapper(
 						themeSettings.Palette.FrameBorder,
-						themeSettings.StatusPalette.RestartNeeded,
+						themeSettings.StatusPalette.Warning,
 						themeSettings.StatusPalette.CurrentHotkey);
 
 					if (ImGui::Button("Create Test INIs", { -1, 0 })) {

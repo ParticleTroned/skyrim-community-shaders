@@ -1,3 +1,4 @@
+#include "CSEditor/Layout.h"
 #include "Features/VR/MenuPositioningPolicy.h"
 #include "Menu/Layout.h"
 
@@ -184,6 +185,68 @@ bool Check(bool result, const char* message)
 	if (!result)
 		std::printf("FAIL: %s\n", message);
 	return result;
+}
+
+bool CheckEditorLayout()
+{
+	bool passed = true;
+	using namespace CSXEditorLayout;
+	for (const ImVec2 canvas : { ImVec2(640, 480), ImVec2(1536, 1380), ImVec2(1920, 1080), ImVec2(3440, 1440), ImVec2(1080, 1920) })
+		for (const float scale : { .5f, 1.0f, 2.0f }) {
+			const ImVec2 origin{ 120.25f, 60.75f };
+			const auto layout = Defaults(origin, canvas, 10 * scale, 960 * scale, canvas.x / canvas.y, { 16 * scale, 40 * scale }, true, true);
+			passed &= Check(layout.has_value(), "editor defaults accept supported canvases and scales");
+			if (!layout)
+				continue;
+			for (const auto panel : { layout->browser, layout->viewport, layout->palette })
+				passed &= Check(panel.size.x > 0 && panel.size.y > 0 && panel.position.x >= origin.x && panel.position.y >= origin.y &&
+									panel.position.x + panel.size.x <= origin.x + canvas.x && panel.position.y + panel.size.y <= origin.y + canvas.y,
+					"all default editor panels fit the usable canvas");
+			passed &= Check(layout->browser.position.y == layout->viewport.position.y && layout->viewport.position.x == layout->palette.position.x &&
+								layout->viewport.size.x == layout->palette.size.x && layout->browser.position.y + layout->browser.size.y == layout->palette.position.y + layout->palette.size.y,
+				"browser, viewport and palette share aligned top, right-column and bottom edges");
+			passed &= Check(layout->browser.position.x + layout->browser.size.x < layout->viewport.position.x &&
+								layout->viewport.position.y + layout->viewport.size.y < layout->palette.position.y,
+				"editor columns and stacked panels retain their gaps");
+			for (const bool showViewport : { false, true }) {
+				const auto single = Defaults(origin, canvas, 10 * scale, 960 * scale, canvas.x / canvas.y, { 16 * scale, 40 * scale }, showViewport, !showViewport);
+				const auto& right = showViewport ? single->viewport : single->palette;
+				passed &= Check(right.position.y == single->browser.position.y && right.size.y == single->browser.size.y,
+					"a single right-hand editor panel fills the browser height");
+			}
+		}
+	passed &= Check(!Defaults({}, {}, 10, 960, 1, {}, true, true) &&
+						!Defaults({}, { 1920, 1080 }, 10, 960, std::numeric_limits<float>::quiet_NaN(), {}, true, true),
+		"invalid editor canvases and aspect ratios do not produce window geometry");
+	passed &= Check(ImHashStr(BrowserTitle) == ImHashStr("CS Editor Browser"), "the CSX Editor title retains its saved browser identity");
+	const auto layout = Defaults({}, { 1920, 1080 }, 10, 960, 16.0f / 9.0f, { 16, 40 }, true, true);
+	const auto draw = [&](const Panel& panel, const char* name, ImGuiCond condition) {
+		ApplyDefaults(panel, condition);
+		ImGui::Begin(name);
+		const auto result = ImRect(ImGui::GetWindowPos(), ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowSize().x, ImGui::GetWindowPos().y + ImGui::GetWindowSize().y));
+		ImGui::End();
+		return result;
+	};
+	ImGui::GetIO().DisplaySize = { 1920, 1080 };
+	ImGui::NewFrame();
+	const auto browser = draw(layout->browser, BrowserTitle, ImGuiCond_FirstUseEver);
+	const auto viewport = draw(layout->viewport, "Editor test viewport", ImGuiCond_FirstUseEver);
+	const auto palette = draw(layout->palette, "Editor test palette", ImGuiCond_FirstUseEver);
+	passed &= Check(browser.Min.y == viewport.Min.y && viewport.Min.x == palette.Min.x && viewport.Max.x == palette.Max.x && browser.Max.y == palette.Max.y,
+		"native ImGui windows retain the aligned first-use geometry");
+	ImGui::Render();
+	ImGui::LoadIniSettingsFromMemory("[Window][CS Editor Browser]\nPos=40,80\nSize=500,650\nCollapsed=0\n");
+	ImGui::NewFrame();
+	const auto restored = draw(layout->browser, BrowserTitle, ImGuiCond_FirstUseEver);
+	passed &= Check(restored.Min.x == 40 && restored.Min.y == 80 && restored.GetWidth() == 500 && restored.GetHeight() == 650,
+		"renamed editor browser preserves an existing saved arrangement");
+	ImGui::Render();
+	ImGui::NewFrame();
+	const auto reset = draw(layout->browser, BrowserTitle, ImGuiCond_Always);
+	passed &= Check(reset.Min.x == browser.Min.x && reset.Min.y == browser.Min.y && reset.GetWidth() == browser.GetWidth() && reset.GetHeight() == browser.GetHeight(),
+		"explicit editor layout reset restores the aligned defaults");
+	ImGui::Render();
+	return passed;
 }
 
 bool CheckWindowGeometry()
@@ -398,6 +461,7 @@ int main()
 	ImGui::Render();
 
 	passed &= CheckWindowGeometry();
+	passed &= CheckEditorLayout();
 	passed &= CheckDesktopHeight();
 	passed &= CheckDockingRecovery();
 

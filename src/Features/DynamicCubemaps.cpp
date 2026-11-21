@@ -183,11 +183,9 @@ void DynamicCubemaps::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("On: water reflects nearby objects visible on screen. Off: keeps only the broader environment reflections. Extra detail costs performance.");
 			if (REL::Module::IsVR() && !enabledAtBoot) {
-				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.0f, 0.0f, 1.0f));
-				ImGui::Text(
+				Util::Text::WrappedWarning(
 					"A restart is required to enable in VR. "
 					"Save Settings after enabling and restart the game.");
-				ImGui::PopStyleColor();
 			}
 		}
 		if (REL::Module::IsVR() && settings.EnabledSSR != 0 && !enabledAtBoot)

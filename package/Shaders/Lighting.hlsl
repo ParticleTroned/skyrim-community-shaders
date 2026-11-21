@@ -3070,6 +3070,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	else
 	float3 worldNormal = SafeNormalize3(mul(tbn, normal.xyz), float3(0.0, 0.0, 1.0));
 #		if defined(TREE_ANIM) && !defined(VR)
+#			if defined(SNOW_COVER)
+#				define TREE_SNOW_COVERAGE_NORMAL
+	// Snow coverage must not inherit the camera-facing lighting adjustment.
+	float3 treeSnowCoverageNormal = worldNormal;
+#			endif
 	float3 viewNormal = SafeNormalize3(FrameBuffer::WorldToView(worldNormal, false, eyeIndex), float3(0.0, 0.0, 1.0));
 	viewNormal = float3(viewNormal.xy, -abs(viewNormal.z));
 	worldNormal = SafeNormalize3(FrameBuffer::ViewToWorld(viewNormal, false, eyeIndex), worldNormal);
@@ -3132,6 +3137,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(LODOBJECTSHD)
 	projWeight += (-0.5 + input.Color.w) * 2.5;
 #		endif  // LODOBJECTSHD
+#		if defined(TREE_SNOW_COVERAGE_NORMAL)
+	float treeSnowProjWeight = -ProjectedUVParams.x * projNoise + (dot(treeSnowCoverageNormal, texProj) * vertexAlpha - ProjectedUVParams.w);
+#			if defined(LODOBJECTSHD)
+	treeSnowProjWeight += (-0.5 + input.Color.w) * 2.5;
+#			endif
+#		endif
 #		if defined(SPARKLE)
 	if (projWeight < 0)
 		discard;
@@ -3139,6 +3150,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	rawBaseColor = Triplanar::SampleStochasticBias(TexColorSampler, SampColorSampler, projWorldPos, triWeights, ProjectedUVParams2.y, SharedData::MipBias, triNoise, projGradientPosition);
 	baseColor = float4(Color::Diffuse(rawBaseColor.rgb), rawBaseColor.a);
 	worldNormal.xyz = projectedNormal;
+#			if defined(TREE_SNOW_COVERAGE_NORMAL)
+	treeSnowCoverageNormal = worldNormal;
+#			endif
 #		elif !defined(FACEGEN) && !defined(MULTI_LAYER_PARALLAX) && !defined(PARALLAX) && !defined(SPARKLE)
 	if (ProjectedUVParams3.w > 0.5) {
 		float diffuseNormalScale = ProjectedUVParams3.x * ProjectedUVParams.z;
@@ -3148,6 +3162,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float3 finalProjNormal = SafeNormalize3(projDetailNormal * float3(1, 1, projNormal.z) + float3(projNormal.xy, 0), float3(0, 0, 1));
 		float3 projBaseColor = Color::ColorToLinear(Triplanar::SampleStochastic(TexProjDiffuseSampler, SampProjDiffuseSampler, projWorldPos, triWeights, diffuseNormalScale, triNoise, projGradientPosition).xyz) * Color::ColorToLinear(ProjectedUVParams2.xyz);
 		projectedMaterialWeight = smoothstep(0, 1, 5 * (0.1 + projWeight));
+#			if defined(TREE_SNOW_COVERAGE_NORMAL)
+		const float treeSnowMaterialWeight = smoothstep(0, 1, 5 * (0.1 + treeSnowProjWeight));
+#			endif
 #			if defined(TRUE_PBR)
 		projBaseColor = max(0, projBaseColor.xyz * MaterialObjectRGBScale);
 		rawRMAOS.xyw = lerp(rawRMAOS.xyw, float3(ParallaxOccData.x, 0, ParallaxOccData.y), projectedMaterialWeight);
@@ -3163,9 +3180,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (SharedData::IsLODBlendingEnabled())
 			projBaseColor.xyz = Color::CategoryGamma(projBaseColor.xyz, SharedData::lodBlendingSettings.LODObjectSnowGamma) * SharedData::lodBlendingSettings.LODObjectSnowBrightness;
 #			endif  // LOD_BLENDING
-		if (projectedMaterialWeight > 0) {
+		if (projectedMaterialWeight > 0
+#			if defined(TREE_SNOW_COVERAGE_NORMAL)
+			|| treeSnowMaterialWeight > 0
+#			endif
+		) {
 			float3 projectedWorldNormal = SafeNormalize3(Triplanar::TransformStochasticNormal(finalProjNormal, tbnTr[2], triWeights, triNoise), tbnTr[2]);
-			worldNormal = SafeNormalize3(lerp(worldNormal, projectedWorldNormal, projectedMaterialWeight), worldNormal);
+#			if defined(TREE_SNOW_COVERAGE_NORMAL)
+			if (treeSnowMaterialWeight > 0)
+				treeSnowCoverageNormal = SafeNormalize3(lerp(treeSnowCoverageNormal, projectedWorldNormal, treeSnowMaterialWeight), treeSnowCoverageNormal);
+			if (projectedMaterialWeight > 0)
+#			endif
+				worldNormal = SafeNormalize3(lerp(worldNormal, projectedWorldNormal, projectedMaterialWeight), worldNormal);
 		}
 		baseColor.xyz = lerp(baseColor.xyz, projBaseColor, projectedMaterialWeight);
 
@@ -3534,6 +3560,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(TREE_ANIM)
 			snowNormal = normalize(snowNormal + float3(0, 0, SnowCover::FoliageNormalBias));
 			float3 treeSnowNormal = snowNormal;
+#			if defined(TREE_SNOW_COVERAGE_NORMAL)
+			snowNormal = SafeNormalize3(treeSnowCoverageNormal + float3(0, 0, SnowCover::FoliageNormalBias), treeSnowCoverageNormal);
+#			endif
 			if (SharedData::snowCoverSettings.AffectTreeTint && !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::NoFoliageTint))
 				SnowCover::ApplyFoliageColor(material.BaseColor, snowEnvironment);
 #		elif defined(DO_ALPHA_TEST)

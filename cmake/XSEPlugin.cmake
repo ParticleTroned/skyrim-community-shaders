@@ -130,6 +130,9 @@ endif()
 # optional, so make the requirement explicit for clean configurations.
 set(SKSE_SUPPORT_XBYAK ON CACHE BOOL "Enable CommonLib trampoline support for Xbyak." FORCE)
 
+# Upstream bundles omit the pinned fork's runtime and initialization fixes.
+set(COMMONLIB_BUILD_FROM_SOURCE ON)
+
 add_subdirectory(${CommonLibPath} ${CommonLibName} EXCLUDE_FROM_ALL)
 
 find_package(spdlog CONFIG REQUIRED)

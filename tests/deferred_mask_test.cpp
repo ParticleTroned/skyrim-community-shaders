@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include "commonlib_d3d_bridge_fake.h"
 #include <array>
 #include <d3d11.h>
 #include <format>

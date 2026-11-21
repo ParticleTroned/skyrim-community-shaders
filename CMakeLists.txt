@@ -3180,6 +3180,12 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_link_libraries(sharpener_bindings_test PRIVATE d3d11.lib)
     include("${PROJECT_SOURCE_DIR}/tests/d3d11_shader_test.cmake")
+
+    add_d3d_shader_test(commonlib_d3d_bridge_test CommonLibD3DBridge tests/commonlib_d3d_bridge_test.cpp)
+    target_link_libraries(
+        commonlib_d3d_bridge_test
+        PRIVATE CommonLibSSE::CommonLibSSE
+    )
     add_controller_test(detail_maps_policy_test DetailMapsPolicy tests/detail_maps_policy_test.cpp)
     target_link_libraries(
         detail_maps_policy_test

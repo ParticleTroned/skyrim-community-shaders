@@ -406,7 +406,7 @@ namespace
 			// live Windhelm/Dragonsreach COC testing reproduced the same helper later
 			// consuming RBX->camera[0] after its frustum array had become null. Guard
 			// the actual late-use camera immediately before the native MOVUPS reads
-			// NiCamera::viewFrustumArray.
+			// NiCamera::eyeFrustums.
 			RequireKnownVtable(rdi, rax, r10, a_allowedCameraVtables, invalidCamera);
 			mov(rax, qword[rdi + kVRNiCameraViewFrustumArrayOffset]);
 			RequirePlausiblePointer(rax, r10, invalidCamera);
@@ -2603,7 +2603,7 @@ void LightLimitFix::Hooks::InstallVRShadowMapCameraGuard()
 	}
 
 	// Skyrim VR 1.4.15's shared shadow-map helper trusts
-	// ShadowmapDescriptorVR::camera[0] and NiCamera::viewFrustumArray. Reproduced
+	// ShadowmapDescriptorVR::camera[0] and NiCamera::eyeFrustums. Reproduced
 	// Windhelm-to-Dragonsreach transitions supplied both stale camera storage and a
 	// valid camera whose late-use frustum array had become null, then crashed at
 	// SkyrimVR.exe+134C61A. The entry, late-use context, and epilogue were verified

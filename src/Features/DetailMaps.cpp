@@ -32,7 +32,7 @@ namespace
 	bool IsFirstPersonPass()
 	{
 		auto* accumulator = *globals::game::currentAccumulator.get();
-		return accumulator && accumulator->GetRuntimeData().renderMode == FirstPersonRenderMode;
+		return accumulator && static_cast<uint32_t>(accumulator->GetRuntimeData().renderMode) == FirstPersonRenderMode;
 	}
 
 	bool IsDetailDescriptor(uint32_t descriptor, bool allowForward)

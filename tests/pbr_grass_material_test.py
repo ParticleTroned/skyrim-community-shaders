@@ -176,6 +176,7 @@ Cache cacheValue; Cache* shaderCache = &cacheValue;
 Deferred deferredValue; Deferred* deferred = &deferredValue;
 namespace features {
 struct Feature { bool loaded = true; } truePBR, grassLighting, grassOptimizations;
+Feature adaptiveBrightness{false};
 }
 namespace d3d { Context contextValue; Context* context = &contextValue; }
 namespace game {
@@ -275,6 +276,12 @@ int main() {
             assert(globals::d3d::contextValue.pixel == &customPS);
         }
     }
+    globals::features::truePBR.loaded = globals::features::grassLighting.loaded = false;
+    globals::features::grassOptimizations.loaded = false;
+    globals::features::adaptiveBrightness.loaded = true;
+    assert(BSGrassShader_SetupTechnique::thunk(&shader, 0));
+    assert(globals::game::vertex == &customVertex && globals::game::pixel == &customPixel);
+    globals::features::adaptiveBrightness.loaded = false;
     // Optimization alone retains native fallback while a complete pair is unavailable.
     globals::features::truePBR.loaded = globals::features::grassLighting.loaded = false;
     globals::features::grassOptimizations.loaded = true;

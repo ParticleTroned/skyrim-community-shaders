@@ -1,5 +1,6 @@
 #include "Features/TextureStreaming/LoadHooks.h"
 #include "Utils/NativeTextureLoading.h"
+#include "commonlib_d3d_bridge_fake.h"
 #include "d3d11_shader_test.h"
 #include <atomic>
 #include <condition_variable>

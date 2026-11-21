@@ -306,7 +306,7 @@ void VolumetricShadows::CopyShadowLightData()
 	if (!renderer)
 		return;
 	auto& esramDepthStencil = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM];
-	if (!TryGetShadowTextureDescription(esramDepthStencil.depthSRV, esramDesc))
+	if (!TryGetShadowTextureDescription(REX::W32::AsReal(esramDepthStencil.depthSRV), esramDesc))
 		return;
 
 	const bool groupedMip0 = UsesGroupedDownsample(srcDesc, kShadowCopySize);
@@ -352,7 +352,7 @@ void VolumetricShadows::CopyShadowLightData()
 	// Moment preparation must run even when the caller predicates its draws.
 	context->SetPredication(nullptr, FALSE);
 	ClearComputeUAV(context);
-	ID3D11ShaderResourceView* csSRVs[2]{ shadowView.get(), esramDepthStencil.depthSRV };
+	ID3D11ShaderResourceView* csSRVs[2]{ shadowView.get(), REX::W32::AsReal(esramDepthStencil.depthSRV) };
 	context->CSSetShaderResources(0, 2, csSRVs);
 	context->CSSetSamplers(0, 1, &linearSampler);
 

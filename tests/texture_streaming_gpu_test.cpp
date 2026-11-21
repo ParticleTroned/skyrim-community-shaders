@@ -2,6 +2,7 @@
 #include "Features/TextureStreaming/TextureData.h"
 #include "Utils/GpuMemoryBudget.h"
 #include "asset_load_diagnostics_fixture.h"
+#include "commonlib_d3d_bridge_fake.h"
 #include "d3d11_shader_test.h"
 #include <bit>
 #include <chrono>

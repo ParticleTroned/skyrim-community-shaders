@@ -145,7 +145,7 @@ void TerrainSeams::Bind(RE::BSGeometry* a_geometry)
 			for (uint32_t texture = 0; texture < TexturesPerExtra; ++texture) {
 				const auto& source = resources->extras[extra][texture];
 				if (source != nullptr && source->rendererTexture != nullptr)
-					views[2 + extra * TexturesPerExtra + texture] = source->rendererTexture->resourceView;
+					views[2 + extra * TexturesPerExtra + texture] = REX::W32::AsReal(source->rendererTexture->resourceView);
 			}
 		}
 	}

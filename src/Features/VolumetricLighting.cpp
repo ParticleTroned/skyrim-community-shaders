@@ -637,16 +637,16 @@ void VolumetricLighting::ClearVolumetricLightingTargets(bool reuseClearedTargets
 		auto& target = renderer->GetRuntimeData().renderTargets[index];
 		auto& previousRTV = depthClearedViews[viewIndex++];
 		auto& previousUAV = depthClearedViews[viewIndex++];
-		const bool unchanged = reuse && previousRTV == target.RTV && previousUAV == target.UAV;
-		previousRTV = target.RTV;
-		previousUAV = target.UAV;
+		const bool unchanged = reuse && previousRTV == REX::W32::AsReal(target.RTV) && previousUAV == REX::W32::AsReal(target.UAV);
+		previousRTV = REX::W32::AsReal(target.RTV);
+		previousUAV = REX::W32::AsReal(target.UAV);
 		if (unchanged)
 			return;
-		if (target.RTV) {
-			context->ClearRenderTargetView(target.RTV, clearColor);
+		if (REX::W32::AsReal(target.RTV)) {
+			context->ClearRenderTargetView(REX::W32::AsReal(target.RTV), clearColor);
 		}
-		if (target.UAV) {
-			context->ClearUnorderedAccessViewFloat(target.UAV, clearColor);
+		if (REX::W32::AsReal(target.UAV)) {
+			context->ClearUnorderedAccessViewFloat(REX::W32::AsReal(target.UAV), clearColor);
 		}
 	};
 

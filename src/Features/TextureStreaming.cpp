@@ -102,12 +102,12 @@ namespace
 		}
 		if (result >= 0 && output && *output && (*output)->texture) {
 			const StreamingTextures::Origin origin{ ++originSerial, false };
-			const auto status = StreamingTextures::WriteOrigin((*output)->texture, origin);
+			const auto status = StreamingTextures::WriteOrigin(REX::W32::AsReal((*output)->texture), origin);
 			if (FAILED(status))
 				logger::warn("[TextureStreaming] DDS provenance unavailable: 0x{:08X}", static_cast<std::uint32_t>(status));
 		}
 		if (remembered)
-			StreamingTextures::LoadHooks::Complete(std::move(*remembered), result >= 0 && output && *output ? (*output)->texture : nullptr, result >= 0);
+			StreamingTextures::LoadHooks::Complete(std::move(*remembered), result >= 0 && output && *output ? REX::W32::AsReal((*output)->texture) : nullptr, result >= 0);
 		return result;
 	}
 
@@ -460,15 +460,17 @@ namespace
 	template <class Shadow>
 	void ReplaceCachedView(Shadow& shadow, ID3D11ShaderResourceView* oldView, ID3D11ShaderResourceView* newView)
 	{
+		const auto oldEngineView = REX::W32::AsW32(oldView);
+		const auto newEngineView = REX::W32::AsW32(newView);
 		for (std::size_t i = 0; i < std::size(shadow.PSTexture); ++i) {
-			if (shadow.PSTexture[i] == oldView) {
-				shadow.PSTexture[i] = newView;
+			if (shadow.PSTexture[i] == oldEngineView) {
+				shadow.PSTexture[i] = newEngineView;
 				shadow.PSResourceModifiedBits |= 1u << i;
 			}
 		}
 		for (std::size_t i = 0; i < std::size(shadow.CSTexture); ++i) {
-			if (shadow.CSTexture[i] == oldView) {
-				shadow.CSTexture[i] = newView;
+			if (shadow.CSTexture[i] == oldEngineView) {
+				shadow.CSTexture[i] = newEngineView;
 				shadow.CSResourceModifiedBits |= 1u << i;
 			}
 		}
@@ -638,7 +640,7 @@ void TextureStreaming::State::AdoptLoads()
 		auto* source = load->source;
 		auto* engine = source ? source->rendererTexture : nullptr;
 		StreamingTextures::Origin origin;
-		if (!engine || !engine->resourceView || !StreamingTextures::ReadOrigin(engine->texture, origin) || origin.serial != load->serial)
+		if (!engine || !REX::W32::AsReal(engine->resourceView) || !StreamingTextures::ReadOrigin(REX::W32::AsReal(engine->texture), origin) || origin.serial != load->serial)
 			continue;
 		if (records.contains(origin.serial)) {
 			Fail("Reduced-load source was observed before ownership transfer");
@@ -650,11 +652,11 @@ void TextureStreaming::State::AdoptLoads()
 #endif
 		record.source.reset(source);
 		record.engine = engine;
-		record.current = engine->texture;
-		record.currentView = engine->resourceView;
+		record.current = REX::W32::AsReal(engine->texture);
+		record.currentView = REX::W32::AsReal(engine->resourceView);
 		record.path = std::move(load->path);
 		record.full = load->size.full;
-		engine->resourceView->GetDesc(&record.view);
+		REX::W32::AsReal(engine->resourceView)->GetDesc(&record.view);
 		record.view.Texture2D.MipLevels = record.full.MipLevels;
 		record.drop = record.desired = load->size.drop;
 		auto resident = record.full;
@@ -703,7 +705,7 @@ void TextureStreaming::State::ObserveTexture(RE::NiSourceTexture* source, RE::BS
 	}
 	auto* engine = source->rendererTexture;
 	StreamingTextures::Origin origin;
-	if (!StreamingTextures::ReadOrigin(engine->texture, origin)) {
+	if (!StreamingTextures::ReadOrigin(REX::W32::AsReal(engine->texture), origin)) {
 		exclude(Exclusion::MissingProvenance);
 		return;
 	}
@@ -716,7 +718,7 @@ void TextureStreaming::State::ObserveTexture(RE::NiSourceTexture* source, RE::BS
 	if ((!eligible && !origin.protectedConsumer) || (requiredCategories & ~origin.requiredCategories)) {
 		origin.protectedConsumer |= !eligible;
 		origin.requiredCategories |= requiredCategories;
-		if (FAILED(StreamingTextures::WriteOrigin(engine->texture, origin))) {
+		if (FAILED(StreamingTextures::WriteOrigin(REX::W32::AsReal(engine->texture), origin))) {
 			Fail("Could not preserve texture consumer requirements");
 			enabled = false;
 			StreamingTextures::LoadHooks::Configure(false, modes, options, categories, maximumDrop);
@@ -742,7 +744,7 @@ void TextureStreaming::State::ObserveTexture(RE::NiSourceTexture* source, RE::BS
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		StreamingTextures::TextureInspection inspection;
 		inspection.unorderedAccess = engine->UAV != nullptr;
-		inspection.viewAvailable = engine->resourceView != nullptr;
+		inspection.viewAvailable = REX::W32::AsReal(engine->resourceView) != nullptr;
 		inspection.engineWidth = engine->width;
 		inspection.engineHeight = engine->height;
 		inspection.engineMips = engine->mips;
@@ -761,24 +763,24 @@ void TextureStreaming::State::ObserveTexture(RE::NiSourceTexture* source, RE::BS
 			classify(StreamingTextures::TextureRejection::UnorderedAccess);
 			return;
 		}
-		if (!engine->resourceView) {
+		if (!REX::W32::AsReal(engine->resourceView)) {
 			classify(StreamingTextures::TextureRejection::MissingView);
 			return;
 		}
 		ComPtr<ID3D11Texture2D> texture;
-		if (FAILED(engine->texture->QueryInterface(IID_PPV_ARGS(&texture)))) {
+		if (FAILED(REX::W32::AsReal(engine->texture)->QueryInterface(IID_PPV_ARGS(&texture)))) {
 			classify(StreamingTextures::TextureRejection::NotTexture2D);
 			return;
 		}
 		ComPtr<ID3D11Resource> viewedResource;
-		engine->resourceView->GetResource(&viewedResource);
-		if (viewedResource.Get() != engine->texture) {
+		REX::W32::AsReal(engine->resourceView)->GetResource(&viewedResource);
+		if (viewedResource.Get() != REX::W32::AsReal(engine->texture)) {
 			classify(StreamingTextures::TextureRejection::ViewResource);
 			return;
 		}
 		Record value;
 		texture->GetDesc(&value.full);
-		engine->resourceView->GetDesc(&value.view);
+		REX::W32::AsReal(engine->resourceView)->GetDesc(&value.view);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		inspection.descriptorAvailable = true;
 		inspection.texture = value.full;
@@ -798,8 +800,8 @@ void TextureStreaming::State::ObserveTexture(RE::NiSourceTexture* source, RE::BS
 			value.bytes[drop] = StreamingTextures::LogicalBytes(value.full, drop);
 		value.source.reset(source);
 		value.engine = engine;
-		value.current = engine->texture;
-		value.currentView = engine->resourceView;
+		value.current = REX::W32::AsReal(engine->texture);
+		value.currentView = REX::W32::AsReal(engine->resourceView);
 		value.path = *path;
 		it = records.emplace(origin.serial, std::move(value)).first;
 		++diagnostics.candidateRegistrations;
@@ -853,7 +855,7 @@ void TextureStreaming::State::ProtectPreviewTexture(RE::NiSourceTexture* texture
 	if (name && *name)
 		StreamingTextures::LoadHooks::Forget(StreamingTextures::NormalizeTexturePath(name));
 	StreamingTextures::Origin origin;
-	auto* resource = texture->rendererTexture->texture;
+	auto* resource = REX::W32::AsReal(texture->rendererTexture->texture);
 	if (!StreamingTextures::ReadOrigin(resource, origin))
 		return;
 	origin.protectedConsumer = true;
@@ -1086,7 +1088,7 @@ std::uint32_t TextureStreaming::State::Demand(Record& record)
 		return 0;
 	}
 	StreamingTextures::Origin origin;
-	if (record.source->rendererTexture != record.engine || record.engine->texture != record.current ||
+	if (record.source->rendererTexture != record.engine || REX::W32::AsReal(record.engine->texture) != record.current ||
 		!StreamingTextures::ReadOrigin(record.current, origin) || origin.protectedConsumer) {
 		Defer(Block::SourceChanged, record);
 		return 0;
@@ -1163,7 +1165,7 @@ void TextureStreaming::State::Select(Deadline deadline, Selection selection)
 	const auto consider = [&](std::uint64_t id, Record& record) {
 		if (selection == Selection::Preview && !record.previewProtected)
 			return;
-		if (record.source->rendererTexture != record.engine || record.engine->texture != record.current) {
+		if (record.source->rendererTexture != record.engine || REX::W32::AsReal(record.engine->texture) != record.current) {
 			Defer(Block::SourceChanged, record);
 			return;
 		}
@@ -1286,7 +1288,7 @@ void TextureStreaming::State::Select(Deadline deadline, Selection selection)
 void TextureStreaming::State::Publish(Record& record, Transaction& work)
 {
 	auto* context = globals::d3d::context;
-	auto* old = record.engine->resourceView;
+	auto* old = REX::W32::AsReal(record.engine->resourceView);
 	StreamingTextures::Origin origin;
 	if (!StreamingTextures::ReadOrigin(record.current, origin) || origin.serial != work.payload.request.serial) {
 		record.retryAfter = GetTickCount64() + 10000;
@@ -1312,7 +1314,7 @@ void TextureStreaming::State::Publish(Record& record, Transaction& work)
 		return found;
 	};
 	const auto hasCachedComputeView = [&](const auto& shadow) {
-		return std::ranges::find(shadow.CSTexture, old) != std::end(shadow.CSTexture);
+		return std::ranges::find(shadow.CSTexture, REX::W32::AsW32(old)) != std::end(shadow.CSTexture);
 	};
 	const bool fullDetail = work.payload.request.drop == 0;
 	if (!fullDetail) {
@@ -1340,14 +1342,14 @@ void TextureStreaming::State::Publish(Record& record, Transaction& work)
 		ReplaceCachedView(globals::game::shadowState->GetVRRuntimeData(), old, work.upload.view.Get());
 	else
 		ReplaceCachedView(globals::game::shadowState->GetRuntimeData(), old, work.upload.view.Get());
-	work.oldTexture.Attach(record.engine->texture);
-	work.oldView.Attach(record.engine->resourceView);
-	record.engine->texture = work.upload.texture.Detach();
-	record.engine->resourceView = work.upload.view.Detach();
+	work.oldTexture.Attach(REX::W32::AsReal(record.engine->texture));
+	work.oldView.Attach(REX::W32::AsReal(record.engine->resourceView));
+	record.engine->texture = REX::W32::AsW32(work.upload.texture.Detach());
+	record.engine->resourceView = REX::W32::AsW32(work.upload.view.Detach());
 	// Some runtimes leave optional wrapper metadata unset; preserve that representation.
 	StreamingTextures::UpdateEngineMetadata(*record.engine, work.upload.desc);
-	record.current = record.engine->texture;
-	record.currentView = record.engine->resourceView;
+	record.current = REX::W32::AsReal(record.engine->texture);
+	record.currentView = REX::W32::AsReal(record.engine->resourceView);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	work.terrainConsumer = (origin.requiredCategories & StreamingTextures::Terrain) != 0;
 #endif
@@ -1493,7 +1495,7 @@ void TextureStreaming::State::ServiceTransaction()
 	}
 	auto& record = found->second;
 	const auto target = work.payload.request.drop;
-	if (record.source->rendererTexture != record.engine || record.engine->texture != record.current || record.engine->resourceView != record.currentView || record.engine->UAV || target > Target(record, Demand(record))) {
+	if (record.source->rendererTexture != record.engine || REX::W32::AsReal(record.engine->texture) != record.current || REX::W32::AsReal(record.engine->resourceView) != record.currentView || record.engine->UAV || target > Target(record, Demand(record))) {
 		CancelTransaction();
 		return;
 	}
@@ -1674,7 +1676,7 @@ void TextureStreaming::State::Prune(Deadline deadline)
 		auto current = entry++;
 		pruneCursor = entry == records.end() ? 0 : entry->first;
 		const auto& [id, record] = *current;
-		const bool replaced = record.source->rendererTexture != record.engine || record.engine->texture != record.current;
+		const bool replaced = record.source->rendererTexture != record.engine || REX::W32::AsReal(record.engine->texture) != record.current;
 		// A partially scanned texture belongs to the next inventory, not an expired one.
 		if ((!record.drop && (!enabled || record.consumers.Expired(completeScan))) || replaced) {
 			reducedRecords.erase(id);

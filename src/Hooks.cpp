@@ -117,7 +117,7 @@ namespace
 		if (a_texture->name.c_str())
 			binding.path = a_texture->name.c_str();
 		if (a_texture->rendererTexture && a_texture->rendererTexture->texture) {
-			binding.resource = CSX::RenderMap::DescribeResource(a_texture->rendererTexture->texture);
+			binding.resource = CSX::RenderMap::DescribeResource(REX::W32::AsReal(a_texture->rendererTexture->texture));
 		}
 	}
 
@@ -1769,7 +1769,7 @@ namespace WaterBlendHistory
 					if (rtv) {
 						// Clear stale coverage left by discarded non-water pixels.
 						constexpr float clearColor[4] = { 0.f, 0.f, 0.f, 0.f };
-						globals::d3d::context->ClearRenderTargetView(rtv, clearColor);
+						globals::d3d::context->ClearRenderTargetView(REX::W32::AsReal(rtv), clearColor);
 					}
 				}
 			}

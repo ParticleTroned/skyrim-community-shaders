@@ -34,10 +34,14 @@ namespace RE
 	};
 	class NiCullingProcess
 	{};
+	struct BSNonReentrantSpinLock
+	{
+		volatile std::uint32_t lock = 0;
+	};
 	struct BGSGrassManager
 	{
 		std::array<std::byte, 0x40> prefix{};
-		volatile std::uint32_t grassShapeLock = 0;
+		BSNonReentrantSpinLock grassShapeLock;
 		std::array<std::byte, 0x24> middle{};
 		struct NodePointer
 		{
@@ -89,7 +93,7 @@ namespace
 RE::NiNode::Children& RE::NiNode::GetChildren()
 {
 	if (verifyChildOwnership)
-		Require(this == &grassNode && Word(testManager.grassShapeLock) == 1);
+		Require(this == &grassNode && Word(testManager.grassShapeLock.lock) == 1);
 	return children;
 }
 namespace logger
@@ -253,13 +257,13 @@ namespace
 		Require(fix.TryInstall() && lodFixesGroupGuard && moduleQueries == installedQueries);
 		unsigned nativeCalls = 0, optimizedCalls = 0;
 		cullAction = [&](RE::NiNode*) {
-			Require(Word(testManager.grassShapeLock) == 1);
+			Require(Word(testManager.grassShapeLock.lock) == 1);
 			// A non-recursive third-party acquisition must succeed without releasing child ownership.
 			Require(InterlockedCompareExchange(reinterpret_cast<volatile LONG*>(&groupsWord), 1, 0) == 0);
 			++nativeCalls;
 			InterlockedExchange(reinterpret_cast<volatile LONG*>(&groupsWord), 0);
 			// The leaf hook releases groups before render registration, retaining the child guard.
-			Require(Word(testManager.grassShapeLock) == 1 && Word(groupsWord) == 0);
+			Require(Word(testManager.grassShapeLock.lock) == 1 && Word(groupsWord) == 0);
 			{
 				Util::GrassGroupLock capture{ groupsWord };
 				Require(Word(groupsWord) == 1);
@@ -270,7 +274,7 @@ namespace
 		};
 		CullGrass(&grassNode, &process, -1);
 		Require(nativeCalls == 1 && optimizedCalls == 1);
-		Require(Word(testManager.grassShapeLock) == 0 && Word(groupsWord) == 0);
+		Require(Word(testManager.grassShapeLock.lock) == 0 && Word(groupsWord) == 0);
 		cullAction = [&](RE::NiNode*) {
 			Util::GrassGroupLock capture{ groupsWord };
 			throw std::runtime_error("capture exception");
@@ -281,7 +285,7 @@ namespace
 		} catch (const std::runtime_error&) {
 			caught = true;
 		}
-		Require(caught && Word(testManager.grassShapeLock) == 0 && Word(groupsWord) == 0);
+		Require(caught && Word(testManager.grassShapeLock.lock) == 0 && Word(groupsWord) == 0);
 		Require(moduleQueries == installedQueries);
 		cullAction = {};
 		installed = false;
@@ -290,7 +294,7 @@ namespace
 
 	void PassthroughAndUnwind()
 	{
-		NativeLock children{ testManager.grassShapeLock }, groups{ groupsWord };
+		NativeLock children{ testManager.grassShapeLock.lock }, groups{ groupsWord };
 		children.lock();
 		groups.lock();
 		unsigned forwarded = 0;
@@ -303,21 +307,21 @@ namespace
 		children.unlock();
 		bool enteredWithLocks = false;
 		cullAction = [&](RE::NiNode*) {
-			enteredWithLocks = Word(testManager.grassShapeLock) == 1 && Word(groupsWord) == 1;
+			enteredWithLocks = Word(testManager.grassShapeLock.lock) == 1 && Word(groupsWord) == 1;
 			throw std::runtime_error("native callback exception");
 		};
 		try {
 			CullGrass(&grassNode, &process, -1);
 		} catch (const std::runtime_error&) {}
-		Require(enteredWithLocks && Word(testManager.grassShapeLock) == 0 && Word(groupsWord) == 0);
+		Require(enteredWithLocks && Word(testManager.grassShapeLock.lock) == 0 && Word(groupsWord) == 0);
 		clearAction = [&](RE::NiNode* a_node) {
 			if (a_node == &grassNode) {
-				Require(Word(testManager.grassShapeLock) == 1 && Word(groupsWord) == 0);
+				Require(Word(testManager.grassShapeLock.lock) == 1 && Word(groupsWord) == 0);
 				ClearGrassChildren(&otherNode);
 			}
 		};
 		ClearGrassChildren(&grassNode);
-		Require(Word(testManager.grassShapeLock) == 0);
+		Require(Word(testManager.grassShapeLock.lock) == 0);
 	}
 
 	void NestedGroupReaders()
@@ -385,7 +389,7 @@ namespace
 			}
 		});
 		writerStarted.acquire();
-		Require(Word(testManager.grassShapeLock) == 1 && Word(groupsWord) == 1);
+		Require(Word(testManager.grassShapeLock.lock) == 1 && Word(groupsWord) == 1);
 		finishRead.release();
 		reader.get();
 		writer.get();
@@ -395,7 +399,7 @@ namespace
 
 	void RemovalBeforeBorrow()
 	{
-		NativeLock children{ testManager.grassShapeLock };
+		NativeLock children{ testManager.grassShapeLock.lock };
 		children.lock();
 		std::unique_ptr<int> shape = std::make_unique<int>(1);
 		std::binary_semaphore started{ 0 };
@@ -417,17 +421,17 @@ namespace
 		cullAction = {};
 		auto reader = std::async(std::launch::async, [&] { CullGrass(&grassNode, &process, -1); });
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-		while (Word(testManager.grassShapeLock) == 0 && std::chrono::steady_clock::now() < deadline)
+		while (Word(testManager.grassShapeLock.lock) == 0 && std::chrono::steady_clock::now() < deadline)
 			std::this_thread::yield();
-		const bool childFirst = Word(testManager.grassShapeLock) == 1;
+		const bool childFirst = Word(testManager.grassShapeLock.lock) == 1;
 		groups.unlock();
 		reader.get();
-		Require(childFirst && Word(testManager.grassShapeLock) == 0);
+		Require(childFirst && Word(testManager.grassShapeLock.lock) == 0);
 	}
 
 	void ManagerLifetime()
 	{
-		NativeLock children{ testManager.grassShapeLock }, groups{ groupsWord };
+		NativeLock children{ testManager.grassShapeLock.lock }, groups{ groupsWord };
 		children.lock();
 		groups.lock();
 		unsigned calls = 0;
@@ -454,14 +458,14 @@ namespace
 		grassNode.children.live = 0;
 		unsigned calls = 0;
 		cullAction = [&](RE::NiNode*) {
-			Require(Word(testManager.grassShapeLock) == 1 && Word(groupsWord) == 1);
+			Require(Word(testManager.grassShapeLock.lock) == 1 && Word(groupsWord) == 1);
 			++calls;
 		};
 		auto reader = std::async(std::launch::async, [&] { CullGrass(&grassNode, &process, -1); });
 		const bool bypassed = reader.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
 		groups.unlock();
 		reader.get();
-		Require(bypassed && calls == 1 && Word(testManager.grassShapeLock) == 0);
+		Require(bypassed && calls == 1 && Word(testManager.grassShapeLock.lock) == 0);
 
 		// A zero live count is not the native early-out when traversal slots still contain holes.
 		grassNode.children.slots = 3;
@@ -472,7 +476,7 @@ namespace
 
 	void EmptyAfterChildAcquisition()
 	{
-		NativeLock children{ testManager.grassShapeLock }, groups{ groupsWord };
+		NativeLock children{ testManager.grassShapeLock.lock }, groups{ groupsWord };
 		children.lock();
 		groups.lock();
 		std::binary_semaphore started{ 0 };

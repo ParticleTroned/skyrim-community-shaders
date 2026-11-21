@@ -297,10 +297,13 @@ namespace VRDepthCullingTemporal
 		SubmissionPolicy::ReadbackProjection CaptureReadbackProjection(std::uint64_t a_cullingEpoch, std::uint64_t a_policyEpoch)
 		{
 			auto* camera = RE::Main::WorldRootCamera();
-			if (!camera || !camera->GetVRRuntimeData().viewFrustumArray)
+			if (!camera)
 				return {};
 			SubmissionPolicy::ReadbackProjection projection{ {}, reinterpret_cast<std::uintptr_t>(camera), a_cullingEpoch, a_policyEpoch };
-			const auto* frusta = camera->GetVRRuntimeData().viewFrustumArray;
+			const auto& cameraFrusta = camera->GetVRRuntimeData().eyeFrustums;
+			if (cameraFrusta.size() != projection.frusta.size() || !cameraFrusta.data())
+				return {};
+			const auto* frusta = cameraFrusta.data();
 			for (std::size_t eye = 0; eye < projection.frusta.size(); ++eye) {
 				const auto& native = frusta[eye];
 				projection.frusta[eye] = { { native.fLeft, native.fRight, native.fTop, native.fBottom, native.fNear, native.fFar }, native.bOrtho };
@@ -345,8 +348,8 @@ namespace VRDepthCullingTemporal
 			if (!generation || generation != globals::state->GetCompletedRenderTargetResourcePublicationGeneration())
 				return;
 			auto& targets = renderer->GetDepthStencilData().depthStencils;
-			auto* source = targets[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV;
-			auto* reduced = targets[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_DOWNSAMPLE].texture;
+			auto* source = REX::W32::AsReal(targets[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV);
+			auto* reduced = REX::W32::AsReal(targets[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_DOWNSAMPLE].texture);
 			auto& cache = g_depthResources;
 			if (cache.generation != generation || cache.source.get() != source || cache.reduced.get() != reduced) {
 				cache = {};

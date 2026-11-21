@@ -1,4 +1,5 @@
 #include "Utils/DeviceContextState.h"
+#include "commonlib_d3d_bridge_fake.h"
 #include "d3d_resource_naming.h"
 
 #include <algorithm>
@@ -182,10 +183,25 @@ namespace RE::BSGraphics
 }
 struct ShadowState
 {
+	struct EngineViewport
+	{
+		float topLeftX = 0, topLeftY = 0, width = 0, height = 0, minDepth = 0, maxDepth = 0;
+		EngineViewport& operator=(const D3D11_VIEWPORT& viewport)
+		{
+			topLeftX = viewport.TopLeftX;
+			topLeftY = viewport.TopLeftY;
+			width = viewport.Width;
+			height = viewport.Height;
+			minDepth = viewport.MinDepth;
+			maxDepth = viewport.MaxDepth;
+			return *this;
+		}
+		operator D3D11_VIEWPORT() const { return { topLeftX, topLeftY, width, height, minDepth, maxDepth }; }
+	};
 	std::array<RE::BSGraphics::ViewData, 2> eyes;
 	struct
 	{
-		D3D11_VIEWPORT viewPort{};
+		EngineViewport viewPort{};
 		uint32_t rasterStateDepthBiasMode = 0;
 	} data;
 	auto& GetVRRuntimeData() { return data; }
@@ -955,8 +971,8 @@ namespace
 				 { 0, std::numeric_limits<float>::quiet_NaN() }, { 0, std::numeric_limits<float>::infinity() } }) {
 			for (auto& eye : shadow.eyes)
 				eye.viewDepthRange = range;
-			shadow.data.viewPort.MinDepth = range.x;
-			shadow.data.viewPort.MaxDepth = range.y - savedBias;
+			shadow.data.viewPort.minDepth = range.x;
+			shadow.data.viewPort.maxDepth = range.y - savedBias;
 			Require(!ResolveNativeViewportCorrection(shadow.data.viewPort), "Invalid or exhausted camera range was normalized");
 		}
 		globals::game::shadowState = nullptr;
@@ -1506,14 +1522,14 @@ float4 PS() : SV_Target { return 1; }
 		ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, depth, 21);
 		ID3D11DeviceContext_RSSetState::thunk(context, raster);
 		ShadowState shadow;
-		shadow.data.viewPort = { 0, 0, 4, 4, .2f, .7f };
+		shadow.data.viewPort = D3D11_VIEWPORT{ 0, 0, 4, 4, .2f, .7f };
 		for (auto& eye : shadow.eyes)
 			eye.viewDepthRange = { .2f, .7f };
 		shadow.data.rasterStateDepthBiasMode = 6;
 		const bool previousVR = globals::game::isVR;
 		globals::game::isVR = true;
 		globals::game::shadowState = &shadow;
-		auto viewport = shadow.data.viewPort;
+		D3D11_VIEWPORT viewport = shadow.data.viewPort;
 		viewport.MaxDepth -= nativeViewportBiases[6];
 		shadow.data.viewPort = viewport;
 		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &viewport);

@@ -4,6 +4,7 @@
 
 #include "Features/AdaptiveBalanceDepthOfField.h"
 #include "Features/AdaptiveBalanceGodraySettings.h"
+#include "Features/GrassPlacementSettings.h"
 #include "Features/WetternessLightingPolicy.h"
 #include "SettingsMigrations.h"
 #include <algorithm>

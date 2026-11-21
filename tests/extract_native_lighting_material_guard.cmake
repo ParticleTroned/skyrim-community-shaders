@@ -34,12 +34,17 @@ extract_between(
 )
 extract_between(
     "${_lighting_shader}" "enum class TechniqueFlag"
-    "uint32_t unk90;" _lighting_technique
+    "};" _lighting_technique
+)
+extract_between(
+    "${_lighting_shader}" "static constexpr std::uint32_t kTechniqueIDBase"
+    ";" _lighting_technique_base
 )
 file(
     WRITE "${OUTPUT_DIRECTORY}/native_lighting_material_types_under_test.h"
     "namespace SIE { struct ShaderCache {\n${_lighting_types}\n}; }\n"
-    "namespace RE { struct BSLightingShader : BSShader {\n${_lighting_technique}\n"
+    "namespace RE { struct BSLightingShader : BSShader {\n${_lighting_technique}};\n"
+    "${_lighting_technique_base};\n"
     "uint32_t unk90 = 0;\nuint32_t currentRawTechnique = 0;\n}; }\n"
 )
 extract_between(

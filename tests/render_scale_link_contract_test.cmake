@@ -263,7 +263,7 @@ forbid_contract("${_stabilizer_match}" [[a_target.renderScaleModePreference]]
 section("${_source}" [[void Upscaling::ApplyPendingVRFpsStabilizerLoadSync()]]
     [[bool Upscaling::IsPerfModePresentationActive()]] _stabilizer_sync)
 require_contract("${_stabilizer_sync}"
-    [[GetVRRenderScaleModePreference() == target.renderScaleModePreference && MatchesVRFpsStabilizerTransitionTarget( currentMethod, IsRenderScaleModeRequested(),]]
+    [[GetVRRenderScaleModePreference() == target.renderScaleModePreference && MatchesVRFpsStabilizerTransitionTarget( GetConfiguredUpscaleMethodForTransition(), IsRenderScaleModeRequested(),]]
     "local load sync reconciles preference separately from public active mode")
 
 forbid_contract("${_bridge}" [[GetVRRenderScalePreferenceForSelection]] "explicit DevBench profiles")

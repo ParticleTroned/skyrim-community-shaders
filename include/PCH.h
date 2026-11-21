@@ -14,6 +14,7 @@ void* operator new[](size_t size, size_t alignment, size_t alignmentOffset, cons
 
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
+#include <REX/W32/Bridge.h>
 #include <xbyak/xbyak.h>
 
 #include <detours/detours.h>

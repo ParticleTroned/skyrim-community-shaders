@@ -1,5 +1,6 @@
 #include "../package/Shaders/Common/WetternessDrying.hlsli"
 #include "Features/WetternessLightingPolicy.h"
+#include "commonlib_d3d_bridge_fake.h"
 
 #include <cstddef>
 #include <cstdint>

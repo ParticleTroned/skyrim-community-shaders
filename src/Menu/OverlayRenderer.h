@@ -47,7 +47,7 @@ public:
 		float& cachedFontSize,
 		float currentFontSize);
 	static bool MoveWindowBelowShaderCompilationStatus(ImVec2& position, const ImVec2& windowSize, const ImVec2& pivot);
-	/** Reserve canvas space only for status windows visible on the menu's presentation surface. */
+	/** Reserve shared menu space for status panels visible on either output. */
 	static bool ExcludeTopStatusWindowsFromLayout(ImVec2& availableMin, const ImVec2& availableMax, float& topStatusLeft);
 	/** Stack a status panel below visible peers, excluding its own window. */
 	static float GetTopStatusWindowBottom(float minimumY, const char* excludeWindow);

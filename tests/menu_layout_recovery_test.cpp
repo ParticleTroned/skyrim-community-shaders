@@ -37,8 +37,10 @@ namespace globals::features
 	struct VR
 	{
 		int resets = 0;
+		bool hasCanvas = true;
 		void ResetMenuLayout() { ++resets; }
 		bool IsMenuPointerInHeadset() const { return false; }
+		bool GetMenuCanvasSize(uint32_t&, uint32_t&) const { return REL::Module::IsVR() && hasCanvas; }
 	} vr;
 }
 struct FeatureListRenderer
@@ -117,6 +119,7 @@ struct Menu
 	bool IsEnabled = true;
 	std::string featureSearch, pendingFeatureSelection;
 	int requests = 0, forwardedKeys = 0;
+	ImVec2 preTopStatusWindowPos, preTopStatusWindowSize;
 	std::unordered_set<uint32_t> _comboFiredKeys;
 	void EnsureSettingsDirtyBaseline() { baseline = true; }
 	void RequestSettingsDirtyCheck() { dirty = true; }
@@ -215,7 +218,46 @@ bool CheckWindowGeometry()
 	const auto constrained = menu.DrawGeometry({ 960, 900 }, { 1000, 200 }, { { 960, 900 }, { 1000, 200 }, true });
 	passed &= Check(constrained.GetHeight() == 200, "compilation status retains its reserved space in production window sizing");
 	ImGui::Render();
+	ImGui::NewFrame();
+	const auto statusBounded = menu.DrawGeometry({ 960, 540 }, { 1800, 1050 }, { { 960, 900 }, { 1000, 200 }, true });
+	passed &= Check(statusBounded.Min.y >= 800 && statusBounded.Max.y <= 1072,
+		"canvas repair cannot move a tall saved menu back over compilation or RenderDoc status");
+	ImGui::Render();
 	REL::Module::vr = false;
+	return passed;
+}
+
+bool CheckDesktopHeight()
+{
+	bool passed = true;
+	Menu menu;
+	for (bool vr : { false, true }) {
+		REL::Module::vr = vr;
+		for (bool canvas : { false, true }) {
+			globals::features::vr.hasCanvas = canvas;
+			menu.resetLayout = true;
+			ImGui::NewFrame();
+			const float font = ImGui::GetFontSize();
+			const auto bounds = menu.DrawGeometry({ 800, 400 }, { 1200, 600 }, { { 800, 400 }, { 1200, 600 } });
+			passed &= Check(bounds.Min.x == 200 && bounds.Min.y == 100 && bounds.GetWidth() == 1200,
+				"desktop height extension preserves the top edge and width");
+			passed &= Check(bounds.Max.y == (vr && canvas ? 700 : 1072),
+				"only desktop-only presentation extends to the bottom canvas margin");
+			passed &= Check(ImGui::GetFontSize() == font, "height extension does not scale typography");
+			ImGui::Render();
+		}
+	}
+	REL::Module::vr = false;
+	globals::features::vr.hasCanvas = true;
+	menu.resetLayout = true;
+	menu.preTopStatusWindowPos = { 800, 400 };
+	menu.preTopStatusWindowSize = { 1200, 600 };
+	ImGui::NewFrame();
+	menu.DrawGeometry({ 800, 700 }, { 1200, 600 }, { { 800, 700 }, { 1200, 600 }, true });
+	passed &= Check(menu.preTopStatusWindowPos.y - menu.preTopStatusWindowSize.y * .5f == 100 &&
+						menu.preTopStatusWindowPos.y + menu.preTopStatusWindowSize.y * .5f == 1072,
+		"status dismissal restores the expanded desktop height without moving its original top");
+	ImGui::Render();
 	return passed;
 }
 
@@ -356,6 +398,7 @@ int main()
 	ImGui::Render();
 
 	passed &= CheckWindowGeometry();
+	passed &= CheckDesktopHeight();
 	passed &= CheckDockingRecovery();
 
 	Menu menu;

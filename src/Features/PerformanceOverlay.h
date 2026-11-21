@@ -259,6 +259,7 @@ struct PerformanceOverlay : OverlayFeature
 		static constexpr float kGraphMinSpread = 2.0f;               // ms - Minimum graph spread
 		static constexpr float kGraphMaxSpread = 20.0f;              // ms - Maximum graph spread
 		static constexpr float kFrameGenerationMultiplier = 2.0f;    // Frame generation doubles frame rate
+		static constexpr float kMinUpdateInterval = 0.001f;          // seconds - Minimum update interval
 		static constexpr float kMaxUpdateInterval = 2.0f;            // seconds - Maximum update interval
 		static constexpr float kDefaultWindowPadding = 10.0f;        // pixels - Default window padding
 		static constexpr float kLabelPadding = 100.0f;               // pixels - Padding for labels

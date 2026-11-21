@@ -1948,6 +1948,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_performance_navigation_under_test.h"
             "${_settings_ui_dir}/settings_adaptive_presets_under_test.h"
             "${_settings_ui_dir}/settings_preset_files_under_test.h"
+            "${_settings_ui_dir}/settings_results_under_test.h"
         COMMAND
             "${Python3_EXECUTABLE}"
             "${PROJECT_SOURCE_DIR}/tests/ui_page_inventory.py" --root
@@ -2022,7 +2023,9 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_performance_navigation_under_test.h"
             "${_settings_ui_dir}/settings_adaptive_presets_under_test.h"
             "${_settings_ui_dir}/settings_preset_files_under_test.h"
+            "${_settings_ui_dir}/settings_results_under_test.h"
     )
+    target_sources(settings_ui_test PRIVATE src/Menu/PerformanceResults.cpp)
     target_include_directories(settings_ui_test PRIVATE "${_settings_ui_dir}")
     find_package(fmt CONFIG REQUIRED)
     target_link_libraries(
@@ -3867,6 +3870,15 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_link_libraries(
         motion_sharpening_settings_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    add_controller_test(performance_results_test PerformanceResults tests/performance_results_test.cpp)
+    target_sources(
+        performance_results_test
+        PRIVATE src/Menu/PerformanceResults.cpp
+    )
+    target_link_libraries(
+        performance_results_test
         PRIVATE nlohmann_json::nlohmann_json
     )
     add_controller_test(

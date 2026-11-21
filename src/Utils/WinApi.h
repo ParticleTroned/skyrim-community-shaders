@@ -8,6 +8,8 @@ namespace Util
 {
 	/** Opens a file or directory through Windows, returning a visible error on failure. */
 	bool OpenInShell(const std::filesystem::path& path, std::string& error);
+	/** Desktop folder picker for a worker thread; cancellation returns an empty path. */
+	std::filesystem::path ChooseExportFolder(const std::filesystem::path& initial);
 
 	std::optional<REL::Version> GetDllVersion(const std::wstring& dllPath);
 

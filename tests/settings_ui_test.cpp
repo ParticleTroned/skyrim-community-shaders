@@ -6,6 +6,7 @@
 #include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
 #include "Menu/AdaptiveBalancePresets.h"
 #include "Menu/PerformancePage.h"
+#include "Menu/PerformanceResults.h"
 #include "Menu/SectionDivider.h"
 #include "Menu/SettingsActions.h"
 #include "Menu/SettingsNavigation.h"
@@ -772,6 +773,7 @@ namespace PresetFilesTest
 	};
 #include "settings_preset_files_under_test.h"
 }
+#include "settings_results_under_test.h"
 
 void require(bool condition, const char* reason)
 {
@@ -1305,6 +1307,7 @@ int main()
 		auto* originalContext = ImGui::GetCurrentContext();
 		ImGui::SetCurrentContext(ImGui::CreateContext());
 		require(!Viewport::Describe(true)["fresh"].get<bool>() && !Viewport::Describe(true)["pending"].get<bool>() && !Viewport::Scroll("ScrollTest", "content", 0), "a different ImGui context cannot use prior observations or requests");
+
 		ImGui::DestroyContext();
 		ImGui::SetCurrentContext(originalContext);
 		frame(drawScroll);
@@ -3500,6 +3503,38 @@ int main()
 			require(toggle == 0, "integer-backed toggles can clear values outside the low byte");
 		}
 
+		{
+			PerformanceResults::View view;
+			json record = json::parse(R"({"schema":1,"id":"test-1","started":"test","kind":"quick_scan","status":"complete","context":{"runtime":"VR","timingDefinitions":2},"settings":{},"results":[{"id":"test","label":"Saved feature","metrics":{"gpu":{"unit":"ms","value":0.0},"cpu":{"unit":"ms","value":null}}}]})");
+			view.first = std::make_shared<const json>(record);
+			const auto draw = [&] { MenuUI::PerformanceResultsPage::DrawResults(view); };
+			frame(draw);
+			frame(draw);
+			std::string text;
+			frame([&] {
+				ImGui::LogToBuffer();
+				draw();
+				text = GImGui->LogBuffer.c_str();
+				ImGui::LogFinish();
+			});
+			require(text.find("Instrumented self-time") != text.npos && text.find("Saved feature") != text.npos &&
+						text.find("0.000") != text.npos && text.find("--") != text.npos,
+				"history UI distinguishes true zero from unavailable self-time");
+			record["results"][0]["metrics"]["gpu"]["value"] = 2.5;
+			view.second = std::make_shared<const json>(record);
+			frame(draw);
+			frame([&] {
+				ImGui::LogToBuffer();
+				draw();
+				text = GImGui->LogBuffer.c_str();
+				ImGui::LogFinish();
+			});
+			require(text.find("Difference") != text.npos && text.find("2.500") != text.npos, "saved-run comparison renders measured difference");
+			record["kind"] = "feature_comparison";
+			view.second = std::make_shared<const json>(record);
+			frame(draw);
+			require(!PerformanceResults::Compare(*view.first, *view.second)["compatible"].get<bool>(), "UI comparison retains semantics guard");
+		}
 		ImGui::DestroyContext();
 		std::cout << "Settings navigation and numeric interaction checks passed\n";
 	} catch (const std::exception& error) {

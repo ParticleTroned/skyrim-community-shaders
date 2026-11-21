@@ -33,6 +33,14 @@ if(_descriptor_error OR NOT _descriptor_type STREQUAL "OBJECT")
 endif()
 
 foreach(_schema_contract IN ITEMS
+    "results_status"
+    "refresh_results"
+    "load_result"
+    "export_result"
+    "retry_results"
+    "resultId"
+    "comparisonId"
+    "directory"
     "start_quick_scan"
     "invalidGpuFrames"
     "invalidCpuFrames"

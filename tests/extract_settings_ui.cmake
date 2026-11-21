@@ -197,3 +197,8 @@ extract_between("${color_source}" "\t\tstatic void PageNoticeV(" "#undef UTIL_TE
 file(READ "${OUTPUT_DIRECTORY}/settings_notices_under_test.h" notices)
 string(REGEX REPLACE "\n[\t ]+UTIL_TEXT[^\n]+" "" notices "${notices}")
 file(WRITE "${OUTPUT_DIRECTORY}/settings_notices_under_test.h" "namespace Util::Text {\n${notices}\n#undef UTIL_TEXT_WRAPPED\n}\n")
+
+file(READ "${PROJECT_ROOT}/src/Menu/PerformanceResultsUI.cpp" source)
+extract_between("${source}" "\t\tvoid ContextLine(" "\n\t}\n\n\tvoid Draw()" "settings_results_under_test.h")
+file(READ "${OUTPUT_DIRECTORY}/settings_results_under_test.h" body)
+file(WRITE "${OUTPUT_DIRECTORY}/settings_results_under_test.h" "namespace MenuUI::PerformanceResultsPage { namespace {\n${body}\n} }\n")

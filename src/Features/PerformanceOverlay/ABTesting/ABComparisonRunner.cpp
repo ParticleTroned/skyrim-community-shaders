@@ -8,6 +8,7 @@
 #	include "Menu.h"
 #	include "Menu/PerformanceTuningController.h"
 #	include "Menu/PerformanceTuningRenderer.h"
+#	include "Menu/PerformanceResultsUI.h"
 #	include "Menu/ProfilingRenderer.h"
 #	include "ShaderCache.h"
 #	include "State.h"
@@ -159,6 +160,8 @@ struct ABComparisonRunner::Impl
 			samples.reserve(ABComparison::MaximumSamples);
 	}
 
+	bool resultIoPaused = false;
+
 	void Start(const json& request)
 	{
 		RequireEnvironment();
@@ -210,7 +213,13 @@ struct ABComparisonRunner::Impl
 				settle = std::max(settle, wait);
 			}
 		}
-		Require(camera.Acquire(), "vanity camera suppression unavailable");
+		Require(MenuUI::PerformanceResultsPage::GetStore().TryPause(), "results task in progress");
+		resultIoPaused = true;
+		if (!camera.Acquire()) {
+			MenuUI::PerformanceResultsPage::GetStore().Resume();
+			resultIoPaused = false;
+			throw std::runtime_error("vanity camera suppression unavailable");
+		}
 		baseline = std::move(a);
 		change = std::move(b);
 		expected = baseline;
@@ -266,6 +275,9 @@ struct ABComparisonRunner::Impl
 
 	void Finish()
 	{
+		if (resultIoPaused)
+			MenuUI::PerformanceResultsPage::GetStore().Resume();
+		resultIoPaused = false;
 		if (profilerOwned && globals::profiler &&
 			globals::profiler->GetBoundedCaptureProgress().state != Profiler::CaptureSessionState::Running)
 			globals::profiler->SetUserEnabled(false);

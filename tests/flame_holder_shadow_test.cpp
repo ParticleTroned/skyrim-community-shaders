@@ -1,19 +1,58 @@
 #include "Features/LightLimitFix/ShadowCullingDrawScope.h"
 #include "Utils/ScopedFlag.h"
 #include <Windows.h>
+#include <array>
 #include <iostream>
 #include <limits>
 #include <source_location>
 #include <stdexcept>
 #include <string>
 
+struct LightLimitFix
+{
+	enum class LightFlags
+	{
+		Initialised
+	};
+};
 namespace RE
 {
+	class TESObjectLIGH;
+	struct TESForm
+	{
+		bool isLight = false;
+		static inline std::array<const TESForm*, 3> forms{};
+		static inline unsigned lookups = 0;
+		template <class T>
+		const T* As() const
+		{
+			return isLight ? static_cast<const T*>(this) : nullptr;
+		}
+		template <class T>
+		static const T* LookupByID(std::uint32_t id)
+		{
+			++lookups;
+			return id < forms.size() && forms[id] ? forms[id]->As<T>() : nullptr;
+		}
+	};
+	class TESObjectLIGH : public TESForm
+	{
+	public:
+		TESObjectLIGH() { isLight = true; }
+		bool noFlicker = false;
+		bool GetNoFlicker() const { return noFlicker; }
+		struct
+		{
+			float flickerMovementAmplitude = 16;
+		} data;
+	};
 	struct TESObjectREFR
 	{
 		std::uint32_t handle = 1;
 		bool actor = false;
 		unsigned handleReads = 0;
+		const TESForm* base = nullptr;
+		const TESForm* GetObjectReference() const { return base; }
 		bool IsActor() const { return actor; }
 		struct Handle
 		{
@@ -27,12 +66,13 @@ namespace RE
 			return { handle };
 		}
 	};
+	struct NiPoint3
+	{
+		float x = 0, y = 0, z = 0;
+	};
 	struct NiAVObject
 	{
-		struct Point
-		{
-			float x = 0, y = 0, z = 0;
-		};
+		using Point = NiPoint3;
 		struct Transform
 		{
 			Point translate;
@@ -43,7 +83,18 @@ namespace RE
 		bool accessFault = false;
 	};
 	class NiLight : public NiAVObject
-	{};
+	{
+	public:
+		struct RuntimeData
+		{
+			struct Flags
+			{
+				bool initialized = false;
+				bool any(LightLimitFix::LightFlags) const { return initialized; }
+			} flags;
+			std::uint32_t lighFormId = 0;
+		} runtimeData;
+	};
 	class BSGeometry : public NiAVObject
 	{
 	public:
@@ -70,6 +121,20 @@ namespace RE
 		bool GetIsParabolicLight() { return parabolic; }
 	};
 }
+struct ISLCommon
+{
+	struct RuntimeLightDataExt
+	{
+		static auto* Get(RE::NiLight* source) { return &source->runtimeData; }
+	};
+};
+namespace globals::features
+{
+	struct
+	{
+		bool loaded = false;
+	} inverseSquareLighting;
+}
 namespace Util
 {
 	RE::TESObjectREFR* GetOwnUserData(const RE::NiAVObject* object)
@@ -88,9 +153,121 @@ void Require(bool condition, std::source_location location = std::source_locatio
 		throw std::runtime_error("Flame holder regression at line " + std::to_string(location.line()));
 }
 
+void CheckPlacedFlickerOrigin()
+{
+	RE::TESObjectLIGH nativeRecord, placedRecord;
+	RE::TESForm nonLight;
+	RE::TESObjectREFR owner;
+	owner.base = &nativeRecord;
+	RE::NiAVObject root;
+	root.owner = &owner;
+	RE::NiLight source;
+	source.parent = &root;
+	source.local.translate.x = source.world.translate.x = 18;
+	RE::BSShadowLight light;
+	light.light.value = &source;
+	RE::BSGeometry holder;
+	holder.parent = &root;
+	const auto fresh = [&] { C::FlameHolderContext context; return C::ShouldSkipFlameHolder(context, light, holder); };
+	Require(fresh());
+	source.local.translate.x = source.world.translate.x = 18.01f;
+	Require(!fresh());
+	source.local.translate.x = source.world.translate.x = 24;
+	nativeRecord.data.flickerMovementAmplitude = 32;
+	Require(fresh());
+	nativeRecord.noFlicker = true;
+	Require(!fresh());
+	nativeRecord.noFlicker = false;
+	for (float amplitude : { 0.0f, -1.0f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() }) {
+		nativeRecord.data.flickerMovementAmplitude = amplitude;
+		Require(!fresh());
+	}
+	nativeRecord.data.flickerMovementAmplitude = 32;
+	source.local.translate = source.world.translate = { 30, 30, 0 };
+	Require(!fresh());
+	source.local.translate = { 24, 0, 0 };
+	source.world.translate = { 0, 48, 0 };
+	root.world.scale = 2;
+	Require(fresh());
+	root.world.scale = 1;
+	source.world.translate = source.local.translate;
+	owner.base = nullptr;
+	Require(!fresh());
+	owner.base = &nonLight;
+	Require(!fresh());
+	owner.base = &nativeRecord;
+	for (float invalid : { std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() }) {
+		source.local.translate.x = invalid;
+		Require(!fresh());
+		source.world.translate = {};
+		Require(fresh());
+		source.local.translate.x = 24;
+		source.world.translate.x = invalid;
+		Require(!fresh());
+		source.world.translate.x = 24;
+		root.world.translate.x = invalid;
+		Require(!fresh());
+		source.world.translate = {};
+		Require(fresh());
+		root.world.translate = {};
+		source.world.translate.x = 24;
+	}
+	// A supplied source record takes precedence over a different holder record.
+	RE::TESForm::forms = { nullptr, &placedRecord, &nonLight };
+	source.runtimeData.lighFormId = 1;
+	source.runtimeData.flags.initialized = true;
+	globals::features::inverseSquareLighting.loaded = true;
+	Require(!fresh());
+	placedRecord.data.flickerMovementAmplitude = 32;
+	Require(fresh());
+	placedRecord.noFlicker = true;
+	Require(!fresh());
+	placedRecord.noFlicker = false;
+	for (std::uint32_t id : { 2u, 3u }) {
+		source.runtimeData.lighFormId = id;
+		Require(!fresh());
+	}
+	source.runtimeData.lighFormId = 0;
+	Require(fresh());
+	source.runtimeData.lighFormId = 2;
+	source.runtimeData.flags.initialized = false;
+	auto reads = RE::TESForm::lookups;
+	Require(fresh() && RE::TESForm::lookups == reads);
+	source.runtimeData.flags.initialized = true;
+	globals::features::inverseSquareLighting.loaded = false;
+	Require(fresh() && RE::TESForm::lookups == reads);
+	globals::features::inverseSquareLighting.loaded = true;
+	source.runtimeData.lighFormId = 1;
+	{
+		C::FlameHolderContext context;
+		Require(C::ShouldSkipFlameHolder(context, light, holder));
+		Require(RE::TESForm::lookups == reads + 1);
+		placedRecord.noFlicker = true;
+		Require(C::ShouldSkipFlameHolder(context, light, holder));
+		Require(RE::TESForm::lookups == reads + 1);
+		Require(!fresh());
+	}
+	placedRecord.noFlicker = false;
+	reads = RE::TESForm::lookups;
+	owner.actor = true;
+	Require(!fresh());
+	holder.worldBound.center = source.world.translate;
+	Require(fresh() && RE::TESForm::lookups == reads);
+	owner.actor = false;
+	source.owner = &owner;
+	source.parent = nullptr;
+	Require(fresh() && RE::TESForm::lookups == reads);
+	source.parent = &root;
+	source.local.translate = {};
+	Require(fresh() && RE::TESForm::lookups == reads);
+	RE::TESForm::forms = {};
+	globals::features::inverseSquareLighting.loaded = false;
+}
+
 int main()
 {
 	try {
+		CheckPlacedFlickerOrigin();
 		Require(C::HoldsFlame({ 0, 0, 0 }, 17, 1));
 		Require(C::HoldsFlame({ 0, 0, -29 }, 5, 1));
 		Require(!C::HoldsFlame({ 0, 0, -30 }, 5, 1));
@@ -216,14 +393,14 @@ int main()
 		light.light.value = nullptr;
 		Require(!fresh());
 		light.light.value = &source;
-		// Native flame wobble must not repeatedly change a holder's classification.
+		// Unknown movement uses the actual source position rather than an assumed anchor.
 		source.local.translate.x = source.world.translate.x = 16;
-		Require(fresh());
+		Require(!fresh());
 		source.local.translate.x = source.world.translate.x = 17;
 		Require(!fresh());
 		source.local.translate = source.world.translate = {};
 		root.world.translate.x = std::numeric_limits<float>::infinity();
-		Require(!fresh());
+		Require(fresh());
 		root.world.translate = {};
 		root.accessFault = true;
 		Require(!fresh());

@@ -27,7 +27,6 @@ namespace LightLimitFixDetail::ShadowCulling
 	inline constexpr double FlameHolderMaxRadius = 20;
 	inline constexpr double FlameHolderReachMargin = 4;
 	inline constexpr double FlameAboveHolderMax = 24;
-	inline constexpr double FlameFlickerMaxOffset = 16;
 
 	/** Large fixtures and invalid bounds retain their shadows. */
 	[[nodiscard]] inline bool FlameHolderSizeEligible(double radius, double scale) noexcept

@@ -1,9 +1,14 @@
 #include "FlameHolderShadow.h"
+#include "Features/InverseSquareLighting.h"
+#include "Features/InverseSquareLighting/Common.h"
+#include "Globals.h"
 #include "Utils/Game.h"
 #include <RE/B/BSGeometry.h>
 #include <RE/B/BSShadowLight.h>
 #include <RE/N/NiLight.h>
 #include <RE/N/NiNode.h>
+#include <RE/T/TESForm.h>
+#include <RE/T/TESObjectLIGH.h>
 #include <RE/T/TESObjectREFR.h>
 #include <Windows.h>
 
@@ -24,10 +29,45 @@ namespace LightLimitFixDetail::ShadowCulling
 			const auto owner = ObjectOwner(object);
 			return owner && owner->IsActor() == actor ? owner->GetHandle().native_handle() : 0;
 		}
+		const RE::TESObjectLIGH* SourceLightRecord(RE::NiLight& source, RE::TESObjectREFR& owner)
+		{
+			// The creation hook retains source metadata even when ISL is toggled off.
+			if (globals::features::inverseSquareLighting.loaded) {
+				const auto* data = ISLCommon::RuntimeLightDataExt::Get(&source);
+				// An invalid source ID must not substitute a different holder's light record.
+				if (data->flags.any(LightLimitFix::LightFlags::Initialised) && data->lighFormId != 0)
+					return RE::TESForm::LookupByID<RE::TESObjectLIGH>(data->lighFormId);
+			}
+			const auto* base = owner.GetObjectReference();
+			return base ? base->As<RE::TESObjectLIGH>() : nullptr;
+		}
+		RE::NiPoint3 PlacedFlameOrigin(RE::NiLight& source, RE::TESObjectREFR& owner)
+		{
+			const auto actual = source.world.translate;
+			const auto offset = source.local.translate;
+			if (!source.parent || !Util::IsFinite(offset.x) || !Util::IsFinite(offset.y) || !Util::IsFinite(offset.z))
+				return actual;
+			const double offsetSquared = double(offset.x) * offset.x + double(offset.y) * offset.y + double(offset.z) * offset.z;
+			if (offsetSquared == 0)
+				return actual;
+			const auto parent = source.parent->world.translate;
+			if (!Util::IsFinite(parent.x) || !Util::IsFinite(parent.y) || !Util::IsFinite(parent.z))
+				return actual;
+			const auto* record = SourceLightRecord(source, owner);
+			if (!record || record->GetNoFlicker())
+				return actual;
+			const double amplitude = record->data.flickerMovementAmplitude;
+			if (!Util::IsFinite(amplitude) || amplitude <= 0)
+				return actual;
+			// Pulse movement reaches sqrt(1.25) times its authored amplitude.
+			constexpr double FlickerReachPerAmplitude = 1.125;
+			const double reach = amplitude * FlickerReachPerAmplitude;
+			return offsetSquared <= reach * reach ? parent : actual;
+		}
 		void CaptureFlameHolder(FlameHolderContext& context, RE::BSShadowLight& light)
 		{
 			context.captured = true;
-			const auto* source = light.light.get();
+			auto* source = light.light.get();
 			if (!source || !light.GetIsParabolicLight())
 				return;
 			auto* owner = ObjectOwner(source);
@@ -37,17 +77,10 @@ namespace LightLimitFixDetail::ShadowCulling
 			if (carried && !light.dynamic)
 				return;
 			auto origin = source->world.translate;
-			if (!carried) {
-				const auto offset = source->local.translate;
-				if (!Util::IsFinite(offset.x) || !Util::IsFinite(offset.y) || !Util::IsFinite(offset.z))
-					return;
-				// Only placed flames use the wobble anchor; carried holders must enclose the actual light.
-				const double offsetSquared = double(offset.x) * offset.x + double(offset.y) * offset.y + double(offset.z) * offset.z;
-				if (source->parent && offsetSquared <= FlameFlickerMaxOffset * FlameFlickerMaxOffset)
-					origin = source->parent->world.translate;
-			}
 			if (!Util::IsFinite(origin.x) || !Util::IsFinite(origin.y) || !Util::IsFinite(origin.z))
 				return;
+			if (!carried)
+				origin = PlacedFlameOrigin(*source, *owner);
 			context.ownerHandle = owner->GetHandle().native_handle();
 			context.origin = { origin.x, origin.y, origin.z };
 			context.carried = carried;

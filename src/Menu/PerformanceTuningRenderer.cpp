@@ -2197,8 +2197,10 @@ namespace
 			MenuUI::DetailText("Running with CS closed");
 		else if (PerformanceTuningRenderer::HasActiveMeasurements())
 			MenuUI::DetailText("Finish the current measurement first");
-		else if (cooldown > 0.0)
-			MenuUI::DetailText(fmt::format("Ready in {:.0f}s", std::ceil(cooldown)).c_str());
+		else if (cooldown > 0.0) {
+			MenuUI::DetailText(fmt::format("Next measurement in {:.0f}s", std::ceil(cooldown)).c_str());
+			Util::AddTooltip("Completed results remain visible. Only the next measurement waits for restored rendering settings to settle.");
+		}
 	}
 
 	const char* GetFeatureCostComparisonLabel(Feature* feature)

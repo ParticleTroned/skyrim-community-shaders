@@ -113,6 +113,7 @@ namespace
 	ID3D11RasterizerState* g_cachedReversedRasterState = nullptr;
 	ID3D11RasterizerState* g_boundRasterState = nullptr;
 	bool g_reverseTargetBound = false;
+	bool g_standardSceneDepthBound = false;
 	bool g_projectionReversed = false;
 	bool g_nearMaskBound = false;
 	std::atomic<bool> g_reversalActive{ false };
@@ -120,10 +121,12 @@ namespace
 	D3D11_VIEWPORT g_requestedViewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
 	D3D11_VIEWPORT g_mappedViewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
 	UINT g_requestedViewportCount = 0;
+	bool g_isolatedContext = false;
 	struct NativeViewportCorrection
 	{
 		float maxDepth;
 		float headroom;
+		bool standardScene;
 	};
 	std::optional<NativeViewportCorrection> g_nativeViewportCorrection;
 	struct OcclusionDepthRange
@@ -141,13 +144,17 @@ namespace
 
 	std::span<const float> NativeViewportDepthBiases();
 	RE::BSGraphics::ViewData* PublishedViewData(uint32_t a_eye);
+	uint32_t PublishedDepthStencilTarget();
 
 	std::optional<NativeViewportCorrection> ResolveNativeViewportCorrection(const D3D11_VIEWPORT& a_viewport)
 	{
-		if (!globals::game::isVR || !globals::game::shadowState)
+		if (!globals::game::isVR || !globals::game::shadowState || g_isolatedContext)
 			return std::nullopt;
 		const auto& native = globals::game::shadowState->GetVRRuntimeData();
 		if (std::memcmp(&native.viewPort, &a_viewport, sizeof(a_viewport)) != 0)
+			return std::nullopt;
+		const bool standardScene = !globals::features::reverseZ.IsActive();
+		if (standardScene && std::find(std::begin(kReverseTargets), std::end(kReverseTargets), PublishedDepthStencilTarget()) == std::end(kReverseTargets))
 			return std::nullopt;
 		const auto biases = NativeViewportDepthBiases();
 		if (native.rasterStateDepthBiasMode >= biases.size())
@@ -171,18 +178,19 @@ namespace
 			maximumBias = std::max(maximumBias, layerBias);
 		}
 		// Common near-plane headroom preserves layer order without a fixed far-depth offset.
-		return NativeViewportCorrection{ range.y, maximumBias - bias };
+		return NativeViewportCorrection{ range.y, maximumBias - bias, standardScene };
 	}
 
-	bool HasNativeViewportCorrection()
+	bool HasNativeViewportCorrection(bool a_flip)
 	{
-		return g_nativeViewportCorrection && g_projectionReversed && !g_nearMaskBound;
+		return g_nativeViewportCorrection && !g_nearMaskBound &&
+		       (a_flip ? g_projectionReversed : g_standardSceneDepthBound && g_nativeViewportCorrection->standardScene);
 	}
 
-	D3D11_VIEWPORT UnbiasedSceneViewport(const D3D11_VIEWPORT& a_viewport)
+	D3D11_VIEWPORT UnbiasedSceneViewport(const D3D11_VIEWPORT& a_viewport, bool a_flip)
 	{
 		auto viewport = a_viewport;
-		if (HasNativeViewportCorrection())
+		if (HasNativeViewportCorrection(a_flip))
 			viewport.MaxDepth = g_nativeViewportCorrection->maxDepth;
 		return viewport;
 	}
@@ -197,11 +205,15 @@ namespace
 
 	D3D11_VIEWPORT MapSceneViewportDepth(const D3D11_VIEWPORT& a_viewport, bool a_flip)
 	{
-		if (!a_flip)
-			return a_viewport;
-		auto mapped = MirrorViewportDepth(UnbiasedSceneViewport(a_viewport));
-		if (HasNativeViewportCorrection())
-			mapped.MaxDepth -= g_nativeViewportCorrection->headroom;
+		auto mapped = UnbiasedSceneViewport(a_viewport, a_flip);
+		if (a_flip)
+			mapped = MirrorViewportDepth(mapped);
+		if (HasNativeViewportCorrection(a_flip)) {
+			if (a_flip)
+				mapped.MaxDepth -= g_nativeViewportCorrection->headroom;
+			else
+				mapped.MinDepth += g_nativeViewportCorrection->headroom;
+		}
 		return mapped;
 	}
 
@@ -217,8 +229,8 @@ namespace
 		const auto viewport = MapSceneViewportDepth(requested, true);
 		if (viewport.MinDepth != g_mappedViewports[0].MinDepth || viewport.MaxDepth != g_mappedViewports[0].MaxDepth)
 			return;
-		requested = UnbiasedSceneViewport(requested);
-		if (HasNativeViewportCorrection()) {
+		requested = UnbiasedSceneViewport(requested, true);
+		if (HasNativeViewportCorrection(true)) {
 			// The uncompressed interval covers every scene layer regardless of the producer's last material.
 			const auto range = MirrorViewportDepth(requested);
 			g_preparedOcclusionDepthRange = { range.MinDepth, range.MaxDepth };
@@ -543,7 +555,7 @@ void ReverseZ::DrawSettings()
 	bool enabled = IsEnabledAtStartup();
 	if (ImGui::Checkbox("Enable Reverse Z (restart required)", &enabled))
 		SetEnabledAtStartup(enabled);
-	Util::AddTooltip("Reduces flickering where distant surfaces overlap. Off uses the original depth handling. Uses extra graphics memory and may cost performance. Save and restart to apply.");
+	Util::AddTooltip("Reduces flickering where distant surfaces overlap. Off uses standard depth precision. Uses extra graphics memory and may cost performance. Save and restart to apply.");
 	if (HasPendingBootChange())
 		Util::Text::WrappedRestartNeeded("Restart required: save settings and restart the game to apply the Reverse Z change.");
 	ImGui::TextUnformatted(IsActive() ? "Active: Reverse Z" : "Active: Standard Z");
@@ -1151,13 +1163,34 @@ namespace
 		OcclusionDepthRange previousRange;
 	};
 
+	bool IsNativeSceneDepthView(ID3D11DepthStencilView* a_view)
+	{
+		if (!a_view || !globals::game::renderer)
+			return false;
+		const auto& targets = globals::game::renderer->GetDepthStencilData().depthStencils;
+		for (const auto index : kReverseTargets) {
+			const auto& target = targets[index];
+			for (size_t i = 0; i < std::size(target.views); ++i)
+				if (a_view == REX::W32::AsReal(target.views[i]) || a_view == REX::W32::AsReal(target.readOnlyViews[i]))
+					return true;
+		}
+		return false;
+	}
+
 	void UpdateBoundDepthTarget(ID3D11DeviceContext* This, ID3D11DepthStencilView* pDepthStencilView)
 	{
 		if (This != globals::d3d::context)
 			return;
+		// Custom passes can change the physical target without updating the engine's shadow state.
+		const bool standardBound = globals::game::isVR && !g_isolatedContext &&
+		                           !globals::features::reverseZ.IsActive() && IsNativeSceneDepthView(pDepthStencilView);
+		const bool standardChanged = std::exchange(g_standardSceneDepthBound, standardBound) != standardBound;
 		const bool reverseBound = globals::features::reverseZ.IsReverseDepthView(pDepthStencilView);
-		if (reverseBound == g_reverseTargetBound)
+		if (reverseBound == g_reverseTargetBound) {
+			if (standardChanged)
+				ReapplyMappedViewports(This, ShouldFlip());
 			return;
+		}
 		g_reverseTargetBound = reverseBound;
 		ReapplyMappedStates(This);
 		ReapplyNearPlaneShader(This);
@@ -1363,6 +1396,8 @@ namespace
 
 	void ResetTrackedContextState(bool a_isolated = false)
 	{
+		// Clearing bindings cannot end an enclosing isolated pass.
+		g_isolatedContext |= a_isolated;
 		g_requestedState = nullptr;
 		g_cachedReversedState = nullptr;
 		g_boundState = nullptr;
@@ -1373,6 +1408,7 @@ namespace
 		g_requestedViewportCount = 0;
 		g_nativeViewportCorrection.reset();
 		g_reverseTargetBound = false;
+		g_standardSceneDepthBound = false;
 		g_nearMaskBound = false;
 		g_lastClearedCubeFace = nullptr;
 		g_boundVertexShader = nullptr;
@@ -1407,10 +1443,12 @@ namespace
 			g_cachedReversedRasterState = cachedReversedRasterState;
 			g_boundRasterState = boundRasterState;
 			g_requestedViewportCount = viewportCount;
+			g_isolatedContext = isolatedContext;
 			g_nativeViewportCorrection = nativeViewportCorrection;
 			std::copy_n(requestedViewports.begin(), viewportCount, g_requestedViewports);
 			std::copy_n(mappedViewports.begin(), viewportCount, g_mappedViewports);
 			g_reverseTargetBound = reverseTargetBound;
+			g_standardSceneDepthBound = standardSceneDepthBound;
 			g_projectionReversed = projectionReversed;
 			g_nearMaskBound = nearMaskBound;
 			g_lastClearedCubeFace = lastClearedCubeFace;
@@ -1431,9 +1469,11 @@ namespace
 		ID3D11RasterizerState* cachedReversedRasterState = g_cachedReversedRasterState;
 		ID3D11RasterizerState* boundRasterState = g_boundRasterState;
 		UINT viewportCount = g_requestedViewportCount;
+		bool isolatedContext = g_isolatedContext;
 		std::optional<NativeViewportCorrection> nativeViewportCorrection = g_nativeViewportCorrection;
 		std::array<D3D11_VIEWPORT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> requestedViewports{}, mappedViewports{};
 		bool reverseTargetBound = g_reverseTargetBound;
+		bool standardSceneDepthBound = g_standardSceneDepthBound;
 		bool projectionReversed = g_projectionReversed;
 		bool nearMaskBound = g_nearMaskBound;
 		ID3D11RenderTargetView* lastClearedCubeFace = g_lastClearedCubeFace;
@@ -1471,7 +1511,7 @@ namespace
 void ReverseZ::InstallRuntimeHooks()
 {
 	LatchBootState();
-	if (runtimeHooksInstalled || !requestedThisBoot)
+	if (runtimeHooksInstalled || (!requestedThisBoot && !globals::game::isVR))
 		return;
 	// Frame-buffer observers must be ready before reversed depth targets are published.
 	auto* context = globals::d3d::context;
@@ -1487,17 +1527,22 @@ void ReverseZ::InstallRuntimeHooks()
 	std::copy_n(g_requestedViewports, g_requestedViewportCount, g_mappedViewports);
 	runtimeHooksInstalled = true;
 	Util::captureDeviceContextState = CaptureReverseContextState;
-
+	stl::detour_vfunc<44, ID3D11DeviceContext_RSSetViewports>(context);
+	stl::detour_vfunc<95, ID3D11DeviceContext_RSGetViewports>(context);
+	stl::detour_vfunc<110, ID3D11DeviceContext_ClearState>(context);
 	stl::detour_vfunc<33, ID3D11DeviceContext_OMSetRenderTargets>(context);
 	stl::detour_vfunc<34, ID3D11DeviceContext_OMSetRenderTargetsAndUnorderedAccessViews>(context);
+	if (!requestedThisBoot) {
+		RefreshBoundDepthTarget();
+		logger::info("ReverseZ: installed standard-depth VR viewport layer correction");
+		return;
+	}
+
 	stl::detour_vfunc<36, ID3D11DeviceContext_OMSetDepthStencilState>(context);
 	stl::detour_vfunc<43, ID3D11DeviceContext_RSSetState>(context);
-	stl::detour_vfunc<44, ID3D11DeviceContext_RSSetViewports>(context);
 	stl::detour_vfunc<53, ID3D11DeviceContext_ClearDepthStencilView>(context);
 	stl::detour_vfunc<92, ID3D11DeviceContext_OMGetDepthStencilState>(context);
 	stl::detour_vfunc<94, ID3D11DeviceContext_RSGetState>(context);
-	stl::detour_vfunc<95, ID3D11DeviceContext_RSGetViewports>(context);
-	stl::detour_vfunc<110, ID3D11DeviceContext_ClearState>(context);
 	if (globals::game::isVR) {
 		stl::detour_vfunc<9, ID3D11DeviceContext_PSSetShader>(context);
 		stl::detour_vfunc<11, ID3D11DeviceContext_VSSetShader>(context);

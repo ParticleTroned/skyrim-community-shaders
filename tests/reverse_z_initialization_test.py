@@ -16,6 +16,116 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReverseZInitializationTests(unittest.TestCase):
+    def test_viewport_hooks_with_reverse_z_disabled(self):
+        from grass_draw_lifecycle_test import compile_fixture
+
+        source = (ROOT / "src/Features/ReverseZ.cpp").read_text(encoding="utf-8")
+        driver = r'''
+#include <algorithm>
+#include <array>
+#include <cassert>
+#include <optional>
+#include <set>
+#include <utility>
+using UINT = unsigned;
+constexpr UINT D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE = 16;
+struct D3D11_VIEWPORT { float depth = 1; };
+struct Context {
+    void OMGetDepthStencilState(void** state, UINT* ref) { *state = nullptr; *ref = 0; }
+    void RSGetState(void** state) { *state = nullptr; }
+    void RSGetViewports(UINT* count, D3D11_VIEWPORT* viewports) { *count = 1; viewports[0] = {}; }
+} fixture;
+struct Holder {
+    void* value = nullptr;
+    void** put() { return &value; }
+    void* get() const { return value; }
+} g_requestedState, g_requestedRasterState;
+void* g_boundState = nullptr;
+void* g_boundRasterState = nullptr;
+UINT g_requestedStencilRef = 0, g_requestedViewportCount = 0;
+D3D11_VIEWPORT g_requestedViewports[16]{}, g_mappedViewports[16]{};
+std::optional<int> g_nativeViewportCorrection;
+std::optional<int> ResolveNativeViewportCorrection(const D3D11_VIEWPORT&) { return 1; }
+unsigned refreshes = 0;
+void RefreshBoundDepthTarget() { ++refreshes; }
+void CaptureReverseContextState() {}
+namespace Util { void (*captureDeviceContextState)() = nullptr; }
+namespace globals {
+namespace game { bool isVR = false; }
+namespace d3d { Context* context = &fixture; int* device = nullptr; }
+}
+namespace logger { template<class... Args> void info(const char*, Args...) {} }
+namespace RE { constexpr int VTABLE_BSImagespaceShaderDepthBuffer4xDownscale[4]{}; }
+struct ID3D11DeviceContext_OMSetRenderTargets;
+struct ID3D11DeviceContext_OMSetRenderTargetsAndUnorderedAccessViews;
+struct ID3D11DeviceContext_OMSetDepthStencilState;
+struct ID3D11DeviceContext_RSSetState;
+struct ID3D11DeviceContext_RSSetViewports;
+struct ID3D11DeviceContext_ClearDepthStencilView;
+struct ID3D11DeviceContext_OMGetDepthStencilState;
+struct ID3D11DeviceContext_RSGetState;
+struct ID3D11DeviceContext_RSGetViewports;
+struct ID3D11DeviceContext_ClearState;
+struct ID3D11DeviceContext_PSSetShader;
+struct ID3D11DeviceContext_VSSetShader;
+struct ID3D11Device_CreateVertexShader;
+struct BSImagespaceShaderDepthBuffer4xDownscale_Render;
+namespace stl {
+std::set<unsigned> contextSlots;
+unsigned deviceHooks = 0, nativeHooks = 0;
+template<unsigned Slot, class Hook, class Object> void detour_vfunc(Object* object) {
+    if (static_cast<void*>(object) == &fixture) {
+        assert(contextSlots.insert(Slot).second);
+    } else {
+        ++deviceHooks;
+    }
+}
+template<unsigned Slot, class Hook> void write_vfunc(int) { ++nativeHooks; }
+}
+struct ReverseZ {
+    bool runtimeHooksInstalled = false, requestedThisBoot = false;
+    void LatchBootState() {}
+    void InstallRuntimeHooks();
+};
+INSTALL_HOOKS
+int main() {
+    for (bool vr : {false, true}) {
+        for (bool requested : {false, true}) {
+            globals::game::isVR = vr;
+            ReverseZ feature;
+            feature.requestedThisBoot = requested;
+            stl::contextSlots.clear();
+            stl::deviceHooks = stl::nativeHooks = refreshes = 0;
+            Util::captureDeviceContextState = nullptr;
+            globals::d3d::context = nullptr;
+            feature.InstallRuntimeHooks();
+            assert(!feature.runtimeHooksInstalled && stl::contextSlots.empty());
+            globals::d3d::context = &fixture;
+            feature.InstallRuntimeHooks();
+            const bool installed = vr || requested;
+            assert(feature.runtimeHooksInstalled == installed);
+            assert(bool(Util::captureDeviceContextState) == installed);
+            std::set<unsigned> expected;
+            if (installed) expected = {33, 34, 44, 95, 110};
+            if (requested) expected.insert({36, 43, 53, 92, 94});
+            if (requested && vr) expected.insert({9, 11});
+            assert(stl::contextSlots == expected);
+            assert(stl::deviceHooks == unsigned(requested && vr));
+            assert(stl::nativeHooks == unsigned(requested && vr));
+            assert(refreshes == unsigned(vr && !requested));
+            feature.InstallRuntimeHooks();
+            assert(stl::contextSlots == expected);
+            assert(stl::deviceHooks == unsigned(requested && vr));
+            assert(stl::nativeHooks == unsigned(requested && vr));
+            assert(refreshes == unsigned(vr && !requested));
+        }
+    }
+}
+'''
+        driver = driver.replace("INSTALL_HOOKS", block(source, "void ReverseZ::InstallRuntimeHooks()"))
+        result = compile_fixture(driver)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_info_controls_and_pending_restart(self):
         from grass_draw_lifecycle_test import compile_fixture
 

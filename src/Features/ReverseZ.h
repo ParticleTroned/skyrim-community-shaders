@@ -38,7 +38,7 @@ struct ReverseZ : Feature
 	void SetupResources() override;
 	void DataLoaded() override;
 	void PostPostLoad() override;
-	/** Install on the renderer immediate context before engine shader creation. */
+	/** Install before engine shader creation; VR viewport layering also applies with standard depth. */
 	void InstallRuntimeHooks();
 	/** Requested and effective states remain separate until preparation commits. */
 	json GetDiagnostics() const;

@@ -139,24 +139,31 @@ namespace RE::RENDER_TARGETS_DEPTHSTENCIL
 		kDECAL_OCCLUSION,
 		kPOST_ZPREPASS_COPY,
 		kPOST_WATER_COPY,
-		kMAIN_DOWNSAMPLE
+		kMAIN_DOWNSAMPLE,
+		kSHADOWMAPS,
+		kCUBEMAP_REFLECTIONS,
+		kHUDMENU,
+		kTOTAL,
+		kNONE = -1
 	};
 }
 struct DepthTarget
 {
 	ID3D11Texture2D* texture = nullptr;
-	ID3D11DepthStencilView* views[1]{};
-	ID3D11DepthStencilView* readOnlyViews[1]{};
+	ID3D11DepthStencilView* views[8]{};
+	ID3D11DepthStencilView* readOnlyViews[8]{};
 	ID3D11ShaderResourceView* depthSRV = nullptr;
 	ID3D11ShaderResourceView* stencilSRV = nullptr;
 	~DepthTarget()
 	{
 		if (texture)
 			texture->Release();
-		if (views[0])
-			views[0]->Release();
-		if (readOnlyViews[0])
-			readOnlyViews[0]->Release();
+		for (auto* view : views)
+			if (view)
+				view->Release();
+		for (auto* view : readOnlyViews)
+			if (view)
+				view->Release();
 		if (depthSRV)
 			depthSRV->Release();
 		if (stencilSRV)
@@ -167,7 +174,7 @@ struct Renderer
 {
 	struct
 	{
-		DepthTarget depthStencils[6];
+		DepthTarget depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kTOTAL];
 	} data;
 	auto& GetDepthStencilData() { return data; }
 };
@@ -248,7 +255,11 @@ namespace
 {
 #include "reverse_z_state_comparison.h"
 #include "reverse_z_state_resources.h"
+#include "reverse_z_state_targets.h"
+
 #include "reverse_z_state_storage.h"
+	uint32_t publishedDepthStencilTarget = static_cast<uint32_t>(RE::RENDER_TARGETS_DEPTHSTENCIL::kNONE);
+	uint32_t PublishedDepthStencilTarget() { return publishedDepthStencilTarget; }
 	std::array nativeViewportBiases{ 0.0f, .000015f, 0.0f, 0.0f, 0.0f, 0.0f,
 		.000026f, .000015f, .000028f, .000017f, .000030f, .000019f };
 	unsigned nativeViewportBiasReads = 0, publishedViewportReads = 0;
@@ -262,7 +273,6 @@ namespace
 		++publishedViewportReads;
 		return globals::game::shadowState ? &globals::game::shadowState->eyes.at(eye) : nullptr;
 	}
-#include "reverse_z_state_targets.h"
 #include "reverse_z_state_views.h"
 	void ReapplyNearPlaneShader(ID3D11DeviceContext*) {}
 #include "reverse_z_state_getters.h"
@@ -981,6 +991,177 @@ namespace
 		g_reverseTargetBound = g_projectionReversed = true;
 	}
 
+	void TestStandardViewportMapping(ID3D11Device* device, ID3D11DeviceContext* context)
+	{
+		const bool previousActive = globals::features::reverseZ.IsActive();
+		const bool previousVR = globals::game::isVR;
+		globals::features::reverseZ.activeThisBoot = false;
+		g_reverseTargetBound = g_projectionReversed = g_nearMaskBound = false;
+		Renderer renderer;
+		CreateSceneTargets(renderer, device);
+		auto* previousRenderer = std::exchange(globals::game::renderer, &renderer);
+		auto* view = renderer.data.depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].views[0];
+		context->OMSetRenderTargets(0, nullptr, view);
+		ShadowState shadow;
+		globals::game::shadowState = &shadow;
+		const D3D11_VIEWPORT scene{ 0, 0, 8, 8, 0, .999998f };
+		for (auto& eye : shadow.eyes)
+			eye.viewDepthRange = { scene.MinDepth, scene.MaxDepth };
+		for (bool vr : { false, true }) {
+			globals::game::isVR = vr;
+			UpdateBoundDepthTarget(context, view);
+			for (uint32_t target = 0; target <= RE::RENDER_TARGETS_DEPTHSTENCIL::kTOTAL; ++target) {
+				publishedDepthStencilTarget = target;
+				for (uint32_t mode = 0; mode < nativeViewportBiases.size(); ++mode) {
+					auto requested = scene;
+					requested.MaxDepth -= nativeViewportBiases[mode];
+					shadow.data.viewPort = requested;
+					shadow.data.rasterStateDepthBiasMode = mode;
+					const RejectHeapAllocations rejectAllocations;
+					ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &requested);
+					auto expected = requested;
+					if (vr && target < RE::RENDER_TARGETS_DEPTHSTENCIL::kSHADOWMAPS) {
+						expected.MaxDepth = scene.MaxDepth;
+						expected.MinDepth += .000030f - nativeViewportBiases[mode];
+					}
+					D3D11_VIEWPORT actual{};
+					UINT count = 1;
+					context->RSGetViewports(&count, &actual);
+					Require(std::memcmp(&actual, &expected, sizeof(actual)) == 0, "Standard VR layer correction escaped its scene domain or missed a mode");
+					ID3D11DeviceContext_RSGetViewports::thunk(context, &count, &actual);
+					Require(std::memcmp(&actual, &requested, sizeof(actual)) == 0, "Standard correction changed logical viewport readback");
+					if (target >= RE::RENDER_TARGETS_DEPTHSTENCIL::kSHADOWMAPS) {
+						nativeViewportBiasReads = publishedViewportReads = 0;
+						ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &requested);
+						Require(nativeViewportBiasReads == 0 && publishedViewportReads == 0, "Non-scene viewport scanned native bias metadata");
+					}
+				}
+			}
+		}
+		publishedDepthStencilTarget = RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN;
+		shadow.data.viewPort = scene;
+		shadow.data.rasterStateDepthBiasMode = 0;
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &scene);
+		{
+			Util::DeviceContextStateSnapshot snapshot;
+			CaptureReverseContextState(context, snapshot);
+			ID3D11DeviceContext_ClearState::thunk(context);
+			ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &scene);
+			Require(!g_nativeViewportCorrection, "Isolated pass inherited standard scene layering after ClearState");
+		}
+		Require(!g_isolatedContext && g_nativeViewportCorrection && g_nativeViewportCorrection->standardScene,
+			"Isolated pass did not restore standard scene metadata");
+		auto custom = scene;
+		custom.Width = 4;
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &custom);
+		Require(!g_nativeViewportCorrection, "Custom pass inherited standard scene layering");
+		globals::game::shadowState = nullptr;
+		globals::game::isVR = previousVR;
+		globals::features::reverseZ.activeThisBoot = previousActive;
+		globals::game::renderer = previousRenderer;
+		publishedDepthStencilTarget = static_cast<uint32_t>(RE::RENDER_TARGETS_DEPTHSTENCIL::kNONE);
+		ID3D11DeviceContext_ClearState::thunk(context);
+		g_reverseTargetBound = g_projectionReversed = true;
+	}
+
+	void TestStandardViewportTargets(ID3D11Device* device, ID3D11DeviceContext* context)
+	{
+		const bool previousActive = globals::features::reverseZ.IsActive();
+		const bool previousVR = globals::game::isVR;
+		globals::features::reverseZ.activeThisBoot = false;
+		globals::game::isVR = true;
+		ID3D11DeviceContext_ClearState::thunk(context);
+		g_projectionReversed = false;
+		Renderer renderer, other;
+		CreateSceneTargets(renderer, device);
+		CreateSceneTargets(other, device);
+		auto* previousRenderer = std::exchange(globals::game::renderer, &renderer);
+		auto& target = renderer.data.depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+		auto* customView = other.data.depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].views[0];
+		std::swap(target.readOnlyViews[0], target.readOnlyViews[7]);
+		ShadowState shadow;
+		const D3D11_VIEWPORT scene{ 0, 0, 4, 4, 0, .999998f };
+		for (auto& eye : shadow.eyes)
+			eye.viewDepthRange = { scene.MinDepth, scene.MaxDepth };
+		shadow.data.rasterStateDepthBiasMode = 6;
+		auto requested = scene;
+		requested.MaxDepth -= nativeViewportBiases[6];
+		shadow.data.viewPort = requested;
+		globals::game::shadowState = &shadow;
+		publishedDepthStencilTarget = RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN;
+		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &requested);
+		auto verify = [&](bool corrected) {
+			D3D11_VIEWPORT actual{}, expected = requested;
+			UINT count = 1;
+			if (corrected) {
+				expected.MaxDepth = scene.MaxDepth;
+				expected.MinDepth = .000030f - nativeViewportBiases[6];
+			}
+			context->RSGetViewports(&count, &actual);
+			Require(count == 1 && std::memcmp(&actual, &expected, sizeof(actual)) == 0, "Bound depth target lost its viewport domain");
+			ID3D11DeviceContext_RSGetViewports::thunk(context, &count, &actual);
+			Require(std::memcmp(&actual, &requested, sizeof(actual)) == 0, "Target transition changed the logical viewport");
+		};
+		auto bind = [&](ID3D11DepthStencilView* view) {
+			context->OMSetRenderTargets(0, nullptr, view);
+			UpdateBoundDepthTarget(context, view);
+		};
+		verify(false);
+		bind(target.views[0]);
+		verify(true);
+		const auto forwards = stateForwards;
+		const auto reads = std::pair{ nativeViewportBiasReads, publishedViewportReads };
+		{
+			const RejectHeapAllocations rejectAllocations;
+			for (unsigned repeat = 0; repeat < 100; ++repeat) {
+				bind(target.views[0]);
+				bind(target.readOnlyViews[7]);
+			}
+		}
+		Require(stateForwards == forwards && reads == std::pair{ nativeViewportBiasReads, publishedViewportReads },
+			"Repeated scene bindings repeated viewport state or metadata work");
+		verify(true);
+		bind(customView);
+		verify(false);
+		bind(nullptr);
+		verify(false);
+		bind(target.views[0]);
+		verify(true);
+		for (bool manual : { false, true }) {
+			Util::UseManualDeviceContextState(manual);
+			winrt::com_ptr<ID3D11DeviceContext1> context1;
+			std::unique_ptr<Util::IsolatedDeviceContextState> isolated;
+			Require(Util::CreateIsolatedDeviceContextState(device, context, context1, isolated, "ReverseZStateTest::StandardIsolated"), "Standard isolation creation failed");
+			Util::captureDeviceContextState = CaptureReverseContextState;
+			{
+				const RejectHeapAllocations rejectAllocations;
+				Util::ScopedDeviceContextState guard(context1.get(), isolated.get());
+				Require(static_cast<bool>(guard), "Standard isolation was unavailable");
+				ID3D11DeviceContext_ClearState::thunk(context);
+				bind(target.views[0]);
+				ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &requested);
+				verify(false);
+			}
+			Require(g_standardSceneDepthBound && !g_isolatedContext, "Standard isolation lost the scene domain");
+			verify(true);
+		}
+		Util::captureDeviceContextState = nullptr;
+		Util::UseManualDeviceContextState(false);
+		globals::game::renderer = &other;
+		bind(target.views[0]);
+		verify(false);
+		bind(customView);
+		verify(true);
+		ID3D11DeviceContext_ClearState::thunk(context);
+		Require(!g_standardSceneDepthBound && !g_nativeViewportCorrection, "ClearState retained standard scene ownership");
+		globals::game::shadowState = nullptr;
+		globals::game::renderer = previousRenderer;
+		globals::game::isVR = previousVR;
+		globals::features::reverseZ.activeThisBoot = previousActive;
+		publishedDepthStencilTarget = static_cast<uint32_t>(RE::RENDER_TARGETS_DEPTHSTENCIL::kNONE);
+		g_reverseTargetBound = g_projectionReversed = true;
+	}
+
 	void TestNativeViewportDomainTransitions(ID3D11DeviceContext* context)
 	{
 		ShadowState shadow;
@@ -1026,6 +1207,89 @@ namespace
 		globals::game::isVR = previousVR;
 		ID3D11DeviceContext_ClearState::thunk(context);
 		g_reverseTargetBound = g_projectionReversed = true;
+	}
+
+	template <class SetDepth, class VisibleSamples>
+	void TestStandardViewportDepthOrdering(ID3D11Device* device, ID3D11DeviceContext* context,
+		SetDepth setDepth, VisibleSamples visibleSamples)
+	{
+		const bool previousActive = globals::features::reverseZ.IsActive();
+		const bool previousVR = globals::game::isVR;
+		globals::features::reverseZ.activeThisBoot = false;
+		globals::game::isVR = true;
+		g_reverseTargetBound = g_projectionReversed = g_nearMaskBound = false;
+		publishedDepthStencilTarget = RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN;
+		Renderer renderer;
+		CreateSceneTargets(renderer, device);
+		auto* previousRenderer = std::exchange(globals::game::renderer, &renderer);
+		auto* view = renderer.data.depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].views[0];
+		context->OMSetRenderTargets(0, nullptr, view);
+		UpdateBoundDepthTarget(context, view);
+		D3D11_DEPTH_STENCIL_DESC desc{};
+		desc.DepthEnable = TRUE;
+		desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+		desc.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+		winrt::com_ptr<ID3D11DepthStencilState> write, read, equal;
+		Require(SUCCEEDED(device->CreateDepthStencilState(&desc, write.put())), "Standard layer write state creation failed");
+		Util::SetResourceName(write.get(), "ReverseZStateTest::StandardLayerWrite");
+		desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+		Require(SUCCEEDED(device->CreateDepthStencilState(&desc, read.put())), "Standard layer read state creation failed");
+		Util::SetResourceName(read.get(), "ReverseZStateTest::StandardLayerRead");
+		desc.DepthFunc = D3D11_COMPARISON_EQUAL;
+		Require(SUCCEEDED(device->CreateDepthStencilState(&desc, equal.put())), "Standard layer equality state creation failed");
+		Util::SetResourceName(equal.get(), "ReverseZStateTest::StandardLayerEqual");
+		D3D11_RASTERIZER_DESC rasterDesc = CD3D11_RASTERIZER_DESC(D3D11_DEFAULT);
+		rasterDesc.CullMode = D3D11_CULL_NONE;
+		winrt::com_ptr<ID3D11RasterizerState> raster;
+		Require(SUCCEEDED(device->CreateRasterizerState(&rasterDesc, raster.put())), "Standard layer rasterizer creation failed");
+		Util::SetResourceName(raster.get(), "ReverseZStateTest::StandardLayerRasterizer");
+		context->RSSetState(raster.get());
+		const D3D11_VIEWPORT scene{ 0, 0, 2, 2, 0, .999998f };
+		ShadowState shadow;
+		for (auto& eye : shadow.eyes)
+			eye.viewDepthRange = { scene.MinDepth, scene.MaxDepth };
+		auto setMode = [&](uint32_t mode) {
+			auto requested = scene;
+			requested.MaxDepth -= nativeViewportBiases[mode];
+			shadow.data.viewPort = requested;
+			shadow.data.rasterStateDepthBiasMode = mode;
+			ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &requested);
+		};
+		// Projected depths from overlapping opaque and decal surfaces retain their native layer intervals.
+		const std::array samples{
+			std::array{ .9968489408493042f / scene.MaxDepth, .99684077501297f / (scene.MaxDepth - .000026f) },
+			std::array{ .9964895844459534f / scene.MaxDepth, .9964855313301086f / (scene.MaxDepth - .000026f) }
+		};
+		for (const auto& sample : samples) {
+			for (bool corrected : { false, true }) {
+				globals::game::shadowState = corrected ? &shadow : nullptr;
+				context->ClearDepthStencilView(view, D3D11_CLEAR_DEPTH, 1, 0);
+				setMode(0);
+				setDepth(sample[0]);
+				context->OMSetDepthStencilState(write.get(), 0);
+				Require(visibleSamples() == 4, "Standard wall prepass failed");
+				context->OMSetDepthStencilState(equal.get(), 0);
+				Require(visibleSamples() == 4, "Standard correction broke equal-depth shading");
+				context->OMSetDepthStencilState(read.get(), 0);
+				setMode(6);
+				setDepth(sample[1]);
+				Require(visibleSamples() == (corrected ? 0 : 4), "Standard decal bleed-through control or correction failed");
+				if (!corrected)
+					continue;
+				for (uint32_t mode = 0; mode < nativeViewportBiases.size(); ++mode) {
+					setMode(mode);
+					Require(visibleSamples() == 0, "Standard viewport layer admitted a hidden decal");
+					setDepth(sample[0]);
+					Require(visibleSamples() == 4, "Standard viewport correction lost a coplanar decal");
+					setDepth(sample[1]);
+				}
+			}
+		}
+		globals::game::shadowState = nullptr;
+		globals::game::isVR = previousVR;
+		globals::features::reverseZ.activeThisBoot = previousActive;
+		publishedDepthStencilTarget = static_cast<uint32_t>(RE::RENDER_TARGETS_DEPTHSTENCIL::kNONE);
+		globals::game::renderer = previousRenderer;
 	}
 
 	template <class SetDepth, class VisibleSamples>
@@ -1491,6 +1755,7 @@ float4 PS() : SV_Target { return 1; }
 		}
 		TestNativeViewportDepthOrdering(context, view.get(), scene, setBoundDepth, visibleSamples);
 		TestNativeViewportLayering(device, context, view.get(), setBoundDepth, visibleSamples);
+		TestStandardViewportDepthOrdering(device, context, setBoundDepth, visibleSamples);
 		context->OMSetRenderTargets(0, nullptr, nullptr);
 		ID3D11DeviceContext_ClearState::thunk(context);
 	}
@@ -1725,6 +1990,8 @@ int main()
 		Require(logicalRaster.get() == requestedRaster.get(), "Rasterizer getter lost logical ownership");
 		TestRequestedStateMappingCache(device.get(), context.get(), requestedDepth.get(), requestedRaster.get());
 		TestNativeViewportBiasMapping(context.get());
+		TestStandardViewportMapping(device.get(), context.get());
+		TestStandardViewportTargets(device.get(), context.get());
 		TestNativeViewportDomainTransitions(context.get());
 		TestOcclusionViewportRanges(context.get());
 		TestOcclusionViewportBiases(context.get());

@@ -460,17 +460,17 @@ void SubsurfaceScattering::DrawSSS()
 		context->CSSetConstantBuffers(1, 1, buffer);
 
 		D3D11_TEXTURE2D_DESC mainDesc{};
-		main.texture->GetDesc(&mainDesc);
+		REX::W32::AsReal(main.texture)->GetDesc(&mainDesc);
 
 		ID3D11UnorderedAccessView* uav = blurUAV;
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 
 		ID3D11ShaderResourceView* views[5];
-		views[0] = main.SRV;
+		views[0] = REX::W32::AsReal(main.SRV);
 		views[1] = Util::GetCurrentSceneDepthSRV(true);
-		views[2] = mask.SRV;
-		views[3] = albedo.SRV;
-		views[4] = normal.SRV;
+		views[2] = REX::W32::AsReal(mask.SRV);
+		views[3] = REX::W32::AsReal(albedo.SRV);
+		views[4] = REX::W32::AsReal(normal.SRV);
 
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
@@ -494,7 +494,7 @@ void SubsurfaceScattering::DrawSSS()
 				views[0] = blurHorizontalTemp->srv.get();
 				context->CSSetShaderResources(0, 1, views);
 
-				ID3D11UnorderedAccessView* uavs[1] = { main.UAV };
+				ID3D11UnorderedAccessView* uavs[1] = { REX::W32::AsReal(main.UAV) };
 				context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 
 				auto shader = GetComputeShaderVerticalBlur();
@@ -528,9 +528,9 @@ void SubsurfaceScattering::DrawSSS()
 						std::min(blurHorizontalTemp->desc.Height, mainDesc.Height),
 						1
 					};
-					context->CopySubresourceRegion(main.texture, 0, 0, 0, 0, blurHorizontalTemp->resource.get(), 0, &sourceBox);
+					context->CopySubresourceRegion(REX::W32::AsReal(main.texture), 0, 0, 0, 0, blurHorizontalTemp->resource.get(), 0, &sourceBox);
 				} else {
-					context->CopyResource(main.texture, blurHorizontalTemp->resource.get());
+					context->CopyResource(REX::W32::AsReal(main.texture), blurHorizontalTemp->resource.get());
 				}
 			}
 		}
@@ -566,7 +566,7 @@ bool SubsurfaceScattering::EnsureBlurHorizontalTemp(uint32_t a_width, uint32_t a
 		return failPrerequisite("SubsurfaceScattering::EnsureBlurHorizontalTemp missing main render target resources");
 
 	D3D11_TEXTURE2D_DESC texDesc{};
-	main.texture->GetDesc(&texDesc);
+	REX::W32::AsReal(main.texture)->GetDesc(&texDesc);
 	if (texDesc.Width == 0 || texDesc.Height == 0)
 		return failPrerequisite("SubsurfaceScattering::EnsureBlurHorizontalTemp invalid main render target size");
 
@@ -606,10 +606,10 @@ bool SubsurfaceScattering::EnsureBlurHorizontalTemp(uint32_t a_width, uint32_t a
 	texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 
 	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-	main.SRV->GetDesc(&srvDesc);
+	REX::W32::AsReal(main.SRV)->GetDesc(&srvDesc);
 
 	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-	main.UAV->GetDesc(&uavDesc);
+	REX::W32::AsReal(main.UAV)->GetDesc(&uavDesc);
 
 	try {
 		auto replacement = std::make_unique<Texture2D>(texDesc, "SubsurfaceScattering::BlurHorizontalTemp");
@@ -676,7 +676,7 @@ void SubsurfaceScattering::SetupResources()
 	loggedMissingMainTarget = false;
 
 	D3D11_TEXTURE2D_DESC texDesc{};
-	main.texture->GetDesc(&texDesc);
+	REX::W32::AsReal(main.texture)->GetDesc(&texDesc);
 
 	EnsureBlurHorizontalTemp(texDesc.Width, texDesc.Height, false);
 }

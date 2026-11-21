@@ -1,6 +1,7 @@
 #include <cstddef>
 #include <format>
 #include <iostream>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -65,6 +66,11 @@ namespace BuildProvenance
 	void LogRuntimeIdentity() { fixture.log.emplace_back("Build ID: startup-test-identity"); }
 }
 
+namespace Util
+{
+	void LogSystemMemory(const char*) {}
+}
+
 namespace SKSE
 {
 	struct LoadInterface
@@ -105,16 +111,34 @@ namespace SKSE
 		return trampoline;
 	}
 
-	void AllocTrampoline(std::size_t size, bool trySKSEReserve = true);
+	struct InitInfo
+	{
+		bool log{ true };
+		bool trampoline{ false };
+		std::size_t trampolineSize{ 0 };
+	};
+	namespace Impl
+	{
+		struct API
+		{
+			InitInfo info;
+			void InitTrampoline();
+		};
 #include "commonlib_trampoline_under_test.h"
+	}
 
-	void Init(const LoadInterface* interface, bool log = true)
+	void Init(const LoadInterface* interface, InitInfo info)
 	{
 		Check(interface == &loadInterface, "The SKSE load interface must be forwarded");
-		Check(!log, "CSX must retain ownership of its startup logger");
+		Check(!info.log, "CSX must retain ownership of its startup logger");
+		Check(info.trampoline, "Startup must request trampoline storage");
 		++fixture.initCalls;
 		fixture.initialized = true;
+		Impl::API api{ info };
+		api.InitTrampoline();
+		api.InitTrampoline();
 	}
+
 }
 
 bool Load()
@@ -126,7 +150,7 @@ bool Load()
 }
 
 #define DLLEXPORT
-#define SKSEAPI
+#define SKSE_PLUGIN_LOAD(...) bool SKSEPlugin_Load(__VA_ARGS__)
 #include "plugin_load_under_test.h"
 
 void TestLoad(bool interfacePresent, bool poolSucceeds, bool loadResult)
@@ -151,15 +175,13 @@ void TestLoad(bool interfacePresent, bool poolSucceeds, bool loadResult)
 	Check(fixture.commonlibAllocations == (interfacePresent && poolSucceeds ? 0 : 1), "CommonLib must provide the absent or exhausted pool fallback");
 }
 
-int main()
+int main(int argc, char** argv)
 {
 	try {
-		for (const bool loadResult : { true, false }) {
-			TestLoad(true, true, loadResult);
-			TestLoad(true, false, loadResult);
-			TestLoad(false, false, loadResult);
-		}
-		std::cout << "Plugin startup: 6 cases passed\n";
+		const int scenario = argc == 2 ? std::stoi(argv[1]) : 0;
+		Check(scenario >= 0 && scenario < 6, "Startup scenario must be in [0,5]");
+		TestLoad(scenario % 3 != 2, scenario % 3 == 0, scenario < 3);
+		std::cout << "Plugin startup: scenario " << scenario << " passed\n";
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

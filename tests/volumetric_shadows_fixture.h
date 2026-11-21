@@ -1,5 +1,7 @@
 #pragma once
 
+#include "commonlib_d3d_bridge_fake.h"
+
 // Substitute the engine registry while executing production preparation against D3D11.
 namespace RE
 {

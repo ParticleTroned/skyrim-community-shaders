@@ -71,7 +71,7 @@ namespace VRGrassLifetime
 		volatile std::uint32_t* ChildLockFor(RE::NiNode* a_node)
 		{
 			auto* manager = *managerAddress;
-			return manager && manager->grassNode.get() == a_node ? &manager->grassShapeLock : nullptr;
+			return manager && manager->grassNode.get() == a_node ? &manager->grassShapeLock.lock : nullptr;
 		}
 
 		// Keep native ownership and guard stack state out of the shared node's forwarding path.

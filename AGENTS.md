@@ -132,6 +132,15 @@ contradict this policy.
 ## Code quality and architecture
 
 -   Prefer complete, focused changes with explicit error handling and graceful degradation.
+-   For CommonLib upgrades, review every incoming change for its effect on
+    CSX, including assumptions introduced for Open Shaders. Check runtime
+    layouts, ABI and API contracts, resource ownership, initialization,
+    threading and hot-path costs. Preserve CSX's fixes and optimizations;
+    retire a local patch only after verifying an equivalent upstream
+    correction. Implement a focused CSX or dependency adaptation wherever
+    an incoming change would regress CSX. Retain the review in ignored local
+    documentation and report unresolved risks. Build success alone does
+    not establish runtime correctness or performance neutrality.
 -   Compile developer-only tracing and capture machinery out of production:
     use `TRACY_SUPPORT` for Tracy and `DEVBENCH_BRIDGE_ENABLED` for DevBench
     diagnostics. Runtime inactivity is not a substitute for build isolation.

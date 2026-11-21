@@ -836,7 +836,7 @@ void FurShells::BeginPass(RE::BSShader* a_shader, RE::BSRenderPass* a_pass)
 
 	const auto lookup = FindShell(a_pass);
 	auto* data = lookup.data;
-	auto* shellView = lookup.shell && lookup.shell->rendererTexture ? lookup.shell->rendererTexture->resourceView : nullptr;
+	auto* shellView = lookup.shell && lookup.shell->rendererTexture ? REX::W32::AsReal(lookup.shell->rendererTexture->resourceView) : nullptr;
 	if (!shellView || !data)
 		return;
 
@@ -861,7 +861,7 @@ void FurShells::BeginPass(RE::BSShader* a_shader, RE::BSRenderPass* a_pass)
 	ID3D11ShaderResourceView* normalView = nullptr;
 	if (modelSpaceNormals) {
 		auto* normal = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material)->normalTexture.get();
-		normalView = normal && normal->rendererTexture ? normal->rendererTexture->resourceView : nullptr;
+		normalView = normal && normal->rendererTexture ? REX::W32::AsReal(normal->rendererTexture->resourceView) : nullptr;
 		if (!normalView)
 			return;
 	}
@@ -1371,7 +1371,7 @@ struct FurShells::Hooks
 
 bool FurShells::CopySceneDepth()
 {
-	auto* texture = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].texture;
+	auto* texture = REX::W32::AsReal(globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].texture);
 	if (!texture || depthCopyFailed)
 		return false;
 

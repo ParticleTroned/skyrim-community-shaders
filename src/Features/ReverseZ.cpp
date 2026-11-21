@@ -162,7 +162,7 @@ namespace
 		const auto& range = left->viewDepthRange;
 		if (!std::isfinite(range.x) || !std::isfinite(range.y) ||
 			range.x < 0.0f || range.y > 1.0f || bias >= range.y - range.x ||
-			native.viewPort.MinDepth != range.x || native.viewPort.MaxDepth != range.y - bias)
+			native.viewPort.minDepth != range.x || native.viewPort.maxDepth != range.y - bias)
 			return std::nullopt;
 		float maximumBias = 0;
 		for (const float layerBias : biases) {
@@ -295,7 +295,7 @@ namespace
 			return;
 		a_slot->Release();
 		auto* view = a_view.detach();
-		a_slot = view;
+		a_slot = REX::W32::AsW32(view);
 		Util::SetResourceName(view, "%s", a_name);
 	}
 
@@ -632,7 +632,7 @@ bool ReverseZ::PrepareDepthTargets()
 		item.target = &data;
 		item.index = static_cast<uint32_t>(target);
 		D3D11_TEXTURE2D_DESC desc{};
-		data.texture->GetDesc(&desc);
+		REX::W32::AsReal(data.texture)->GetDesc(&desc);
 		if (desc.Format != kStandardDepthTypeless)
 			return RejectDepthPreparation("Unexpected scene depth format");
 		if (target == RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN)
@@ -644,11 +644,11 @@ bool ReverseZ::PrepareDepthTargets()
 			return RejectDepthPreparation("Floating-point scene depth allocation failed");
 		Util::SetResourceName(item.texture.get(), "ReverseZ::SceneDepth");
 		for (size_t i = 0; i < count; ++i)
-			if (!RecreateFloatView(device, item.texture.get(), data.views[i], item.views[i]) ||
-				!RecreateFloatView(device, item.texture.get(), data.readOnlyViews[i], item.readOnly[i]))
+			if (!RecreateFloatView(device, item.texture.get(), REX::W32::AsReal(data.views[i]), item.views[i]) ||
+				!RecreateFloatView(device, item.texture.get(), REX::W32::AsReal(data.readOnlyViews[i]), item.readOnly[i]))
 				return RejectDepthPreparation("Scene depth view preparation failed");
-		if (!RecreateFloatView(device, item.texture.get(), data.depthSRV, item.depth) ||
-			!RecreateFloatView(device, item.texture.get(), data.stencilSRV, item.stencil))
+		if (!RecreateFloatView(device, item.texture.get(), REX::W32::AsReal(data.depthSRV), item.depth) ||
+			!RecreateFloatView(device, item.texture.get(), REX::W32::AsReal(data.stencilSRV), item.stencil))
 			return RejectDepthPreparation("Scene depth SRV preparation failed");
 		// Staged views are not registered yet, so these clears use physical depth.
 		for (const auto& view : item.views)
@@ -674,9 +674,9 @@ bool ReverseZ::PrepareDepthTargets()
 	for (auto& item : staged) {
 		auto& data = *item.target;
 		for (size_t i = 0; i < count; ++i) {
-			if (data.views[i] == boundDepth.get())
+			if (REX::W32::AsReal(data.views[i]) == boundDepth.get())
 				replacementBoundDepth = item.views[i].get();
-			if (data.readOnlyViews[i] == boundDepth.get())
+			if (REX::W32::AsReal(data.readOnlyViews[i]) == boundDepth.get())
 				replacementBoundDepth = item.readOnly[i].get();
 			ReplaceEngineView(data.views[i], item.views[i], "ReverseZ::SceneDepth DSV");
 			ReplaceEngineView(data.readOnlyViews[i], item.readOnly[i], "ReverseZ::SceneDepth RODSV");
@@ -684,7 +684,7 @@ bool ReverseZ::PrepareDepthTargets()
 		ReplaceEngineView(data.depthSRV, item.depth, "ReverseZ::SceneDepth SRV");
 		ReplaceEngineView(data.stencilSRV, item.stencil, "ReverseZ::SceneDepth Stencil SRV");
 		data.texture->Release();
-		data.texture = item.texture.detach();
+		data.texture = REX::W32::AsW32(item.texture.detach());
 		convertedTargetMask |= 1u << item.index;
 	}
 	lock.unlock();
@@ -739,9 +739,9 @@ ID3D11DepthStencilView* ReverseZ::ResolveCubemapFaceDepthView(ID3D11RenderTarget
 		return a_depthView;
 	const auto& cubemap = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS];
 	for (auto* faceView : cubemap.cubeSideRTV) {
-		if (faceView == a_renderTarget) {
+		if (REX::W32::AsReal(faceView) == a_renderTarget) {
 			auto* cubemapDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kCUBEMAP_REFLECTIONS].views[0];
-			return cubemapDepth ? cubemapDepth : a_depthView;
+			return cubemapDepth ? REX::W32::AsReal(cubemapDepth) : a_depthView;
 		}
 	}
 	return a_depthView;
@@ -860,8 +860,10 @@ void ReverseZ::ApplyReverseProjection(void* a_cameraStateEntry, const RE::NiCame
 		return;
 
 	std::span<RE::BSGraphics::ViewData> eyes;
+	const RE::NiFrustum* frusta = nullptr;
 	if (globals::game::isVR) {
-		if (!a_camera->GetVRRuntimeData().viewFrustumArray) {
+		const auto& cameraFrusta = a_camera->GetVRRuntimeData().eyeFrustums;
+		if (cameraFrusta.size() != kStereoEyeCount || !cameraFrusta.data()) {
 			RejectRendering("Missing stereo camera frusta");
 			ReapplyMappedStates(globals::d3d::context);
 			return;
@@ -873,11 +875,12 @@ void ReverseZ::ApplyReverseProjection(void* a_cameraStateEntry, const RE::NiCame
 			return;
 		}
 		eyes = { vrEyes.data(), vrEyes.size() };
+		frusta = cameraFrusta.data();
 	} else {
 		eyes = { &static_cast<CameraStateEntry*>(a_cameraStateEntry)->viewData, 1 };
+		frusta = &a_camera->GetRuntimeData2().viewFrustum;
 	}
 
-	const auto* frusta = globals::game::isVR ? a_camera->GetVRRuntimeData().viewFrustumArray : &a_camera->GetRuntimeData2().viewFrustum;
 	// Admit the complete camera before changing either eye's depth convention.
 	std::array<ZAxis, kStereoEyeCount> axes{};
 	for (size_t eye = 0; eye < eyes.size(); ++eye) {

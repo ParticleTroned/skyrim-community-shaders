@@ -11,6 +11,10 @@ add_custom_command(
     VERBATIM
 )
 add_controller_test(plugin_load_test PluginLoad tests/plugin_load_test.cpp)
+foreach(_startup_case RANGE 1 5)
+    add_test(NAME PluginLoad${_startup_case} COMMAND plugin_load_test ${_startup_case})
+    set_tests_properties(PluginLoad${_startup_case} PROPERTIES LABELS "ControllerTests")
+endforeach()
 target_sources(
     plugin_load_test
     PRIVATE "${_plugin_load_test_dir}/plugin_load_under_test.h"

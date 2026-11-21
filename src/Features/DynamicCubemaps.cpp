@@ -542,7 +542,7 @@ bool DynamicCubemaps::UpdateCubemapCapture(bool a_reflections)
 		context->CSSetShader(nullptr, nullptr, 0);
 	});
 
-	ID3D11ShaderResourceView* srvs[2] = { depth.depthSRV, main.SRV };
+	ID3D11ShaderResourceView* srvs[2] = { REX::W32::AsReal(depth.depthSRV), REX::W32::AsReal(main.SRV) };
 	ID3D11UnorderedAccessView* uavs[4] = {
 		(a_reflections ? envCaptureReflectionsTexture : envCaptureTexture)->uav.get(),
 		(a_reflections ? envCaptureRawReflectionsTexture : envCaptureRawTexture)->uav.get(),
@@ -590,7 +590,7 @@ bool DynamicCubemaps::Inferrence(bool a_reflections)
 
 	auto& cubemap = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS];
 
-	ID3D11ShaderResourceView* srvs[3] = { (a_reflections ? envCaptureReflectionsTexture : envCaptureTexture)->srv.get(), cubemap.SRV, defaultCubemap };
+	ID3D11ShaderResourceView* srvs[3] = { (a_reflections ? envCaptureReflectionsTexture : envCaptureTexture)->srv.get(), REX::W32::AsReal(cubemap.SRV), REX::W32::AsReal(defaultCubemap) };
 	context->CSSetShaderResources(0, 3, srvs);
 
 	context->CSSetSamplers(0, 1, &computeSampler);
@@ -1118,7 +1118,7 @@ void DynamicCubemaps::SetupResourcesImpl()
 
 	{
 		D3D11_TEXTURE2D_DESC texDesc;
-		cubemap.texture->GetDesc(&texDesc);
+		REX::W32::AsReal(cubemap.texture)->GetDesc(&texDesc);
 		if (texDesc.Width != requestedCubemapResolution || texDesc.Height != requestedCubemapResolution) {
 			logger::warn(
 				"Dynamic cubemap target is {}x{}, expected {}x{}; using the renderer target dimensions",
@@ -1132,7 +1132,7 @@ void DynamicCubemaps::SetupResourcesImpl()
 		}
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
-		cubemap.SRV->GetDesc(&srvDesc);
+		REX::W32::AsReal(cubemap.SRV)->GetDesc(&srvDesc);
 
 		texDesc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
 

@@ -1,3 +1,4 @@
+#include "commonlib_d3d_bridge_fake.h"
 #include "d3d11_shader_test.h"
 
 #include <array>

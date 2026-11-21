@@ -38,7 +38,7 @@ namespace
 	} queueLock;
 	bool installed = false;
 
-	void RunTask(SKSE::detail::TaskDelegate* a_task)
+	void RunTask(SKSE::Impl::TaskDelegate* a_task)
 	{
 		VRTaskQueue::RunOutsideLock(queueLock, *a_task);
 	}

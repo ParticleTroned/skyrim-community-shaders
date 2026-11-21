@@ -416,11 +416,11 @@ namespace d3d { void* context = nullptr; }
 }
 struct ViewData { Matrix projMat, projMatrixUnjittered, viewProjMat, viewProjMatrixUnjittered; };
 namespace RE {
-struct Frustum { float fNear = 1, fFar = 100000; bool bOrtho = false; };
+struct NiFrustum { float fNear = 1, fFar = 100000; bool bOrtho = false; };
 struct NiCamera {
-    Frustum frusta[2];
-    struct VRData { Frustum* viewFrustumArray; } vr{frusta};
-    struct Data { Frustum viewFrustum; } flat;
+    NiFrustum frusta[2];
+    struct VRData { std::span<NiFrustum> eyeFrustums; } vr{frusta};
+    struct Data { NiFrustum viewFrustum; } flat;
     const VRData& GetVRRuntimeData() const { return vr; }
     const Data& GetRuntimeData2() const { return flat; }
 };
@@ -823,32 +823,35 @@ int main() {
         g_projectionReversed = true;
         globals::game::isVR = true;
         const auto rejectedBefore = reverse.rejected;
-        world.vr.viewFrustumArray = nullptr;
+        world.vr.eyeFrustums = {};
         reverse.ApplyReverseProjection(&stereoEntry, &world);
         Require(reverse.rejected == rejectedBefore + 1, "Missing stereo frusta did not reject rendering");
-        world.vr.viewFrustumArray = world.frusta;
+        world.vr.eyeFrustums = std::span<RE::NiFrustum>(world.frusta, 1);
+        reverse.ApplyReverseProjection(&stereoEntry, &world);
+        Require(reverse.rejected == rejectedBefore + 2, "A single stereo frustum did not reject rendering");
+        world.vr.eyeFrustums = world.frusta;
         stereoEntry.viewData.resize(1);
         reverse.ApplyReverseProjection(&stereoEntry, &world);
-        Require(reverse.rejected == rejectedBefore + 2, "Incomplete stereo eyes did not reject rendering");
+        Require(reverse.rejected == rejectedBefore + 3, "Incomplete stereo eyes did not reject rendering");
         stereoEntry.viewData.resize(2);
         stereoEntry.viewData.assign(2, startupPublished);
         const auto beforeInvalidStereo = stereoEntry.viewData;
         world.frusta[1].fFar = world.frusta[1].fNear;
         reverse.ApplyReverseProjection(&stereoEntry, &world);
-        Require(reverse.rejected == rejectedBefore + 3, "Invalid second-eye range did not reject rendering");
+        Require(reverse.rejected == rejectedBefore + 4, "Invalid second-eye range did not reject rendering");
         Require(std::memcmp(beforeInvalidStereo.data(), stereoEntry.viewData.data(), 2 * sizeof(ViewData)) == 0,
             "Invalid second eye partially changed the stereo camera");
         published[0] = published[1] = startupPublished;
         missingPublishedEye = 1;
         reverse.ReversePublishedProjection();
-        Require(reverse.rejected == rejectedBefore + 4, "Missing published eye did not reject rendering");
+        Require(reverse.rejected == rejectedBefore + 5, "Missing published eye did not reject rendering");
         Require(std::memcmp(&startupPublished, &published[0], sizeof(ViewData)) == 0,
             "Missing second published eye partially changed the stereo camera");
         missingPublishedEye = -1;
         globals::game::isVR = false;
         world.flat.viewFrustum.fNear = 0;
         reverse.ApplyReverseProjection(&entry, &world);
-        Require(reverse.rejected == rejectedBefore + 5, "Invalid flat range did not reject rendering");
+        Require(reverse.rejected == rejectedBefore + 6, "Invalid flat range did not reject rendering");
         globals::game::isVR = true;
         world.frusta[1].fFar = 100000;
         for (unsigned orthographicEye = 0; orthographicEye < 2; ++orthographicEye) {

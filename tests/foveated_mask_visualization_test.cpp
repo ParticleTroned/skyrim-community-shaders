@@ -6,6 +6,7 @@
 #include <stdexcept>
 
 #include "Features/FoveatedCommon.h"
+#include "commonlib_d3d_bridge_fake.h"
 
 namespace
 {

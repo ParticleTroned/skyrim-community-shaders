@@ -2,6 +2,7 @@
 #include "Features/TextureStreaming/Policy.h"
 #include "Features/TextureStreaming/RestorationPriority.h"
 #include "Features/TextureStreaming/WorkSchedule.h"
+#include "commonlib_d3d_bridge_fake.h"
 #include <array>
 #include <iostream>
 #include <optional>

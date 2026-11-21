@@ -4484,7 +4484,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 	bool hasEmissive = (0x3F & (Permutation::PixelShaderDescriptor >> 24)) == Permutation::LightingTechnique::Glowmap;
 #		if defined(TRUE_PBR)
-	hasEmissive = hasEmissive || (PBRFlags & PBR::Flags::HasEmissive != 0);
+	hasEmissive = hasEmissive || ((PBRFlags & PBR::Flags::HasEmissive) != 0);
 #		endif
 	[branch] if (hasEmissive)
 	{
@@ -4492,29 +4492,21 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float4 glowSample;
 		MESH_TV_COLOR(glowSample, TexGlowSampler, SampGlowSampler, uv);
 		float3 glowColor = Color::Glowmap(glowSample.xyz);
+		emitColor *= glowColor;
 
 #		if defined(TRUE_PBR)
 		float3 emitVertexColor = Color::SrgbToLinear(input.Color.xyz);
 		float emitVertexAO = max(max(emitVertexColor.r, emitVertexColor.g), emitVertexColor.b);
 		emitVertexColor = emitVertexAO == 0.0f ? 1.0f : emitVertexColor * lerp(1 / max(emitVertexAO, 1e-4), 1, SharedData::truePBRSettings.VertexAOStrength);
 
-		if (!Color::UseLinearLightingColorAdjustments()) {
-			emitColor = Color::SrgbToLinear(emitColor);
-			glowColor = Color::SrgbToLinear(glowColor);
-			emitColor *= glowColor;
+		if (Color::UseLinearLightingColorAdjustments())
 			emitColor *= emitVertexColor;
-			emitColor = Color::LinearToSrgb(emitColor);
-		} else {
-			emitColor *= glowColor;
-			emitColor *= emitVertexColor;
-		}
-#		else
-		if (!Color::UseLinearLightingColorAdjustments()) {
-			emitColor = Color::LinearToSrgb(Color::SrgbToLinear(emitColor) * Color::SrgbToLinear(glowColor));
-		} else {
-			emitColor *= glowColor;
-		}
+		else
+			emitColor *= Color::LinearToSrgb(emitVertexColor);
 #		endif  // TRUE_PBR
+		// Gamma-space emission discards sign; linear scene emission retains signed intensity.
+		if (!Color::UseLinearLightingColorAdjustments())
+			emitColor = abs(emitColor);
 	}
 #	endif
 

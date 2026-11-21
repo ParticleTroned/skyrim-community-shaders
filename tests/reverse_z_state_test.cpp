@@ -1,3 +1,4 @@
+#include "Features/FurShells/DepthBinding.h"
 #include "Utils/DeviceContextState.h"
 #include "commonlib_d3d_bridge_fake.h"
 #include "d3d_resource_naming.h"
@@ -1064,6 +1065,84 @@ namespace
 		g_reverseTargetBound = g_projectionReversed = true;
 	}
 
+	void TestFurDepthDomain(ID3D11Device* device, ID3D11DeviceContext* context)
+	{
+		auto& reverse = globals::features::reverseZ;
+		const bool previousActive = reverse.IsActive();
+		const bool previousVR = std::exchange(globals::game::isVR, true);
+		Renderer renderer;
+		CreateSceneTargets(renderer, device);
+		auto* previousRenderer = std::exchange(globals::game::renderer, &renderer);
+		ShadowState shadow;
+		auto* previousShadow = std::exchange(globals::game::shadowState, &shadow);
+		const D3D11_VIEWPORT scene{ 0, 0, 4, 4, 0, .999998f };
+		for (auto& eye : shadow.eyes)
+			eye.viewDepthRange = { scene.MinDepth, scene.MaxDepth };
+		shadow.data.rasterStateDepthBiasMode = 6;
+		auto requested = scene;
+		requested.MaxDepth -= nativeViewportBiases[6];
+		shadow.data.viewPort = requested;
+		publishedDepthStencilTarget = RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN;
+		auto& target = renderer.data.depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+		D3D11_DEPTH_STENCIL_DESC state{};
+		state.DepthEnable = TRUE;
+		state.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+		state.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+		winrt::com_ptr<ID3D11DepthStencilState> prepass;
+		Require(SUCCEEDED(device->CreateDepthStencilState(&state, prepass.put())), "Fur prepass state creation failed");
+		Util::SetResourceName(prepass.get(), "ReverseZStateTest::FurPrepass");
+		for (bool runtimeVR : { false, true })
+			for (bool reversed : { false, true }) {
+				globals::game::isVR = runtimeVR;
+				ID3D11DeviceContext_ClearState::thunk(context);
+				reverse.activeThisBoot = reversed;
+				g_projectionReversed = reversed;
+				if (reversed) {
+					reverse.RegisterSceneDepthView(target.views[0]);
+					reverse.RegisterSceneDepthView(target.readOnlyViews[0]);
+				}
+				context->OMSetRenderTargets(0, nullptr, target.readOnlyViews[0]);
+				RefreshBoundDepthTarget();
+				ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &requested);
+				D3D11_VIEWPORT before{};
+				UINT count = 1;
+				context->RSGetViewports(&count, &before);
+				FurRendering::DepthViewCache cache;
+				{
+					FurRendering::ScopedDepthWrite fur(context, cache, [&](auto* source) {
+						return FurRendering::FindWritableDepthView(source,
+							std::span{ &renderer.data.depthStencils[0], std::size(renderer.data.depthStencils) }, [](auto* view) { return view; });
+					});
+					Require(SUCCEEDED(fur.Status()), "Fur native depth lookup failed");
+					RefreshBoundDepthTarget();
+					Require(g_reverseTargetBound == reversed && g_standardSceneDepthBound == (runtimeVR && !reversed), "Fur view substitution changed the depth domain");
+					ID3D11DeviceContext_OMSetDepthStencilState::thunk(context, prepass.get(), 0);
+					winrt::com_ptr<ID3D11DepthStencilState> actual;
+					context->OMGetDepthStencilState(actual.put(), nullptr);
+					D3D11_DEPTH_STENCIL_DESC desc{};
+					actual->GetDesc(&desc);
+					Require(desc.DepthFunc == (reversed ? D3D11_COMPARISON_GREATER_EQUAL : D3D11_COMPARISON_LESS_EQUAL), "Fur prepass lost its mapped comparison");
+					D3D11_VIEWPORT after{};
+					count = 1;
+					context->RSGetViewports(&count, &after);
+					Require(std::memcmp(&before, &after, sizeof(before)) == 0, "Fur prepass changed the VR scene depth interval");
+				}
+				RefreshBoundDepthTarget();
+				Require(g_reverseTargetBound == reversed && g_standardSceneDepthBound == (runtimeVR && !reversed), "Fur restoration changed the depth domain");
+				if (reversed) {
+					reverse.UnregisterSceneDepthView(target.views[0]);
+					reverse.UnregisterSceneDepthView(target.readOnlyViews[0]);
+				}
+			}
+		ID3D11DeviceContext_ClearState::thunk(context);
+		globals::game::renderer = previousRenderer;
+		globals::game::shadowState = previousShadow;
+		globals::game::isVR = previousVR;
+		reverse.activeThisBoot = previousActive;
+		publishedDepthStencilTarget = static_cast<uint32_t>(RE::RENDER_TARGETS_DEPTHSTENCIL::kNONE);
+		g_reverseTargetBound = g_projectionReversed = true;
+	}
+
 	void TestStandardViewportTargets(ID3D11Device* device, ID3D11DeviceContext* context)
 	{
 		const bool previousActive = globals::features::reverseZ.IsActive();
@@ -1992,6 +2071,7 @@ int main()
 		TestNativeViewportBiasMapping(context.get());
 		TestStandardViewportMapping(device.get(), context.get());
 		TestStandardViewportTargets(device.get(), context.get());
+		TestFurDepthDomain(device.get(), context.get());
 		TestNativeViewportDomainTransitions(context.get());
 		TestOcclusionViewportRanges(context.get());
 		TestOcclusionViewportBiases(context.get());

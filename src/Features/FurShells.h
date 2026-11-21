@@ -1,5 +1,6 @@
 #pragma once
 
+#include "FurShells/DepthBinding.h"
 #include "FurShells/InertiaSpring.h"
 #include "FurShells/Interactors.h"
 #include <array>
@@ -307,6 +308,8 @@ private:
 	winrt::com_ptr<ID3D11Texture2D> depthCopy;
 	winrt::com_ptr<ID3D11ShaderResourceView> depthCopyView;
 	bool depthCopyFailed = false;
+	bool depthBindingFailureLogged = false;
+	FurRendering::DepthViewCache depthViews;
 	bool deferralClosed = false;
 	bool replaying = false;
 	bool rootTest = false;

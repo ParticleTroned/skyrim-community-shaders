@@ -1303,10 +1303,28 @@ bool FurShells::DrawShells(UINT a_indexCount, UINT a_engineInstances, UINT a_sta
 	context->OMGetBlendState(blendState.put(), blendFactor, &sampleMask);
 	const SKSE::stl::scope_exit restoreBlend([&] { context->OMSetBlendState(blendState.get(), blendFactor, sampleMask); });
 
-	context->OMSetBlendState(noColorWrite.get(), nullptr, 0xFFFFFFFF);
-	context->OMSetDepthStencilState(states->prepass.get(), stencilRef);
-	context->PSSetShader(depthPixelShader, nullptr, 0);
-	DrawInstanced(a_indexCount, totalInstances, a_startIndexLocation, a_baseVertexLocation);
+	{
+		FurRendering::ScopedDepthWrite depthWrite(context, depthViews, [](ID3D11DepthStencilView* source) -> ID3D11DepthStencilView* {
+			auto* renderer = globals::game::renderer;
+			if (!renderer)
+				return nullptr;
+			auto& targets = renderer->GetDepthStencilData().depthStencils;
+			return FurRendering::FindWritableDepthView(source, std::span{ &targets[0], static_cast<size_t>(Util::GetDepthStencilCount()) },
+				[](auto* view) { return REX::W32::AsReal(view); });
+		});
+		if (FAILED(depthWrite.Status())) {
+			if (!depthBindingFailureLogged) {
+				logger::warn("[Fur Shells] Skipping shells without writable depth: {:08X}", static_cast<uint32_t>(depthWrite.Status()));
+				depthBindingFailureLogged = true;
+			}
+			EndPass();
+			return replaying;
+		}
+		context->OMSetBlendState(noColorWrite.get(), nullptr, 0xFFFFFFFF);
+		context->OMSetDepthStencilState(states->prepass.get(), stencilRef);
+		context->PSSetShader(depthPixelShader, nullptr, 0);
+		DrawInstanced(a_indexCount, totalInstances, a_startIndexLocation, a_baseVertexLocation);
+	}
 
 	context->OMSetBlendState(blendState.get(), blendFactor, sampleMask);
 	context->OMSetDepthStencilState(states->shade.get(), stencilRef);
@@ -1609,6 +1627,8 @@ void FurShells::SetupRenderTargetResources()
 	depthCopy = nullptr;
 	depthCopyView = nullptr;
 	depthCopyFailed = false;
+	depthBindingFailureLogged = false;
+	depthViews.Reset();
 	rootTest = false;
 }
 

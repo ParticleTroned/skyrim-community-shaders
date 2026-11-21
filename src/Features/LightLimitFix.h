@@ -128,10 +128,12 @@ public:
 		uint LightsVisualisationMode;
 		uint ContactShadowFlags;
 		uint ContactShadowParams;
-		uint ClusterSize[4];
+		uint ClusterSize[3];
+		uint HasClusteredLights;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 	static_assert(sizeof(PerFrame) == 32);
+	static_assert(offsetof(PerFrame, HasClusteredLights) == 28);
 
 	PerFrame GetCommonBufferData();
 
@@ -175,6 +177,7 @@ public:
 	eastl::unique_ptr<Buffer> contactShadowGrid = nullptr;
 
 	std::uint32_t lightCount = 0;
+	bool clusteredLightsAvailable = false;
 	float lightsNear = 1;
 	float lightsFar = 16384;
 

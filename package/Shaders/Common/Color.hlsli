@@ -215,17 +215,23 @@ namespace Color
 	// Linear Lighting Functions
 	float3 LLGammaToLinear(float3 color)
 	{
-		return ENABLE_LL_COLOR_ADJUSTMENTS ? SkyrimGammaToLinear(color) : color;
+		[branch] if (ENABLE_LL_COLOR_ADJUSTMENTS)
+			color = SkyrimGammaToLinear(color);
+		return color;
 	}
 
 	float3 LLLinearToGamma(float3 color)
 	{
-		return ENABLE_LL_COLOR_ADJUSTMENTS ? LinearToSkyrimGamma(color) : color;
+		[branch] if (ENABLE_LL_COLOR_ADJUSTMENTS)
+			color = LinearToSkyrimGamma(color);
+		return color;
 	}
 
 	float3 PBRDiffuse(float3 color)
 	{
-		return ENABLE_LL_COLOR_ADJUSTMENTS ? color : LinearToSrgb(color);
+		[branch] if (!ENABLE_LL_COLOR_ADJUSTMENTS)
+			color = LinearToSrgb(color);
+		return color;
 	}
 
 	/** Applies category gamma while retaining magnitude semantics at unit gamma. */
@@ -263,7 +269,8 @@ namespace Color
 
 	float3 Light(float3 color, bool isLinear = false, bool preserveHDRIntensity = false)
 	{
-		if (ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) {
+		[branch] if (ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear)
+		{
 			if (preserveHDRIntensity) {
 				const float hdrScale = max(1.0f, max(abs(color.r), max(abs(color.g), abs(color.b))));
 				color = CategoryGamma(color / hdrScale, SharedData::linearLightingSettings.lightGamma) * hdrScale;
@@ -463,17 +470,23 @@ namespace Color
 
 	float3 RadianceToLinear(float3 color)
 	{
-		return ENABLE_LL_COLOR_ADJUSTMENTS ? color : SkyrimGammaToLinear(color);
+		[branch] if (!ENABLE_LL_COLOR_ADJUSTMENTS)
+			color = SkyrimGammaToLinear(color);
+		return color;
 	}
 
 	float IrradianceToLinear(float color)
 	{
-		return ENABLE_LL_COLOR_ADJUSTMENTS ? color : SkyrimGammaToLinear(color);
+		[branch] if (!ENABLE_LL_COLOR_ADJUSTMENTS)
+			color = SkyrimGammaToLinear(color);
+		return color;
 	}
 
 	float IrradianceToGamma(float color)
 	{
-		return ENABLE_LL_COLOR_ADJUSTMENTS ? color : LinearToSkyrimGamma(color);
+		[branch] if (!ENABLE_LL_COLOR_ADJUSTMENTS)
+			color = LinearToSkyrimGamma(color);
+		return color;
 	}
 
 	float3 IrradianceToLinear(float3 color)

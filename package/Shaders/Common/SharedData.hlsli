@@ -103,7 +103,8 @@ namespace SharedData
 		uint LightsVisualisationMode;
 		uint ContactShadowFlags;
 		uint ContactShadowParams;
-		uint4 ClusterSize;
+		uint3 ClusterSize;
+		uint HasClusteredLights;
 	};
 
 	struct WetnessEffectsSettings

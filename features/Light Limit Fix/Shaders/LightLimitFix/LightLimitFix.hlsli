@@ -26,21 +26,24 @@ namespace LightLimitFix
 
 	bool GetClusterIndex(in float2 uv, in float z, inout uint clusterIndex)
 	{
-		const uint3 clusterSize = SharedData::lightLimitFixSettings.ClusterSize.xyz;
+		bool found = false;
+		[branch] if (SharedData::lightLimitFixSettings.HasClusteredLights != 0)
+		{
+			const uint3 clusterSize = SharedData::lightLimitFixSettings.ClusterSize.xyz;
 
-		if (!FrameBuffer::FrameParams.y)  // Fix first person lights
-			uv = 0.5;
+			if (!FrameBuffer::FrameParams.y)  // Fix first person lights
+				uv = 0.5;
 
-		z = max(z, SharedData::CameraData.y);
-		uint clusterZ = log(z / SharedData::CameraData.y) * clusterSize.z / log(SharedData::CameraData.x / SharedData::CameraData.y);
-		uint3 cluster = uint3(uint2(uv * clusterSize.xy), clusterZ);
+			z = max(z, SharedData::CameraData.y);
+			uint clusterZ = log(z / SharedData::CameraData.y) * clusterSize.z / log(SharedData::CameraData.x / SharedData::CameraData.y);
+			uint3 cluster = uint3(uint2(uv * clusterSize.xy), clusterZ);
 
-		// Bounds validation to prevent out-of-range cluster indices
-		if (any(cluster >= clusterSize))
-			return false;
-
-		clusterIndex = cluster.x + (clusterSize.x * cluster.y) + (clusterSize.x * clusterSize.y * cluster.z);
-		return true;
+			if (all(cluster < clusterSize)) {
+				clusterIndex = cluster.x + (clusterSize.x * cluster.y) + (clusterSize.x * clusterSize.y * cluster.z);
+				found = true;
+			}
+		}
+		return found;
 	}
 
 #if defined(DEFERRED) || defined(WATER)

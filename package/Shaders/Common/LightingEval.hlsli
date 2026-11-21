@@ -115,7 +115,6 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
 #	endif
 	const float NdotL = dot(context.worldNormal, context.lightDir);
 	float3 diffuseLightColor = context.lightColor * context.detailedShadow;
-	float3 softLightColor = context.lightColor * context.softShadow;
 	lightingOutput.diffuse = saturate(NdotL) * diffuseLightColor * Color::VanillaNormalization();
 #	if defined(TREE_ANIM)
 	[branch] if (SharedData::foliageLightingSettings.EnableFoliageScattering != 0)
@@ -123,14 +122,19 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
 		lightingOutput.transmission += material.BaseColor * GetFoliageTransmission(NdotL, dot(context.viewDir, context.lightDir)) * diffuseLightColor * Color::VanillaNormalization();
 	}
 #	endif
-	if (Lighting::HasSoftLighting())
-		lightingOutput.diffuse += softLightColor * GetSoftLightMultiplier(NdotL) * material.rimSoftLightColor * Color::VanillaNormalization();
+	const uint shadingFlags = Lighting::GetShadingFlags(Permutation::PixelShaderDescriptor);
+	[branch] if ((shadingFlags & (Permutation::LightingFlags::SoftLighting | Permutation::LightingFlags::RimLighting | Permutation::LightingFlags::BackLighting)) != 0)
+	{
+		float3 softLightColor = context.lightColor * context.softShadow;
+		if (Lighting::HasSoftLighting())
+			lightingOutput.diffuse += softLightColor * GetSoftLightMultiplier(NdotL) * material.rimSoftLightColor * Color::VanillaNormalization();
 
-	if (Lighting::HasRimLighting())
-		lightingOutput.diffuse += softLightColor * GetRimLightMultiplier(context.lightDir, context.viewDir, context.worldNormal) * material.rimSoftLightColor * Color::VanillaNormalization();
+		if (Lighting::HasRimLighting())
+			lightingOutput.diffuse += softLightColor * GetRimLightMultiplier(context.lightDir, context.viewDir, context.worldNormal) * material.rimSoftLightColor * Color::VanillaNormalization();
 
-	if (Lighting::HasBackLighting())
-		lightingOutput.diffuse += softLightColor * saturate(-NdotL) * material.backLightColor * Color::VanillaNormalization();
+		if (Lighting::HasBackLighting())
+			lightingOutput.diffuse += softLightColor * saturate(-NdotL) * material.backLightColor * Color::VanillaNormalization();
+	}
 	lightingOutput.specular = VanillaSpecular(context, material.Shininess, uv, uv_ddx, uv_ddy) * material.SpecularColor * material.Glossiness * diffuseLightColor * Color::VanillaNormalization();
 #endif
 }

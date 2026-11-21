@@ -3770,9 +3770,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// Update flatness and normal calculations
 	flatnessAmount *= smoothstep(SharedData::wetnessEffectsSettings.PuddleMinWetness, 1.0, wetnessGlossinessSpecular);
 
-	// Apply ripple normal effects
-	float3 rippleNormal = normalize(lerp(float3(0, 0, 1), raindropInfo.xyz, lerp(flatnessAmount, 1.0, 0.5)));
-	wetnessNormal = CS_REORIENT_NORMAL(rippleNormal, wetnessNormal);
+	// Ripple normals can remain active even when the splotch channel is zero.
+	[branch] if (any(raindropInfo.xyz != float3(0, 0, 1)))
+	{
+		float3 rippleNormal = normalize(lerp(float3(0, 0, 1), raindropInfo.xyz, lerp(flatnessAmount, 1.0, 0.5)));
+		wetnessNormal = CS_REORIENT_NORMAL(rippleNormal, wetnessNormal);
+	}
 
 	// Minimum roughness prevents an extreme retroreflective peak (NdotH→1) for near-zero
 	// roughness puddles. Real water has ripples and surface tension that keep it from being
@@ -4119,18 +4122,23 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float contactShadowNoise = 0.0;
 	bool hasContactShadowNoise = false;
 	float2 contactShadowScreenDim = 0.0;
-	[branch] if (contactShadowsEnabled)
-		contactShadowScreenDim = LightLimitFix::GetContactShadowScreenDim();
 #			endif
-	if (inWorld && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
-		numClusteredLights = LightLimitFix::lightGrid[clusterIndex].lightCount;
+	[branch] if (inWorld && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex))
+	{
+		LightLimitFix::LightGrid clusterGrid = LightLimitFix::lightGrid[clusterIndex];
+		numClusteredLights = clusterGrid.lightCount;
 		totalLightCount += numClusteredLights;
-		lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
+		lightOffset = clusterGrid.offset;
 #			if defined(DEFERRED)
 		[branch] if (contactShadowsEnabled)
 			LightLimitFix::GetContactShadowClusterRange(clusterIndex, contactShadowOffset, contactShadowCount);
 #			endif
 	}
+
+#			if defined(DEFERRED)
+	[branch] if (contactShadowsEnabled && totalLightCount > 0)
+		contactShadowScreenDim = LightLimitFix::GetContactShadowScreenDim();
+#			endif
 
 	[loop] for (uint lightIndex = 0; lightIndex < totalLightCount; lightIndex++)
 	{
@@ -4498,7 +4506,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	porosity = lerp(porosity, 0.0, saturate(sqrt(envMask)));
 #			endif
 	float wetnessDarkeningAmount = porosity * wetnessGlossinessAlbedo;
-	material.BaseColor = lerp(material.BaseColor, pow(abs(material.BaseColor), 1.0 + wetnessDarkeningAmount), 0.5);
+	[branch] if (wetnessDarkeningAmount != 0.0 || any(material.BaseColor < 0.0))
+		material.BaseColor = lerp(material.BaseColor, pow(abs(material.BaseColor), 1.0 + wetnessDarkeningAmount), 0.5);
 #		endif
 #	endif
 
@@ -4525,7 +4534,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 #	elif defined(WETNESS_EFFECTS)
 #		if defined(DYNAMIC_CUBEMAPS)
-	float3 wetnessReflectance = CS_GET_WETNESS_INDIRECT(indirectLobeWeights, wetnessNormal, waterRoughnessSpecular, indirectContext);
+	float3 wetnessReflectance = 0.0;
+	[branch] if (waterRoughnessSpecular < 1.0)
+		wetnessReflectance = CS_GET_WETNESS_INDIRECT(indirectLobeWeights, wetnessNormal, waterRoughnessSpecular, indirectContext);
 #		else
 	float3 wetnessReflectance = 0.0;
 #		endif

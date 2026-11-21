@@ -24,6 +24,7 @@
 #include "RE/B/BSShadowDirectionalLight.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -1415,11 +1416,13 @@ LightLimitFix::PerFrame LightLimitFix::GetCommonBufferData()
 	perFrame.ContactShadowFlags = PackContactShadowFlags(settings);
 	perFrame.ContactShadowParams = PackContactShadowParams(settings);
 	std::copy(clusterSize, clusterSize + 3, perFrame.ClusterSize);
+	perFrame.HasClusteredLights = clusteredLightsAvailable;
 	return perFrame;
 }
 
 void LightLimitFix::SetupResources()
 {
+	clusteredLightsAvailable = false;
 	auto screenSize = globals::state->screenSize;
 	if (REL::Module::IsVR())
 		screenSize.x *= .5;
@@ -1997,23 +2000,34 @@ void LightLimitFix::Prepass()
 {
 	auto context = globals::d3d::context;
 	auto state = globals::state;
-	if (!context || !state || !lights || !lightIndexList || !lightGrid ||
-		!contactShadowIndexList || !contactShadowGrid ||
-		!lights->srv || !lightIndexList->srv || !lightGrid->srv ||
-		!contactShadowIndexList->srv || !contactShadowGrid->srv) {
+	if (!context || !state) {
+		clusteredLightsAvailable = false;
 		return;
 	}
 
-	CS_GPU_PASS("LightLimitFix::Prepass");
-	UpdateLights();
+	const bool hadClusteredLights = clusteredLightsAvailable;
+	const auto previousClusterSize = std::to_array(clusterSize);
+	clusteredLightsAvailable = false;
+	if (lights && lightIndexList && lightGrid && contactShadowIndexList && contactShadowGrid &&
+		lights->srv && lightIndexList->srv && lightGrid->srv &&
+		contactShadowIndexList->srv && contactShadowGrid->srv) {
+		CS_GPU_PASS("LightLimitFix::Prepass");
+		UpdateLights();
 
-	ID3D11ShaderResourceView* views[5]{};
-	views[0] = lights->srv.get();
-	views[1] = lightIndexList->srv.get();
-	views[2] = lightGrid->srv.get();
-	views[3] = contactShadowIndexList->srv.get();
-	views[4] = contactShadowGrid->srv.get();
-	context->PSSetShaderResources(35, ARRAYSIZE(views), views);
+		ID3D11ShaderResourceView* views[5]{};
+		views[0] = lights->srv.get();
+		views[1] = lightIndexList->srv.get();
+		views[2] = lightGrid->srv.get();
+		views[3] = contactShadowIndexList->srv.get();
+		views[4] = contactShadowGrid->srv.get();
+		context->PSSetShaderResources(35, ARRAYSIZE(views), views);
+	}
+
+	// Draws need the current grid; nonzero count changes do not affect this gate.
+	if (hadClusteredLights != clusteredLightsAvailable ||
+		!std::equal(previousClusterSize.begin(), previousClusterSize.end(), clusterSize)) {
+		state->UpdateFeatureData(state->inWorld);
+	}
 }
 
 bool LightLimitFix::IsValidLight(RE::BSLight* a_light)
@@ -3664,6 +3678,7 @@ void LightLimitFix::UpdateStructure()
 
 	ID3D11UnorderedAccessView* null_uavs[6] = { nullptr };
 	context->CSSetUnorderedAccessViews(0, 6, null_uavs, nullptr);
+	clusteredLightsAvailable = lightCount != 0;
 }
 
 void LightLimitFix::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)

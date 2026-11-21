@@ -182,6 +182,7 @@ void GrassCollision::QueueCollisions()
 	if (historyResetRequested.exchange(false) || queuedMode != GrassCollisionMode::Mode::Advanced)
 		colliderHistory.clear();
 	if (!loaded || (resourceFailed && failedMode.load(std::memory_order_relaxed) == queuedMode) || !settings.EnableGrassCollision) {
+		colliderHistory.clear();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		const auto frame = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
 		if (DiagnosticsActive(frame)) {
@@ -227,7 +228,7 @@ void GrassCollision::QueueCollisions()
 #endif
 	struct Shape
 	{
-		const RE::bhkNiCollisionObject* object;
+		RE::bhkNiCollisionObject* object;
 		ColliderHistory history;
 		float radius;
 	};
@@ -306,15 +307,19 @@ void GrassCollision::QueueCollisions()
 			const auto& shape = shapes[index];
 			const auto& current = shape.history;
 			auto previous = current;
-			if (const auto found = colliderHistory.find(shape.object); found != colliderHistory.end()) {
-				const auto& old = found->second;
+			auto [historyIt, inserted] = colliderHistory.try_emplace(shape.object);
+			auto& history = historyIt->second;
+			if (inserted) {
+				history.object.reset(shape.object);
+			} else {
+				const auto& old = history.capsule;
 				// Never sweep across a replaced skeleton, a missing frame, or an actor teleport.
 				if (old.actorID == current.actorID && old.root == current.root && old.body == current.body && old.shape == current.shape &&
 					uint32_t(frame - old.frame) == 1 && old.pointA.GetSquaredDistance(current.pointA) <= 512.0f * 512.0f &&
 					old.pointB.GetSquaredDistance(current.pointB) <= 512.0f * 512.0f)
 					previous = old;
 			}
-			colliderHistory.insert_or_assign(shape.object, current);
+			history.capsule = current;
 			auto pack = [&](const RE::NiPoint3& point, float radius = 0.0f) {
 				const auto relative = point - queuedCamera;
 				return float4{ relative.x, relative.y, relative.z, radius };
@@ -342,7 +347,7 @@ void GrassCollision::QueueCollisions()
 			break;
 	}
 	if (queuedMode == GrassCollisionMode::Mode::Advanced)
-		std::erase_if(colliderHistory, [frame](const auto& entry) { return entry.second.frame != frame; });
+		std::erase_if(colliderHistory, [frame](const auto& entry) { return entry.second.capsule.frame != frame; });
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	if (observe) {
 		try {

@@ -1,5 +1,6 @@
 #include "Menu.h"
 #include "FeatureSettingsScope.h"
+#include "Presets/LookProfileState.h"
 
 #ifndef DIRECTINPUT_VERSION
 #	define DIRECTINPUT_VERSION 0x0800
@@ -648,6 +649,9 @@ void Menu::AcceptCurrentFeatureSettingsAsClean(const std::string& a_featureSetti
 		return;
 
 	FeatureSettingsScope::Copy(settingsDirtyBaseline, currentSettings, a_featureSettingsName);
+	for (auto* feature : Feature::GetFeatureList())
+		if (feature->GetName() == a_featureSettingsName)
+			Presets::CopyFeatureProfileState(settingsDirtyBaseline, currentSettings, feature->GetShortName());
 	settingsDirty = currentSettings != settingsDirtyBaseline;
 	UpdateDirtySettingsSections(currentSettings);
 	ClearSettingsSaveResult();

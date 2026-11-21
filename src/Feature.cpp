@@ -3,6 +3,8 @@
 #include "Features/Skin.h"
 #include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/SettingsPage.h"
+#include "Presets/LookSceneRuntime.h"
+#include "SceneSettingsManager.h"
 #include "Utils/UI.h"
 
 #include <algorithm>
@@ -212,6 +214,17 @@ void Feature::Save(json& o_json)
 	}
 
 	SaveSettings(o_json[GetName()]);
+}
+
+void Feature::SaveBaseSettings(json& settings)
+{
+	const auto name = GetShortName();
+	const auto variables = WeatherManager::GetSingleton()->GetActiveVariablesForFeature(name);
+	WeatherVariables::GlobalWeatherRegistry::GetSingleton()->SerializeFeatureUserSettings(name, variables, [&] {
+		SaveSettings(settings);
+		SceneSettingsManager::GetSingleton()->OverlayBaseSettings(name, settings, variables);
+		Presets::LookSceneRuntime::OverlayBase(name, settings);
+	});
 }
 
 bool Feature::ValidateCache(CSimpleIniA& a_ini)

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <nlohmann/json_fwd.hpp>
 #include <string>
 #include <string_view>
@@ -22,6 +23,10 @@ namespace MenuUI::PerformancePage
 	nlohmann::json CaptureAll();
 	nlohmann::json SetBase(std::string_view a_profile);
 	nlohmann::json Status();
+	/** Imports staged choices only; Apply MyPerformance remains explicit. */
+	nlohmann::json ImportProfile(const std::filesystem::path& source);
+	/** Exports one portable MyPerformance JSON without saving or applying settings. */
+	nlohmann::json ExportProfile(const std::filesystem::path& folder, const std::string& name);
 	/** Inspect or stage Included Features; none of these actions change live feature settings. */
 	nlohmann::json IncludedFeaturesStatus();
 	nlohmann::json SelectIncludedFeature(std::string_view a_feature, bool a_enabled);

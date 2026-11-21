@@ -65,6 +65,8 @@
 #include "Menu/PerformancePage.h"
 #include "Menu/PerformanceTuningRenderer.h"
 #include "PresetCompatibility.h"
+#include "Presets/LookProfiles.h"
+#include "Presets/LookSceneRuntime.h"
 #include "Profiler.h"
 #include "SceneSettingsManager.h"
 #include "SettingsMigrations.h"
@@ -95,7 +97,7 @@ namespace
 	{
 		std::vector<std::string> failedLayers;
 		auto overrideManager = SettingsOverrideManager::GetSingleton();
-		if (!overrideManager->IsEnabled())
+		if (!overrideManager->IsEnabled() || Presets::LookProfiles::Get().IsManaged())
 			return failedLayers;
 
 		for (auto* feature : Feature::GetFeatureList()) {
@@ -109,12 +111,7 @@ namespace
 					continue;
 
 				json currentSettings;
-				const auto activeVariables =
-					WeatherManager::GetSingleton()->GetActiveVariablesForFeature(featureName);
-				WeatherVariables::GlobalWeatherRegistry::GetSingleton()
-					->SerializeFeatureUserSettings(featureName, activeVariables, [&]() {
-						feature->SaveSettings(currentSettings);
-					});
+				feature->SaveBaseSettings(currentSettings);
 
 				const auto overrideSettings =
 					overrideManager->GetMergedOverrideSettings(featureName, json::object());
@@ -544,6 +541,7 @@ void State::Draw(bool isCompute)
 			CS_DRAW_ZONE(weatherZone, "WeatherManager::UpdateFeatures", emitTracyDrawZones);
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::WeatherUpdateFeatures, stateDrawDiagFrame, stateDrawDiagActive);
 			WeatherManager::GetSingleton()->UpdateFeatures();
+			Presets::LookSceneRuntime::Update();
 		}
 
 		if (terrainBlending.loaded && terrainBlending.settings.Enabled) {
@@ -1256,6 +1254,7 @@ bool State::RestoreDefaultSettings(std::string& a_error)
 		a_error = "Could not preserve the saved-settings baseline before restoring defaults.";
 		return false;
 	}
+	SceneSettingsManager::BaseSettingsScope sceneScope;
 	json previous;
 	try {
 		SaveToJson(previous, false);
@@ -1266,11 +1265,16 @@ bool State::RestoreDefaultSettings(std::string& a_error)
 	bool restored = false;
 	try {
 		LoadFromJson(defaults);
+		Presets::LookProfiles::Get().OnDefaultsRestored();
+		sceneScope.Finish();
 		restored = true;
 	} catch (const std::exception& e) {
 		a_error = std::format("Defaults could not be applied: {}", e.what());
 		try {
+			SceneSettingsManager::BaseSettingsScope rollbackScope;
 			LoadFromJson(previous);
+			rollbackScope.Finish();
+			sceneScope.Finish();
 		} catch (const std::exception& rollback) {
 			a_error += std::format(" Current settings could not be recovered: {}", rollback.what());
 		}
@@ -1290,7 +1294,10 @@ void State::Load(
 	bool a_allowReload,
 	SettingsApplyMode a_applyMode)
 {
+	SceneSettingsManager::BaseSettingsScope sceneScope;
+	Presets::LookProfiles::Get().CaptureFactorySettings();
 	json settings = json::object();
+	json profileUserSettings = json::object();
 	bool errorDetected = false;
 
 	const auto configPath = GetConfigPath(a_configMode);
@@ -1374,6 +1381,7 @@ void State::Load(
 			SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(*adaptiveIt);
 	}
 
+	const auto profileDefaults = settings;
 	// Step 2: Apply user settings on top of defaults.
 	if (a_configMode == ConfigMode::USER) {
 		json userSettings;
@@ -1408,6 +1416,7 @@ void State::Load(
 				if (auto adaptiveIt = userSettings.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
 					adaptiveIt != userSettings.end())
 					SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(*adaptiveIt);
+				profileUserSettings = userSettings;
 				for (const auto& [key, value] : userSettings.items()) {
 					if (Util::Settings::OverlayCoreSettings(settings, key, value))
 						continue;
@@ -1468,6 +1477,13 @@ void State::Load(
 	SettingsMigrations::MigrateAdaptiveBalanceRootLayer(settings);
 
 	try {
+		if (const auto presets = profileUserSettings.find("Presets"); presets != profileUserSettings.end() &&
+																	  presets->is_object() && presets->contains("csxLookSchema") && (*presets)["csxLookSchema"] == 1) {
+			// Managed settings retain legacy author baselines, but personal edits are the final layer.
+			for (const char* section : { "Menu", "Advanced", "General", "Disable at Boot", "Replace Original Shaders" })
+				if (profileUserSettings.contains(section))
+					Presets::Overlay(settings[section], profileUserSettings[section]);
+		}
 		// Load core settings (Menu, Advanced, General, Replace Original Shaders)
 		logger::info("Loading core settings");
 		LoadFromJson(settings, false, a_applyMode);
@@ -1520,7 +1536,8 @@ void State::Load(
 						}
 
 						// Apply user override customizations on top (if any)
-						if (overrideManager->LoadUserOverride(featureName, featureJson)) {
+						if (!profileUserSettings.value("Presets", json::object()).contains("csxLookSchema") &&
+							overrideManager->LoadUserOverride(featureName, featureJson)) {
 							logger::info("Applied user override customizations to {}", feature->GetName());
 						}
 
@@ -1529,6 +1546,15 @@ void State::Load(
 							feature->LoadSettings(featureJson);
 						} catch (...) {
 							logger::warn("Invalid override settings for {}, keeping original settings.", feature->GetName());
+						}
+					}
+
+					if (profileUserSettings.value("Presets", json::object()).contains("csxLookSchema")) {
+						if (const auto user = profileUserSettings.find(feature->GetName()); user != profileUserSettings.end() && user->is_object()) {
+							json values;
+							feature->SaveSettings(values);
+							Presets::Overlay(values, *user);
+							feature->LoadSettings(values);
 						}
 					}
 
@@ -1548,6 +1574,7 @@ void State::Load(
 
 		WeatherManager::GetSingleton()->NotifyUserSettingsChanged();
 
+		Presets::LookProfiles::Get().Load(profileDefaults, profileUserSettings);
 		const auto currentVersion = std::string{ Plugin::VERSION_LABEL };
 		const auto versionIt = settings.find("Version");
 		if (versionIt == settings.end() || !versionIt->is_string() || versionIt->get<std::string>() != currentVersion) {
@@ -1580,6 +1607,7 @@ void State::SaveToJson(
 	bool a_includeMissingUnloadedFeatures)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
+	Presets::LookProfiles::Get().SaveSelection(settings);
 	SettingsMigrations::MigrateAdaptiveBalanceRootLayer(settings);
 	const auto shaderCache = globals::shaderCache;
 
@@ -1632,21 +1660,14 @@ void State::SaveToJson(
 	settings["Version"] = std::string{ Plugin::VERSION_LABEL };
 
 	// Save feature settings.
-	auto* weatherRegistry =
-		WeatherVariables::GlobalWeatherRegistry::GetSingleton();
 	for (auto* feature : Feature::GetFeatureList()) {
 		// Preserve the last valid settings for features which were disabled, missing,
 		// or incompatible and therefore never loaded into memory.
 		const std::string settingsName = feature->GetName();
 		if (feature->loaded || (a_includeMissingUnloadedFeatures && !settings.contains(settingsName))) {
 			if (feature->loaded) {
-				const auto activeVariables =
-					WeatherManager::GetSingleton()->GetActiveVariablesForFeature(
-						feature->GetShortName());
-				weatherRegistry->SerializeFeatureUserSettings(
-					feature->GetShortName(), activeVariables, [&]() {
-						feature->Save(settings);
-					});
+				if (feature->HasFeatureSettings())
+					feature->SaveBaseSettings(settings[settingsName]);
 			} else {
 				feature->Save(settings);
 			}
@@ -1815,9 +1836,7 @@ bool State::Save(ConfigMode a_configMode, Feature* a_feature)
 		if (a_feature) {
 			json featureSettings = json::object();
 			FeatureSettingsScope::Copy(featureSettings, settings, a_feature->GetName());
-			const auto activeVariables = WeatherManager::GetSingleton()->GetActiveVariablesForFeature(a_feature->GetShortName());
-			WeatherVariables::GlobalWeatherRegistry::GetSingleton()->SerializeFeatureUserSettings(
-				a_feature->GetShortName(), activeVariables, [&] { a_feature->Save(featureSettings); });
+			a_feature->SaveBaseSettings(featureSettings[a_feature->GetName()]);
 			globals::menu->CaptureFeatureMenuSettings(a_feature->GetName(), featureSettings);
 			FeatureSettingsScope::Copy(settings, featureSettings, a_feature->GetName());
 		} else {
@@ -1834,6 +1853,12 @@ bool State::Save(ConfigMode a_configMode, Feature* a_feature)
 	}
 
 	std::string writeError;
+	try {
+		if (a_configMode == ConfigMode::USER && !Presets::LookProfiles::Get().PrepareSave(settings, writeError, a_feature))
+			return reportFailure(writeError, writeError);
+	} catch (const std::exception& error) {
+		return reportFailure(error.what(), "Settings were not saved because the Visuals profile could not be collected.");
+	}
 	if (!SettingsSerialization::WriteFileAtomic(configPath, settings, writeError)) {
 		return reportFailure(
 			std::format("Failed to save settings to {}: {}", configPath.string(), writeError),

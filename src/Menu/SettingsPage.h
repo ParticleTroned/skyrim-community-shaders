@@ -172,8 +172,8 @@ namespace MenuUI
 	class SettingsPage
 	{
 	public:
-		/** Empty sections draw one continuous page. The navigation guard must outlive the page ID. */
-		SettingsPage(const char* a_id, std::initializer_list<Section> a_sections, const char* a_overviewTitle = "", const char* a_guidance = "", std::function<bool(std::string_view)> a_canSelect = {});
+		/** Empty sections draw one continuous page. A child-page section owns its scrolling and spacing. */
+		SettingsPage(const char* a_id, std::initializer_list<Section> a_sections, const char* a_overviewTitle = "", const char* a_guidance = "", std::function<bool(std::string_view)> a_canSelect = {}, std::string_view a_childPageSection = {});
 		~SettingsPage();
 		SettingsPage(const SettingsPage&) = delete;
 		SettingsPage& operator=(const SettingsPage&) = delete;

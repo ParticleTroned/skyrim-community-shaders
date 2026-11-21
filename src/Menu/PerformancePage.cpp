@@ -6,10 +6,14 @@
 #include "Menu.h"
 #include "PerformanceProfiles.h"
 #include "PerformanceTuningRenderer.h"
+#include "Presets/LookPack.h"
+#include "ProfileExchange.h"
 #include "SettingsActions.h"
 #include "SettingsPage.h"
 #include "SettingsSearch.h"
+#include "SettingsSerialization.h"
 #include "State.h"
+#include "Utils/FileSystem.h"
 #include "Utils/RuntimeToggle.h"
 #include "Utils/UI.h"
 #include <algorithm>
@@ -22,6 +26,7 @@ namespace MenuUI::PerformancePage
 {
 	namespace
 	{
+		ProfileExchangeState exchange;
 		using json = nlohmann::json;
 		PerformanceProfiles::UserProfile user;
 		int selectedProfile = 1;
@@ -126,7 +131,7 @@ namespace MenuUI::PerformancePage
 		{
 			if (!globals::menu)
 				return "The settings menu is unavailable.";
-			return PerformanceTuningRenderer::HasActiveMeasurements() ? "Finish the active measurement before editing MyPreset feature choices." : nullptr;
+			return PerformanceTuningRenderer::HasActiveMeasurements() ? "Finish the active measurement before editing MyPerformance feature choices." : nullptr;
 		}
 
 		json MakeIncludedFeatureChoices(bool a_current)
@@ -189,7 +194,7 @@ namespace MenuUI::PerformancePage
 				Choice{ "performance", "Performance", "Prioritise frame time.", "Click to apply unified Performance switches, upscaling and feature-owned presets. Save CSX settings to keep them." },
 				Choice{ "balanced", "Balanced", "Balance cost and quality.", "Click to apply unified Balanced switches, upscaling and feature-owned presets. Save CSX settings to keep them." },
 				Choice{ "quality", "Quality", "Prioritise rendering quality.", "Click to apply unified Quality switches, upscaling and feature-owned presets. Save CSX settings to keep them." },
-				Choice{ "user", "MyPreset", "Your saved performance choices.", "Review a base tier plus selections saved from Tuning, then use Apply MyPreset below to apply them." }
+				Choice{ "user", "MyPerformance", "Your saved performance choices.", "Review a base tier plus selections saved from Tuning, then use Apply MyPerformance below to apply them." }
 			};
 			if (const auto* reason = MutationBlockReason()) {
 				for (int index = 0; index < 3; ++index) {
@@ -197,7 +202,7 @@ namespace MenuUI::PerformancePage
 					choices[index].tooltip = reason;
 				}
 			}
-			const char* profileNames[]{ "Performance", "Balanced", "Quality", "MyPreset" };
+			const char* profileNames[]{ "Performance", "Balanced", "Quality", "MyPerformance" };
 			SettingsSearch::SelectNavigationChoice("Performance preset", selectedProfile, profileNames, 4);
 			const int highlighted = selectedProfile == 3 || Matches(Resolve(PerformanceProfiles::Names[selectedProfile])) ? selectedProfile : -1;
 			const int clicked = ChoiceCards("Performance preset", highlighted, choices);
@@ -213,7 +218,7 @@ namespace MenuUI::PerformancePage
 			switch (selectedProfile) {
 			case 3:
 				{
-					SectionHeading("Preset selections", "Choose a base and review your saved choices, then use Apply MyPreset. Applies upscaling choices, feature On/Off states and named feature presets. Other individual visual adjustments are preserved.");
+					SectionHeading("Preset selections", "Choose a base and review your saved choices, then use Apply MyPerformance. Applies upscaling choices, feature On/Off states and named feature presets. Other individual visual adjustments are preserved.");
 					const char* names[]{ "Performance", "Balanced", "Quality" };
 					int base = static_cast<int>(std::ranges::find(PerformanceProfiles::Names, user.base) - PerformanceProfiles::Names.begin());
 					{
@@ -227,7 +232,7 @@ namespace MenuUI::PerformancePage
 						feedback = {};
 						ImGui::SetScrollY(0);
 					}
-					Util::AddTooltip("Choose which loaded features MyPreset will turn on or off when applied. Editing these tiles does not change the running features.");
+					Util::AddTooltip("Choose which loaded features MyPerformance will turn on or off when applied. Editing these tiles does not change the running features.");
 					SectionHeading("Saved performance choices");
 					for (const auto& [category, values] : user.choices.items()) {
 						if (category == "upscaling") {
@@ -257,18 +262,19 @@ namespace MenuUI::PerformancePage
 					}
 					if (user.choices.empty()) {
 						ImGui::TextDisabled("Base preset only");
-						Util::AddTooltip("MyPreset currently uses only its base preset. To add your own choices, open Performance Tuning and use Save settings to MyPreset for individual features or all editable features.");
+						Util::AddTooltip("MyPerformance currently uses only its base preset. To add your own choices, open Performance Tuning and use Save settings to MyPerformance for individual features or all editable features.");
 					}
 					if (!Matches(user.Resolve())) {
-						PageNotice("MyPreset changes not applied.", NoticeKind::Pending,
-							"Current settings differ from MyPreset. Use Apply MyPreset to apply its base and saved choices, then Save settings to keep the result.");
+						PageNotice("MyPerformance changes not applied.", NoticeKind::Pending,
+							"Current settings differ from MyPerformance. Use Apply MyPerformance to apply its base and saved choices, then Save settings to keep the result.");
 					}
 					{
 						const auto disabled = Util::DisableGuard(MutationBlockReason() != nullptr);
-						if (ImGui::Button("Apply MyPreset"))
+						if (ImGui::Button("Apply MyPerformance"))
 							Report(Apply(PerformanceProfiles::Names[3]));
 					}
 					Util::AddTooltip("Applies the chosen base plus your saved performance choices. Save CSX settings to keep the result.");
+					DrawProfileExchange(exchange, "Share MyPerformance", Util::PathHelpers::GetCommunityShaderPath() / "Presets", false, MutationBlockReason(), [](const auto& path, const auto&) { Report(ImportProfile(path)); }, [](const auto& folder, const auto& name) { Report(ExportProfile(folder, name)); });
 					break;
 				}
 			default:
@@ -285,16 +291,16 @@ namespace MenuUI::PerformancePage
 			const float toolbarWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x);
 			const auto& style = ImGui::GetStyle();
 			const float restoreSize = ImGui::GetFrameHeight();
-			const float applyWidth = ImGui::CalcTextSize("Apply to MyPreset").x + style.FramePadding.x * 2;
+			const float applyWidth = ImGui::CalcTextSize("Apply to MyPerformance").x + style.FramePadding.x * 2;
 			const float actionsWidth = applyWidth + style.ItemSpacing.x + restoreSize;
-			if (ImGui::Button("Back to MyPreset")) {
+			if (ImGui::Button("Back to MyPerformance")) {
 				includedFeaturesOpen = false;
 				selectedProfile = 3;
 				feedback = {};
 				ImGui::SetScrollY(0);
 				return;
 			}
-			Util::AddTooltip("Return to MyPreset. Use Apply to MyPreset first to keep edited selections.");
+			Util::AddTooltip("Return to MyPerformance. Use Apply to MyPerformance first to keep edited selections.");
 			const float actionsLeft = toolbarStart.x + std::max(0.0f, toolbarWidth - actionsWidth);
 			if (actionsLeft >= ImGui::GetItemRectMax().x + style.ItemSpacing.x) {
 				ImGui::SameLine();
@@ -305,18 +311,18 @@ namespace MenuUI::PerformancePage
 			const auto* blocked = IncludedFeaturesBlockReason();
 			{
 				const auto disabled = Util::DisableGuard(blocked != nullptr);
-				if (ImGui::Button("Apply to MyPreset"))
+				if (ImGui::Button("Apply to MyPerformance"))
 					Report(SaveIncludedFeatures());
-				Util::AddTooltip(blocked ? blocked : "Store these On/Off choices in MyPreset. Live features stay unchanged. Apply MyPreset on the previous page to use them; Save settings persists the preset.");
+				Util::AddTooltip(blocked ? blocked : "Store these On/Off choices in MyPerformance. Live features stay unchanged. Apply MyPerformance on the previous page to use them; Save settings persists the preset.");
 				if (actionsWidth <= toolbarWidth)
 					ImGui::SameLine();
 				if (ImGui::Button("##RestoreIncludedFeatures", { restoreSize, restoreSize }))
 					Report(RestoreIncludedFeatures());
 				Util::DrawActionGlyph(ImGui::GetWindowDrawList(), Util::ActionGlyph::LoadSettings, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), ImGui::GetColorU32(ImGuiCol_Text));
-				Util::AddTooltip(blocked ? blocked : "Reset the draft to current Enabled settings. This does not change MyPreset or any running feature.");
+				Util::AddTooltip(blocked ? blocked : "Reset the draft to current Enabled settings. This does not change MyPerformance or any running feature.");
 			}
 			ImGui::SetCursorScreenPos({ toolbarStart.x, ImGui::GetCursorScreenPos().y });
-			SectionHeading("Included Features", "Highlighted editable tiles will be On when MyPreset is applied; unhighlighted tiles will be Off. Restart-only features show their selected state and cannot be changed here. These choices do not change the running features.");
+			SectionHeading("Included Features", "Highlighted editable tiles will be On when MyPerformance is applied; unhighlighted tiles will be Off. Restart-only features show their selected state and cannot be changed here. These choices do not change the running features.");
 			feedback.Draw();
 			if (includedFeatureChoices.is_null())
 				includedFeatureChoices = MakeIncludedFeatureChoices(false);
@@ -340,7 +346,7 @@ namespace MenuUI::PerformancePage
 						continue;
 					auto description = feature->GetFeatureSummary().first;
 					const auto* readOnlyReason = feature->GetPerformanceProfileReadOnlyReason();
-					const auto help = description + "\n\n" + (readOnlyReason ? readOnlyReason : "Click to stage this feature On or Off in MyPreset. The running feature is unchanged.");
+					const auto help = description + "\n\n" + (readOnlyReason ? readOnlyReason : "Click to stage this feature On or Off in MyPerformance. The running feature is unchanged.");
 					description = description.substr(0, description.find_first_of("\r\n"));
 					if (const auto sentence = description.find(". "); sentence != std::string::npos)
 						description.resize(sentence + 1);
@@ -396,7 +402,7 @@ namespace MenuUI::PerformancePage
 			return { { "accepted", false }, { "error", reason } };
 		user.base = a_profile;
 		globals::menu->RequestSettingsDirtyCheck();
-		return { { "accepted", true }, { "message", "MyPreset base updated. Save CSX settings in the header to keep it." } };
+		return { { "accepted", true }, { "message", "MyPerformance base updated. Save CSX settings in the header to keep it." } };
 	}
 
 	nlohmann::json Capture(std::string_view a_name)
@@ -412,7 +418,7 @@ namespace MenuUI::PerformancePage
 			return { { "accepted", false }, { "error", "These selections cannot be stored in a performance profile." } };
 		user.choices = std::move(candidate);
 		globals::menu->RequestSettingsDirtyCheck();
-		return { { "accepted", true }, { "message", "Performance choices added to MyPreset. Custom visual tuning is excluded. Save CSX settings in the header to keep MyPreset." } };
+		return { { "accepted", true }, { "message", "Performance choices added to MyPerformance. Custom visual tuning is excluded. Save CSX settings in the header to keep MyPerformance." } };
 	}
 
 	nlohmann::json CaptureAll()
@@ -439,10 +445,10 @@ namespace MenuUI::PerformancePage
 			return { { "accepted", false }, { "error", "These selections cannot be stored in a performance profile." } };
 		user.choices = std::move(candidate);
 		globals::menu->RequestSettingsDirtyCheck();
-		std::string message = "Saved settings for " + std::to_string(captured.size()) + " features to MyPreset.";
+		std::string message = "Saved settings for " + std::to_string(captured.size()) + " features to MyPerformance.";
 		if (!skipped.empty())
 			message += " Skipped " + std::to_string(skipped.size()) + " unavailable or controlled features; their saved choices were kept.";
-		message += " Save CSX settings in the header to keep MyPreset.";
+		message += " Save CSX settings in the header to keep MyPerformance.";
 		return { { "accepted", true }, { "capturedFeatures", captured }, { "skippedFeatures", skipped }, { "message", message } };
 	}
 
@@ -598,10 +604,10 @@ namespace MenuUI::PerformancePage
 			candidate["upscaling"] = std::move(upscaling);
 		}
 		if (!PerformanceProfiles::ValidateChoices(candidate))
-			return { { "accepted", false }, { "error", "These feature selections cannot be stored in MyPreset." } };
+			return { { "accepted", false }, { "error", "These feature selections cannot be stored in MyPerformance." } };
 		user.choices = std::move(candidate);
 		globals::menu->RequestSettingsDirtyCheck();
-		return { { "accepted", true }, { "message", "Feature choices stored in MyPreset. Save settings to keep them." } };
+		return { { "accepted", true }, { "message", "Feature choices stored in MyPerformance. Save settings to keep them." } };
 	}
 
 	void DrawSaveChoice(Feature* a_feature, float a_rightEdge)
@@ -616,9 +622,9 @@ namespace MenuUI::PerformancePage
 		const auto start = ImGui::GetCursorScreenPos();
 		const float available = std::max(1.0f, ImGui::GetContentRegionAvail().x);
 		const float padding = ImGui::GetStyle().FramePadding.x * 2;
-		const char* label = "Save settings to MyPreset###SaveToMyPreset";
+		const char* label = "Save settings to MyPerformance###SaveToMyPerformance";
 		if (ImGui::CalcTextSize(label, nullptr, true).x + padding > available)
-			label = "Save settings\nto MyPreset###SaveToMyPreset";
+			label = "Save settings\nto MyPerformance###SaveToMyPerformance";
 		const float width = std::min(available, ImGui::CalcTextSize(label, nullptr, true).x + padding);
 		const float right = a_rightEdge > 0 ? std::min(a_rightEdge, start.x + available) : start.x + available;
 		ImGui::SetCursorScreenPos({ std::max(start.x, right - width), start.y });
@@ -627,8 +633,8 @@ namespace MenuUI::PerformancePage
 			if (ImGui::Button(label, { width, 0 }))
 				Report(a_feature ? Capture(a_feature->GetShortName()) : CaptureAll());
 		}
-		Util::AddTooltip(reason ? reason : a_feature ? "Adds this feature's current On/Off state and named preset, or Upscaling choices, to MyPreset. Other features and individual visual adjustments are excluded. Save CSX settings in the header to keep MyPreset." :
-													   "Adds current On/Off states, named feature presets and Upscaling choices for all editable features to MyPreset, including features switched off. Unavailable or controlled features keep their previously saved choices. Individual visual adjustments are excluded. Save CSX settings in the header to keep MyPreset.");
+		Util::AddTooltip(reason ? reason : a_feature ? "Adds this feature's current On/Off state and named preset, or Upscaling choices, to MyPerformance. Other features and individual visual adjustments are excluded. Save CSX settings in the header to keep MyPerformance." :
+													   "Adds current On/Off states, named feature presets and Upscaling choices for all editable features to MyPerformance, including features switched off. Unavailable or controlled features keep their previously saved choices. Individual visual adjustments are excluded. Save CSX settings in the header to keep MyPerformance.");
 		ImGui::SetCursorScreenPos({ start.x, ImGui::GetCursorScreenPos().y });
 		feedback.Draw();
 	}
@@ -640,4 +646,63 @@ namespace MenuUI::PerformancePage
 		else
 			DrawPresets();
 	}
+	nlohmann::json ImportProfile(const std::filesystem::path& source)
+	{
+		if (const auto* reason = MutationBlockReason())
+			return { { "accepted", false }, { "error", reason } };
+		try {
+			const auto document = Presets::ReadProfileDocument(source);
+			PerformanceProfiles::UserProfile candidate;
+			if (!PerformanceProfiles::ReadExport(document, candidate))
+				throw std::runtime_error("Choose a valid MyPerformance profile.");
+			std::vector<std::string> unavailable;
+			for (const auto* category : { "features", "presets" }) {
+				if (!candidate.choices.contains(category))
+					continue;
+				for (const auto& [id, value] : candidate.choices[category].items()) {
+					auto* feature = FindFeature(id);
+					if (feature && !IsSelectable(feature))
+						throw std::runtime_error(id + ": this feature cannot be changed by a performance profile.");
+					if (!IsAvailable(feature)) {
+						unavailable.push_back(id);
+						continue;
+					}
+					const auto names = feature->GetPerformancePresetNames();
+					if (std::string_view(category) == "presets" && std::ranges::find(names, value.get<std::string>()) == names.end())
+						throw std::runtime_error(id + ": unsupported quality preset.");
+				}
+			}
+			if (!globals::menu->PrepareSettingsMutation())
+				throw std::runtime_error("Could not preserve saved settings.");
+			user = std::move(candidate);
+			selectedProfile = 3;
+			includedFeatureChoices = nullptr;
+			globals::menu->RequestSettingsDirtyCheck();
+			return { { "accepted", true }, { "unavailableFeatures", unavailable },
+				{ "message", unavailable.empty() ? "Imported. Use Apply MyPerformance to use these choices." : "Imported with unavailable features. They will be skipped when applied." } };
+		} catch (const std::exception& error) {
+			return { { "accepted", false }, { "error", error.what() } };
+		}
+	}
+
+	nlohmann::json ExportProfile(const std::filesystem::path& folder, const std::string& name)
+	{
+		try {
+			if (!Presets::IsPackId(name))
+				throw std::runtime_error("Choose a valid profile name.");
+			if (!folder.is_absolute())
+				throw std::runtime_error("Choose an absolute export folder.");
+			std::filesystem::create_directories(folder);
+			const auto path = folder / std::filesystem::path(std::u8string(name.begin(), name.end()) + u8".MyPerformance.json");
+			if (std::filesystem::exists(path))
+				throw std::runtime_error("That profile already exists. Choose another name.");
+			std::string error;
+			if (!Util::FileHelpers::WriteTextFileAtomic(path, SettingsSerialization::Serialize(PerformanceProfiles::MakeExport(user, Plugin::VERSION_LABEL)), error, false, false))
+				throw std::runtime_error(error);
+			return { { "accepted", true }, { "path", Util::PathToUtf8(path) }, { "message", "MyPerformance exported." } };
+		} catch (const std::exception& error) {
+			return { { "accepted", false }, { "error", error.what() } };
+		}
+	}
+
 }

@@ -17,7 +17,6 @@
 #include "Bloom.h"
 #include "Buffer.h"
 #include "LinearLighting.h"
-#include "Menu/AdaptiveBalancePresets.h"
 #include "SharedLighting.h"
 #include "WaterAppearance.h"
 
@@ -266,9 +265,6 @@ struct AdaptiveBrightness : Feature
 		bool hasColorAdjustments = false;
 	};
 
-	static constexpr const char* kDefaultGlobalPresetName = "Default";
-	static constexpr const char* kDefaultLocationOverridePresetName = "Default";
-	static constexpr const char* kDefaultFullPresetName = "Default";
 	static constexpr std::size_t kInvalidLocationOverrideIndex = static_cast<std::size_t>(-1);
 
 	struct LocationLayerCache
@@ -302,27 +298,9 @@ struct AdaptiveBrightness : Feature
 		Locations
 	};
 
-	MenuUI::AdaptiveBalancePresets::State presetUI;
-	MenuUI::AdaptiveBalancePresets::State lastDrawnPresetUI;
-	MenuUI::AdaptiveBalancePresets::ExportFolder presetExportFolder;
-	std::vector<std::string> presetFiles;
-	std::string presetFileStatus;
-	bool presetFilesDirty = true;
-	std::string globalPresetName = kDefaultGlobalPresetName;
-	std::string globalPresetStatus;
 	std::string selectedLocationOverrideKey;
-	std::string locationOverridePresetName = kDefaultLocationOverridePresetName;
-	std::string locationOverridePresetStatus;
 	std::atomic_bool locationTeleportPending{ false };
 	std::atomic<const char*> locationTeleportStatus{ nullptr };
-	std::array<std::string, static_cast<std::size_t>(ContextProfileScope::Count)> contextPresetNames{
-		kDefaultLocationOverridePresetName,
-		kDefaultLocationOverridePresetName,
-		kDefaultLocationOverridePresetName
-	};
-	std::array<std::string, static_cast<std::size_t>(ContextProfileScope::Count)> contextPresetStatuses{};
-	std::string fullPresetName = kDefaultFullPresetName;
-	std::string fullPresetStatus;
 	std::string locationOverrideEditKey;
 	std::optional<ProfileSettings> locationOverrideEditProfile;
 	ProfileTabSyncState profileTabSyncState{};
@@ -478,19 +456,8 @@ struct AdaptiveBrightness : Feature
 	void InvalidateProfileTabSync();
 	void ResetLocationOverrideEdit();
 	ProfileSettings* GetLocationOverrideEditProfile(LocationOverride& a_locationOverride);
-	bool ExportGlobalPreset();
-	/** Effective session export folder; the default uses the game's virtual Data path. */
-	std::filesystem::path GetPresetExportDirectory() const;
-	bool ImportGlobalPreset();
-	bool ExportLocationOverrides();
-	bool ImportLocationOverrides();
-	bool ExportContextProfile(
-		ContextProfileScope a_scope,
-		const LocationOverrideTarget& a_target,
-		const LocationOverride& a_locationOverride);
-	bool ImportContextProfile(ContextProfileScope a_scope, const LocationOverrideTarget& a_target);
-	bool ExportFullPreset();
-	bool ImportFullPreset();
+	/** Converts legacy full/base/place exports without changing live settings. */
+	bool ReadLegacyVisuals(const std::filesystem::path& source, json& values, std::string& error) const;
 	CurrentLocationOverrideTargets GetCurrentLocationOverrideTargets() const;
 	const LocationOverride* GetInheritedLocationOverride(const LocationOverrideTarget& a_target) const;
 	LocationOverride* FindLocationOverride(const std::string& a_key);

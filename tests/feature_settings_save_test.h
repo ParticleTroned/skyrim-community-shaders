@@ -17,8 +17,22 @@ namespace FeatureSettingsSaveTest
 		bool HasFeatureSettings() const { return true; }
 		void Save(json& root) { root[name] = settings; }
 		void SaveSettings(json& value) { value = settings; }
+		void SaveBaseSettings(json& value) { value = settings; }
 		void OnSettingsSaved() { ++notified; }
 	};
+	namespace Presets
+	{
+		struct LookProfiles
+		{
+			static LookProfiles& Get()
+			{
+				static LookProfiles instance;
+				return instance;
+			}
+			bool IsManaged() const { return false; }
+			bool PrepareSave(json&, std::string&, Feature*) { return true; }
+		};
+	}
 	namespace globals
 	{
 		struct Menu

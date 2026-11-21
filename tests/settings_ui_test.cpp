@@ -7,6 +7,7 @@
 #include "Menu/AdaptiveBalancePresets.h"
 #include "Menu/PerformancePage.h"
 #include "Menu/PerformanceResults.h"
+#include "Menu/ProfileExchange.h"
 #include "Menu/SectionDivider.h"
 #include "Menu/SettingsActions.h"
 #include "Menu/SettingsNavigation.h"
@@ -453,6 +454,25 @@ namespace WeatherVariables
 		void CaptureFeatureUserSettings(const std::string&) {}
 	};
 }
+struct SceneSettingsManager
+{
+	struct BaseSettingsScope
+	{
+		void Finish() {}
+	};
+};
+namespace Presets
+{
+	struct LookProfiles
+	{
+		static LookProfiles& Get()
+		{
+			static LookProfiles instance;
+			return instance;
+		}
+		void OnDefaultsRestored() {}
+	};
+}
 namespace globals
 {
 	using json = nlohmann::json;
@@ -714,12 +734,12 @@ bool g_reactiveWarningShow = false, g_dontShowAgainCheckbox = false;
 std::vector<std::pair<FeatureConstraints::SettingId, FeatureConstraints::ConstraintResult>> g_reactiveWarningConstraints;
 struct FeatureListRenderer
 {
-	static void RenderPerformancePage(const char* page, const std::function<void()>& draw);
+	static void RenderPerformancePage(const char* page, const std::function<void()>& draw, const char* section = nullptr);
 	static std::string GetBuiltInPageMenuEntryId(const std::string& page)
 	{
-		return page == "PerformancePresets" ? "builtin:Performance Presets" : page == "PerformanceOverlay" ? "" :
-		                                                                  page == "PerformanceTuning"      ? "builtin:Performance Tuning" :
-		                                                                                                     "builtin:" + page;
+		return page == "PerformancePresets" ? "builtin:Performance Presets" : (page == "PerformanceOverlay" || page == "TextureStreaming") ? "" :
+		                                                                  page == "PerformanceTuning"                                      ? "builtin:Performance Tuning" :
+		                                                                                                                                     "builtin:" + page;
 	}
 	struct DrawMenuVisitor
 	{
@@ -747,7 +767,7 @@ bool TrackedPresetNameInput(const char* label, const char* hint, std::string* na
 	}
 	return changed;
 }
-bool TrackedPresetButton(const char* label, ImVec2 size)
+bool TrackedPresetButton(const char* label, ImVec2 size = {})
 {
 	presetButtonColors[label] = ImGui::GetStyleColorVec4(ImGuiCol_Button);
 	const bool clicked = ImGui::Button(label, size);
@@ -761,17 +781,6 @@ namespace Util::PathHelpers
 	std::filesystem::path presetTestRoot;
 	std::filesystem::path GetCommunityShaderPath() { return presetTestRoot; }
 	std::filesystem::path GetOverridesPath() { return presetTestRoot / "Overrides"; }
-}
-namespace PresetFilesTest
-{
-	struct AdaptiveBrightness
-	{
-		static constexpr const char* kDefaultGlobalPresetName = "Default";
-		static constexpr const char* kDefaultLocationOverridePresetName = "Default";
-		static constexpr const char* kDefaultFullPresetName = "Default";
-		static constexpr std::string_view kFeatureShortName = "AdaptiveBrightness";
-	};
-#include "settings_preset_files_under_test.h"
 }
 #include "settings_results_under_test.h"
 
@@ -1010,229 +1019,54 @@ int main()
 		}
 
 		{
-			namespace Presets = MenuUI::AdaptiveBalancePresets;
-			const auto exportRoot = std::filesystem::current_path() / std::format("preset-folder-test-{}-{}", GetCurrentProcessId(), GetTickCount64());
-			require(std::filesystem::create_directory(exportRoot), "folder browser tests own a fresh directory");
-			const SKSE::stl::scope_exit cleanupExportRoot([&] { std::filesystem::remove_all(exportRoot); });
-			const auto customFolder = exportRoot / std::filesystem::path(u8"Shared_\u00e9_\u6f22##presets");
-			std::filesystem::create_directory(customFolder);
-			const auto regularFile = exportRoot / "not-a-folder.json";
-			std::ofstream(regularFile) << "{}";
-			Presets::State exchange;
-			Presets::ExportFolder exportFolder;
-			const Presets::Palette exportColors{ { .42f, .34f, .12f, 1 }, { .50f, .40f, .16f, 1 }, { .60f, .48f, .20f, 1 }, { .8f, .7f, .4f, 1 } };
-			const Presets::Palette importColors{ { .21f, .17f, .06f, 1 }, { .30f, .24f, .08f, 1 }, { .40f, .32f, .12f, 1 }, { .6f, .5f, .2f, 1 } };
-			const Presets::Targets targets{ "Tamriel", "The Reach", "Markarth" };
-			const std::array<std::string, 2> files{ std::string(96, 'W') + "_AdaptiveBrightness_City.json", "Clear_Nights_AdaptiveBrightness_City.json" };
-			std::string name = "My appearance", feedback;
-			const char* unavailable = nullptr;
-			bool refresh = false;
-			int transfers = 0;
-			float panelWidth = 850, panelHeight = 600, fontSize = 22, presetLine = 0, presetAvailableHeight = 0;
-			ImRect panelBounds;
-			MenuUI::SettingsPage::Select("PresetExchangeTest", "presets");
+			MenuUI::ProfileExchangeState exchange;
+			exchange.name = "My shared profile";
+			exchange.source = std::filesystem::current_path() / "profile.json";
+			int imports = 0, exports = 0;
+			float exchangeWidth = 620, font = 22;
+			const char* blocked = nullptr;
 			const auto draw = [&] {
-				ImGui::PushFont(ImGui::GetFont(), fontSize);
-				ImGui::BeginChild("PresetHMDPanel", { panelWidth, panelHeight });
-				panelBounds = ImGui::GetCurrentWindow()->Rect();
-				{
-					MenuUI::SettingsPage page("PresetExchangeTest", { { "presets", "Presets", "Exchange appearances" } });
-					if (page.Is("presets")) {
-						const auto colors = GImGui->ColorStack.Size;
-						const auto disabled = GImGui->DisabledStackSize;
-						presetLine = ImGui::GetTextLineHeight();
-						presetAvailableHeight = ImGui::GetContentRegionAvail().y;
-						Presets::DrawSelection(exchange, exportColors, importColors, targets, exportFolder, exportRoot / "Presets");
-						transfers += Presets::DrawTransfer(exchange, exchange.mode == Presets::Mode::Export ? exportColors : importColors,
-							name, files, "Presets/example.json", feedback, unavailable, refresh);
-						require(colors == GImGui->ColorStack.Size && disabled == GImGui->DisabledStackSize,
-							"preset exchange restores button colours and enclosing disabled state");
-					}
-				}
+				ImGui::PushFont(ImGui::GetFont(), font);
+				ImGui::BeginChild("UnifiedProfileExchange", { exchangeWidth, 600 });
+				const auto colors = GImGui->ColorStack.Size;
+				const auto disabled = GImGui->DisabledStackSize;
+				MenuUI::DrawProfileExchange(exchange, "Share Visuals", std::filesystem::current_path(), true, blocked, [&](const auto&, const auto&) { ++imports; }, [&](const auto&, const auto&) { ++exports; });
+				require(colors == GImGui->ColorStack.Size && disabled == GImGui->DisabledStackSize, "unified exchange restores ImGui state");
+				require(ImGui::GetScrollMaxX() == 0, "unified exchange has no horizontal overflow");
 				ImGui::EndChild();
 				ImGui::PopFont();
 			};
-			for (const ImVec2 panel : { ImVec2{ 850, 600 }, ImVec2{ 700, 500 }, ImVec2{ 620, 440 } }) {
-				panelWidth = panel.x;
-				panelHeight = panel.y;
-				for (float size : { 18.0f, 22.0f, 27.0f }) {
-					fontSize = size;
-					for (const auto mode : { Presets::Mode::Export, Presets::Mode::Import }) {
-						for (int collection = 0; collection < static_cast<int>(Presets::Collection::Count); ++collection) {
-							exchange.collection = static_cast<Presets::Collection>(collection);
-							exchange.mode = mode;
-							frame(draw);
-							frame(draw);
-							const auto viewport = MenuUI::DevBenchViewport::Describe(true);
-							require(viewport["scrollMaxY"].get<float>() == 0, std::format("Preset viewport {}x{} font {} mode {} collection {}: scroll {}, height {}, line {}, available {}", panelWidth, panelHeight, fontSize, static_cast<int>(mode), static_cast<int>(exchange.collection), viewport["scrollMaxY"].get<float>(), viewport["height"].get<float>(), presetLine, presetAvailableHeight).c_str());
-							const auto action = std::format("{} {}", mode == Presets::Mode::Export ? "Export" : "Import", Presets::CollectionName(exchange.collection));
-							const auto button = Util::controls.at(action);
-							require(button.Min.x >= 0 && button.Max.x <= panelWidth && button.Max.y <= panelHeight,
-								"preset action stays inside the visible HMD panel");
-							const auto fullBox = Util::controls.at("##full");
-							const auto baseBox = Util::controls.at("##base");
-							const auto locationsBox = Util::controls.at("##locations");
-							require(fullBox.GetHeight() <= presetLine * 2.5f && baseBox.Min.y - fullBox.Max.y >= presetLine * .6f,
-								"compact preset boxes leave visible space for the parent-child connectors");
-							require(locationsBox.Min.x - baseBox.Max.x >= presetLine * .5f,
-								"sibling preset boxes remain visibly separated");
-						}
-						if (mode == Presets::Mode::Import) {
-							refresh = false;
-							click(Util::controls.at("Choose a matching JSON preset from the Presets folder.").GetCenter(), draw);
-							frame(draw);
-							require(refresh && !GImGui->OpenPopupStack.empty(), "opening the preset picker requests a fresh file inventory");
-							const auto* popup = GImGui->OpenPopupStack.back().Window;
-							require(popup != nullptr, "the file picker has a visible window");
-							require(panelBounds.Contains(popup->Rect()) && popup->ScrollMax.x == 0,
-								std::format("Picker must fit panel {}x{} font {}: panel ({},{})-({},{}), popup ({},{})-({},{}), horizontal scroll {}",
-									panelWidth, panelHeight, fontSize, panelBounds.Min.x, panelBounds.Min.y, panelBounds.Max.x, panelBounds.Max.y,
-									popup->Pos.x, popup->Pos.y, popup->Rect().Max.x, popup->Rect().Max.y, popup->ScrollMax.x)
-									.c_str());
-							click(Util::controls.at(files[0]).GetCenter(), draw);
-							require(name == files[0] && transfers == 0, "choosing a file preserves its full name and never imports automatically");
-						} else {
-							click(Util::controls.at("Choose folder##ExportFolder").GetCenter(), draw);
-							frame(draw);
-							require(!GImGui->OpenPopupStack.empty(), "Choose folder opens an in-menu browser");
-							const auto* popup = GImGui->OpenPopupStack.back().Window;
-							require(popup != nullptr, "the folder browser has a visible window");
-							require(panelBounds.Contains(popup->Rect()) && popup->ScrollMax.x == 0 && popup->ScrollMax.y == 0,
-								std::format("Folder browser {}x{} font {}: panel ({},{})-({},{}), popup ({},{})-({},{}), horizontal scroll {}",
-									panelWidth, panelHeight, fontSize, panelBounds.Min.x, panelBounds.Min.y, panelBounds.Max.x, panelBounds.Max.y,
-									popup->Pos.x, popup->Pos.y, popup->Rect().Max.x, popup->Rect().Max.y, popup->ScrollMax.x)
-									.c_str());
-							click(Util::controls.at("Cancel").GetCenter(), draw);
-							require(exportFolder.directory.empty() && transfers == 0 && !std::filesystem::exists(exportRoot / "Presets"),
-								"opening and cancelling the browser leaves the destination unchanged and creates no files");
-						}
+			for (float panelWidth : { 620.f, 850.f })
+				for (float fontSize : { 18.f, 27.f })
+					for (int mode : { 0, 1 }) {
+						exchangeWidth = panelWidth;
+						font = fontSize;
+						exchange.mode = mode;
+						frame(draw);
+						frame(draw);
+						const auto action = Util::controls.at(mode ? "Export profile" : "Import profile");
+						require(action.GetWidth() <= exchangeWidth && action.GetHeight() > 0, "unified exchange action fits");
+						const auto previous = imports + exports;
+						click(action.GetCenter(), draw);
+						require(imports + exports == previous + 1, "unified exchange dispatches its selected action once");
+						blocked = "Measurement running";
+						frame(draw);
+						click(Util::controls.at(mode ? "Export profile" : "Import profile").GetCenter(), draw);
+						require(imports + exports == previous + 1, "blocked exchange cannot dispatch");
+						blocked = nullptr;
 					}
-				}
-			}
-			panelWidth = 850;
-			panelHeight = 600;
-			fontSize = 22;
-			exchange = {};
-			frame(draw);
-			frame(draw);
-			click(Util::controls.at("Choose folder##ExportFolder").GetCenter(), draw);
-			click(Util::controls.at(Util::PathToUtf8(customFolder)).GetCenter(), draw);
-			require(exportFolder.browsing == std::filesystem::canonical(customFolder) && exportFolder.directory.empty(),
-				"clicking a Unicode subfolder with ImGui marker characters navigates without selecting an export destination");
-			click(Util::controls.at("Parent folder").GetCenter(), draw);
-			exportFolder.input = Util::PathToUtf8(customFolder);
-			click(Util::controls.at("Go").GetCenter(), draw);
-			require(exportFolder.browsing == std::filesystem::canonical(customFolder) && exportFolder.directory.empty(),
-				"browsing a Unicode folder does not select it or export a preset");
-			click(Util::controls.at("Use this folder").GetCenter(), draw);
-			require(exportFolder.directory == std::filesystem::canonical(customFolder) && transfers == 0,
-				"explicit folder selection changes the shared export destination without writing a preset");
-			std::string folderError;
-			for (const auto& invalid : { std::string("relative"), Util::PathToUtf8(exportRoot / "missing"), Util::PathToUtf8(regularFile), std::string(4097, 'x'), std::string("bad\0path", 8) })
-				require(!Presets::SetExportFolder(exportFolder, invalid, folderError) && !folderError.empty() && exportFolder.directory == std::filesystem::canonical(customFolder),
-					"invalid folder input reports an error and preserves the selected destination");
-			click(Util::controls.at("Choose folder##ExportFolder").GetCenter(), draw);
-			exportFolder.input.clear();
-			click(Util::controls.at("Use this folder").GetCenter(), draw);
-			require(exportFolder.directory == std::filesystem::canonical(customFolder) && !exportFolder.error.empty() && !GImGui->OpenPopupStack.empty(),
-				"an empty path cannot silently reset the destination or close the browser");
-			click(Util::controls.at("Default folder").GetCenter(), draw);
-			require(exportFolder.directory.empty() && transfers == 0, "Default folder restores preset routing without writing a file");
-			const auto exportTint = presetButtonColors.at("##full");
-			click(Util::controls.at("Select import mode, then choose the contents and file and use the Import button below.").GetCenter(), draw);
-			require(exchange.mode == Presets::Mode::Import && transfers == 0, "switching to import changes mode without applying a file");
-			const auto importTint = presetButtonColors.at("##full");
-			require(importTint.x < exportTint.x && importTint.y < exportTint.y, "import changes the complete diagram to the darker palette");
-			for (int index = 0; index < static_cast<int>(Presets::Collection::Count); ++index) {
-				const auto collection = static_cast<Presets::Collection>(index);
-				click(Util::controls.at(std::format("##{}", Presets::CollectionId(collection))).GetCenter(), draw);
-				require(exchange.collection == collection && transfers == 0, "collection boxes select contents without performing a transfer");
-				const auto action = std::format("Import {}", Presets::CollectionName(collection));
-				require(Util::controls.contains(action), "the final action names both mode and selected collection");
-			}
-			unavailable = "Apply or cancel the open location edit before exchanging presets.";
-			frame(draw);
-			click(Util::controls.at("Import City").GetCenter(), draw);
-			require(transfers == 0, "unavailable and pending-edit transfers cannot apply a file");
-			unavailable = nullptr;
-			frame(draw);
-			click(Util::controls.at("Import City").GetCenter(), draw);
-			require(transfers == 1, "only the explicit named import button requests a transfer");
-			click(Util::controls.at("Preset name input").GetCenter(), draw);
-			const auto cityInput = presetNameInputId;
-			require(GImGui->ActiveId == cityInput, "preset name editing is active before external navigation");
-			exchange.collection = Presets::Collection::Base;
-			frame(draw);
-			frame(draw);
-			require(presetNameInputId != cityInput && GImGui->ActiveId != cityInput,
-				"external collection selection cannot retain the previous collection's text edit buffer");
-			const auto importInput = presetNameInputId;
-			click(Util::controls.at("Select export mode, then choose the contents and use the Export button below.").GetCenter(), draw);
-			require(exchange.mode == Presets::Mode::Export && transfers == 1, "the export mode selector never writes a file");
-			require(presetNameInputId != importInput, "import and export filename fields have independent edit identities");
-			click(Util::controls.at("Export Base appearance").GetCenter(), draw);
-			require(transfers == 2, "only the named export action requests a file write");
-			feedback = "Status line\nSecond line must stay in the tooltip";
-			frame(draw);
-			const auto feedbackBounds = Util::controls.at(feedback);
-			require(VisibleTextIndices({ { feedbackBounds.Min.x, feedbackBounds.Max.y },
-						{ feedbackBounds.Max.x, feedbackBounds.Max.y + ImGui::GetTextLineHeight() * 2 } }) == 0,
-				"multiline feedback cannot draw below its reserved single row");
-			name.assign(300, 'X');
-			feedback.assign(500, 'Y');
-			panelWidth = 620;
-			panelHeight = 440;
-			fontSize = 27;
-			frame(draw);
-			frame(draw);
-			require(MenuUI::DevBenchViewport::Describe(true)["scrollMaxY"].get<float>() == 0,
-				"long preset names and feedback do not make the HMD view scroll");
 		}
 
 		{
-			using namespace PresetFilesTest;
-			auto& root = Util::PathHelpers::presetTestRoot;
-			root = std::filesystem::current_path() / std::format("preset-picker-test-{}-{}", GetCurrentProcessId(), GetTickCount64());
-			require(std::filesystem::create_directory(root), "preset picker tests own a fresh temporary directory");
-			const SKSE::stl::scope_exit cleanup([&] { std::filesystem::remove_all(root); });
-			const auto directory = GetPresetDirectory();
-			const auto customDirectory = root / "custom-export";
-			std::filesystem::create_directory(customDirectory);
-			for (const auto kind : { PresetKind::Full, PresetKind::Global, PresetKind::Location, PresetKind::Worldspace, PresetKind::Region, PresetKind::City }) {
-				const auto customPath = GetPresetPath("Warm", kind, customDirectory);
-				require(customPath.parent_path() == customDirectory && customPath.filename() == GetPresetPath("Warm", kind).filename(),
-					"every preset export kind uses the chosen folder and preserves its importable filename");
-			}
-			std::filesystem::create_directories(directory);
-			std::filesystem::create_directories(Util::PathHelpers::GetOverridesPath());
-			const auto write = [](const std::filesystem::path& path) { std::ofstream(path) << "{}"; };
-			const auto full = GetPresetFilename("Warm", PresetKind::Full);
-			const auto suffixName = std::string("Warm_AdaptiveBrightness_Global_AdaptiveBrightness_Full.json");
-			write(directory / full);
-			write(directory / suffixName);
-			write(directory / "Warm tone_AdaptiveBrightness_Full.json");
-			write(directory / GetPresetFilename("Warm", PresetKind::City));
-			std::filesystem::create_directory(directory / GetPresetFilename("Folder", PresetKind::Full));
-			std::vector<std::string> files;
-			std::string status;
-			ReadPresetNames(PresetKind::Full, files, status);
-			require(files.size() == 2 && std::ranges::find(files, suffixName) != files.end(), "picker filters directories and incompatible names while keeping full exported filenames");
-			for (const auto& file : files)
-				require(ResolvePresetImportPath(file, PresetKind::Full) == directory / file, "every selectable file resolves to that exact exported file");
-			require(!status.empty(), "incompatible file names are explained");
-			const auto locations = GetPresetFilename("Places", PresetKind::Location);
-			write(directory / locations);
-			write(Util::PathHelpers::GetOverridesPath() / locations);
-			ReadPresetNames(PresetKind::Location, files, status);
-			require(files.size() == 1 && status.empty(), "duplicate live/preset names are removed and a successful refresh clears earlier errors");
-			require(ResolvePresetImportPath(files[0], PresetKind::Location) == directory / locations, "picker and importer give the Presets directory the same priority");
-			std::filesystem::remove_all(directory);
-			write(directory);
-			ReadPresetNames(PresetKind::Location, files, status);
-			require(files.size() == 1 && !status.empty(), "a failed preset directory scan reports its error and still offers readable legacy files");
-			std::filesystem::remove(directory);
-			ReadPresetNames(PresetKind::Location, files, status);
-			require(files.size() == 1 && status.empty(), "missing preset directories are harmless and a recovered scan clears errors");
+			namespace Presets = MenuUI::AdaptiveBalancePresets;
+			Presets::ExportFolder folder;
+			std::string error;
+			const auto root = std::filesystem::current_path();
+			require(Presets::SetExportFolder(folder, Util::PathToUtf8(root), error), "existing export folder accepted");
+			const auto saved = folder.directory;
+			require(!Presets::SetExportFolder(folder, "relative/folder", error) && folder.directory == saved,
+				"invalid folder preserves the destination");
+			require(Presets::SetExportFolder(folder, {}, error) && folder.directory.empty(), "default export folder restored");
 		}
 
 		using Viewport = MenuUI::DevBenchViewport;
@@ -1631,22 +1465,45 @@ int main()
 			require(MenuUI::SettingsPage::Selected(tool) == MenuUI::SettingsNavigation::PerformanceSection(tool) && bodyDraws > 0, "each tool opens its native content without another overview");
 			for (const auto& entry : MenuUI::SettingsPage::Describe())
 				if (entry["page"] == tool) {
-					require(entry["tabs"].size() == 5, "Performance tools share exactly five parent tabs");
+					require(entry["tabs"].size() == 6, "Performance tools share exactly six parent tabs");
 					require(entry["tabs"][1]["id"] == "presets", "Presets is the first destination after Overview");
+					require(entry["tabs"][2]["id"] == "streaming" && entry["tabs"][3]["id"] == "timings", "Texture Streaming sits between Presets and Profiling");
 					for (const auto& tab : entry["tabs"])
 						require(tab["showTab"].get<bool>(), "all parent tabs remain visible");
 				}
-			for (const auto* section : { "overview", "presets", "timings", "tuning", "overlay" }) {
+			for (const auto* section : { "overview", "presets", "streaming", "timings", "tuning", "overlay" }) {
 				globals::menu->destination.clear();
 				require(MenuUI::SettingsPage::Navigate(tool, section), "parent tab navigation is available from every tool");
 				for (int i = 0; i < 3; ++i) frame(drawTool);
 				if (section != MenuUI::SettingsNavigation::PerformanceSection(tool))
 					require(!globals::menu->destination.empty(), "parent tab queues its native tool page");
+				if (std::string_view(section) == "streaming")
+					require(globals::menu->destination == "TextureStreaming", "streaming navigation targets the registered feature, not a duplicate built-in");
 			}
 			MenuUI::SettingsPage::Select(tool, MenuUI::SettingsNavigation::PerformanceSection(tool).data());
 		}
 		require(!MenuUI::SettingsPage::Navigate("PerformanceTuning", "performance") && !MenuUI::SettingsPage::Navigate("PerformanceTuning", "profiling"), "global tools cannot recursively inject internal performance tabs");
 		require(MenuUI::SettingsPage::Navigate("PerformanceTuning", "quick_scan") && PerformanceTuningRenderer::requestedView == "quick_scan", "legacy scan link retains its radio selection");
+
+		Feature streamingFeature{ "TextureStreaming", false };
+		auto drawStreaming = [&] {
+			FeatureListRenderer::RenderPerformancePage("Performance", [&] {
+				require((ImGui::GetCurrentWindow()->Flags & ImGuiWindowFlags_NoScrollbar) && ImGui::GetCursorPosX() == 0, "streaming host adds neither a second scrollbar nor indentation");
+				MenuUI::FeatureScope scope(&streamingFeature);
+				MenuUI::SettingsPage page("TextureStreaming", { { "quality", "Texture detail", "Detail controls" }, { "status", "Status", "Activity" } }); }, "streaming");
+		};
+		MenuUI::SettingsPage::Select("Performance", "streaming");
+		MenuUI::SettingsPage::Select("TextureStreaming", "quality");
+		for (int i = 0; i < 3; ++i) frame(drawStreaming);
+		require(MenuUI::SettingsPage::Selected("Performance") == "streaming" && MenuUI::SettingsPage::Selected("TextureStreaming") == "quality", "parent navigation preserves the streaming feature's active section");
+		require(!MenuUI::SettingsPage::Navigate("TextureStreaming", "profiling") && !MenuUI::SettingsPage::Navigate("TextureStreaming", "performance"), "hosting streaming preserves its existing profiling and measurement exclusions");
+		require(MenuUI::SettingsPage::Navigate("TextureStreaming", "status"), "streaming keeps its native status view");
+		for (int i = 0; i < 3; ++i) frame(drawStreaming);
+		require(MenuUI::SettingsPage::Selected("Performance") == "streaming" && MenuUI::SettingsPage::Selected("TextureStreaming") == "status", "streaming status retains the parent tab");
+		require(MenuUI::SettingsPage::Navigate("Performance", "presets"), "streaming can return to the other Performance tools");
+		globals::menu->destination.clear();
+		frame(drawStreaming);
+		require(globals::menu->destination == "builtin:Performance Presets", "streaming routes parent navigation through the existing preset page");
 
 		std::vector<std::string> profilingPages{ "Screenshot", "TextureStreaming" };
 		for (const auto& view : Util::FeatureProfiling::views)

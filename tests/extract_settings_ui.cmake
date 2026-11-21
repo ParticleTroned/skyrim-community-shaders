@@ -184,13 +184,12 @@ string(SUBSTRING "${source}" ${start} -1 body)
 string(REPLACE "ImGui::Button(" "TrackedPresetButton(" body "${body}")
 string(REPLACE "ImGui::InputTextWithHint(" "TrackedPresetNameInput(" body "${body}")
 file(WRITE "${OUTPUT_DIRECTORY}/settings_adaptive_presets_under_test.h" "${body}")
+file(READ "${PROJECT_ROOT}/src/Menu/ProfileExchange.cpp" exchange_source)
+string(FIND "${exchange_source}" "namespace MenuUI" exchange_start)
+string(SUBSTRING "${exchange_source}" ${exchange_start} -1 exchange_body)
+string(REPLACE "ImGui::Button(" "TrackedPresetButton(" exchange_body "${exchange_body}")
+file(APPEND "${OUTPUT_DIRECTORY}/settings_adaptive_presets_under_test.h" "\n${exchange_body}")
 
-file(READ "${PROJECT_ROOT}/src/Features/AdaptiveBrightness.cpp" source)
-extract_between("${source}" "\tconstexpr std::string_view kGlobalPresetFilenameSuffix" "\tusing ContextProfileScope" "settings_preset_files_under_test.h")
-file(READ "${OUTPUT_DIRECTORY}/settings_preset_files_under_test.h" constants)
-extract_between("${source}" "\tbool EndsWithCaseInsensitive(" "\tstd::string GetPresetNotFoundMessage(" "settings_preset_files_under_test.h")
-file(READ "${OUTPUT_DIRECTORY}/settings_preset_files_under_test.h" functions)
-file(WRITE "${OUTPUT_DIRECTORY}/settings_preset_files_under_test.h" "${constants}\n${functions}")
 
 # Exercise shared warning/error routing through the production notice functions.
 extract_between("${color_source}" "\t\tstatic void PageNoticeV(" "#undef UTIL_TEXT_WRAPPED" "settings_notices_under_test.h")

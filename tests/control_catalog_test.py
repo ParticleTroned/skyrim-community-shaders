@@ -45,8 +45,8 @@ void DrawSettings() { Util::Widgets::Checkbox("Skip a light's own flame holder",
         self.assertEqual({e["section"] for e in tuning}, {"tuning"})
         presets = [e for e in entries if e["page"] == "PerformancePresets"]
         self.assertTrue(any(e["label"] == "Performance preset" and not e["choice"] for e in presets))
-        for label in ("Apply MyPreset", "Base preset"):
-            self.assertEqual({e["choice"] for e in presets if e["label"] == label}, {"MyPreset"})
+        for label in ("Apply MyPerformance", "Base preset"):
+            self.assertEqual({e["choice"] for e in presets if e["label"] == label}, {"MyPerformance"})
         self.assertEqual({e["section"] for e in presets}, {"presets"})
 
     def test_production_interface_controls_have_one_home(self):

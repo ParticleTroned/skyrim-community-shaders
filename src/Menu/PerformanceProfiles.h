@@ -8,7 +8,7 @@
 
 namespace PerformanceProfiles
 {
-	inline constexpr std::array<std::string_view, 4> Names{ "Performance", "Balanced", "Quality", "MyPreset" };
+	inline constexpr std::array<std::string_view, 4> Names{ "Performance", "Balanced", "Quality", "MyPerformance" };
 
 	/** Accept only selections; arbitrary feature parameters never enter a performance profile. */
 	inline bool ValidateChoices(const nlohmann::json& a_choices)
@@ -96,4 +96,15 @@ namespace PerformanceProfiles
 		}
 		nlohmann::json Save() const { return { { "version", 1 }, { "base", base }, { "choices", choices } }; }
 	};
+	/** Validates the public exchange envelope before replacing a personal profile. */
+	inline bool ReadExport(const nlohmann::json& document, UserProfile& profile)
+	{
+		return document.is_object() && document.value("format", nlohmann::json{}) == "CSX.MyPerformance" &&
+		       document.contains("version") && document["version"].is_number_integer() && document["version"] == 1 && document.contains("profile") && profile.Load(document["profile"]);
+	}
+	inline nlohmann::json MakeExport(const UserProfile& profile, std::string_view sourceVersion)
+	{
+		return { { "format", "CSX.MyPerformance" }, { "version", 1 }, { "sourceVersion", sourceVersion }, { "profile", profile.Save() } };
+	}
+
 }

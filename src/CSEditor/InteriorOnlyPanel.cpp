@@ -124,6 +124,10 @@ namespace InteriorOnlyPanel
 			return;
 
 		const auto& entry = entries[index];
+		if (entry.source == EntrySource::LookPack) {
+			ImGui::TextWrapped("%s.%s: %s", entry.featureShortName.c_str(), entry.settingKey.c_str(), entry.value.dump().c_str());
+			return;
+		}
 
 		ImGui::PushID(static_cast<int>(index));
 
@@ -244,10 +248,12 @@ namespace InteriorOnlyPanel
 		DrawAddSettingUI();
 
 		// Collect indices by source
-		std::vector<size_t> overwriteIndices, userIndices;
+		std::vector<size_t> overwriteIndices, userIndices, lookIndices;
 		for (size_t i = 0; i < entries.size(); ++i) {
 			if (entries[i].source == EntrySource::Overwrite)
 				overwriteIndices.push_back(i);
+			else if (entries[i].source == EntrySource::LookPack)
+				lookIndices.push_back(i);
 			else
 				userIndices.push_back(i);
 		}
@@ -259,6 +265,13 @@ namespace InteriorOnlyPanel
 				"No interior-only settings configured.");
 			Util::AddTooltip("Click + to add settings that only apply in interiors. These override feature defaults in interior cells; original values return when you leave.");
 			return;
+		}
+
+		if (!lookIndices.empty()) {
+			ImGui::Spacing();
+			ImGui::TextUnformatted("Selected Look");
+			ImGui::TextWrapped("These values belong to your Look. Add a user setting above to customize them.");
+			for (auto index : lookIndices) DrawSettingEntry(index);
 		}
 
 		// --- Overwrite Files Section ---

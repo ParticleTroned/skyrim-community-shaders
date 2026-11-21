@@ -2,6 +2,8 @@
 #include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/SettingsPage.h"
 #include "Menu/SettingsSearch.h"
+#include "Menu/VisualsProfiles.h"
+#include "Presets/LookPack.h"
 
 #include "Api/MainThreadDispatchPolicy.h"
 #include "CSEditor/EditorWindow.h"
@@ -217,26 +219,9 @@ namespace
 	constexpr const char* kOverrideTypeCity = "City";
 	constexpr const char* kOverrideTypeCell = "Cell";
 	constexpr const char* kOverrideTypeWorldspace = "Worldspace";
-	constexpr const char* kPresetVersion = "5.0.0";
 	constexpr std::string_view kLocationOverridesFieldName = "locationOverrides";
 	constexpr std::string_view kProfilesFieldName = "profiles";
 	constexpr std::string_view kLegacyGlobalWaterAppearanceFieldName = SettingsMigrations::kLegacyWaterAppearanceSettingsKey;
-	constexpr std::string_view kGlobalPresetFilenameSuffix = "_AdaptiveBrightness_Global";
-	constexpr std::string_view kLocationPresetFilenameSuffix = "_AdaptiveBrightness_LocationOverrides";
-	constexpr std::string_view kWorldspacePresetFilenameSuffix = "_AdaptiveBrightness_Worldspace";
-	constexpr std::string_view kRegionPresetFilenameSuffix = "_AdaptiveBrightness_Location";
-	constexpr std::string_view kCityPresetFilenameSuffix = "_AdaptiveBrightness_City";
-	constexpr std::string_view kFullPresetFilenameSuffix = "_AdaptiveBrightness_Full";
-
-	enum class PresetKind
-	{
-		Global,
-		Location,
-		Worldspace,
-		Region,
-		City,
-		Full
-	};
 
 	using ContextProfileScope = AdaptiveBrightness::ContextProfileScope;
 	constexpr std::array kContextProfileOrder{
@@ -276,20 +261,6 @@ namespace
 			return "City";
 		default:
 			return "Context";
-		}
-	}
-
-	constexpr PresetKind GetContextScopePresetKind(ContextProfileScope a_scope)
-	{
-		switch (a_scope) {
-		case ContextProfileScope::Worldspace:
-			return PresetKind::Worldspace;
-		case ContextProfileScope::Region:
-			return PresetKind::Region;
-		case ContextProfileScope::City:
-			return PresetKind::City;
-		default:
-			return PresetKind::Location;
 		}
 	}
 
@@ -447,237 +418,13 @@ namespace
 		return !a_key.empty() && a_key != "Invalid";
 	}
 
-	bool EndsWithCaseInsensitive(std::string_view a_value, std::string_view a_suffix)
-	{
-		if (a_value.size() < a_suffix.size())
-			return false;
-
-		const auto offset = a_value.size() - a_suffix.size();
-		for (std::size_t i = 0; i < a_suffix.size(); ++i) {
-			const auto lhs = static_cast<unsigned char>(a_value[offset + i]);
-			const auto rhs = static_cast<unsigned char>(a_suffix[i]);
-			if (std::tolower(lhs) != std::tolower(rhs))
-				return false;
-		}
-
-		return true;
-	}
-
-	std::string TrimCopy(std::string_view a_value)
-	{
-		const auto first = std::find_if(a_value.begin(), a_value.end(), [](char a_ch) { return !std::isspace(static_cast<unsigned char>(a_ch)); });
-		if (first == a_value.end())
-			return {};
-
-		const auto last = std::find_if(a_value.rbegin(), a_value.rend(), [](char a_ch) { return !std::isspace(static_cast<unsigned char>(a_ch)); }).base();
-		return std::string(first, last);
-	}
-
-	std::string_view GetDefaultPresetName(PresetKind a_kind)
-	{
-		switch (a_kind) {
-		case PresetKind::Global:
-			return AdaptiveBrightness::kDefaultGlobalPresetName;
-		case PresetKind::Full:
-			return AdaptiveBrightness::kDefaultFullPresetName;
-		case PresetKind::Location:
-		case PresetKind::Worldspace:
-		case PresetKind::Region:
-		case PresetKind::City:
-		default:
-			return AdaptiveBrightness::kDefaultLocationOverridePresetName;
-		}
-	}
-
-	std::string GetPresetModName(std::string_view a_name, PresetKind a_kind = PresetKind::Location)
-	{
-		auto baseName = TrimCopy(a_name);
-		if (EndsWithCaseInsensitive(baseName, ".json"))
-			baseName.resize(baseName.size() - std::string_view(".json").size());
-
-		for (const auto suffix : {
-				 kGlobalPresetFilenameSuffix,
-				 kLocationPresetFilenameSuffix,
-				 kWorldspacePresetFilenameSuffix,
-				 kRegionPresetFilenameSuffix,
-				 kCityPresetFilenameSuffix,
-				 kFullPresetFilenameSuffix }) {
-			if (EndsWithCaseInsensitive(baseName, suffix)) {
-				baseName.resize(baseName.size() - suffix.size());
-				break;
-			}
-		}
-
-		std::string sanitized;
-		sanitized.reserve(baseName.size());
-		bool lastWasSeparator = false;
-		for (const auto ch : baseName) {
-			const auto uch = static_cast<unsigned char>(ch);
-			if (std::isalnum(uch) || ch == '-' || ch == '_') {
-				sanitized.push_back(ch);
-				lastWasSeparator = ch == '_';
-			} else if (std::isspace(uch) || ch == '.') {
-				if (!sanitized.empty() && !lastWasSeparator) {
-					sanitized.push_back('_');
-					lastWasSeparator = true;
-				}
-			}
-
-			if (sanitized.size() >= 96)
-				break;
-		}
-
-		while (!sanitized.empty() && sanitized.back() == '_')
-			sanitized.pop_back();
-
-		return sanitized.empty() ? std::string(GetDefaultPresetName(a_kind)) : sanitized;
-	}
-
-	std::string_view GetPresetFilenameSuffix(PresetKind a_kind)
-	{
-		switch (a_kind) {
-		case PresetKind::Global:
-			return kGlobalPresetFilenameSuffix;
-		case PresetKind::Full:
-			return kFullPresetFilenameSuffix;
-		case PresetKind::Worldspace:
-			return kWorldspacePresetFilenameSuffix;
-		case PresetKind::Region:
-			return kRegionPresetFilenameSuffix;
-		case PresetKind::City:
-			return kCityPresetFilenameSuffix;
-		case PresetKind::Location:
-		default:
-			return kLocationPresetFilenameSuffix;
-		}
-	}
-
-	std::string GetPresetFilename(std::string_view a_name, PresetKind a_kind)
-	{
-		return std::format("{}{}.json", GetPresetModName(a_name, a_kind), GetPresetFilenameSuffix(a_kind).data());
-	}
-
-	std::filesystem::path GetPresetDirectory()
-	{
-		// Keep exported presets outside the live Overrides folder so sharing a preset
-		// does not implicitly turn it into an active feature override on next load.
-		return Util::PathHelpers::GetCommunityShaderPath() / AdaptiveBrightness::kFeatureShortName.data() / "Presets";
-	}
-
-	std::filesystem::path GetPresetPath(std::string_view a_name, PresetKind a_kind, const std::filesystem::path& a_exportFolder = {})
-	{
-		return (a_exportFolder.empty() ? GetPresetDirectory() : a_exportFolder) / GetPresetFilename(a_name, a_kind);
-	}
-
-	std::array<std::filesystem::path, 2> GetPresetImportDirectories(PresetKind a_kind)
-	{
-		return { GetPresetDirectory(), a_kind == PresetKind::Location ? Util::PathHelpers::GetOverridesPath() : std::filesystem::path{} };
-	}
-
-	void ReadPresetNames(PresetKind a_kind, std::vector<std::string>& a_names, std::string& a_status)
-	{
-		a_names.clear();
-		a_status.clear();
-		std::unordered_set<std::string> seen;
-		std::size_t skipped = 0;
-		const auto suffix = std::format("{}.json", GetPresetFilenameSuffix(a_kind));
-		for (const auto& directory : GetPresetImportDirectories(a_kind)) {
-			try {
-				if (directory.empty() || !std::filesystem::exists(directory))
-					continue;
-				for (const auto& entry : std::filesystem::directory_iterator(directory)) {
-					const auto filename = Util::PathToUtf8(entry.path().filename());
-					if (!entry.is_regular_file() || !EndsWithCaseInsensitive(filename, suffix))
-						continue;
-					const auto key = Util::ToLowerAscii(filename);
-					// A listed filename must resolve back to itself through the existing importer.
-					if (key != Util::ToLowerAscii(GetPresetFilename(filename, a_kind))) {
-						++skipped;
-						continue;
-					}
-					if (seen.insert(key).second)
-						a_names.push_back(filename);
-				}
-			} catch (const std::filesystem::filesystem_error& error) {
-				if (!a_status.empty())
-					a_status += " ";
-				a_status += std::format("Could not list presets: {}", error.what());
-			}
-		}
-		std::ranges::sort(a_names);
-		if (skipped) {
-			if (!a_status.empty())
-				a_status += " ";
-			a_status += std::format("{} file(s) omitted: use letters, numbers, - or _ before the preset suffix.", skipped);
-		}
-	}
-
-	std::optional<std::filesystem::path> ResolvePresetImportPath(std::string_view a_name, PresetKind a_kind)
-	{
-		for (const auto& directory : GetPresetImportDirectories(a_kind)) {
-			if (directory.empty())
-				continue;
-
-			const auto path = directory / GetPresetFilename(a_name, a_kind);
-			std::error_code ec;
-			if (std::filesystem::exists(path, ec) && !ec)
-				return path;
-		}
-
-		return std::nullopt;
-	}
-
-	std::string GetPresetNotFoundMessage(std::string_view a_name, PresetKind a_kind)
-	{
-		if (a_kind == PresetKind::Location) {
-			return std::format(
-				"Import failed: no preset named {} was found in {} or {}.",
-				GetPresetFilename(a_name, a_kind),
-				GetPresetDirectory().string(),
-				Util::PathHelpers::GetOverridesPath().string());
-		}
-
-		return std::format(
-			"Import failed: no preset named {} was found in {}.",
-			GetPresetFilename(a_name, a_kind),
-			GetPresetDirectory().string());
-	}
-
-	bool WriteJsonFileAtomic(const std::filesystem::path& a_path, const json& a_json, std::string& a_error)
-	{
-		return Util::FileHelpers::WriteTextFileAtomic(a_path, a_json.dump(1), a_error, false);
-	}
-
-	bool ReadJsonPresetFile(const std::filesystem::path& a_path, json& o_json, std::string& o_status)
+	bool ReadJsonPresetFile(const std::filesystem::path& path, json& document, std::string& error)
 	{
 		try {
-			std::error_code ec;
-			const auto fileSize = std::filesystem::file_size(a_path, ec);
-			if (ec) {
-				o_status = std::format("Import failed: could not read file size for {}.", a_path.string());
-				return false;
-			}
-
-			constexpr std::uintmax_t maxImportFileSize = 1024 * 1024;
-			if (fileSize == 0 || fileSize > maxImportFileSize) {
-				o_status = "Import failed: preset file must be between 1 byte and 1 MB.";
-				return false;
-			}
-
-			std::ifstream file(a_path);
-			if (!file.is_open()) {
-				o_status = std::format("Import failed: could not open {}.", a_path.string());
-				return false;
-			}
-
-			file >> o_json;
-			SettingsMigrations::MigrateAdaptiveBalanceRootLayer(o_json);
+			document = Presets::ReadProfileDocument(path);
 			return true;
-		} catch (const json::exception& e) {
-			o_status = std::format("Import failed: invalid JSON ({})", e.what());
-			return false;
-		} catch (const std::exception& e) {
-			o_status = std::format("Import failed: {}", e.what());
+		} catch (const std::exception& failure) {
+			error = failure.what();
 			return false;
 		}
 	}
@@ -1279,36 +1026,6 @@ namespace
 		return migrated;
 	}
 
-	json MakePresetMetadata(std::string_view a_name, PresetKind a_kind, std::string_view a_type, std::string_view a_description)
-	{
-		return {
-			{ "feature", AdaptiveBrightness::kFeatureShortName.data() },
-			{ "modName", GetPresetModName(a_name, a_kind) },
-			{ "type", std::string(a_type) },
-			{ "version", kPresetVersion },
-			{ "description", std::string(a_description) }
-		};
-	}
-
-	json MakeBasePresetJson(const AdaptiveBrightness::Settings& a_settings, std::string_view a_name, PresetKind a_kind, std::string_view a_type, std::string_view a_description)
-	{
-		return {
-			{ "useAmbientEffectLighting", a_settings.useAmbientEffectLighting },
-			{ "bloomEnabled", a_settings.bloomEnabled },
-			{ "godrayFinalBrightness", a_settings.godrayFinalBrightness },
-			{ "volumetricClarity", a_settings.volumetricClarity },
-			{ "godrays", a_settings.godrays },
-			{ "moonReflectionStrength", a_settings.moonReflectionStrength },
-			{ "globalProfile", a_settings.globalProfile },
-			{ "depthOfField", a_settings.depthOfField },
-			{ "dayStartHour", a_settings.dayStartHour },
-			{ "nightStartHour", a_settings.nightStartHour },
-			{ "transitionHours", a_settings.transitionHours },
-			{ "profiles", a_settings.profiles },
-			{ "_metadata", MakePresetMetadata(a_name, a_kind, a_type, a_description) }
-		};
-	}
-
 	bool NormalizeImportedLocationOverride(AdaptiveBrightness::LocationOverride& a_locationOverride)
 	{
 		if (a_locationOverride.name.empty())
@@ -1651,7 +1368,7 @@ void AdaptiveBrightness::DrawSettings()
 														{ "profiles", "Profiles", "Refine the shared look for time and location types.", "Time and location profiles", true, true, nullptr },
 														{ "weather", "Weather", "Refine the outdoor look for individual weathers.", "Blended weather adjustments", true, true, nullptr },
 														{ "locations", "Locations", "Add precise changes for individual places.", "Exact places and cells", true, true, "Refine local changes" },
-														{ "presets", "Presets", "Save or load complete appearances and location collections.", "Complete looks and collections", true, true, nullptr },
+														{ "presets", "Presets", "Select, import or export a complete Visuals profile.", "Complete appearance profiles", true, true, nullptr },
 													});
 
 	if (page.Is("global")) {
@@ -1833,22 +1550,7 @@ void AdaptiveBrightness::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 void AdaptiveBrightness::LoadSettings(json& o_json)
 {
 	settings = MigrateLegacyProfileSettings(o_json);
-	weatherProfile = ProfileSettings::WeatherDefaults();
 	NormalizeBaseSettings(settings);
-	globalPresetStatus.clear();
-	if (globalPresetName.empty())
-		globalPresetName = kDefaultGlobalPresetName;
-	locationOverridePresetStatus.clear();
-	if (locationOverridePresetName.empty())
-		locationOverridePresetName = kDefaultLocationOverridePresetName;
-	for (std::size_t i = 0; i < contextPresetNames.size(); ++i) {
-		contextPresetStatuses[i].clear();
-		if (contextPresetNames[i].empty())
-			contextPresetNames[i] = kDefaultLocationOverridePresetName;
-	}
-	fullPresetStatus.clear();
-	if (fullPresetName.empty())
-		fullPresetName = kDefaultFullPresetName;
 	ClearLocationOverrideSelection();
 	InvalidateProfileTabSync();
 	NormalizeLocationOverrides();
@@ -1868,14 +1570,6 @@ void AdaptiveBrightness::RestoreDefaultSettings()
 	settings = {};
 	weatherProfile = ProfileSettings::WeatherDefaults();
 	NormalizeBaseSettings(settings);
-	globalPresetName = kDefaultGlobalPresetName;
-	globalPresetStatus.clear();
-	locationOverridePresetName = kDefaultLocationOverridePresetName;
-	locationOverridePresetStatus.clear();
-	contextPresetNames.fill(kDefaultLocationOverridePresetName);
-	contextPresetStatuses.fill(std::string{});
-	fullPresetName = kDefaultFullPresetName;
-	fullPresetStatus.clear();
 	ClearLocationOverrideSelection();
 	InvalidateProfileTabSync();
 	MarkLocationOverrideLookupDirty();
@@ -2169,13 +1863,10 @@ void AdaptiveBrightness::DrawCurrentContextProfileControls(
 
 void AdaptiveBrightness::DrawPresetShortcut(ContextProfileScope a_scope)
 {
-	if (ImGui::Button("Import / export this profile")) {
-		presetUI.collection = static_cast<MenuUI::AdaptiveBalancePresets::Collection>(
-			static_cast<int>(MenuUI::AdaptiveBalancePresets::Collection::Worldspace) + static_cast<int>(a_scope));
-		presetFilesDirty = true;
+	if (ImGui::Button("Share Visuals")) {
 		MenuUI::SettingsPage::Select("AdaptiveBrightness", "presets");
 	}
-	Util::AddTooltip("Open the shared Presets screen for this scope. Apply pending profile edits before exporting.");
+	Util::AddTooltip("Open complete Visuals profiles. Exports include all saved places; older partial files can still be imported.");
 }
 
 void AdaptiveBrightness::DrawProfileSettings(ProfileSettings& a_profile, const char* a_sectionTitle, bool a_showAdvancedControls, bool a_allowEdits, bool a_locationLayer)
@@ -2507,12 +2198,10 @@ void AdaptiveBrightness::DrawLocationOverrides(bool a_includePresetControls, boo
 	ImGui::TextDisabled("%zu saved override%s.", settings.locationOverrides.size(), settings.locationOverrides.size() == 1 ? "" : "s");
 
 	if (a_includePresetControls) {
-		if (ImGui::Button("Import / export location presets")) {
-			presetUI.collection = MenuUI::AdaptiveBalancePresets::Collection::Locations;
-			presetFilesDirty = true;
+		if (ImGui::Button("Share Visuals")) {
 			MenuUI::SettingsPage::Select("AdaptiveBrightness", "presets");
 		}
-		Util::AddTooltip("Import adds overrides from a preset to the override list below. Later edits change this list, not the preset file.");
+		Util::AddTooltip("Open complete Visuals profiles. Exports include this saved-place list.");
 	}
 	MenuUI::SectionHeading("Saved Overrides", a_allowEdits ?
 												  "Overrides match worldspace, region, city, specific location or cell. Select a row to edit it." :
@@ -2792,471 +2481,66 @@ bool AdaptiveBrightness::TeleportToLocationOverride(const std::string& a_key, st
 
 void AdaptiveBrightness::DrawPresets()
 {
-	namespace Presets = MenuUI::AdaptiveBalancePresets;
-	const auto& theme = globals::menu->GetTheme();
-	const auto palette = [&](bool a_export) {
-		const auto accent = Util::Color::Lift(theme.StatusPalette.InfoColor, a_export ? .10f : -.10f, 1);
-		const auto base = ImGui::GetStyleColorVec4(ImGuiCol_Button);
-		const float tint = a_export ? .30f : .14f;
-		return Presets::Palette{
-			Util::Color::Blend(base, accent, tint, .76f),
-			Util::Color::Blend(base, accent, tint + .12f, .86f),
-			Util::Color::Blend(base, accent, tint + .24f, .94f),
-			Util::Color::Blend(theme.Palette.FrameBorder, accent, .65f, 1)
-		};
-	};
-	const auto exportPalette = palette(true);
-	const auto importPalette = palette(false);
-	const auto targets = GetCurrentLocationOverrideTargets();
-	const std::array contextTargets{
-		targets.worldspace ? &*targets.worldspace : nullptr,
-		targets.region ? &*targets.region : nullptr,
-		targets.city ? &*targets.city : nullptr
-	};
-	Presets::Targets targetNames;
-	for (std::size_t index = 0; index < targetNames.size(); ++index)
-		targetNames[index] = contextTargets[index] ? contextTargets[index]->name : "No current scope";
-	const auto previousFolder = presetExportFolder.directory;
-	Presets::DrawSelection(presetUI, exportPalette, importPalette, targetNames, presetExportFolder, GetPresetDirectory());
-	const bool changed = lastDrawnPresetUI.mode != presetUI.mode || lastDrawnPresetUI.collection != presetUI.collection;
-	lastDrawnPresetUI = presetUI;
-	presetFilesDirty |= changed || ImGui::IsWindowAppearing();
-	constexpr std::array kinds{ PresetKind::Full, PresetKind::Global, PresetKind::Location, PresetKind::Worldspace, PresetKind::Region, PresetKind::City };
-	static_assert(kinds.size() == static_cast<std::size_t>(Presets::Collection::Count));
-	const auto collectionIndex = static_cast<std::size_t>(presetUI.collection);
-	const auto kind = kinds.at(collectionIndex);
-	std::string* name = &fullPresetName;
-	std::string* status = &fullPresetStatus;
-	const LocationOverrideTarget* target = nullptr;
-	const LocationOverride* profile = nullptr;
-	ContextProfileScope scope = ContextProfileScope::Worldspace;
-	if (presetUI.collection == Presets::Collection::Base) {
-		name = &globalPresetName;
-		status = &globalPresetStatus;
-	} else if (presetUI.collection == Presets::Collection::Locations) {
-		name = &locationOverridePresetName;
-		status = &locationOverridePresetStatus;
-	} else if (collectionIndex >= static_cast<std::size_t>(Presets::Collection::Worldspace)) {
-		const auto scopeIndex = collectionIndex - static_cast<std::size_t>(Presets::Collection::Worldspace);
-		scope = static_cast<ContextProfileScope>(scopeIndex);
-		name = &contextPresetNames.at(scopeIndex);
-		status = &contextPresetStatuses.at(scopeIndex);
-		target = contextTargets.at(scopeIndex);
-		profile = target ? FindLocationOverride(target->key) : nullptr;
-	}
-	if (changed) {
-		status->clear();
-		presetFileStatus.clear();
-	}
-	const bool importing = presetUI.mode == Presets::Mode::Import;
-	if (importing && presetFilesDirty) {
-		ReadPresetNames(kind, presetFiles, presetFileStatus);
-		presetFilesDirty = false;
-	}
-	const char* unavailable = nullptr;
-	const auto* editedOverride = locationOverrideEditProfile ? FindLocationOverride(locationOverrideEditKey) : nullptr;
-	if (locationOverrideEditProfile && (!editedOverride || json(*locationOverrideEditProfile) != json(editedOverride->profile)))
-		unavailable = "Apply or cancel the open location edit before exchanging presets.";
-	else if (collectionIndex >= static_cast<std::size_t>(Presets::Collection::Worldspace) && !target)
-		unavailable = "The current cell has no matching scope. Choose another box.";
-	else if (!importing && collectionIndex >= static_cast<std::size_t>(Presets::Collection::Worldspace) && !profile)
-		unavailable = "Create and apply this scope's profile before exporting it.";
-	else if (importing && target && !settings.enabled)
-		unavailable = "Enable Visuals before importing a contextual profile.";
-	else if (!importing && presetUI.collection == Presets::Collection::Locations && settings.locationOverrides.empty())
-		unavailable = "No location overrides are saved. Complete setup is still available.";
-	const auto& colors = importing ? importPalette : exportPalette;
-	const auto feedback = importing && !presetFileStatus.empty() ?
-	                          std::format("{}{}{}", presetFileStatus, status->empty() ? "" : " ", *status) :
-	                          *status;
-	const auto path = GetPresetPath(*name, kind, importing ? std::filesystem::path{} : presetExportFolder.directory);
-	const auto relativePath = GetPresetPath(*name, kind).lexically_relative(Util::PathHelpers::GetDataPath());
-	const auto pathHint = importing ?
-	                          std::format("Import folder (relative to Data): {}\nMod Organizer 2: Put shared presets in this folder inside an enabled mod. Keep the exported filename and use Choose file.\nExpected file: {}{}",
-								  relativePath.parent_path().string(), path.filename().string(),
-								  kind == PresetKind::Location ? std::format("\nAlso accepts location presets in: {}", Util::PathHelpers::GetOverridesPath().lexically_relative(Util::PathHelpers::GetDataPath()).string()) : "") :
-	                      presetExportFolder.directory.empty() ?
-	                          std::format("Export path (relative to Data): {}\nMod Organizer 2: New exports go to Overwrite or the configured output mod.", relativePath.string()) :
-	                          std::format("Export path: {}\nMO2 can still redirect writes if you choose the game's Data folder.", Util::PathToUtf8(path));
-	const bool transfer = Presets::DrawTransfer(presetUI, colors, *name, presetFiles, pathHint, feedback, unavailable, presetFilesDirty);
-	if (previousFolder != presetExportFolder.directory)
-		status->clear();
-	if (!transfer)
-		return;
-	bool succeeded = false;
-	switch (presetUI.collection) {
-	case Presets::Collection::Full:
-		succeeded = importing ? ImportFullPreset() : ExportFullPreset();
-		break;
-	case Presets::Collection::Base:
-		succeeded = importing ? ImportGlobalPreset() : ExportGlobalPreset();
-		break;
-	case Presets::Collection::Locations:
-		succeeded = importing ? ImportLocationOverrides() : ExportLocationOverrides();
-		break;
-	default:
-		if (target) {
-			if (importing)
-				succeeded = ImportContextProfile(scope, *target);
-			else if (profile)
-				succeeded = ExportContextProfile(scope, *target, *profile);
-		}
-		break;
-	}
-	if (importing && succeeded)
-		*status = "Imported. Use Save Settings to keep it. " + *status;
-	presetFilesDirty = true;
+	MenuUI::DrawVisualsProfiles();
 }
 
-std::filesystem::path AdaptiveBrightness::GetPresetExportDirectory() const
+bool AdaptiveBrightness::ReadLegacyVisuals(const std::filesystem::path& source, json& values, std::string& error) const
 {
-	return presetExportFolder.directory.empty() ? GetPresetDirectory() : presetExportFolder.directory;
-}
-
-bool AdaptiveBrightness::ExportGlobalPreset()
-{
-	NormalizeBaseSettings(settings);
-
-	const auto path = GetPresetPath(globalPresetName, PresetKind::Global, presetExportFolder.directory);
+	json document;
+	if (!ReadJsonPresetFile(source, document, error))
+		return false;
 	try {
-		const auto exportJson = MakeBasePresetJson(
-			settings,
-			globalPresetName,
-			PresetKind::Global,
-			"global",
-			"Visuals global preset");
-
-		std::string error;
-		if (!WriteJsonFileAtomic(path, exportJson, error)) {
-			globalPresetStatus = std::format("Export failed: {}", error);
+		auto candidate = settings;
+		const bool base = FindBasePresetJson(document) != nullptr;
+		const auto* locations = FindLocationOverridesJson(document);
+		const bool scoped = document.contains("profile") && document.contains("scope");
+		if (!base && !locations && !scoped)
+			throw std::runtime_error("Choose a Visuals profile or an upstream preset pack.");
+		if (base && !ApplyBasePresetJson(document, candidate, error))
 			return false;
+		if (locations) {
+			if (!locations->is_array())
+				throw std::runtime_error("Invalid saved places.");
+			std::vector<LocationOverride> parsed;
+			const auto stats = ParseLocationOverridesJson(*locations, parsed);
+			if (stats.skipped)
+				throw std::runtime_error("Some saved places are invalid. The current profile was kept.");
+			if (base)
+				candidate.locationOverrides = std::move(parsed);
+			else
+				for (auto& item : parsed) {
+					auto found = std::ranges::find(candidate.locationOverrides, item.key, &LocationOverride::key);
+					if (found == candidate.locationOverrides.end())
+						candidate.locationOverrides.push_back(std::move(item));
+					else
+						*found = std::move(item);
+				}
 		}
-
-		globalPresetStatus = std::format("Exported global preset as {}.", path.filename().string());
+		if (scoped) {
+			const auto& scope = document.at("scope");
+			auto profile = document.at("profile");
+			MigrateLegacyProfileLighting(profile);
+			MigrateLegacyProfileBloom(profile, Bloom::Profile{}, false, false);
+			MigrateLegacyProfileWaterAppearance(profile, WaterAppearance::Profile{}, false);
+			NormalizeJsonObjectWithDefaults(profile, json(ProfileSettings{}));
+			LocationOverride item{ .key = scope.at("key").get<std::string>(), .name = scope.value("name", ""), .type = scope.at("type").get<std::string>(), .profile = profile.get<ProfileSettings>(), .layered = document.value("layered", false) };
+			if (!IsValidFormKey(item.key))
+				throw std::runtime_error("Invalid place in this profile.");
+			NormalizeImportedLocationOverride(item);
+			auto found = std::ranges::find(candidate.locationOverrides, item.key, &LocationOverride::key);
+			if (found == candidate.locationOverrides.end())
+				candidate.locationOverrides.push_back(std::move(item));
+			else
+				*found = std::move(item);
+		}
+		NormalizeBaseSettings(candidate);
+		NormalizeLocationOverrideList(candidate.locationOverrides);
+		values = candidate;
 		return true;
-	} catch (const std::exception& e) {
-		globalPresetStatus = std::format("Export failed: {}", e.what());
+	} catch (const std::exception& failure) {
+		error = failure.what();
 		return false;
 	}
-}
-
-bool AdaptiveBrightness::ImportGlobalPreset()
-{
-	const auto resolvedPath = ResolvePresetImportPath(globalPresetName, PresetKind::Global);
-	if (!resolvedPath) {
-		globalPresetStatus = GetPresetNotFoundMessage(globalPresetName, PresetKind::Global);
-		return false;
-	}
-
-	json importedJson;
-	if (!ReadJsonPresetFile(*resolvedPath, importedJson, globalPresetStatus))
-		return false;
-
-	if (!ApplyBasePresetJson(importedJson, settings, globalPresetStatus))
-		return false;
-
-	NotifyGrassPlacementChanged();
-	ResetWaterWindSmoothing();
-	globalPresetStatus = std::format("Imported global preset from {}.", resolvedPath->filename().string());
-	return true;
-}
-
-bool AdaptiveBrightness::ExportLocationOverrides()
-{
-	NormalizeLocationOverrides();
-
-	if (settings.locationOverrides.empty()) {
-		locationOverridePresetStatus = "Nothing to export: no location overrides are saved.";
-		return false;
-	}
-
-	const auto path = GetPresetPath(locationOverridePresetName, PresetKind::Location, presetExportFolder.directory);
-	try {
-		json exportJson;
-		exportJson["locationOverrides"] = settings.locationOverrides;
-		exportJson["_metadata"] = MakePresetMetadata(
-			locationOverridePresetName,
-			PresetKind::Location,
-			"locations",
-			"Visuals location override preset");
-
-		std::string error;
-		if (!WriteJsonFileAtomic(path, exportJson, error)) {
-			locationOverridePresetStatus = std::format("Export failed: {}", error);
-			return false;
-		}
-
-		locationOverridePresetStatus = std::format("Exported {} location override(s) as {}.", settings.locationOverrides.size(), path.filename().string());
-		return true;
-	} catch (const std::exception& e) {
-		locationOverridePresetStatus = std::format("Export failed: {}", e.what());
-		return false;
-	}
-}
-
-bool AdaptiveBrightness::ImportLocationOverrides()
-{
-	const auto resolvedPath = ResolvePresetImportPath(locationOverridePresetName, PresetKind::Location);
-	if (!resolvedPath) {
-		locationOverridePresetStatus = GetPresetNotFoundMessage(locationOverridePresetName, PresetKind::Location);
-		return false;
-	}
-
-	const auto& path = *resolvedPath;
-
-	json importedJson;
-	if (!ReadJsonPresetFile(path, importedJson, locationOverridePresetStatus))
-		return false;
-
-	const auto* overridesJson = FindLocationOverridesJson(importedJson);
-	if (!overridesJson || !overridesJson->is_array()) {
-		locationOverridePresetStatus = "Import failed: no locationOverrides array was found.";
-		return false;
-	}
-
-	auto mergedOverrides = settings.locationOverrides;
-	NormalizeLocationOverrideList(mergedOverrides);
-
-	std::unordered_map<std::string, std::size_t> existingIndices;
-	existingIndices.reserve(mergedOverrides.size() + overridesJson->size());
-	for (std::size_t i = 0; i < mergedOverrides.size(); ++i) {
-		const auto& locationOverride = mergedOverrides[i];
-		if (IsValidFormKey(locationOverride.key))
-			existingIndices[locationOverride.key] = i;
-	}
-
-	std::vector<LocationOverride> importedOverrides;
-	importedOverrides.reserve(overridesJson->size());
-	auto stats = ParseLocationOverridesJson(*overridesJson, importedOverrides);
-
-	if (stats.imported == 0) {
-		locationOverridePresetStatus = std::format("Import failed: no valid location overrides found ({} skipped).", stats.skipped);
-		return false;
-	}
-
-	std::string lastImportedKey;
-	for (auto& locationOverride : importedOverrides) {
-		const auto key = locationOverride.key;
-		if (auto it = existingIndices.find(key); it != existingIndices.end() && it->second < mergedOverrides.size()) {
-			mergedOverrides[it->second] = std::move(locationOverride);
-			++stats.replaced;
-		} else {
-			existingIndices[key] = mergedOverrides.size();
-			mergedOverrides.push_back(std::move(locationOverride));
-		}
-
-		lastImportedKey = key;
-	}
-
-	NormalizeLocationOverrideList(mergedOverrides);
-	settings.locationOverrides = std::move(mergedOverrides);
-	selectedLocationOverrideKey = std::move(lastImportedKey);
-	ResetLocationOverrideEdit();
-	ResetWaterWindSmoothing();
-	MarkLocationOverrideLookupDirty();
-	locationOverridePresetStatus = std::format(
-		"Imported {} location override(s) from {} ({} replaced, {} skipped).",
-		stats.imported,
-		path.filename().string(),
-		stats.replaced,
-		stats.skipped);
-	return true;
-}
-
-bool AdaptiveBrightness::ExportContextProfile(
-	ContextProfileScope a_scope,
-	const LocationOverrideTarget& a_target,
-	const LocationOverride& a_locationOverride)
-{
-	const auto scopeIndex = ContextScopeIndex(a_scope);
-	auto& status = contextPresetStatuses[scopeIndex];
-	const auto presetKind = GetContextScopePresetKind(a_scope);
-	const auto path = GetPresetPath(contextPresetNames[scopeIndex], presetKind, presetExportFolder.directory);
-
-	auto profile = a_locationOverride.profile;
-	ClampProfileSettings(profile);
-	try {
-		json exportJson{
-			{ "profile", profile },
-			{ "layered", a_locationOverride.layered },
-			{ "scope", { { "key", a_target.key },
-						   { "name", a_target.name },
-						   { "type", a_target.type } } },
-			{ "_metadata", MakePresetMetadata(
-							   contextPresetNames[scopeIndex],
-							   presetKind,
-							   a_target.type,
-							   std::format("Visuals {} profile", GetContextScopeName(a_scope))) }
-		};
-
-		std::string error;
-		if (!WriteJsonFileAtomic(path, exportJson, error)) {
-			status = std::format("Export failed: {}", error);
-			return false;
-		}
-
-		status = std::format(
-			"Exported the {} profile for {} as {}.",
-			GetContextScopeName(a_scope),
-			a_target.name,
-			path.filename().string());
-		return true;
-	} catch (const std::exception& e) {
-		status = std::format("Export failed: {}", e.what());
-		return false;
-	}
-}
-
-bool AdaptiveBrightness::ImportContextProfile(
-	ContextProfileScope a_scope,
-	const LocationOverrideTarget& a_target)
-{
-	const auto scopeIndex = ContextScopeIndex(a_scope);
-	auto& status = contextPresetStatuses[scopeIndex];
-	const auto presetKind = GetContextScopePresetKind(a_scope);
-	const auto resolvedPath = ResolvePresetImportPath(contextPresetNames[scopeIndex], presetKind);
-	if (!resolvedPath) {
-		status = GetPresetNotFoundMessage(contextPresetNames[scopeIndex], presetKind);
-		return false;
-	}
-
-	json importedJson;
-	if (!ReadJsonPresetFile(*resolvedPath, importedJson, status))
-		return false;
-
-	const json* profileJson = nullptr;
-	if (const auto profileIt = importedJson.find("profile");
-		profileIt != importedJson.end() && profileIt->is_object()) {
-		profileJson = &*profileIt;
-	}
-
-	if (!profileJson) {
-		status = "Import failed: no profile object was found.";
-		return false;
-	}
-	const bool layered = GetOptionalBool(importedJson, "layered", false);
-
-	auto migratedProfileJson = *profileJson;
-	MigrateLegacyProfileLighting(migratedProfileJson);
-	MigrateLegacyProfileBloom(migratedProfileJson, Bloom::Profile{}, false, false);
-	MigrateLegacyProfileWaterAppearance(migratedProfileJson, WaterAppearance::Profile{}, false);
-	NormalizeJsonObjectWithDefaults(migratedProfileJson, json(ProfileSettings{}));
-
-	ProfileSettings importedProfile;
-	try {
-		importedProfile = migratedProfileJson.get<ProfileSettings>();
-	} catch (const json::exception& e) {
-		status = std::format("Import failed: invalid profile data: {}", e.what());
-		return false;
-	}
-	ClampProfileSettings(importedProfile);
-
-	auto* targetOverride = FindLocationOverride(a_target.key);
-	if (!targetOverride) {
-		settings.locationOverrides.push_back(LocationOverride{
-			.key = a_target.key,
-			.name = a_target.name,
-			.type = a_target.type,
-			.cocCode = a_target.cocCode,
-			.profile = importedProfile,
-			.layered = layered,
-		});
-	} else {
-		targetOverride->name = a_target.name;
-		targetOverride->type = a_target.type;
-		targetOverride->cocCode = a_target.cocCode;
-		targetOverride->profile = importedProfile;
-		targetOverride->layered = layered;
-	}
-
-	selectedLocationOverrideKey = a_target.key;
-	ResetLocationOverrideEdit();
-	ResetWaterWindSmoothing();
-	MarkLocationOverrideLookupDirty();
-	status = std::format(
-		"Imported {} for the current {} {}.",
-		resolvedPath->filename().string(),
-		GetContextScopeName(a_scope),
-		a_target.name);
-	return true;
-}
-
-bool AdaptiveBrightness::ExportFullPreset()
-{
-	NormalizeBaseSettings(settings);
-	NormalizeLocationOverrides();
-
-	const auto path = GetPresetPath(fullPresetName, PresetKind::Full, presetExportFolder.directory);
-	try {
-		auto exportJson = MakeBasePresetJson(
-			settings,
-			fullPresetName,
-			PresetKind::Full,
-			"full",
-			"Visuals full preset");
-		exportJson["locationOverrides"] = settings.locationOverrides;
-
-		std::string error;
-		if (!WriteJsonFileAtomic(path, exportJson, error)) {
-			fullPresetStatus = std::format("Export failed: {}", error);
-			return false;
-		}
-
-		fullPresetStatus = std::format("Exported full preset with {} location override(s) as {}.", settings.locationOverrides.size(), path.filename().string());
-		return true;
-	} catch (const std::exception& e) {
-		fullPresetStatus = std::format("Export failed: {}", e.what());
-		return false;
-	}
-}
-
-bool AdaptiveBrightness::ImportFullPreset()
-{
-	const auto resolvedPath = ResolvePresetImportPath(fullPresetName, PresetKind::Full);
-	if (!resolvedPath) {
-		fullPresetStatus = GetPresetNotFoundMessage(fullPresetName, PresetKind::Full);
-		return false;
-	}
-
-	json importedJson;
-	if (!ReadJsonPresetFile(*resolvedPath, importedJson, fullPresetStatus))
-		return false;
-
-	auto importedSettings = settings;
-	if (!ApplyBasePresetJson(importedJson, importedSettings, fullPresetStatus))
-		return false;
-
-	std::vector<LocationOverride> importedOverrides;
-	LocationOverrideImportStats stats;
-	bool hadNonEmptyOverridesArray = false;
-	if (const auto* overridesJson = FindLocationOverridesJson(importedJson); overridesJson) {
-		if (!overridesJson->is_array()) {
-			fullPresetStatus = "Import failed: locationOverrides must be an array when present.";
-			return false;
-		}
-
-		importedOverrides.reserve(overridesJson->size());
-		stats = ParseLocationOverridesJson(*overridesJson, importedOverrides);
-		hadNonEmptyOverridesArray = !overridesJson->empty();
-	}
-
-	if (hadNonEmptyOverridesArray && stats.imported == 0) {
-		fullPresetStatus = std::format("Import failed: no valid location overrides found ({} skipped).", stats.skipped);
-		return false;
-	}
-
-	importedSettings.locationOverrides = std::move(importedOverrides);
-	settings = std::move(importedSettings);
-	ResetWaterWindSmoothing();
-	ClearLocationOverrideSelection();
-	NormalizeLocationOverrides();
-	MarkLocationOverrideLookupDirty();
-	fullPresetStatus = std::format(
-		"Imported full preset from {} ({} location override(s), {} skipped).",
-		resolvedPath->filename().string(),
-		settings.locationOverrides.size(),
-		stats.skipped);
-	return true;
 }
 
 bool AdaptiveBrightness::IsRuntimeAvailable() const

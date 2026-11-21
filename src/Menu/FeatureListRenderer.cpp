@@ -33,6 +33,7 @@
 #include "Features/PerformanceOverlay.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenshotFeature.h"
+#include "Features/TextureStreaming.h"
 #include "Features/VR.h"
 #include "Features/Wetterness.h"
 #include "Fonts.h"
@@ -458,11 +459,16 @@ namespace
 		return feature == &globals::features::adaptiveBrightness || feature == &globals::features::screenshotFeature;
 	}
 
+	bool IsPerformanceFeature(const Feature* feature)
+	{
+		return feature == &globals::features::performanceOverlay || feature == &TextureStreaming::Instance();
+	}
+
 	bool IsFeatureVisible(Feature* feature)
 	{
 		return feature &&
 		       !IsTopLevelFeature(feature) && feature != &globals::features::renderDoc &&
-		       feature != &globals::features::performanceOverlay &&
+		       !IsPerformanceFeature(feature) &&
 		       !feature->IsHiddenFromUserView() &&
 		       feature->IsInMenu();
 	}
@@ -735,22 +741,21 @@ std::vector<Feature*> FeatureListRenderer::GetMenuFeatures()
 	return features;
 }
 
-void FeatureListRenderer::RenderPerformancePage(const char* a_page, const std::function<void()>& a_draw)
+void FeatureListRenderer::RenderPerformancePage(const char* a_page, const std::function<void()>& a_draw, const char* a_section)
 {
-	const auto current = MenuUI::SettingsNavigation::PerformanceSection(a_page);
+	const auto current = a_section ? std::string_view(a_section) : MenuUI::SettingsNavigation::PerformanceSection(a_page);
 	const MenuUI::FeatureScope builtinScope(nullptr);
-	MenuUI::SettingsPage page(a_page, { { "presets", "Presets", "Choose Performance, Balanced, Quality or MyPreset.", "Shared performance choices" }, { "timings", "Profiling", "Inspect live CPU and GPU timings for the active scene.", "Live CPU and GPU timings" }, { "tuning", "Performance Tuning", "Scan feature timings or measure individual on/off savings.", "Feature costs and comparisons" }, { "overlay", "Performance Overlay", "Choose in-game counters, graphs, and their appearance.", "Counters, graphs and appearance" } }, "Performance", "Choose presets, inspect timings, compare feature costs, or configure the overlay.", [current](std::string_view section) {
-		return section == current || !PerformanceTuningRenderer::HasActiveMeasurements();
-	});
+	MenuUI::SettingsPage page(a_page, { { "presets", "Presets", "Choose Performance, Balanced, Quality or MyPerformance.", "Shared performance choices" }, { "streaming", "Texture Streaming", "Control texture detail and graphics-memory use.", "Texture detail, coverage and streaming activity" }, { "timings", "Profiling", "Inspect live CPU and GPU timings for the active scene.", "Live CPU and GPU timings" }, { "tuning", "Performance Tuning", "Scan feature timings or measure individual on/off savings.", "Feature costs and comparisons" }, { "overlay", "Performance Overlay", "Choose in-game counters, graphs, and their appearance.", "Counters, graphs and appearance" } }, "Performance", "Choose presets, manage texture streaming, inspect timings, compare feature costs, or configure the overlay.", [current = std::string(current)](std::string_view section) { return section == current || !PerformanceTuningRenderer::HasActiveMeasurements(); }, a_section ? a_section : "");
 	if (page.Is(current)) {
 		a_draw();
 		return;
 	}
 	for (const auto& [section, destination] : { std::pair{ "overview", "Performance" }, std::pair{ "presets", "PerformancePresets" },
-			 std::pair{ "timings", "Profiling" }, std::pair{ "tuning", "PerformanceTuning" }, std::pair{ "overlay", "PerformanceOverlay" } }) {
+			 std::pair{ "streaming", "TextureStreaming" }, std::pair{ "timings", "Profiling" }, std::pair{ "tuning", "PerformanceTuning" }, std::pair{ "overlay", "PerformanceOverlay" } }) {
 		if (!page.Is(section))
 			continue;
-		MenuUI::SettingsPage::Select(destination, section);
+		if (!MenuUI::SettingsPage::Select(std::string_view(section) == "streaming" ? "Performance" : destination, section))
+			return;
 		const auto entry = GetBuiltInPageMenuEntryId(destination);
 		globals::menu->SelectFeatureMenu(entry.empty() ? destination : entry);
 		break;
@@ -795,7 +800,7 @@ void FeatureListRenderer::RenderFeatureList(
 	if (!pendingFeatureSelection.empty()) {
 		featureSearch.clear();
 		for (auto* feature : GetMenuFeatures()) {
-			if (feature->GetShortName() == pendingFeatureSelection) {
+			if (IsFeatureVisible(feature) && feature->GetShortName() == pendingFeatureSelection) {
 				categoryExpansionStates[std::string(feature->GetCategory())] = true;
 				break;
 			}
@@ -872,6 +877,7 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 		BuiltInMenu{ "Dev Tools", drawAdvancedSettings },
 		&globals::features::screenshotFeature,
 		BuiltInMenu{ PERFORMANCE_PRESETS_MENU_NAME, [] { FeatureListRenderer::RenderPerformancePage("PerformancePresets", [] { MenuUI::PerformancePage::RenderPresets(); }); } },
+		&TextureStreaming::Instance(),
 		BuiltInMenu{ "Profiling", [] { FeatureListRenderer::RenderPerformancePage("Profiling", [] { ProfilingRenderer::RenderStatistics(true, true, false); }); } },
 		BuiltInMenu{ PERFORMANCE_TUNING_MENU_NAME, [] { PerformanceTuningRenderer::Render(); } },
 		&globals::features::renderDoc,
@@ -975,6 +981,8 @@ void FeatureListRenderer::HandlePendingFeatureSelection(
 		                                                                                         nullptr;
 		if (performancePage)
 			MenuUI::SettingsPage::Select(performancePage, MenuUI::SettingsNavigation::PerformanceSection(performancePage).data());
+		if (pendingFeatureSelection == "TextureStreaming")
+			MenuUI::SettingsPage::Select("Performance", "streaming");
 		if (pendingFeatureSelection == globals::features::renderDoc.GetShortName())
 			MenuUI::SettingsPage::Select("DevTools", "renderdoc");
 		if (pendingFeatureSelection.starts_with("builtin:") && TrySelectMenuEntryById(menuList, pendingFeatureSelection, selectedMenu)) {
@@ -1019,7 +1027,7 @@ void FeatureListRenderer::RenderLeftColumn(
 				const auto* selectedFeature = selectedMenu < menuList.size() ? std::get_if<Feature*>(&menuList[selectedMenu]) : nullptr;
 				const bool groupSelected = menu &&
 				                           ((menu->name == "Performance" && ((selectedBuiltIn && MenuUI::SettingsNavigation::IsPerformancePage(BuiltInPageId(*selectedBuiltIn))) ||
-																				(selectedFeature && *selectedFeature == &globals::features::performanceOverlay))) ||
+																				(selectedFeature && IsPerformanceFeature(*selectedFeature)))) ||
 											   (menu->name == "Dev Tools" && selectedFeature && *selectedFeature == &globals::features::renderDoc));
 				std::visit(ListMenuVisitor{ i, selectedMenu, categoryExpansionStates, groupSelected }, menuList[i]);
 			}
@@ -1055,7 +1063,7 @@ void FeatureListRenderer::RenderLeftColumn(
 					}
 				}
 				if (const auto* feature = std::get_if<Feature*>(&menuList[i]); feature &&
-																			   (IsTopLevelFeature(*feature) || *feature == &globals::features::renderDoc || *feature == &globals::features::performanceOverlay))
+																			   (IsTopLevelFeature(*feature) || *feature == &globals::features::renderDoc || IsPerformanceFeature(*feature)))
 					continue;
 				std::visit(ListMenuVisitor{ i, selectedMenu, categoryExpansionStates }, menuList[i]);
 			}
@@ -1240,7 +1248,7 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
 		                          menu.name == "Dev Tools"                   ? "Manage RenderDoc captures, shaders, caches, logging, and renderer tests." :
 		                          menu.name == "Performance"                 ? "Choose performance presets, inspect timings, compare feature costs, and configure the overlay." :
 		                          menu.name == "Profiling"                   ? "Inspect live CPU and GPU timings in the current scene." :
-		                          menu.name == PERFORMANCE_PRESETS_MENU_NAME ? "Choose a performance preset or build MyPreset from your saved choices." :
+		                          menu.name == PERFORMANCE_PRESETS_MENU_NAME ? "Choose a performance preset or build MyPerformance from your saved choices." :
 		                          menu.name == PERFORMANCE_TUNING_MENU_NAME  ? "Scan rendering costs or compare enabled features in the current scene." :
 		                          menu.name == "Feature Issues"              ? "Review feature compatibility and available recovery actions." :
 		                                                                       "";
@@ -1347,6 +1355,8 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 #endif
 				if (external)
 					external->DrawSettings();
+				else if (feat == &TextureStreaming::Instance())
+					FeatureListRenderer::RenderPerformancePage("Performance", [&] { RenderFeatureSettings(feat, isDisabled, isLoaded, hasFailedMessage, sceneControlled); }, "streaming");
 				else if (feat == &globals::features::performanceOverlay)
 					FeatureListRenderer::RenderPerformancePage("PerformanceOverlay", [&] { RenderFeatureSettings(feat, isDisabled, isLoaded, hasFailedMessage, sceneControlled); });
 				else if (feat == &globals::features::renderDoc)
@@ -1366,6 +1376,8 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 		if (external) {
 			externalFooter = external->GetSettingsFooter();
 			DrawSettingsFooter(featureName.c_str(), {}, &*externalFooter, feat);
+		} else if (feat == &globals::features::adaptiveBrightness && MenuUI::SettingsPage::Selected(featureName.c_str()) == "presets") {
+			DrawSettingsFooter(featureName.c_str());
 		} else {
 			DrawSettingsFooter(featureName.c_str(), [&](float width) { RenderRestoreDefaultsButton(feat, isDisabled || sceneControlled, isLoaded, width); }, nullptr, feat);
 		}
@@ -1472,6 +1484,8 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 
 bool FeatureListRenderer::DrawMenuVisitor::RenderFeatureContentControls(Feature* feat, bool sceneControlled)
 {
+	if (feat == &globals::features::adaptiveBrightness && MenuUI::SettingsPage::Selected("AdaptiveBrightness") == "presets")
+		return false;
 	const auto featureName = feat->GetShortName();
 	auto weatherRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
 	if (!weatherControlInFooter && weatherRegistry->HasWeatherSupport(featureName)) {

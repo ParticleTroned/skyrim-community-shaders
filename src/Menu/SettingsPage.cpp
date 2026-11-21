@@ -284,7 +284,7 @@ namespace MenuUI
 	}
 #endif
 
-	SettingsPage::SettingsPage(const char* a_id, std::initializer_list<Section> a_sections, const char* a_overviewTitle, const char* a_guidance, std::function<bool(std::string_view)> a_canSelect) :
+	SettingsPage::SettingsPage(const char* a_id, std::initializer_list<Section> a_sections, const char* a_overviewTitle, const char* a_guidance, std::function<bool(std::string_view)> a_canSelect, std::string_view a_childPageSection) :
 		overviewTitle(a_overviewTitle), overviewGuidance(a_guidance), sections(a_sections)
 	{
 		std::scoped_lock lock(navigationMutex);
@@ -423,12 +423,15 @@ namespace MenuUI
 		}
 		state.pending = rejectedSelection || activatedTopTab;
 		selected = state.selected;
-		contentLeftPadding = selected == "overview" ? ImGui::GetStyle().WindowPadding.x : OverviewTextInset(a_id, ImGui::GetContentRegionAvail().x);
+		const bool childPage = !a_childPageSection.empty() && selected == a_childPageSection;
+		contentLeftPadding = childPage ? 0 : selected == "overview" ? ImGui::GetStyle().WindowPadding.x :
+		                                                              OverviewTextInset(a_id, ImGui::GetContentRegionAvail().x);
 		{
-			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0, ImGui::GetStyle().WindowPadding.y });
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0, childPage ? 0 : ImGui::GetStyle().WindowPadding.y });
 			const SKSE::stl::scope_exit restorePadding([] { ImGui::PopStyleVar(); });
 			// Conditional controls must not change the available width and reflow neighbouring columns.
-			contentVisible = ImGui::BeginChild(std::format("##SettingsContent/{}", selected).c_str(), { 0, 0 }, ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+			const ImGuiWindowFlags contentFlags = childPage ? ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse : ImGuiWindowFlags_AlwaysVerticalScrollbar;
+			contentVisible = ImGui::BeginChild(std::format("##SettingsContent/{}", selected).c_str(), { 0, 0 }, ImGuiChildFlags_AlwaysUseWindowPadding, contentFlags);
 		}
 		if (contentLeftPadding > 0)
 			ImGui::Indent(contentLeftPadding);
@@ -443,7 +446,7 @@ namespace MenuUI
 			if (contentDisabled)
 				ImGui::BeginDisabled();
 		}
-		if (contentVisible && (singlePage || selected != "overview"))
+		if (contentVisible && !childPage && (singlePage || selected != "overview"))
 			controlLayout = std::make_unique<Util::Widgets::ControlLayout>();
 		if (!contentVisible || (selected != "performance" && !(SettingsNavigation::IsPerformancePage(pageId) && selected == "tuning")))
 			PerformanceTuningRenderer::NotifyOverviewInactive();

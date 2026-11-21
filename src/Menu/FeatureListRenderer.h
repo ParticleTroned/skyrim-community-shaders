@@ -13,8 +13,8 @@ class FeatureListRenderer
 public:
 	/** Menu features plus optional companion pages, without registering companions with the renderer. */
 	static std::vector<Feature*> GetMenuFeatures();
-	/** Shared Performance tabs retain each tool's native controls and settings ownership. */
-	static void RenderPerformancePage(const char* a_page, const std::function<void()>& a_draw);
+	/** Shared Performance tabs retain native feature ownership; a_section hosts a feature inside a parent tab. */
+	static void RenderPerformancePage(const char* a_page, const std::function<void()>& a_draw, const char* a_section = nullptr);
 	/** Explicit sidebar choice takes precedence over automatic hover hiding. */
 	static void SetSidebarVisible(bool a_visible);
 	static bool IsSidebarVisible();

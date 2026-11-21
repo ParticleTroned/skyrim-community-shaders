@@ -1,0 +1,7 @@
+file(READ "${PROJECT_ROOT}/src/Presets/LookSceneRuntime.cpp" source)
+string(FIND "${source}" "namespace Presets::LookSceneRuntime" start)
+if(start EQUAL -1)
+    message(FATAL_ERROR "Visuals scene runtime was not found")
+endif()
+string(SUBSTRING "${source}" ${start} -1 body)
+file(WRITE "${OUTPUT_FILE}" "${body}")

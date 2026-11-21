@@ -217,6 +217,8 @@ public:
 	void Save(json& o_json);
 
 	virtual void SaveSettings(json&) {}
+	/** Serializes persistent values without reloading features or retaining transient scene/weather values. */
+	void SaveBaseSettings(json& settings);
 	virtual void LoadSettings(json&) {}
 	// Called only after the user settings file has been written successfully.
 	virtual void OnSettingsSaved() {}

@@ -1947,7 +1947,6 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_constraint_warning_under_test.h"
             "${_settings_ui_dir}/settings_performance_navigation_under_test.h"
             "${_settings_ui_dir}/settings_adaptive_presets_under_test.h"
-            "${_settings_ui_dir}/settings_preset_files_under_test.h"
             "${_settings_ui_dir}/settings_results_under_test.h"
         COMMAND
             "${Python3_EXECUTABLE}"
@@ -1961,6 +1960,7 @@ if(BUILD_CONTROLLER_TESTS)
         DEPENDS
             src/Menu/FeatureListRenderer.cpp
             src/Menu/SettingsActions.cpp
+            src/Menu/ProfileExchange.cpp
             src/State.cpp
             src/Menu/ExternalSettingsPage.h
             src/Menu/StabilizerPage.cpp
@@ -2022,7 +2022,6 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_constraint_warning_under_test.h"
             "${_settings_ui_dir}/settings_performance_navigation_under_test.h"
             "${_settings_ui_dir}/settings_adaptive_presets_under_test.h"
-            "${_settings_ui_dir}/settings_preset_files_under_test.h"
             "${_settings_ui_dir}/settings_results_under_test.h"
     )
     target_sources(settings_ui_test PRIVATE src/Menu/PerformanceResults.cpp)
@@ -2098,6 +2097,51 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_link_libraries(
         vr_interface_settings_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+
+    add_controller_test(look_scene_runtime_test LookSceneRuntime tests/look_scene_runtime_test.cpp)
+    set(_look_scene_test
+        "${CMAKE_CURRENT_BINARY_DIR}/look_scene_runtime_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_look_scene_test}"
+        COMMAND
+            ${CMAKE_COMMAND} -DPROJECT_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+            -DOUTPUT_FILE=${_look_scene_test} -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/extract_look_scene_runtime.cmake"
+        DEPENDS
+            src/Presets/LookSceneRuntime.cpp
+            tests/extract_look_scene_runtime.cmake
+        VERBATIM
+    )
+    target_sources(
+        look_scene_runtime_test
+        PRIVATE
+            "${_look_scene_test}"
+            src/Presets/LookScenes.cpp
+            src/Presets/SettingsDomains.cpp
+    )
+    target_include_directories(
+        look_scene_runtime_test
+        PRIVATE "${CMAKE_CURRENT_BINARY_DIR}"
+    )
+    target_link_libraries(
+        look_scene_runtime_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+
+    add_controller_test(look_profiles_test LookProfiles tests/look_profiles_test.cpp)
+    target_sources(
+        look_profiles_test
+        PRIVATE
+            src/Presets/SettingsDomains.cpp
+            src/Presets/LookScenes.cpp
+            src/Presets/LookPack.cpp
+            src/Utils/PathValidation.cpp
+    )
+    target_link_libraries(
+        look_profiles_test
         PRIVATE nlohmann_json::nlohmann_json
     )
 

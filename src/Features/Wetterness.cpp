@@ -1286,22 +1286,36 @@ std::vector<std::string> Wetterness::GetPerformancePresetNames() const
 
 std::string Wetterness::GetPerformancePresetName() const
 {
-	for (const auto& preset : WETTERNESS_UI_PRESETS)
-		if (IsWetternessUiPresetActive(*this, preset))
+	for (const auto& preset : WETTERNESS_UI_PRESETS) {
+		const auto expected = BuildWetternessUiPresetState(preset);
+		if (IsNearlyEqual(settings.RaindropFxRangeWorldUnits, expected.settings.RaindropFxRangeWorldUnits) &&
+			IsNearlyEqual(settings.RaindropGridSize, expected.settings.RaindropGridSize) &&
+			IsNearlyEqual(settings.RaindropInterval, expected.settings.RaindropInterval) &&
+			IsNearlyEqual(settings.RaindropChance, expected.settings.RaindropChance) &&
+			IsNearlyEqual(settings.SplashesLifetime, expected.settings.SplashesLifetime) &&
+			IsNearlyEqual(settings.RippleLifetime, expected.settings.RippleLifetime) &&
+			IsNearlyEqual(wetnessDistanceFadeRange, expected.wetnessDistanceFadeRange))
 			return preset.name;
+	}
 	return {};
 }
 
 bool Wetterness::ApplyPerformancePreset(std::string_view a_name)
 {
 	for (const auto& preset : WETTERNESS_UI_PRESETS) {
-		if (a_name == preset.name) {
-			const bool enabled = IsPerformanceToggleEnabled();
-			ApplyWetternessUiPreset(*this, preset);
-			SetPerformanceToggleEnabled(enabled);
-			DetectCurrentPreset();
-			return true;
-		}
+		if (a_name != preset.name)
+			continue;
+		const auto expected = BuildWetternessUiPresetState(preset);
+		// Performance choices change effect density and reach without replacing the authored look.
+		settings.RaindropFxRangeWorldUnits = expected.settings.RaindropFxRangeWorldUnits;
+		settings.RaindropGridSize = expected.settings.RaindropGridSize;
+		settings.RaindropInterval = expected.settings.RaindropInterval;
+		settings.RaindropChance = expected.settings.RaindropChance;
+		settings.SplashesLifetime = expected.settings.SplashesLifetime;
+		settings.RippleLifetime = expected.settings.RippleLifetime;
+		wetnessDistanceFadeRange = expected.wetnessDistanceFadeRange;
+		DetectCurrentPreset();
+		return true;
 	}
 	return false;
 }
@@ -2178,10 +2192,10 @@ void Wetterness::DrawPerformanceSettings(bool a_advanced)
 		for (size_t i = 0; i < WETTERNESS_UI_PRESETS.size(); ++i) {
 			ImGui::TableNextColumn();
 			const auto& preset = WETTERNESS_UI_PRESETS[i];
-			const bool presetActive = IsWetternessUiPresetActive(*this, preset);
+			const bool presetActive = GetPerformancePresetName() == preset.name;
 			[[maybe_unused]] auto presetStyle = Util::PresetButtonStyle(presetActive);
 			if (ImGui::Button(preset.name, ImVec2(-1.0f, 0.0f))) {
-				ApplyWetternessUiPreset(*this, preset);
+				ApplyPerformancePreset(preset.name);
 				sanitizePersistentPresetState();
 				DetectCurrentPreset();
 			}

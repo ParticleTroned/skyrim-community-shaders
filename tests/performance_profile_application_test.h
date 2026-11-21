@@ -226,8 +226,8 @@ void TestProfileApplication()
 		"capturing an AMD selection excludes inactive NVIDIA preferences and visual settings");
 	after["Performance Profiles"]["choices"]["presets"]["Skylighting"] = "Unavailable preset";
 	Load(after);
-	require(Resolve("User defined") == Resolve("MyPreset"), "the former profile action name remains a compatible alias");
-	require(!Apply("MyPreset")["accepted"], "feature-owned preset validation rejects unknown presets before mutation");
+	require(Resolve("User defined") == Resolve("MyPerformance"), "the former profile action name remains a compatible alias");
+	require(!Apply("MyPerformance")["accepted"], "feature-owned preset validation rejects unknown presets before mutation");
 	Load(json::object());
 	sky.settings["enabled"] = false;
 	wet.sceneOwned = true;
@@ -335,7 +335,7 @@ void TestProfileApplication()
 	legacyProfile["choices"] = { { "features", { { "UnifiedWater", false }, { "ReverseZ", false }, { "Skylighting", true } } } };
 	Load({ { "Performance Profiles", legacyProfile } });
 	require(user.choices["features"].size() == 1 && user.choices["features"]["Skylighting"] == true,
-		"loading legacy MyPreset choices must discard restart-only switches while preserving editable choices");
+		"loading legacy MyPerformance choices must discard restart-only switches while preserving editable choices");
 	const auto beforeSelection = sky.settings;
 	const auto beforeUtility = utility.settings;
 	const auto beforeUpscaling = upscaling.selections;
@@ -348,14 +348,14 @@ void TestProfileApplication()
 	json unchanged;
 	Save(unchanged);
 	require(unchanged == profileBeforeSelection && sky.settings == beforeSelection && utility.settings == beforeUtility,
-		"tile selections must not mutate MyPreset or live settings");
-	require(SaveIncludedFeatures()["accepted"], "draft selections must save to MyPreset");
+		"tile selections must not mutate MyPerformance or live settings");
+	require(SaveIncludedFeatures()["accepted"], "draft selections must save to MyPerformance");
 	require(!user.choices["features"].contains("UnifiedWater") && !user.choices["features"].contains("ReverseZ") &&
 				water.IsPerformanceToggleEnabled() && reverseZ.IsPerformanceToggleEnabled(),
 		"saving Included Features must exclude restart-only controls and preserve their settings");
 	require(user.choices["features"][sky.name] == false && user.choices["features"][utility.name] == false &&
 				sky.settings == beforeSelection && utility.settings == beforeUtility && upscaling.selections == beforeUpscaling,
-		"Apply to MyPreset must only store explicit On/Off choices");
+		"Apply to MyPerformance must only store explicit On/Off choices");
 	require(RestoreIncludedFeatures()["accepted"] && includedFeatureChoices[sky.name] == sky.IsPerformanceToggleEnabled() &&
 				user.choices["features"][sky.name] == false,
 		"restore must update only the draft from current Enabled states");
@@ -371,8 +371,8 @@ void TestProfileApplication()
 	globals::state->disabled.clear();
 	sky.presetEnables = true;
 	upscaling.rejectTransition = false;
-	require(Apply("MyPreset")["accepted"] && !sky.IsPerformanceToggleEnabled() && !utility.IsPerformanceToggleEnabled(),
-		"only Apply MyPreset changes live features, and explicit Off must override a named preset's Enabled value");
+	require(Apply("MyPerformance")["accepted"] && !sky.IsPerformanceToggleEnabled() && !utility.IsPerformanceToggleEnabled(),
+		"only Apply MyPerformance changes live features, and explicit Off must override a named preset's Enabled value");
 	require(SelectIncludedFeature("Upscaling", false)["accepted"] && SaveIncludedFeatures()["accepted"] &&
 				user.choices["upscaling"]["upscaleMethod"] == 0 && !user.choices["features"].contains("Upscaling"),
 		"upscaling Off must use its native selection boundary rather than a feature toggle");

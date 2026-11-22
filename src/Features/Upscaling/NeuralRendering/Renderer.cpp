@@ -3007,7 +3007,7 @@ namespace NeuralRendering
 				slot.colorWork.baseline = {};
 				slot.colorWork.result = {};
 				slot.colorWork.capacityWidth = slot.colorWork.capacityHeight = 0;
-				slot.colorWork.prepared = false;
+				slot.colorWork.InvalidatePreparation();
 				memoryConservation_.RecordColorTrim(index, trimmedBytes[index]);
 			}
 			snapshot_.lastCompletedStage = RendererStage::ResourceRetirement;
@@ -4225,7 +4225,7 @@ namespace NeuralRendering
 				}
 				if (!colorPipeline_.Prepare(a_args.front().context, slots[index]->colorWork,
 						resources[index].color.texture.Get(), slots[index]->color.resource11.Get(),
-						slots[index]->color.uav11.Get(), colorConfiguration_, observation)) {
+						slots[index]->color.uav11.Get(), colorConfiguration_, observation, a_args[index].providerBlending)) {
 					return FailLocked(RendererStage::ColorInputCopy, E_FAIL,
 						"shared NR colour preparation failed", a_args[index].featureSlot, true);
 				}

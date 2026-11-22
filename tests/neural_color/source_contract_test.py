@@ -8,6 +8,28 @@ SHADERS = ROOT / "features/Neural Rendering/Shaders/Upscaling/NeuralRendering"
 
 
 class Contracts(unittest.TestCase):
+    def test_prepared_baseline_uses_validated_slot_and_existing_shaders(self):
+        pipeline = (NR / "ColorPipeline.cpp").read_text()
+        renderer = (NR / "Renderer.cpp").read_text()
+        prepare = renderer.split("if (!colorPipeline_.Prepare(", 1)[1].split("RecordExecutionCopy", 1)[0]
+        self.assertIn("a_args[index].providerBlending", prepare)
+        self.assertIn("slots[index]->color.resource11.Get()", prepare)
+        reconstruct = renderer.split("if (!colorPipeline_.Reconstruct(", 1)[1].split("RecordExecutionCopy", 1)[0]
+        self.assertIn("slots[index]->color.srv11.Get()", reconstruct)
+        self.assertIn("slot.colorWork.InvalidatePreparation();", renderer)
+        self.assertNotIn("GetResource(", pipeline)
+        self.assertNotIn("GetDesc(", pipeline)
+        self.assertEqual(pipeline.count("Util::CompileShader("), 3)
+        self.assertEqual(pipeline.count("work.BaselineSRV("), 2)
+        self.assertIn("offsetof(Constants, baselineOffset) == 56", pipeline)
+        self.assertIn("sizeof(Constants) == 128", pipeline)
+        for filename in ("ColorReconstructCS.hlsl", "ColorMeasureCS.hlsl"):
+            source = (SHADERS / filename).read_text()
+            loads = source.split("Baseline.Load(")[1:]
+            self.assertTrue(loads)
+            self.assertTrue(all(load.startswith("int3(BaselineOffset + ") for load in loads))
+        self.assertNotIn("BaselineOffset", (SHADERS / "ColorPrepareCS.hlsl").read_text())
+
     def test_lighting_layout_and_latched_shared_path(self):
         import hashlib
         import json

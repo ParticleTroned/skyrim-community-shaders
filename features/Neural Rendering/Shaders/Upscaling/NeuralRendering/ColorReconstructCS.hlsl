@@ -37,7 +37,7 @@ void PrepareReconstructionTile(uint2 groupBase, uint groupIndex)
 		index += ReconstructionGroupSize * ReconstructionGroupSize) {
 		int2 tile = int2(index % ReconstructionTileSize, index / ReconstructionTileSize);
 		uint2 local = uint2(clamp(int2(groupBase) + tile - 1, int2(0, 0), int2(RegionSize) - 1));
-		float3 baseline = Baseline.Load(int3(local, 0)).rgb;
+		float3 baseline = Baseline.Load(int3(BaselineOffset + local, 0)).rgb;
 		ReconstructionSample sample;
 		sample.candidate = Candidate(local, baseline);
 		float3 b = ToWorking(baseline), n = ToWorking(sample.candidate);
@@ -89,7 +89,7 @@ float3 RoundPreserveSourceForStorage(float3 value)
 	uint2 local = id.xy;
 	if (any(local >= RegionSize))
 		return;
-	float4 baseline = Baseline.Load(int3(local, 0));
+	float4 baseline = Baseline.Load(int3(BaselineOffset + local, 0));
 	if (!all(Finite::IsFinite(baseline))) {
 		Result[local] = 0.0;
 		return;
@@ -178,9 +178,9 @@ float3 RoundPreserveSourceForStorage(float3 value)
 					}
 					else
 					{
-						// Keep the untiled expressions intact so the reference permutation retains its bytecode.
-						float3 b = ToWorking(Baseline.Load(int3(p, 0)).rgb);
-						float3 n = ToWorking(Candidate(p, Baseline.Load(int3(p, 0)).rgb));
+						// Preserve the untiled arithmetic as the independent reconstruction reference.
+						float3 b = ToWorking(Baseline.Load(int3(BaselineOffset + p, 0)).rgb);
+						float3 n = ToWorking(Candidate(p, Baseline.Load(int3(BaselineOffset + p, 0)).rgb));
 						float by = Luminance(b), ny = Luminance(n);
 						if (by > 1e-5 && ny > 1e-5 && all(b >= 0.0) && all(n >= 0.0) && all(Finite::IsFinite(b)) && all(Finite::IsFinite(n))) {
 							float distance = abs((log2(by) - log2(baseY)));

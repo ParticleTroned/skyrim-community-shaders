@@ -20,7 +20,7 @@ groupshared float2 invalidCodecs[256];
 	for (uint i = lane; i < count; i += 256u) {
 		uint pixelIndex = i * stride;
 		uint2 p = uint2(pixelIndex % RegionSize.x, pixelIndex / RegionSize.x);
-		float3 b = Baseline.Load(int3(p, 0)).rgb;
+		float3 b = Baseline.Load(int3(BaselineOffset + p, 0)).rgb;
 		float3 n = Neural.Load(int3(RegionOffset + p, 0)).rgb;
 		float3 r = Result.Load(int3(p, 0)).rgb;
 		bool bv = all(Finite::IsFinite(b)), nv = all(Finite::IsFinite(n)), rv = all(Finite::IsFinite(r));

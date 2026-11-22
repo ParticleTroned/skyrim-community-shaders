@@ -104,6 +104,11 @@ namespace NeuralRendering::Color
 		bool pending = false;
 		void Abandon() noexcept;
 	};
+	enum class BaselineSource
+	{
+		OwnedBaseline,
+		IdentityPreparedInput
+	};
 	struct Work
 	{
 		Texture baseline, result;
@@ -114,8 +119,20 @@ namespace NeuralRendering::Color
 		std::uint32_t capacityWidth = 0, capacityHeight = 0;
 		DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
 		bool readbackAttempted = false, prepared = false;
+		BaselineSource baselineSource = BaselineSource::OwnedBaseline;
 		Configuration configuration{};
 		Observation observation{};
+		/** Invalidate the transaction before its prepared input can be replaced. */
+		void InvalidatePreparation() noexcept
+		{
+			prepared = false;
+			baselineSource = BaselineSource::OwnedBaseline;
+		}
+		/** Borrow the validated slot input only for the current identity transaction. */
+		ID3D11ShaderResourceView* BaselineSRV(ID3D11ShaderResourceView* preparedInput) const noexcept
+		{
+			return baselineSource == BaselineSource::IdentityPreparedInput ? preparedInput : baseline.srv.Get();
+		}
 		/** Whether both retained colour buffers can serve this input. */
 		[[nodiscard]] bool Fits(const ComputeSubrect&, DXGI_FORMAT) const noexcept;
 		/** Replacement dimensions retain both axes until pressure retirement. */
@@ -134,9 +151,10 @@ namespace NeuralRendering::Color
 		std::uint64_t BeginMeasurementBatch() noexcept;
 		/** Preserves allocation HRESULTs so healthy-device memory failures can recover. */
 		bool Ensure(ID3D11Device*, Work&, const ComputeSubrect&, DXGI_FORMAT, bool diagnostics, HRESULT& result);
+		/** Prepare validated slot resources; provider blending retains an independent baseline. */
 		bool Prepare(ID3D11DeviceContext*, Work&, ID3D11Resource* original,
 			ID3D11Resource* prepared, ID3D11UnorderedAccessView* preparedUAV,
-			const Configuration&, Observation);
+			const Configuration&, Observation, bool providerBlending);
 		bool Reconstruct(ID3D11DeviceContext*, Work&, ID3D11Resource* neural,
 			ID3D11ShaderResourceView* neuralSRV, ID3D11ShaderResourceView* preparedSRV, const Configuration&);
 		void Commit(ID3D11DeviceContext*, const Work&, ID3D11Resource* destination);

@@ -1,7 +1,10 @@
 // Standalone Windows shader tests: WARP by default, optional --hardware adapter.
 #include "../ShaderPackageIncludes.h"
+#include "Features/Upscaling/NeuralRendering/ColorPipeline.h"
 #include "Features/Upscaling/NeuralRendering/ColorPolicy.h"
 #include "ShaderConstants.h"
+#include "d3d_resource_naming.h"
+#include "pipeline_test_support.h"
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -10,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <d3d11.h>
+#include <d3d11sdklayers.h>
 #include <d3dcompiler.h>
 #include <filesystem>
 #include <fstream>
@@ -56,12 +60,12 @@ struct Texture
 	ComPtr<ID3D11ShaderResourceView> srv;
 	ComPtr<ID3D11UnorderedAccessView> uav;
 };
-static Texture MakeTexture(ID3D11Device* device, const std::vector<Pixel>& pixels,
+static ::Texture MakeTexture(ID3D11Device* device, const std::vector<Pixel>& pixels,
 	DXGI_FORMAT format = DXGI_FORMAT_R32G32B32A32_FLOAT, unsigned width = 64, unsigned height = 64)
 {
 	Require(format != DXGI_FORMAT_R32G32B32A32_FLOAT || pixels.size() == size_t(width) * height,
 		"texture initialization must cover its actual dimensions");
-	Texture value;
+	::Texture value;
 	D3D11_TEXTURE2D_DESC desc{};
 	desc.Width = width;
 	desc.Height = height;
@@ -129,7 +133,6 @@ static std::vector<Pixel> Read(ID3D11Device* device, ID3D11DeviceContext* contex
 	context->Unmap(staging.Get(), 0);
 	return result;
 }
-#include "shared_transport_gpu_checks.h"
 
 static void CheckFineDetail(ID3D11Device* device, ID3D11DeviceContext* context,
 	ID3D11ComputeShader* prepare, ID3D11ComputeShader* reconstruct, ID3D11Buffer* cb, unsigned domain)
@@ -245,7 +248,7 @@ static Constants FullTextureConstants(unsigned width = 64, unsigned height = 64)
 	return constants;
 }
 static std::vector<Pixel> ReadStored(ID3D11Device* device, ID3D11DeviceContext* context,
-	ID3D11ComputeShader* copy, ID3D11Buffer* cb, const Texture& texture)
+	ID3D11ComputeShader* copy, ID3D11Buffer* cb, const ::Texture& texture)
 {
 	D3D11_TEXTURE2D_DESC desc{};
 	texture.texture->GetDesc(&desc);
@@ -256,7 +259,7 @@ static std::vector<Pixel> ReadStored(ID3D11Device* device, ID3D11DeviceContext* 
 	Dispatch(context, copy, cb, FullTextureConstants(desc.Width, desc.Height), { texture.srv.Get() }, decoded.uav.Get());
 	return Read(device, context, decoded.texture.Get());
 }
-static Texture StorePixels(ID3D11Device* device, ID3D11DeviceContext* context,
+static ::Texture StorePixels(ID3D11Device* device, ID3D11DeviceContext* context,
 	ID3D11ComputeShader* copy, ID3D11Buffer* cb, const std::vector<Pixel>& pixels,
 	DXGI_FORMAT format = DXGI_FORMAT_R11G11B10_FLOAT, unsigned width = 64, unsigned height = 64)
 {
@@ -414,11 +417,15 @@ static void CheckPackedInvalidCandidates(ID3D11Device* device, ID3D11DeviceConte
 				"invalid packed candidates must retain source before storage rounding");
 	}
 }
+// Fixtures depend on helpers from the preceding includes.
+// clang-format off
 #include "exposure_range_gpu_checks.h"
 #include "lighting_preservation_gpu_checks.h"
 #include "reference_gpu_checks.h"
 #include "tiled_reconstruction_gpu_checks.h"
-
+#include "shared_transport_gpu_checks.h"
+#include "pipeline_gpu_checks.h"
+// clang-format on
 int main(int argc, char** argv)
 {
 	std::setvbuf(stdout, nullptr, _IONBF, 0);
@@ -440,8 +447,12 @@ int main(int argc, char** argv)
 	auto driverType = hardware ? D3D_DRIVER_TYPE_HARDWARE : D3D_DRIVER_TYPE_WARP;
 	if (adapter)
 		driverType = D3D_DRIVER_TYPE_UNKNOWN;
-	Check(D3D11CreateDevice(adapter.Get(), driverType,
-		nullptr, 0, levels, 1, D3D11_SDK_VERSION, &device, nullptr, &context));
+	auto deviceResult = D3D11CreateDevice(adapter.Get(), driverType,
+		nullptr, D3D11_CREATE_DEVICE_DEBUG, levels, 1, D3D11_SDK_VERSION, &device, nullptr, &context);
+	if (deviceResult == DXGI_ERROR_SDK_COMPONENT_MISSING)
+		deviceResult = D3D11CreateDevice(adapter.Get(), driverType,
+			nullptr, 0, levels, 1, D3D11_SDK_VERSION, &device, nullptr, &context);
+	Check(deviceResult);
 	ComPtr<IDXGIDevice> dxgiDevice;
 	Check(device.As(&dxgiDevice));
 	Check(dxgiDevice->GetAdapter(&adapter));
@@ -449,6 +460,8 @@ int main(int argc, char** argv)
 	Check(adapter->GetDesc(&adapterDesc));
 	std::printf("Shader test adapter: %ls (vendor %04x, device %04x)\n", adapterDesc.Description, adapterDesc.VendorId, adapterDesc.DeviceId);
 	const std::filesystem::path directory(argv[1]);
+	pipelineTestDevice = device.Get();
+	pipelineShaderDirectory = directory;
 	auto prepare = Compile(device.Get(), directory / "ColorPrepareCS.hlsl");
 	auto reconstruct = Compile(device.Get(), directory / "ColorReconstructCS.hlsl");
 	const auto measure = Compile(device.Get(), directory / "ColorMeasureCS.hlsl");
@@ -527,6 +540,7 @@ int main(int argc, char** argv)
 			}
 	}
 	CheckSharedPreparedInputs(device.Get(), context.Get(), prepare.Get(), reconstruct.Get(), cb.Get());
+	CheckPipelineBaselineLifecycle(device.Get(), context.Get());
 	for (unsigned domain = 0; domain < 3; ++domain)
 		CheckFineDetail(device.Get(), context.Get(), prepare.Get(), reconstruct.Get(), cb.Get(), domain);
 	// Production optimization must preserve the same packed rounding and fallback contract.
@@ -536,10 +550,13 @@ int main(int argc, char** argv)
 		const auto packedReconstruct = optimized ? Compile(device.Get(), directory / "ColorReconstructCS.hlsl", {}, flags) : reconstruct;
 		const auto rounding = Compile(device.Get(), std::filesystem::path(__FILE__).parent_path() / "packed_rounding_test.hlsl",
 			directory.parent_path().parent_path(), flags);
+		if (optimized)
+			CheckPipelineIdentityCopies(device.Get(), context.Get(), rounding.Get(), cb.Get());
 		std::printf("Packed shader compiler: %s\n", optimized ? "production optimization" : "IEEE strict");
 		CheckLightingPreservation(device.Get(), context.Get(), packedReconstruct.Get(), rounding.Get(), cb.Get(), optimized);
 		const D3D_SHADER_MACRO referenceDefines[]{ { "CSX_PERF_REFERENCE_FLAGS", "32" }, { nullptr, nullptr } };
 		const auto referenceReconstruct = Compile(device.Get(), directory / "ColorReconstructCS.hlsl", {}, flags, referenceDefines);
+		CheckIdentityPreparedBaseline(device.Get(), context.Get(), packedReconstruct.Get(), referenceReconstruct.Get(), rounding.Get(), cb.Get(), optimized);
 		CheckPreparationReference(device.Get(), context.Get(), packedReconstruct.Get(), referenceReconstruct.Get(), rounding.Get(), cb.Get());
 		const auto tiledPrepare = optimized ? Compile(device.Get(), directory / "ColorPrepareCS.hlsl", {}, flags) : prepare;
 		CheckTiledReconstruction(device.Get(), context.Get(), tiledPrepare.Get(), packedReconstruct.Get(), referenceReconstruct.Get(), rounding.Get(), cb.Get(), optimized);
@@ -554,5 +571,6 @@ int main(int argc, char** argv)
 		CheckPackedDetail(device.Get(), context.Get(), packedReconstruct.Get(), rounding.Get(), cb.Get());
 		CheckPackedInvalidCandidates(device.Get(), context.Get(), packedReconstruct.Get(), rounding.Get(), cb.Get());
 	}
+	CheckColorDebugMessages(device.Get());
 	std::printf("Passed %u %s shader checks; D3D12/NGX transport is not exercised by this test.\n", checks, hardware ? "hardware" : "WARP");
 }

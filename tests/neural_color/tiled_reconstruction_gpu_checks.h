@@ -85,7 +85,7 @@ static void CheckTiledReconstruction(ID3D11Device* device, ID3D11DeviceContext* 
 					                                 scenario == 2    ? 1u :
 					                                                    2u;
 					c.exposure = scenario == 2 ? 2.f : 0.5f;
-					Texture exposure;
+					::Texture exposure;
 					if (scenario >= 5) {
 						c.bypass |= 4u;
 						exposure = MakeTexture(device, { Pixel{ 1, 2, 2, scenario == 5 ? 1.f : 0.f } },

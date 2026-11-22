@@ -2,6 +2,7 @@
 #include "../ShaderPackageIncludes.h"
 #include "Features/Upscaling/NeuralRendering/ComputeStateGuard.h"
 #include "Features/Upscaling/NeuralRendering/ExposureCapture.h"
+#include "ShaderConstants.h"
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -311,18 +312,9 @@ static void CheckExposureShaders(const std::filesystem::path& folder, UINT flags
 	const Pixel b{ 0.18f, 0.09f, 0.01f, 0.375f };
 	auto baseline = Make(d.Get(), 8, b);
 	auto prepared = Make(d.Get(), 8, {}), result = Make(d.Get(), 8, {}), neural = Make(d.Get(), 8, { 0.8f, 0.2f, 0.1f, 0 });
-	struct Constants
-	{
-		unsigned x = 0, y = 0, w = 8, h = 8, mode = 1, domain = 1, transform = 1, flags = 12;
-		float multiplier = 1, detail = 1, appearance = 0, stops = 1;
-		float lightingPreservation = 1;
-		float padding[3]{};
-	} constants;
-	static_assert(sizeof(Constants) == 64);
-	static_assert(offsetof(Constants, multiplier) == 32);
-	static_assert(offsetof(Constants, lightingPreservation) == 48);
+	NeuralColorTest::Constants constants{ .x = 0, .y = 0, .width = 8, .height = 8, .mode = 1, .domain = 1, .transform = 1, .bypass = 12 };
 	D3D11_BUFFER_DESC desc{};
-	desc.ByteWidth = sizeof(Constants);
+	desc.ByteWidth = sizeof(constants);
 	desc.Usage = D3D11_USAGE_DEFAULT;
 	desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 	ComPtr<ID3D11Buffer> cb;
@@ -347,7 +339,7 @@ static void CheckExposureShaders(const std::filesystem::path& folder, UINT flags
 	for (unsigned i = 0; i < 3; ++i) Require(std::abs(p[i] - expected[i]) < 1e-5f);
 	Dispatch(c.Get(), reconstruct.Get(), { baseline.srv.Get(), prepared.srv.Get(), prepared.srv.Get(), exposure.srv.Get() }, result.uav.Get());
 	Require(Read(d.Get(), c.Get(), result.resource.Get()) == b);
-	constants.flags |= 2;
+	constants.bypass |= 2;
 	update();
 	Dispatch(c.Get(), reconstruct.Get(), { baseline.srv.Get(), neural.srv.Get(), prepared.srv.Get(), exposure.srv.Get() }, result.uav.Get());
 	Require(Read(d.Get(), c.Get(), result.resource.Get()) == b);
@@ -357,7 +349,7 @@ static void CheckExposureShaders(const std::filesystem::path& folder, UINT flags
 	spatial[3] = { 4, 1, 0, 0 };
 	c->UpdateSubresource(quad.resource.Get(), 0, nullptr, spatial.data(), 2 * sizeof(Pixel), 0);
 	Dispatch(c.Get(), capture.Get(), { quad.srv.Get() }, exposure.uav.Get());
-	constants.flags = 12;
+	constants.bypass = 12;
 	update();
 	Dispatch(c.Get(), prepare.Get(), { baseline.srv.Get(), nullptr, nullptr, exposure.srv.Get() }, prepared.uav.Get());
 	Require(Read(d.Get(), c.Get(), prepared.resource.Get())[0] == 0);
@@ -366,7 +358,7 @@ static void CheckExposureShaders(const std::filesystem::path& folder, UINT flags
 	c->UpdateSubresource(average.resource.Get(), 0, nullptr, zero.data(), sizeof(Pixel), 0);
 	Dispatch(c.Get(), capture.Get(), { average.srv.Get() }, exposure.uav.Get());
 	Require(Read(d.Get(), c.Get(), exposure.resource.Get())[3] == 2);
-	constants.flags = 12;
+	constants.bypass = 12;
 	update();
 	Dispatch(c.Get(), prepare.Get(), { baseline.srv.Get(), nullptr, nullptr, exposure.srv.Get() }, prepared.uav.Get());
 	Require(Read(d.Get(), c.Get(), prepared.resource.Get())[0] == 0);
@@ -391,8 +383,9 @@ static void CheckExposureShaders(const std::filesystem::path& folder, UINT flags
 	statsDesc.StructureByteStride = 0;
 	statsDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 	Check(d->CreateBuffer(&statsDesc, nullptr, &staging));
+	auto* measurementBaseline = baseline.srv.Get();
 	const auto statistics = [&]() {
-		Dispatch(c.Get(), measure.Get(), { baseline.srv.Get(), neural.srv.Get(), result.srv.Get(), exposure.srv.Get(), prepared.srv.Get() }, uav.Get());
+		Dispatch(c.Get(), measure.Get(), { measurementBaseline, neural.srv.Get(), result.srv.Get(), exposure.srv.Get(), prepared.srv.Get() }, uav.Get());
 		c->CopyResource(staging.Get(), gpu.Get());
 		D3D11_MAPPED_SUBRESOURCE mapped{};
 		Check(c->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped));
@@ -409,7 +402,7 @@ static void CheckExposureShaders(const std::filesystem::path& folder, UINT flags
 	Dispatch(c.Get(), capture.Get(), { average.srv.Get() }, exposure.uav.Get());
 	Require(Read(d.Get(), c.Get(), exposure.resource.Get())[3] == 0);
 	// Invalid PREPARED inverse must be counted even when neural inverse is valid.
-	constants.flags = 0;
+	constants.bypass = 0;
 	constants.transform = 2;
 	update();
 	prepared = Make(d.Get(), 8, { 4, 4, 4, 1 });
@@ -419,8 +412,8 @@ static void CheckExposureShaders(const std::filesystem::path& folder, UINT flags
 	Require(v[16] == 0 && v[17] == 64 && v[7] == 0);
 	// A finite encoded model output can decode beyond packed/half range.
 	constants.transform = 1;
-	constants.multiplier = 1.0f / 256.0f;
-	constants.flags = 0x100;
+	constants.exposure = 1.0f / 256.0f;
+	constants.bypass = 0x100;
 	update();
 	Dispatch(c.Get(), prepare.Get(), { baseline.srv.Get() }, prepared.uav.Get());
 	neural = Make(d.Get(), 8, { 12, 12, 12, 0 });
@@ -429,13 +422,29 @@ static void CheckExposureShaders(const std::filesystem::path& folder, UINT flags
 	p = Read(d.Get(), c.Get(), packed.resource.Get());
 	for (unsigned i = 0; i < 3; ++i) Require(std::abs(p[i] - b[i]) < 0.002f);
 	// The same decision also applies before FP16 stores; output remains baseline.
-	constants.flags = 0x200;
+	constants.bypass = 0x200;
 	update();
 	Dispatch(c.Get(), reconstruct.Get(), { baseline.srv.Get(), neural.srv.Get(), prepared.srv.Get() }, result.uav.Get());
 	Require(Read(d.Get(), c.Get(), result.resource.Get()) == b);
 	v = statistics();
 	Require(v[17] == 64);
-	std::puts("Exposure/codec/storage/t4/A-B/measurement WARP checks passed; engine hooks and NGX are not exercised.");
+	constants.x = 3;
+	constants.y = 5;
+	constants.transform = 0;
+	constants.exposure = 1;
+	constants.bypass = 0;
+	prepared = Make(d.Get(), 32, { -7, -7, -7, -7 });
+	neural = Make(d.Get(), 32, { .2f, .1f, .05f, 0 });
+	const D3D11_BOX identityRegion{ 0, 0, 0, 8, 8, 1 };
+	c->CopySubresourceRegion(prepared.resource.Get(), 0, constants.x, constants.y, 0, baseline.resource.Get(), 0, &identityRegion);
+	update();
+	const auto compactStatistics = statistics();
+	measurementBaseline = prepared.srv.Get();
+	constants.baselineOffset[0] = constants.x;
+	constants.baselineOffset[1] = constants.y;
+	update();
+	Require(statistics() == compactStatistics);
+	std::puts("Exposure/codec/storage/t4/A-B/measurement and prepared-baseline offset WARP checks passed; engine hooks and NGX are not exercised.");
 }
 
 int main(int argc, char** argv)

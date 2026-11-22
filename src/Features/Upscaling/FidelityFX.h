@@ -293,7 +293,7 @@ public:
 	bool ShouldRequestRuntimeFsr4() const;
 	/** Resolves the target preference during preparation, or the active preference otherwise. */
 	bool ShouldUseRuntimeUpscalerForFSR(std::optional<bool> a_automaticRequested = std::nullopt) const;
-	/** Applies the guide routing preference without releasing fenced import ownership. */
+	/** Applies the colour and guide routing preference without releasing fenced import ownership. */
 	void SetRuntimeSharedGuideInputsEnabled(bool a_enabled) noexcept { runtimeSharedGuideInputsEnabled.store(a_enabled, std::memory_order_release); }
 	[[nodiscard]] bool AreRuntimeSharedGuideInputsEnabled() const noexcept { return runtimeSharedGuideInputsEnabled.load(std::memory_order_acquire); }
 	/** A quarantined provider's imported inputs must be replaced before any D3D11 reuse. */
@@ -435,12 +435,12 @@ private:
 	RuntimeWrappedResources runtimeReactiveShared{};
 	RuntimeWrappedResources runtimeTransparencyShared{};
 	RuntimeWrappedResources runtimeOutputShared{};
-	struct RuntimeSharedGuideImport
+	struct RuntimeSharedInputImport
 	{
 		winrt::com_ptr<ID3D11Resource> source;
 		std::unique_ptr<WrappedResource> imported;
 	};
-	std::array<std::array<RuntimeSharedGuideImport, FSRSharedGuidePolicy::kGuideCount>, 2> runtimeSharedGuideImports{};
+	std::array<std::array<RuntimeSharedInputImport, FSRSharedGuidePolicy::kInputCount>, 2> runtimeSharedInputImports{};
 	std::atomic_bool runtimeSharedGuideInputsEnabled{ true };
 
 	HMODULE frameGenerationModule = nullptr;
@@ -567,8 +567,8 @@ private:
 		const D3D11_TEXTURE2D_DESC& a_outputDesc);
 	LifecycleResult ExecuteRuntimeUpscalerBatch(const RuntimeDispatchPlan& a_plan, std::span<const UpscaleRegionParameters> a_regions,
 		bool a_compositorSubmit = false);
-	/** Returns a retained exact full-eye guide import, or null to use the copy fallback. */
-	WrappedResource* ResolveRuntimeSharedGuide(uint32_t a_eye, FSRSharedGuidePolicy::Guide a_guide,
+	/** Returns a retained exact full-eye input import, or null to use the copy fallback. */
+	WrappedResource* ResolveRuntimeSharedInput(uint32_t a_eye, std::size_t a_inputIndex,
 		ID3D11Resource* a_source, const D3D11_TEXTURE2D_DESC& a_desc);
 	[[nodiscard]] bool HasQuarantinedRuntimeSharedGuides(const UpscaleRegionParameters& a_region) const noexcept;
 	[[nodiscard]] bool CanDispatchHostFallbackForRegions(std::span<const UpscaleRegionParameters> a_regions, const RuntimeDispatchPlan& a_plan) const;

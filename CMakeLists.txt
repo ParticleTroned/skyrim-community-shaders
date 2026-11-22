@@ -4909,6 +4909,7 @@ if(BUILD_CONTROLLER_TESTS)
         DEPENDS
             src/Buffer.h
             src/Features/Upscaling/DX12SwapChain.cpp
+            src/Utils/D3D.cpp
             tests/extract_fsr_shared_guide_interop.cmake
         VERBATIM
     )

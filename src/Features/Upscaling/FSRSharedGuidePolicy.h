@@ -15,6 +15,8 @@ namespace FSRSharedGuidePolicy
 		Count
 	};
 	inline constexpr auto kGuideCount = static_cast<std::size_t>(Guide::Count);
+	inline constexpr auto kColorInputIndex = kGuideCount;
+	inline constexpr auto kInputCount = kGuideCount + 1;
 
 	enum class Route
 	{
@@ -45,18 +47,18 @@ namespace FSRSharedGuidePolicy
 
 	/** Accounts for color plus four guides; output copies are outside this input counter. */
 	[[nodiscard]] constexpr CopyWork CountInputCopies(uint32_t a_renderWidth, uint32_t a_renderHeight,
-		uint32_t a_allocationWidth, uint32_t a_allocationHeight, uint32_t a_directGuideCount) noexcept
+		uint32_t a_allocationWidth, uint32_t a_allocationHeight, uint32_t a_directGuideCount, bool a_directColor = false) noexcept
 	{
 		if (!a_renderWidth || !a_renderHeight || a_renderWidth > a_allocationWidth ||
 			a_renderHeight > a_allocationHeight || a_directGuideCount > kGuideCount)
 			return {};
 		const uint64_t activePixels = static_cast<uint64_t>(a_renderWidth) * a_renderHeight;
 		const uint64_t allocationPixels = static_cast<uint64_t>(a_allocationWidth) * a_allocationHeight;
-		if (allocationPixels > std::numeric_limits<uint64_t>::max() / (1u + kGuideCount))
+		if (allocationPixels > std::numeric_limits<uint64_t>::max() / kInputCount)
 			return {};
-		const uint64_t copyCalls = 1u + kGuideCount - a_directGuideCount;
+		const uint64_t copyCalls = kInputCount - a_directGuideCount - (a_directColor ? 1u : 0u);
 		return { copyCalls, activePixels * copyCalls,
-			allocationPixels * (1u + kGuideCount) - activePixels * copyCalls,
+			allocationPixels * kInputCount - activePixels * copyCalls,
 			a_directGuideCount, activePixels * a_directGuideCount };
 	}
 }

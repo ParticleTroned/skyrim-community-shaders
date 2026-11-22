@@ -18,6 +18,14 @@ namespace
 	constexpr auto allGuides = CountInputCopies(100, 50, 200, 100, 4);
 	static_assert(allGuides.copyCalls == 1 && allGuides.activePixels == 5000 && allGuides.avoidedPixels == 95000);
 	static_assert(allGuides.directGuides == 4 && allGuides.directGuidePixels == 20000);
+	constexpr auto allInputs = CountInputCopies(100, 50, 200, 100, 4, true);
+	static_assert(allInputs.copyCalls == 0 && allInputs.activePixels == 0 && allInputs.avoidedPixels == 100000);
+	static_assert(allInputs.directGuides == 4 && allInputs.directGuidePixels == 20000);
+	constexpr auto colorOnly = CountInputCopies(100, 50, 200, 100, 0, true);
+	static_assert(colorOnly.copyCalls == 4 && colorOnly.activePixels == 20000 && colorOnly.directGuides == 0);
+	constexpr auto mixed = CountInputCopies(100, 50, 200, 100, 2, true);
+	static_assert(mixed.copyCalls == 2 && mixed.activePixels == 10000 && mixed.avoidedPixels == 90000);
+	static_assert(CountInputCopies(50, 25, 200, 100, 2, true).activePixels == 2500);
 	constexpr auto partialImport = CountInputCopies(100, 50, 200, 100, 2);
 	static_assert(partialImport.copyCalls == 3 && partialImport.activePixels == 15000);
 	static_assert(partialImport.activePixels + partialImport.avoidedPixels == fullCopy.activePixels + fullCopy.avoidedPixels);

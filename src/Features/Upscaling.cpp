@@ -17624,7 +17624,7 @@ void Upscaling::DrawSettings()
 					{
 						ImGui::BeginDisabled(!canChangeSharedGuides);
 						auto endDisabled = ScopeExit([]() { ImGui::EndDisabled(); });
-						if (Util::Widgets::Checkbox("Share FSR guide textures", &sharedGuides))
+						if (Util::Widgets::Checkbox("Share FSR input textures", &sharedGuides))
 							SetFSRSharedGuideInputsEnabled(sharedGuides);
 					}
 					if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -17632,7 +17632,7 @@ void Upscaling::DrawSettings()
 						ImGui::TextUnformatted("Disable if you notice flickering, ghosting or differences between eyes.");
 					}
 					if (!canChangeSharedGuides)
-						ImGui::TextDisabled("Stop GPU performance capture to change guide sharing.");
+						ImGui::TextDisabled("Stop GPU performance capture to change input sharing.");
 				}
 			}
 			if (page.Is("tuning")) {
@@ -49430,7 +49430,7 @@ bool Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 		GetRuntimeUpscaleMethod() == UpscaleMethod::kFSR;
 	const uint32_t allocationInWidth = useStableFSRInputBounds ? std::max(inWidth, outWidth) : inWidth;
 	const uint32_t allocationInHeight = useStableFSRInputBounds ? std::max(inHeight, outHeight) : inHeight;
-	const bool shareGuidesWithRuntime = useStableFSRInputBounds &&
+	const bool shareInputsWithRuntime = useStableFSRInputBounds &&
 	                                    (fidelityFX.ShouldUseRuntimeUpscalerForFSR() || fidelityFX.ShouldRequestRuntimeFsr4());
 	RetiredVRIntermediateTextures replacement{};
 
@@ -49438,7 +49438,7 @@ bool Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 		std::string suffix = (i == 0) ? "Left" : "Right";
 
 		replacement.colorIn[i] = CreateTextureFromSource(colorSrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscale_ColorIn_" + suffix).c_str(),
-			false, false, DXGI_FORMAT_UNKNOWN, &sourceDescriptions->color);
+			false, shareInputsWithRuntime, DXGI_FORMAT_UNKNOWN, &sourceDescriptions->color);
 		replacement.colorOut[i] =
 			colorOutFormat == colorSrcDesc.Format ?
 				CreateTextureFromSource(colorSrc, outWidth, outHeight, false, true, true, ("Upscale_ColorOut_" + suffix).c_str(), requiresColorOutRTV,
@@ -49483,7 +49483,7 @@ bool Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 			linearDepthDesc.Usage = D3D11_USAGE_DEFAULT;
 			linearDepthDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 			replacement.linearDepth[i] = CreateUpscalingTexture(linearDepthDesc,
-				("Upscaling::LinearDepth_" + suffix).c_str(), shareGuidesWithRuntime);
+				("Upscaling::LinearDepth_" + suffix).c_str(), shareInputsWithRuntime);
 
 			D3D11_SHADER_RESOURCE_VIEW_DESC linearSRVDesc = {};
 			linearSRVDesc.Format = DXGI_FORMAT_R32_FLOAT;
@@ -49498,11 +49498,11 @@ bool Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 			replacement.linearDepth[i]->CreateUAV(linearUAVDesc);
 		}
 
-		replacement.motionVectors[i] = CreateTextureFromSource(mvecSrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscaling::MotionVectors_" + suffix).c_str(), false, shareGuidesWithRuntime,
+		replacement.motionVectors[i] = CreateTextureFromSource(mvecSrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscaling::MotionVectors_" + suffix).c_str(), false, shareInputsWithRuntime,
 			DXGI_FORMAT_UNKNOWN, &sourceDescriptions->motion);
-		replacement.reactiveMask[i] = CreateTextureFromSource(reactiveSrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscaling::Reactive_" + suffix).c_str(), false, shareGuidesWithRuntime,
+		replacement.reactiveMask[i] = CreateTextureFromSource(reactiveSrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscaling::Reactive_" + suffix).c_str(), false, shareInputsWithRuntime,
 			DXGI_FORMAT_UNKNOWN, &sourceDescriptions->reactive);
-		replacement.transparencyMask[i] = CreateTextureFromSource(transparencySrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscaling::Transparency_" + suffix).c_str(), false, shareGuidesWithRuntime,
+		replacement.transparencyMask[i] = CreateTextureFromSource(transparencySrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscaling::Transparency_" + suffix).c_str(), false, shareInputsWithRuntime,
 			DXGI_FORMAT_UNKNOWN, &sourceDescriptions->transparency);
 	}
 	for (uint32_t eye = 0; eye < 2; ++eye) {
@@ -49703,7 +49703,7 @@ bool Upscaling::EnsureVRPresentationTextures(uint32_t inWidth, uint32_t inHeight
 
 	bool needsRecreate = false;
 	for (uint32_t eye = 0; eye < 2; ++eye) {
-		needsRecreate = needsRecreate ||
+		needsRecreate = needsRecreate || IsVRColorInputQuarantined(eye) ||
 		                !matchesInput(vrIntermediateColorIn[eye]) ||
 		                !matchesOutput(vrIntermediateColorOut[eye]);
 	}
@@ -50073,15 +50073,22 @@ bool Upscaling::AreVRIntermediateTexturesCompatibleForFSR(uint32_t a_displayEyeW
 	return true;
 }
 
+bool Upscaling::IsVRColorInputQuarantined(uint32_t a_eye) const
+{
+	return a_eye < std::size(vrIntermediateColorIn) && vrIntermediateColorIn[a_eye] &&
+	       fidelityFX.IsRuntimeSharedGuideQuarantined(vrIntermediateColorIn[a_eye]->resource.get());
+}
+
 bool Upscaling::HasQuarantinedVRGuideInputs() const
 {
 	for (uint32_t eye = 0; eye < 2; ++eye) {
-		const std::array<const Texture2D*, 4> guides{
+		const std::array<const Texture2D*, 5> inputs{
+			vrIntermediateColorIn[eye].get(),
 			vrIntermediateLinearDepth[eye].get(), vrIntermediateMotionVectors[eye].get(),
 			vrIntermediateReactiveMask[eye].get(), vrIntermediateTransparencyMask[eye].get()
 		};
-		for (const auto* guide : guides) {
-			if (guide && fidelityFX.IsRuntimeSharedGuideQuarantined(guide->resource.get()))
+		for (const auto* input : inputs) {
+			if (input && fidelityFX.IsRuntimeSharedGuideQuarantined(input->resource.get()))
 				return true;
 		}
 	}
@@ -51264,7 +51271,7 @@ bool Upscaling::StretchSubmitStageEyeOutput(
 	uint32_t outputHeight)
 {
 	if (eyeIndex >= 2 || !inputWidth || !inputHeight || !outputWidth ||
-		!outputHeight || IsSubmitStageDeviceLost()) {
+		!outputHeight || IsSubmitStageDeviceLost() || IsVRColorInputQuarantined(eyeIndex)) {
 		return false;
 	}
 	if (!vrIntermediateColorIn[eyeIndex] ||
@@ -59883,6 +59890,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	}
 
 	if (!reuseRuntimeFSRStereoOutput) {
+		if (IsVRColorInputQuarantined(eyeIndex))
+			return false;
 		context->CopySubresourceRegion(vrIntermediateColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, sourceTexture, sourceSubresource, &colorBox);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		VRRenderScaleDevBenchBridge::RecordSubmitFreshnessWork(
@@ -59901,6 +59910,8 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	// history. Failure safely retains the original compositor submission.
 	const auto sanitizeSubmitStageInputEye = [&](uint32_t targetEyeIndex,
 												 const VRSubmitSourceRegion& targetSourceRegion) {
+		if (IsVRColorInputQuarantined(targetEyeIndex))
+			return false;
 		const bool inputMaskEligible =
 			ShouldClearHMDMaskInPhase(HMDMaskClearPhase::SubmitStageInput);
 		bool inputMaskCleared = false;
@@ -59943,7 +59954,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	}
 
 	const auto prepareSubmitStageColorInput = [&](uint32_t targetEyeIndex, const VRSubmitSourceRegion& targetRegion) {
-		if (!peerInputFreshnessProven || targetEyeIndex >= 2 ||
+		if (!peerInputFreshnessProven || targetEyeIndex >= 2 || IsVRColorInputQuarantined(targetEyeIndex) ||
 			!targetRegion.valid || !targetRegion.matchesExpectedSize ||
 			!vrIntermediateColorIn[targetEyeIndex] || !vrIntermediateColorIn[targetEyeIndex]->resource)
 			return false;
@@ -61158,26 +61169,9 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		if (runtimeFSRStereoResourcesReady) {
 			const auto& otherSourceRegion =
 				canonicalSourceRegions[otherEyeIndex];
-			// Peer input is legal only inside the exact engine pair producer scope.
-			context->CopySubresourceRegion(
-				vrIntermediateColorIn[otherEyeIndex]->resource.get(),
-				0,
-				0,
-				0,
-				0,
-				sourceTexture,
-				otherSourceRegion.subresource,
-				&otherSourceRegion.box);
-#ifdef DEVBENCH_BRIDGE_ENABLED
-			VRRenderScaleDevBenchBridge::RecordSubmitFreshnessWork(
-				VRRenderScaleDevBenchBridge::SubmitFreshnessWork::ColorCopyEyes,
-				static_cast<uint32_t>(upscaleMethod));
-#endif
-			submitStageRuntimeFSRStereoState = {};
-			if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage stereo source copy"))
-				return false;
 			const bool peerInputSanitized =
-				sanitizeSubmitStageInputEye(otherEyeIndex, otherSourceRegion);
+				prepareSubmitStageColorInput(otherEyeIndex, otherSourceRegion);
+			submitStageRuntimeFSRStereoState = {};
 			if (!peerInputSanitized && IsSubmitStageDeviceLost())
 				return false;
 			if (!peerInputSanitized) {

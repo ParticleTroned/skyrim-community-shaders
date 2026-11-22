@@ -19,16 +19,36 @@ function(extract_between start end output)
     set(${output} "${_extracted}" PARENT_SCOPE)
 endfunction()
 
-extract_between("D3D11_TEXTURE2D_DESC MakeSharedTextureDesc(" "template <class T, size_t N>" _descriptors)
+extract_between("D3D11_TEXTURE2D_DESC MakeSharedTextureDesc(" "bool DispatchHostFsr3UpscaleProtected(" _descriptors)
 extract_between("FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeCommandContexts()" "FidelityFX::LifecycleResult FidelityFX::AcquireRuntimeCommandContext(" _commands)
 extract_between("FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerInterop()" "FidelityFX::LifecycleResult FidelityFX::RecordRuntimeProviderResult(" _interop)
 extract_between("bool FidelityFX::IsRuntimeUpscalerInteropReady()" "FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerContexts(" _interop_ready)
 extract_between("bool FidelityFX::HasCompleteRuntimeUpscalerSharedResources(" "bool FidelityFX::AreRuntimeUpscalerContextsCompatible(" _complete)
 extract_between("FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerSharedResources(" "FidelityFX::LifecycleResult FidelityFX::ExecuteRuntimeUpscalerBatch(" _shared)
-extract_between("WrappedResource* FidelityFX::ResolveRuntimeSharedGuide(" "bool FidelityFX::CanDispatchHostFallbackForRegions(" _guide)
+extract_between("FidelityFX::LifecycleResult FidelityFX::DestroyRuntimeUpscalerResources(" "void FidelityFX::ResetFSRIdleFence(" _destroy)
+extract_between("bool FidelityFX::HasRuntimeUpscalerResources()" "bool FidelityFX::IsRuntimeUpscalerTeardownFencePending()" _retirement)
+extract_between("WrappedResource* FidelityFX::ResolveRuntimeSharedInput(" "bool FidelityFX::CanDispatchHostFallbackForRegions(" _guide)
 # Stop at the first recreation operation; the harness counts admission to vendor mutation.
 extract_between("FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerContexts(" "const auto idleResult = PollRuntimeUpscalerTeardownReady(\"runtime upscaler context recreation\");" _contexts)
 file(
     WRITE "${OUTPUT_DIRECTORY}/fsr_save_reuse_under_test.h"
-    "${_descriptors}\n${_commands}\n${_interop}\n${_interop_ready}\n${_complete}\n${_shared}\n${_guide}\n${_contexts}\n++contextRecreationAdmissions; return LifecycleResult::Ready;\n}\n"
+    "${_descriptors}\n${_commands}\n${_interop}\n${_interop_ready}\n${_complete}\n${_shared}\n${_destroy}\n${_retirement}\n${_guide}\n${_contexts}\n++contextRecreationAdmissions; return LifecycleResult::Ready;\n}\n"
 )
+
+# Compile the actual selection, barriers, binding and probe source against effects.
+extract_between("// FFX permits oversized resources" "\n#ifdef DEVBENCH_BRIDGE_ENABLED\n\t\t// Sample the shared D3D11 alias" _selection)
+extract_between("std::array<D3D12_RESOURCE_BARRIER, 12> beginBarriers" "const auto temporal = GetDispatchTemporalParameters();" _begin)
+extract_between("dispatchParameters.color = ffxApiGetResourceDX12(" "dispatchParameters.depth =" _color)
+extract_between("std::array<D3D12_RESOURCE_BARRIER, 12> endBarriers" "const HRESULT closeResult =" _end)
+extract_between("const auto* texture = output ? runtimeOutputShared[eye].get()" "\n\t\t\t}\n\t\t} catch (...)" _probe)
+file(APPEND "${OUTPUT_DIRECTORY}/fsr_save_reuse_under_test.h"
+    "\nvoid FidelityFX::TestDispatchInputs(std::span<const TestRegion> a_regions, std::span<const TestDescriptions> descriptions) {\n"
+    "auto& upscaling = globals::features::upscaling; auto& swapChain = upscaling.dx12SwapChain;\n"
+    "std::array<WrappedResource*, 2> colorInputs{};\n"
+    "std::array<std::array<WrappedResource*, FSRSharedGuidePolicy::kGuideCount>, 2> guideInputs{};\n"
+    "auto* commandList = &graphicsContext;\n${_selection}\n${_begin}\n"
+    "for (const auto& region : a_regions) { const auto contextIndex = region.contextIndex; TestDispatchParameters dispatchParameters;\n"
+    "${_color}\n bindings[contextIndex] = dispatchParameters.color.resource;\n"
+    "if (dispatchParameters.color.description.usage != FFX_API_RESOURCE_USAGE_READ_ONLY) throw std::runtime_error(\"Colour input retained producer UAV usage\"); }\n${_end}\n"
+    "for (bool output : {false, true}) { for (const auto& region : a_regions) { const auto eye = region.contextIndex;\n"
+    "const int metadata = 0, probeRoute = 0; const bool a_stage = output;\n${_probe}\n} }\n}\n")

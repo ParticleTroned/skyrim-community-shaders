@@ -11046,7 +11046,7 @@ namespace
 				return json{
 					{ "action", "fsr_shared_guides" },
 					{ "enabled", upscaling.fidelityFX.AreRuntimeSharedGuideInputsEnabled() },
-					{ "scope", "eligible full-eye runtime FSR inputs only; copied guides remain the fallback" },
+					{ "scope", "eligible owned full-eye runtime FSR colour and guides; copies remain the fallback" },
 				};
 			});
 		}
@@ -12422,15 +12422,15 @@ namespace VRRenderScaleDevBenchBridge
 			                            "status includes the same graphicsContext object.";
 			descriptor["inputSchema"]["properties"]["enabled"]["description"] =
 				"Action-specific enabled state. For fsr_shared_guides, omit to inspect; supplied values "
-				"update the live preference while GPU capture is inactive. Save Settings persists the choice.";
+				"update direct colour and guide sharing while GPU capture is inactive. Save Settings persists the choice.";
 			descriptor["description"] = descriptor["description"].get<std::string>() +
-			                            " fsr_shared_guides inspects the full-eye FSR shared-guide mode; "
+			                            " fsr_shared_guides inspects the full-eye FSR colour and guide sharing mode; "
 			                            "optional boolean enabled selects direct imports or reference copies while GPU "
-			                            "performance capture is inactive. The in-game Upscaling checkbox Share FSR guide "
+			                            "performance capture is inactive. The in-game Upscaling checkbox Share FSR input "
 			                            "textures uses the same setting and capture guard. Changes apply immediately and "
 			                            "persist through Save Settings; this action does not write configuration files. "
 			                            "Imports remain retained until fenced teardown. "
-			                            "GPU status exposes runtimeFSRSharedGuides direct inputs/pixels, fallback guide "
+			                            "GPU status exposes runtimeFSRSharedGuides direct guide inputs/pixels, fallback guide "
 			                            "copies and import failures; item5ActiveFSRCopies counts actual input copies, "
 			                            "with avoidedPixels including direct sharing and inactive rectangle savings.";
 			descriptor["inputSchema"]["properties"]["foveation"]["description"] =

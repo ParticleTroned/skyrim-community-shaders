@@ -3085,7 +3085,9 @@ public:
 		ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, bool copyAuxiliaryInputs = true, bool copyDepthInput = true,
 		const UpscalingTextures::VRInputSourceDescriptions* sourceDescriptions = nullptr);
 	bool AreVRPerEyeUpscalingResourcesReady(bool requireDepth, bool requireLinearDepth) const;
-	/** Rejects any guide retained by an unsafe optional-provider ownership domain. */
+	/** Quarantined shared colour cannot be read or overwritten by presentation work. */
+	[[nodiscard]] bool IsVRColorInputQuarantined(uint32_t a_eye) const;
+	/** Rejects any input retained by an unsafe optional-provider ownership domain. */
 	bool HasQuarantinedVRGuideInputs() const;
 	bool AreVRIntermediateTexturesCompatibleForFSR(uint32_t a_displayEyeWidth, uint32_t a_displayEyeHeight) const;
 	bool AreActiveVRIntermediateTexturesCompatible(

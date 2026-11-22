@@ -3,6 +3,7 @@
 #include "Features/Upscaling/DLSSViewportCrop.h"
 #include "Features/Upscaling/FSRHostLifecyclePolicy.h"
 #include "Features/Upscaling/FSRRuntimeLifecyclePolicy.h"
+#include "Features/Upscaling/FSRSharedGuidePolicy.h"
 #include "Features/Upscaling/VRSubmitColorContract.h"
 #include "Features/Upscaling/VRSubmitInputFreshnessPolicy.h"
 #include "Features/Upscaling/VRSubmitTemporalSnapshot.h"
@@ -14,6 +15,7 @@
 #include <cstdint>
 #include <format>
 #include <iterator>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -21,15 +23,43 @@
 
 // Compile the production provider and vendor dispatch functions against effect
 // counters, so deferred admission cannot silently become an evaluation failure.
+using DXGI_FORMAT = uint32_t;
 struct D3D11_TEXTURE2D_DESC
 {
+	DXGI_FORMAT Format = 28;
 	uint32_t Width = 1512;
 	uint32_t Height = 1680;
 };
 struct ID3D11Resource
 {
 	D3D11_TEXTURE2D_DESC desc;
+	ID3D11Resource* identity = nullptr;
 };
+template <class T>
+struct TestPointer
+{
+	T* value = nullptr;
+	T* get() const { return value; }
+	explicit operator bool() const { return value != nullptr; }
+};
+struct Texture2D
+{
+	TestPointer<ID3D11Resource> resource;
+	D3D11_TEXTURE2D_DESC desc;
+	bool srv = true, uav = true;
+};
+namespace eastl
+{
+	template <class T>
+	using unique_ptr = std::unique_ptr<T>;
+}
+namespace CSX::NvidiaComIdentity
+{
+	bool IsSame(ID3D11Resource* a_left, ID3D11Resource* a_right)
+	{
+		return a_left && a_right && (a_left->identity ? a_left->identity : a_left) == (a_right->identity ? a_right->identity : a_right);
+	}
+}
 struct ID3D11DeviceContext
 {};
 struct Float2
@@ -193,7 +223,12 @@ struct FidelityFX
 	uint32_t fsrContextDisplayHeight = 0;
 	bool fsrDispatchCrashLogged = false;
 	bool hostSupported = false;
-	bool sharedGuidesQuarantined = false;
+	struct RetainedInput
+	{
+		TestPointer<ID3D11Resource> source;
+		bool imported = false;
+	};
+	std::array<std::array<RetainedInput, FSRSharedGuidePolicy::kInputCount>, 2> runtimeSharedInputImports;
 	bool hostDispatchReady = true;
 	bool hostDispatchFault = false;
 	RuntimeDispatchPlan controlledPlan{
@@ -300,7 +335,8 @@ struct FidelityFX
 	}
 	void ArmRuntimeHostFallback(uint32_t);
 	bool CanDispatchHostFallbackForRegions(std::span<const UpscaleRegionParameters>, const RuntimeDispatchPlan&) const;
-	bool HasQuarantinedRuntimeSharedGuides(const UpscaleRegionParameters&) const { return sharedGuidesQuarantined; }
+	bool IsRuntimeSharedGuideQuarantined(ID3D11Resource*) const noexcept;
+	bool HasQuarantinedRuntimeSharedGuides(const UpscaleRegionParameters&) const noexcept;
 	UpscaleResult UpscaleRegion(uint32_t, ID3D11Resource*, ID3D11Resource*, ID3D11Resource*,
 		ID3D11Resource*, ID3D11Resource*, ID3D11Resource*, uint32_t, uint32_t,
 		uint32_t, uint32_t, float, float, float, bool* = nullptr);
@@ -338,6 +374,14 @@ struct Upscaling
 	bool IsVRRenderScaleModeLatched() const { return renderScaleLatched; }
 	static constexpr uint32_t kDLSSPresetK = 1;
 #include "fsr_eye_dispatch_params_under_test.h"
+	std::array<std::unique_ptr<Texture2D>, 2> vrIntermediateColorOut, vrIntermediateColorIn, vrIntermediateLinearDepth, vrIntermediateMotionVectors;
+	std::array<std::unique_ptr<Texture2D>, 2> vrIntermediateReactiveMask, vrIntermediateTransparencyMask;
+	bool IsVRColorInputQuarantined(uint32_t) const;
+	bool HasQuarantinedVRGuideInputs() const;
+	bool EnsureVRPresentationTextures(uint32_t, uint32_t, uint32_t, uint32_t, ID3D11Resource*, bool, DXGI_FORMAT);
+	bool StretchSubmitStageEyeOutput(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+	bool IsSubmitStageDeviceLost() const { return false; }
+	uint32_t presentationReplacementAdmissions = 0, stretchAdmissions = 0;
 	FidelityFX fidelityFX;
 	Streamline streamline;
 	Float2 jitter;
@@ -964,23 +1008,81 @@ namespace
 
 void QuarantinedSharedGuidesRequireReplacement()
 {
-	auto& upscaling = Reset();
-	auto& provider = upscaling.fidelityFX;
-	EnableHost(provider);
-	provider.controlledPlan.selected = false;
-	provider.sharedGuidesQuarantined = true;
-	Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(0, 1284)) == Result::Failed,
-		"Host fallback reused a quarantined direct guide");
-	Require(provider.hostCalls == 0, "Quarantined guide reached host dispatch");
-	provider.sharedGuidesQuarantined = false;
-	Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, Region(0, 1284)) == Result::Ready,
-		"Replacement guides did not restore compatible host fallback");
+	for (uint32_t eye = 0; eye < 2; ++eye) {
+		for (size_t input = 0; input < FSRSharedGuidePolicy::kInputCount; ++input) {
+			auto& upscaling = Reset();
+			auto& provider = upscaling.fidelityFX;
+			EnableHost(provider);
+			provider.controlledPlan.selected = false;
+			provider.runtimeUpscalerSessionQuarantined = true;
+			const auto region = Region(eye, 1284);
+			const std::array sources{ region.depth, region.motionVectors, region.reactiveMask, region.transparencyMask, region.colorIn };
+			auto& retained = provider.runtimeSharedInputImports[eye][input];
+			retained.source.value = sources[input];
+			retained.imported = true;
+			ID3D11Resource alias;
+			alias.identity = sources[input];
+			Require(provider.IsRuntimeSharedGuideQuarantined(&alias), "Quarantine scan did not compare COM identity");
+			const std::array owners{ &upscaling.vrIntermediateLinearDepth, &upscaling.vrIntermediateMotionVectors,
+				&upscaling.vrIntermediateReactiveMask, &upscaling.vrIntermediateTransparencyMask, &upscaling.vrIntermediateColorIn };
+			auto& owner = (*owners[input])[eye];
+			owner = std::make_unique<Texture2D>();
+			owner->resource.value = &alias;
+			Require(upscaling.HasQuarantinedVRGuideInputs(), "Imported input did not block producer reuse");
+			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, region) == Result::Failed && provider.hostCalls == 0,
+				"Host fallback reused a quarantined input");
+			const auto peer = Region(1 - eye, 1284);
+			Require(!provider.IsRuntimeSharedGuideQuarantined(peer.colorIn), "Quarantine escaped the retained identity");
+			retained.imported = false;
+			Require(!upscaling.HasQuarantinedVRGuideInputs(), "Failed import was treated as submitted work");
+			Require(upscaling.DispatchVendorEyeRegion(UpscaleMethod::kFSR, region) == Result::Ready,
+				"Replacement input did not restore compatible host fallback");
+		}
+	}
+}
+
+void QuarantinedColorBlocksPresentation()
+{
+	for (uint32_t eye = 0; eye < 2; ++eye) {
+		auto& upscaling = Reset();
+		auto& provider = upscaling.fidelityFX;
+		std::array<ID3D11Resource, 4> resources{};
+		ID3D11Resource source;
+		for (uint32_t index = 0; index < 2; ++index) {
+			upscaling.vrIntermediateColorIn[index] = std::make_unique<Texture2D>();
+			upscaling.vrIntermediateColorOut[index] = std::make_unique<Texture2D>();
+			upscaling.vrIntermediateColorIn[index]->resource.value = &resources[index];
+			upscaling.vrIntermediateColorOut[index]->resource.value = &resources[2 + index];
+		}
+		auto ensure = [&](bool allowCreation) { return upscaling.EnsureVRPresentationTextures(1284, 1428, 1512, 1680, &source, allowCreation, 28); };
+		Require(ensure(false) && upscaling.presentationReplacementAdmissions == 0, "Compatible presentation failed to reuse");
+		provider.runtimeUpscalerSessionQuarantined = true;
+		auto& retained = provider.runtimeSharedInputImports[eye][FSRSharedGuidePolicy::kColorInputIndex];
+		retained.source.value = &resources[eye];
+		retained.imported = true;
+		Require(upscaling.IsVRColorInputQuarantined(eye) && !upscaling.IsVRColorInputQuarantined(1 - eye),
+			"Colour quarantine did not retain eye identity");
+		Require(!ensure(false) && upscaling.presentationReplacementAdmissions == 0,
+			"Presentation reused quarantined colour while allocation was forbidden");
+		upscaling.ordinarySave = true;
+		Require(!ensure(true) && upscaling.presentationReplacementAdmissions == 0,
+			"Ordinary save reused or replaced quarantined colour");
+		upscaling.ordinarySave = false;
+		Require(ensure(true) && upscaling.presentationReplacementAdmissions == 1,
+			"Presentation did not admit safe colour replacement");
+		Require(!upscaling.StretchSubmitStageEyeOutput(eye, 1284, 1428, 1512, 1680) && upscaling.stretchAdmissions == 0,
+			"Failure stretch read a colour allocation without a proven completion wait");
+		retained.imported = false;
+		Require(upscaling.StretchSubmitStageEyeOutput(eye, 1284, 1428, 1512, 1680) && upscaling.stretchAdmissions == 1,
+			"Unimported colour was blocked from presentation");
+	}
 }
 
 int main()
 {
 	OrdinarySaveRetainsFoveatedHostRegions();
 	QuarantinedSharedGuidesRequireReplacement();
+	QuarantinedColorBlocksPresentation();
 	SubmitContractsReachHostDispatch();
 	ColdRuntimeWithoutPeerProof();
 	DeferredAdmissionAndHostFallback();

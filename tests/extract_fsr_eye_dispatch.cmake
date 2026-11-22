@@ -40,13 +40,17 @@ string(
 )
 extract_between("${_fidelity_source}" "bool FidelityFX::HasFSRResources()" "bool FidelityFX::IsRuntimeUpscalerDispatchProofUsable(" _resources)
 extract_between("${_fidelity_source}" "bool FidelityFX::AreFSRResourcesCompatible(" "bool FidelityFX::IsHostFSR3Supported()" _compatibility)
+extract_between("${_fidelity_source}" "bool FidelityFX::IsRuntimeSharedGuideQuarantined(" "WrappedResource* FidelityFX::ResolveRuntimeSharedInput(" _quarantine)
+extract_between("${_upscaling_source}" "bool Upscaling::IsVRColorInputQuarantined(" "bool Upscaling::AreActiveVRIntermediateTexturesCompatible(" _producer_quarantine)
+extract_between("${_upscaling_source}" "bool Upscaling::EnsureVRPresentationTextures(" "logger::debug(\"[VRRenderScale] (Re)creating presentation textures:" _presentation_admission)
+extract_between("${_upscaling_source}" "bool Upscaling::StretchSubmitStageEyeOutput(" "if (DispatchSubmitStageColorRegion(" _stretch_admission)
 extract_between("${_fidelity_source}" "bool FidelityFX::CanDispatchHostFallbackForRegions(" "FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(" _fallback)
 extract_between("${_fidelity_source}" "FidelityFX::UpscaleResult FidelityFX::UpscaleRegion(" "FidelityFX::StereoUpscaleResult FidelityFX::UpscaleStereoRegions(" _region)
 extract_between("${_fidelity_source}" "FidelityFX::StereoUpscaleResult FidelityFX::UpscaleStereoRegions(" "FidelityFX::UpscaleResult FidelityFX::Upscale(" _stereo)
 extract_between("${_upscaling_source}" "FidelityFX::UpscaleResult Upscaling::DispatchVendorEyeRegion(" "\n}\n" _vendor)
 file(
     WRITE "${OUTPUT_DIRECTORY}/fsr_eye_dispatch_under_test.h"
-    "${_submit_contract}\n${_arm}\n${_resolve_plan}\n${_resources}\n${_compatibility}\n${_fallback}\n${_region}\n${_stereo}\n${_vendor}\n}\n"
+    "${_submit_contract}\n${_arm}\n${_resolve_plan}\n${_resources}\n${_compatibility}\n${_quarantine}\n${_producer_quarantine}\n${_presentation_admission}\n++presentationReplacementAdmissions; return true; }\n${_stretch_admission}\n++stretchAdmissions; return true; }\n${_fallback}\n${_region}\n${_stereo}\n${_vendor}\n}\n"
 )
 
 extract_between("${_fidelity_source}" "const bool runtimeDeferredByGate =" "static bool loggedRuntimeDeferredForShaderCompilation =" _gate)

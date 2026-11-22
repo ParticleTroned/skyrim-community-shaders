@@ -4,6 +4,7 @@ endif()
 
 file(READ "${PROJECT_ROOT}/src/Buffer.h" _buffer)
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/DX12SwapChain.cpp" _interop)
+file(READ "${PROJECT_ROOT}/src/Utils/D3D.cpp" _d3d)
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 
 function(extract_between source start end output)
@@ -23,4 +24,8 @@ endfunction()
 extract_between("${_buffer}" "HANDLE GetOrCreateSharedHandle()" "void CreateSRV(" _handle)
 extract_between("${_interop}" "WrappedResource::WrappedResource(ID3D11Texture2D*" "WrappedResource::WrappedResource(D3D11_TEXTURE2D_DESC" _import)
 file(WRITE "${OUTPUT_DIRECTORY}/shared_guide_handle_under_test.h" "${_handle}")
-file(WRITE "${OUTPUT_DIRECTORY}/shared_guide_import_under_test.h" "${_import}")
+extract_between("${_d3d}" "GUID WKPDID_D3DDebugObjectNameT =" "ID3D11DeviceChild* CompileShader(" _names)
+file(WRITE "${OUTPUT_DIRECTORY}/shared_guide_import_under_test.h" "namespace Util {
+${_names}
+}
+${_import}")

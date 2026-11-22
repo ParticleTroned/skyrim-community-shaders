@@ -2122,6 +2122,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/extract_look_scene_runtime.cmake"
         DEPENDS
             src/Presets/LookSceneRuntime.cpp
+            src/SceneSettingsManager.cpp
             tests/extract_look_scene_runtime.cmake
         VERBATIM
     )

@@ -7,6 +7,7 @@
 #include <optional>
 #include <set>
 #include <stdexcept>
+#include <unordered_set>
 using Presets::Json;
 namespace RE
 {
@@ -95,6 +96,7 @@ struct WeatherManager
 };
 struct SceneSettingsManager
 {
+	static std::vector<std::string> GetInteriorRelevantFeatureNames();
 	bool paused = false;
 	static SceneSettingsManager* GetSingleton()
 	{
@@ -106,6 +108,7 @@ struct SceneSettingsManager
 };
 struct Feature
 {
+	static std::vector<std::string> GetLoadedFeatureNames() { return { "Skin", "SubsurfaceScattering", "GrassLighting", "TerrainHelper" }; }
 	Json settings = { { "MinDiffuseVisibility", 1.f } };
 	bool loaded = true, throwNext = false;
 	static Feature* FindFeatureByShortName(const std::string&)
@@ -145,6 +148,8 @@ void Require(bool value, const char* message)
 int main()
 try {
 	using namespace Presets::LookSceneRuntime;
+	Require(SceneSettingsManager::GetInteriorRelevantFeatureNames() == std::vector<std::string>{ "Skin", "SubsurfaceScattering" },
+		"Interior settings offer Advanced Skin beside diffusion while excluding exterior-only features");
 	auto* feature = Feature::FindFeatureByShortName("Skylighting");
 	Presets::LookPack pack;
 	pack.scenes["TimeOfDay/Day"] = { { "Skylighting", { { "MinDiffuseVisibility", 3.f } } } };

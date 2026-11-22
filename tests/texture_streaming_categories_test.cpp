@@ -333,11 +333,16 @@ namespace MenuUI
 			Util::Widgets::Checkbox(choice.label, choice.value);
 	}
 #include "streaming_sections_under_test.h"
-	std::string selected = "categories";
+	std::string selected = "overview";
 	std::vector<Section> sections;
+	std::vector<std::string> headings;
 	struct SettingsPage
 	{
-		SettingsPage(const char*, std::initializer_list<Section> value) { sections = value; }
+		SettingsPage(const char*, std::initializer_list<Section> value)
+		{
+			sections = value;
+			headings.clear();
+		}
 		bool Is(const char* id) const { return selected == id; }
 	};
 	struct DetailGrid
@@ -347,7 +352,7 @@ namespace MenuUI
 	};
 	void DetailNote(const char*) {}
 	void DetailText(const char*) {}
-	void SectionHeading(const char*) {}
+	void SectionHeading(const char* label, const char* = nullptr) { headings.emplace_back(label); }
 }
 struct Feature
 {
@@ -621,7 +626,7 @@ void CheckStreamingConflict()
 #endif
 
 	Util::Widgets::clicks = { { "Enabled", false }, { "On pressure", true } };
-	MenuUI::selected = "quality";
+	MenuUI::selected = "overview";
 	blocked.DrawSettingsEnabledControl();
 	blocked.DrawSettings();
 	Require(!blocked.state->enabled && blocked.state->requestedEnabled && !blocked.state->modes.onPressure &&
@@ -849,7 +854,7 @@ int main()
 		for (const auto* protectedPath : { "textures\\armor\\a.dds", "textures\\books\\a.dds", "textures\\fonts\\a.dds",
 				 "textures\\interface\\a.dds", "textures\\terrain\\a.dds", "textures\\world\\maps\\a.dds" })
 			Require(!PathCategories(protectedPath, Terrain), "Expanded coverage bypassed a protected path");
-		MenuUI::selected = "categories";
+		MenuUI::selected = "overview";
 		TextureStreaming terrainControl;
 		terrainControl.Configure(true, 2);
 		Util::Widgets::clicks = { { "Terrain", false } };
@@ -874,7 +879,8 @@ int main()
 		Require(feature.state->epoch == featureEpoch + 1 && feature.state->frontier.empty() && feature.state->visited.empty() && !feature.state->completeScan &&
 					!feature.state->selectionCursor && !feature.state->learningRemaining && feature.state->records[1].consumers.clears == consumerClears + 1,
 			"Category change retained stale scans or pending work identity");
-		Require(MenuUI::sections.size() == 3 && std::string(MenuUI::sections[1].id) == "categories", "Optional categories were absent from page navigation");
+		Require(MenuUI::sections.empty() && MenuUI::headings == std::vector<std::string>{ "Texture detail", "Coverage", "Status" },
+			"Streaming controls must share one page without feature sub-tabs");
 		feature.Configure(true, 3);
 		Require(feature.state->categories == Categories{ true, true, true, true, true } && feature.state->epoch == featureEpoch + 2, "Mip control reset categories or retained stale pending work");
 		feature.Configure(true, 3, Categories{ true, true, true, true, true });
@@ -932,21 +938,20 @@ int main()
 		const auto initialEpoch = mode.state->epoch;
 		Util::Widgets::clicks = { { "On pressure", false }, { "Always stream", true } };
 		globals::state->developerMode = false;
-		MenuUI::selected = "quality";
+		MenuUI::selected = "overview";
 		mode.DrawSettings();
 		Require(mode.state->enabled && mode.state->modes == Modes{ false, true } && mode.state->epoch == initialEpoch + 1,
-			"Info controls failed to select independent continuous mode or invalidate pending work");
+			"Combined page failed to select independent continuous mode or invalidate pending work");
 		mode.state->pressure.conserving = false;
 		Require(mode.state->ReductionRequested(), "Continuous mode depended on real pressure");
-		MenuUI::selected = "status";
 		mode.DrawSettings();
-		Require(mode.state->ReductionRequested(), "Changing UI pages cleared continuous mode");
+		Require(mode.state->ReductionRequested(), "Redrawing the combined page cleared continuous mode");
 		mode.SaveSettings(saved);
 		TextureStreaming continuous;
 		continuous.LoadSettings(saved);
 		Require(continuous.state->modes == Modes{ false, true } && continuous.state->ReductionRequested(), "Continuous mode did not survive saving/reloading");
 		Util::Widgets::clicks = { { "Always stream", false } };
-		MenuUI::selected = "quality";
+		MenuUI::selected = "overview";
 		mode.DrawSettings();
 		mode.state->pressure.conserving = true;
 		Require(mode.state->enabled && !mode.state->ReductionRequested(), "Turning both triggers off retained distance reductions or disabled the independent cap");
@@ -961,9 +966,9 @@ int main()
 		mode.state->pressure.conserving = false;
 		originHookReady = false;
 		Util::Widgets::clicks = { { "Always stream", true } };
-		MenuUI::selected = "quality";
+		MenuUI::selected = "overview";
 		mode.DrawSettings();
-		Require(!mode.state->modes.continuous && !Util::disabled, "Unavailable Info controls changed modes or leaked disabled state");
+		Require(!mode.state->modes.continuous && !Util::disabled, "Unavailable streaming controls changed modes or leaked disabled state");
 		originHookReady = true;
 		mode.Configure(true, 2, std::nullopt, std::nullopt, Options{ 2048, false, 1024 });
 		mode.SaveSettings(saved);
@@ -1018,7 +1023,7 @@ int main()
 		Require(rejected && !mode.state->enabled, "Disabled streaming admitted a legacy continuous request");
 #endif
 		mode.Configure(true, 2);
-		MenuUI::selected = "quality";
+		MenuUI::selected = "overview";
 		Util::Widgets::sliderEdits = { { "Keep free", INT_MAX }, { "Maximum mip levels removed", INT_MAX } };
 		mode.DrawSettings();
 		Require(mode.state->options.reserveMiB == Util::TextureMemoryPolicy::MaximumReserveMiB && mode.state->maximumDrop == Policy::MaximumDrop,
@@ -1027,7 +1032,7 @@ int main()
 		mode.DrawSettings();
 		Require(mode.state->options.reserveMiB == Util::TextureMemoryPolicy::ReserveStepMiB && mode.state->maximumDrop == 1,
 			"Out-of-range menu input bypassed minimum bounds");
-		std::cout << "PASS: static material protection, terrain slots, compact Info controls, independent triggers, persistence and pending-work invalidation\n";
+		std::cout << "PASS: static material protection, terrain slots, combined page controls, independent triggers, persistence and pending-work invalidation\n";
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';
 		return 1;

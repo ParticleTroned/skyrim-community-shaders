@@ -33,7 +33,7 @@ modules outside `src/Features`, such as True PBR. Every listed module is
 part of the CSX core AIO, independent of its inherited standalone metadata.
 The obsolete Wetness Effects package is excluded; Wetterness is included.
 
-Module counts are not a count of all CSX capabilities. Adaptive Balance
+Module counts are not a count of all CSX capabilities. Visuals
 and Performance Tuning are versioned modules; shader-cache management is
 a built-in system and must also appear in the release description.
 The main feature table lists modules and built-in systems together in

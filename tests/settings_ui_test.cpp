@@ -2640,6 +2640,23 @@ int main()
 			}
 			conflict = false;
 			available = true;
+			LLFShadowsFixture noticeShadows;
+			const auto drawShadowNotice = [&] {
+				MenuUI::PageNoticeScope notices;
+				notices.Reserve();
+				noticeShadows.Draw();
+			};
+			frame(drawShadowNotice);
+			const auto shadowPosition = shadowControls.at("Sun shadows").center;
+			available = false;
+			failure = "Shadow resources unavailable. A long failure explanation must stay in the header tooltip rather than moving controls.";
+			frame(drawShadowNotice);
+			require(shadowControls.at("Sun shadows").center.y == shadowPosition.y,
+				"Native shadow failure feedback must not move the controls");
+			require(shadowControls.at("Sun shadows").disabled && !shadowControls.at("Enable Point Light Contact Shadows").disabled,
+				"Native shadow failure leaves independent contact shadows editable");
+			failure.clear();
+			available = true;
 			globals::features::vr.headset = false;
 			Settings tuned;
 			const auto draw = [&] {

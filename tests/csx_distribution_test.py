@@ -29,7 +29,7 @@ class CsxDistributionTests(unittest.TestCase):
         self.assertEqual({row["short_name"] for row in metadata}, expected)
         self.assertEqual(len(metadata), len(expected))
         by_short_name = {row["short_name"]: row for row in metadata}
-        for name in ("TruePBR", "Screenshot", "Wetterness", "UnifiedWater", "ImageBasedLighting", "PerformanceTuning"):
+        for name in ("TruePBR", "Screenshot", "Wetterness", "UnifiedWater", "ImageBasedLighting", "PerformanceTuning", "Skin"):
             self.assertIn(name, by_short_name)
         self.assertNotIn("WetnessEffects", by_short_name)
         self.assertNotIn("CSUtility", by_short_name)
@@ -72,8 +72,8 @@ class CsxDistributionTests(unittest.TestCase):
         ]
         lines, _ = audit.format_metadata_summary(list(reversed(metadata)))
         rows = [line.split('|')[1].strip() for line in lines if line.startswith('| ')][2:]
-        self.assertEqual(rows, ["Visuals", "Performance Overlay", "Performance Tuning",
-                                "RenderDoc", "Shader-cache management"])
+        self.assertEqual(rows, ["Performance Overlay", "Performance Tuning",
+                                "RenderDoc", "Shader-cache management", "Visuals"])
         self.assertEqual(len(metadata), 4)
         report = audit.generate_audit_report('csx3.19.2', None, None, 'now', [], [], [], {},
                                              lambda _: None, audit.normalize_feature_key, metadata, [])

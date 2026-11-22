@@ -426,7 +426,7 @@ namespace LightLimitFixDetail::ShadowCulling
 		if (conflict)
 			Util::Text::WrappedWarning("SPS owns shadow culling. Disable SPS and restart to use CSX native culling.");
 		else if (!failure.empty())
-			ImGui::TextWrapped("Native shadow culling is unavailable: %s", failure.c_str());
+			MenuUI::PageNotice("Native shadow culling is unavailable.", MenuUI::NoticeKind::Error, failure);
 		const auto disabled = Util::DisableGuard(unavailable);
 		Util::Widgets::Checkbox("Sun shadows", &settings.sun);
 		Util::AddTooltip("Skip tiny distant sun-shadow casters. Both VR eyes and long shadows near the horizon remain protected.");

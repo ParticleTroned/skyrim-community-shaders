@@ -268,6 +268,7 @@ std::vector<std::string> SceneSettingsManager::GetInteriorRelevantFeatureNames()
 		"ScreenSpaceGI",
 		"ScreenSpaceShadows",
 		"SubsurfaceScattering",
+		"Skin",
 		"LinearLighting",
 		"ImageBasedLighting",
 		"PostProcessing",

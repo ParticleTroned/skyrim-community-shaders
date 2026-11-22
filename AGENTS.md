@@ -107,6 +107,19 @@ contradict this policy.
 -   Add co-author trailers only for people who materially authored the committed work. Do not invent names or email addresses, and do not credit reviewers, tools, or assistants merely for reviewing, generating, or applying a change.
 -   Keep mechanical formatting separate from behavioral changes when that materially improves reviewability.
 
+### Attribution for work based on external PRs
+
+When a change is based on a PR from another repository, apply these rules
+to its attribution in commit messages, PR descriptions, and write-ups:
+
+-   Acknowledge the original author and include their verified GitHub-associated
+    email when known. Preserve the authorship and co-author requirements above;
+    never invent a missing identity or email address.
+-   Name the source repository and include a link to the repository.
+-   Mention the source PR number in plain text using `PR<number>`.
+    Do not link directly to the PR or use automatically linked GitHub shorthand
+    such as `#<number>` or `owner/repo#<number>`.
+
 ## Comments and documentation
 
 -   Never publish machine-specific absolute paths or usernames in PR bodies,

@@ -3669,13 +3669,13 @@ void LightLimitFix::UpdateLights()
 	{
 		CS_PROFILE_CPU_SCOPE("LightLimitFix::UploadLightsCPU");
 		UploadEffectSpotlights();
-		D3D11_MAPPED_SUBRESOURCE mapped;
-		DX::ThrowIfFailed(context->Map(lights->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
-		size_t bytes = sizeof(LightData) * lightCount;
-		if (bytes > 0) {
+		if (lightCount != 0) {
+			D3D11_MAPPED_SUBRESOURCE mapped;
+			DX::ThrowIfFailed(context->Map(lights->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+			const size_t bytes = sizeof(LightData) * lightCount;
 			memcpy_s(mapped.pData, bytes, lightsData.data(), bytes);
+			context->Unmap(lights->resource.get(), 0);
 		}
-		context->Unmap(lights->resource.get(), 0);
 	}
 
 	UpdateStructure();
@@ -3683,24 +3683,28 @@ void LightLimitFix::UpdateLights()
 
 void LightLimitFix::UpdateStructure()
 {
+	clusteredLightsAvailable = false;
 	auto context = globals::d3d::context;
 	if (!context || !lightBuildingCB || !lightCullingCB || !clusters || !lights ||
 		!lightIndexList || !lightGrid ||
 		!contactShadowIndexCounter || !contactShadowIndexList || !contactShadowGrid) {
 		return;
 	}
-	auto* clusterBuilding = clusterBuildingCS.Get(
-		L"Data\\Shaders\\LightLimitFix\\ClusterBuildingCS.hlsl", {}, "cs_5_0",
-		"main", "LightLimitFix::ClusterBuildingCS");
-	auto* clusterCulling = clusterCullingCS.Get(
-		L"Data\\Shaders\\LightLimitFix\\ClusterCullingCS.hlsl", {}, "cs_5_0",
-		"main", "LightLimitFix::ClusterCullingCS");
-	if (!clusterBuilding || !clusterCulling) {
+	const SKSE::stl::scope_exit clearBindings([&] {
+		context->CSSetShader(nullptr, nullptr, 0);
+		ID3D11Buffer* nullBuffer = nullptr;
+		context->CSSetConstantBuffers(0, 1, &nullBuffer);
+		ID3D11ShaderResourceView* nullSRVs[2]{};
+		context->CSSetShaderResources(0, 2, nullSRVs);
+		ID3D11UnorderedAccessView* nullUAVs[6]{};
+		context->CSSetUnorderedAccessViews(0, 6, nullUAVs, nullptr);
+	});
+	auto clearGrids = [&] {
 		const UINT zero[4]{ 0, 0, 0, 0 };
 		context->ClearUnorderedAccessViewUint(lightGrid->uav.get(), zero);
 		context->ClearUnorderedAccessViewUint(contactShadowGrid->uav.get(), zero);
-		return;
-	}
+		context->ClearUnorderedAccessViewUint(contactShadowIndexCounter->uav.get(), zero);
+	};
 
 	if (globals::game::cameraNear) {
 		lightsNear = *globals::game::cameraNear;
@@ -3715,6 +3719,22 @@ void LightLimitFix::UpdateStructure()
 	clusterSize[0] = ((uint)renderSize.x + 63) / 64;
 	clusterSize[1] = ((uint)renderSize.y + 63) / 64;
 	clusterSize[2] = 32;
+
+	if (lightCount == 0 || clusterSize[0] == 0 || clusterSize[1] == 0) {
+		clearGrids();
+		return;
+	}
+
+	auto* clusterBuilding = clusterBuildingCS.Get(
+		L"Data\\Shaders\\LightLimitFix\\ClusterBuildingCS.hlsl", {}, "cs_5_0",
+		"main", "LightLimitFix::ClusterBuildingCS");
+	auto* clusterCulling = clusterCullingCS.Get(
+		L"Data\\Shaders\\LightLimitFix\\ClusterCullingCS.hlsl", {}, "cs_5_0",
+		"main", "LightLimitFix::ClusterCullingCS");
+	if (!clusterBuilding || !clusterCulling) {
+		clearGrids();
+		return;
+	}
 
 	const bool projectionProven = globals::IsFrameBufferCacheCurrentForCS(context);
 	LightLimitFixDetail::ClusterBoundsKey boundsKey{};
@@ -3814,16 +3834,6 @@ void LightLimitFix::UpdateStructure()
 		}
 	}
 
-	context->CSSetShader(nullptr, nullptr, 0);
-
-	ID3D11Buffer* null_buffer = nullptr;
-	context->CSSetConstantBuffers(0, 1, &null_buffer);
-
-	ID3D11ShaderResourceView* null_srvs[2] = { nullptr };
-	context->CSSetShaderResources(0, 2, null_srvs);
-
-	ID3D11UnorderedAccessView* null_uavs[6] = { nullptr };
-	context->CSSetUnorderedAccessViews(0, 6, null_uavs, nullptr);
 	clusteredLightsAvailable = lightCount != 0;
 }
 

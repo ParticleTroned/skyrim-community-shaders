@@ -3489,6 +3489,17 @@ if(BUILD_CONTROLLER_TESTS)
             ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
     )
     add_test(
+        NAME FeatureVersionRegistry
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/csx_distribution_test.py"
+            CsxDistributionTests.test_all_feature_versions_and_core_flags_match_inis
+    )
+    set_tests_properties(
+        FeatureVersionRegistry
+        PROPERTIES LABELS "ControllerTests;PackagingTests"
+    )
+    add_test(
         NAME ReverseZInitialization
         COMMAND
             ${_settings_test_launcher} "${Python3_EXECUTABLE}"

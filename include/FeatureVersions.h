@@ -41,6 +41,7 @@ namespace FeatureVersions
         {"ScreenSpaceShadows"sv,   {2,4,0}},
         {"Screenshot"sv,           {1,5,1}},
         {"SeasonalWeather"sv,      {1,0,1}},
+        {"Skin"sv,                 {0,2,0}},
         {"SkySync"sv,              {1,5,1}},
         {"Skylighting"sv,          {1,5,2}},
         {"SnowCover"sv,            {1,6,0}},

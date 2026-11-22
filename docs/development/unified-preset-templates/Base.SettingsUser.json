@@ -180,7 +180,7 @@
       "lightingPreservation": 1.0
     }
   },
-  "CS Editor": null,
+  "CSX Editor": null,
   "Performance Overlay": {
     "BackgroundOpacity": 0.5,
     "FrameHistorySize": 600,
@@ -2207,7 +2207,7 @@
     "ModernWetIndirectSpecularScale": 0.75,
     "PostRainPuddleWaterStrength": 2.5,
     "PostRainWaterClarity": 0.75,
-    "PreserveWetnessHighlights": false,
+    "PreserveWetnessHighlights": true,
     "PuddleDryingHours": 15.0,
     "PuddleLayout": 3.0,
     "PuddleMaxAngle": 0.75,
@@ -2224,7 +2224,7 @@
     "RaindropGridSize": 3.59999990463257,
     "RaindropInterval": 0.649999976158142,
     "RaindropTransitionFalloff": 2.0,
-    "RestrictPuddleSlopes": false,
+    "RestrictPuddleSlopes": true,
     "RippleBreadth": 0.4000000059604645,
     "RippleLifetime": 0.219999998807907,
     "RippleRadius": 0.6000000238418579,

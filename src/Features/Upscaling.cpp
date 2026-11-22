@@ -2060,7 +2060,7 @@ namespace
 	constexpr const char* kFoveatedUpscalingSetupInstructions = R"(1) Select FOV only, then press Automatic Headset Setup. 100% Outer Coverage fits the view supplied by your headset.
 2) Turn FOV Mask Visualization on. Yellow-and-black stripes show areas outside the mask.
 3) Lower Outer Coverage until stripes just enter your view, then increase slightly until they disappear. Release after each change; the masks and centre refit automatically.
-4) Check each eye separately, then both eyes open, including edges and corners. If needed, fine-tune each eye's X/Y sliders, then press Calibrate Masks and check again.
+4) Check each eye separately, then both eyes open, including edges and corners. If needed, fine-tune each eye's X/Y sliders. Optionally press Calibrate Masks (manual tuning may provide greater savings).
 5) Turn visualization off and check for flicker. Increase coverage slightly if needed. When both eyes look clear, click Mask setup finished, then Save settings.
 
 Manual setup (skip Automatic Headset Setup):
@@ -4569,6 +4569,7 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 
 	void DrawDLSSPresetTooltip(uint32_t preset)
 	{
+		ImGui::TextWrapped("K for DLAA, Quality and Balanced. L/M for Performance and Ultra Performance on newer RTX cards. RTX 3000 series: start with F; compare E.");
 		switch (preset) {
 		case Upscaling::kDLSSPresetJ:
 			ImGui::TextUnformatted("DLAA/Quality/Balanced: less ghosting than K but more flicker, at similar speed. Use if K ghosts.");
@@ -16713,13 +16714,13 @@ namespace
 
 	void DrawFrameGenerationForceEnableToggle(Upscaling& a_upscaling)
 	{
-		ImGui::TextWrapped("Allows frame generation to function on low refresh rate monitors. Detected: %.2f Hz", a_upscaling.refreshRate);
 		bool forceEnabled = a_upscaling.settings.frameGenerationForceEnable != 0;
 		if (Util::Widgets::Checkbox("Force Enable Frame Generation", &forceEnabled)) {
 			a_upscaling.settings.frameGenerationForceEnable = forceEnabled ? 1u : 0u;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Forces Frame Generation on unsupported/low-refresh setups.");
+			ImGui::Text("Detected refresh rate: %.2f Hz", a_upscaling.refreshRate);
 		}
 	}
 }
@@ -17257,16 +17258,18 @@ namespace
 
 void Upscaling::DrawSettingsHeaderControls()
 {
+	if (MenuUI::SettingsPage::Selected("Upscaling") != "mode")
+		return;
+
 	const auto upscaleMethod = GetUpscaleMethod();
-	const bool showDLSSGuidance = fidelityFX.IsNvidiaAdapterDetected() && upscaleMethod == UpscaleMethod::kDLSS;
 	const bool showFovStatus = globals::game::isVR;
-	if (!showDLSSGuidance && !showFovStatus)
+	if (!showFovStatus)
 		return;
 
 	{
 		MenuFonts::FontRoleGuard infoFont(Menu::FontRole::Subtext);
-		const float labelWidth = std::max(ImGui::CalcTextSize("DLSS profiles").x, ImGui::CalcTextSize("FOV: unavailable").x);
-		const float minimumTextWidth = ImGui::CalcTextSize("Performance / Ultra Performance").x;
+		const float labelWidth = ImGui::CalcTextSize("FOV: unavailable").x;
+		const float minimumTextWidth = ImGui::CalcTextSize("Configure in VR > FOV").x;
 		const bool inlineLabels = ImGui::GetContentRegionAvail().x >= labelWidth + minimumTextWidth + ImGui::GetStyle().ItemSpacing.x * 2.0f;
 		if (ImGui::BeginTable("##UpscalingOverview", inlineLabels ? 2 : 1, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX)) {
 			auto endTable = ScopeExit([]() { ImGui::EndTable(); });
@@ -17284,12 +17287,6 @@ void Upscaling::DrawSettingsHeaderControls()
 				ImGui::TableNextColumn();
 			};
 
-			if (showDLSSGuidance) {
-				drawLabel("DLSS profiles");
-				ImGui::TextWrapped(
-					"K for DLAA, Quality and Balanced. L/M for Performance and Ultra Performance on newer RTX cards.\n"
-					"RTX 3000 series: start with F; compare E.");
-			}
 			if (showFovStatus) {
 				const char* fovNotice = nullptr;
 				if (SupportsFoveatedVendorDispatch(upscaleMethod)) {
@@ -17325,8 +17322,7 @@ void Upscaling::DrawSettingsHeaderControls()
 void Upscaling::DrawSettings()
 {
 	MenuUI::SettingsPage page("Upscaling", {
-											   { "mode", "Mode", "Choose your upscaler and quality first.", "Upscaler and image quality", true, true, "Choose the rendering foundation" },
-											   { "scale", "Render scale", "Choose whether to render a smaller scene before upscaling.", "Scaled scene rendering", globals::game::isVR, true, nullptr },
+											   { "mode", "Mode", "Choose your upscaler, quality and render scale.", "Upscaler and image quality", true, true, "Choose the rendering foundation" },
 											   { "tuning", "Tuning", "Refine FSR stability and detail.", "FSR stability and detail", GetUpscaleMethod() == UpscaleMethod::kFSR, true, "Refine image quality" },
 											   { "look", "Sharpening", "Refine sharpening after choosing the rendering mode.", "Sharpening and clarity", true, true, nullptr },
 											   { "motion", "Reflex", "Choose extra frames and latency controls.", "Frame generation and latency", !globals::game::isVR || streamline.reflexSupportedOnCurrentAdapter, true, "Refine motion" },
@@ -17479,15 +17475,15 @@ void Upscaling::DrawSettings()
 		const auto& hostFsrSdkLabel = FidelityFX::GetHostFsrSdkLabel();
 		ImGui::TextDisabled("Active: %s", fidelityFX.GetActiveFsrLabel(GetRuntimeUpscaleMethod() == UpscaleMethod::kFSR).c_str());
 		if (fidelityFX.IsRuntimeUpscalerFailureLatched()) {
-			ImGui::TextDisabled("Runtime FSR path is latched off after a runtime failure; using %s fallback.", hostFsrSdkLabel.c_str());
+			MenuUI::AvailabilityNotice(std::format("Runtime FSR stopped after a failure; using {} fallback. Restart to retry.", hostFsrSdkLabel).c_str());
 		} else if (fidelityFX.IsRuntimeFsr4FailureLatched()) {
-			ImGui::TextDisabled("%s is latched off after a failure; using %s fallback.", FidelityFX::GetFsrSelectionLabel(true).c_str(), hostFsrSdkLabel.c_str());
+			MenuUI::AvailabilityNotice(std::format("{} stopped after a failure; using {} fallback. Restart to retry.", FidelityFX::GetFsrSelectionLabel(true), hostFsrSdkLabel).c_str());
 		} else if (fidelityFX.HasRuntimeUpscalerSupportCheckResult() &&
 				   !fidelityFX.IsRuntimeUpscalerSupportConfirmed()) {
-			ImGui::TextDisabled("Runtime FSR context creation failed; using %s fallback.", hostFsrSdkLabel.c_str());
+			MenuUI::AvailabilityNotice(std::format("Runtime FSR could not initialize; using {} fallback. Check CSX.log for the failure reason.", hostFsrSdkLabel).c_str());
 		}
 		if (!runtimeUpscalerPresent && runtimeFsr4Requested)
-			ImGui::TextDisabled("%s is unavailable: missing FidelityFX upscaler runtime.", FidelityFX::GetFsrSelectionLabel(true).c_str());
+			MenuUI::AvailabilityNotice(std::format("{} is unavailable: install the bundled FidelityFX upscaler runtime and restart.", FidelityFX::GetFsrSelectionLabel(true)).c_str());
 	}
 
 	// Display warning for DLSS resolution limits (non-VR only; VR handles this automatically)
@@ -17501,7 +17497,7 @@ void Upscaling::DrawSettings()
 	}
 
 	auto drawRenderScaleSettings = [&]() {
-		if (!page.Is("scale"))
+		if (!page.Is("mode"))
 			return;
 		if (!globals::game::isVR)
 			return;
@@ -17552,7 +17548,7 @@ void Upscaling::DrawSettings()
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (globals::state && globals::state->IsDeveloperMode()) {
-			ImGui::SeparatorText("Render Scale Stress Capture");
+			MenuUI::SectionHeading("Render Scale Stress Capture");
 			const auto stressSession = GetVRRenderScaleStressSessionSnapshot();
 			if (stressSession.active) {
 				if (ImGui::Button("Stop Capture##VRRenderScaleStress"))
@@ -17646,9 +17642,8 @@ void Upscaling::DrawSettings()
 					draft = settings.fsrTemporalTuning;
 					lastSettings = settings.fsrTemporalTuning;
 				}
-				ImGui::TextWrapped("Runtime FSR tuning. Apply edits together. Disabling or any provider rejection restores the entire profile to vendor defaults.");
 				Util::Widgets::Checkbox("Enable reconstruction overrides", &draft.enabled);
-				Util::AddTooltip("On: uses your custom FSR motion and stability settings. Off: restores standard FSR settings. Use Apply reconstruction tuning to apply either choice.");
+				Util::AddTooltip("On: uses your custom FSR motion and stability settings. Off: restores standard FSR settings. Use Apply reconstruction tuning to apply edits together. A provider rejection restores the entire profile to vendor defaults.");
 				Util::Widgets::SliderFloat("Velocity factor", &draft.velocityFactor, 0.0f, 1.0f);
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::TextUnformatted("Lower values can stabilize bright pixels in motion.");
@@ -17764,12 +17759,9 @@ void Upscaling::DrawSettings()
 
 	if (!globals::game::isVR) {
 		if (page.Is("motion")) {
-			ImGui::Text("Frame Generation interpolates real frames with generated ones for a smoother experience");
-			ImGui::Text("Uses AMD FSR Frame Generation technology");
+			MenuUI::SectionHeading("Frame generation", "AMD FSR Frame Generation interpolates real frames with generated ones for smoother motion. Requires a D3D11 to D3D12 proxy, which can create compatibility issues. Toggling requires a restart.");
 			if (HasFrameGenModule())
 				ImGui::Text("AMD FSR Frame Generation is available.");
-			ImGui::Text("Requires a D3D11 to D3D12 proxy which can create compatibility issues");
-			ImGui::Text("Toggling this setting requires a restart to work correctly");
 
 			bool onlyRequiresRestart = true;
 
@@ -17843,11 +17835,11 @@ void Upscaling::DrawSettings()
 		const bool reflexBlockedByFrameGeneration = IsFrameGenerationDx12PathActive();
 
 		if (!reflexAvailable) {
-			ImGui::TextDisabled("Reflex is not available. Ensure sl.reflex.dll is present and restart.");
+			MenuUI::AvailabilityNotice("Reflex is not available. Ensure sl.reflex.dll is present and restart.");
 		}
 
 		if (reflexBlockedByFrameGeneration) {
-			ImGui::TextDisabled("Reflex is disabled while Frame Generation is active on the DX12 swap chain.");
+			MenuUI::AvailabilityNotice("Reflex is disabled while Frame Generation is active on the DX12 swap chain.");
 		}
 
 		if (!reflexAvailable || reflexBlockedByFrameGeneration)
@@ -17866,7 +17858,7 @@ void Upscaling::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Keeps GPU clocks higher to avoid latency spikes at low GPU load.");
 			ImGui::TextUnformatted("Useful if frametime jumps and responsiveness feels inconsistent.");
-			ImGui::TextColored(ImVec4(1.0f, 0.25f, 0.25f, 1.0f), "Increases power draw and heat, so leave Off unless needed.");
+			Util::Text::WrappedWarning("Increases power draw and heat, so leave Off unless needed.");
 		}
 
 		if (!settings.reflexLowLatencyMode)
@@ -17899,7 +17891,7 @@ void Upscaling::DrawSettings()
 
 	if (page.Is("diagnostics")) {
 		if (globals::state && globals::state->IsDeveloperMode() && streamline.reflexSupportedOnCurrentAdapter) {
-			ImGui::SeparatorText("Reflex Debug");
+			MenuUI::SectionHeading("Reflex Debug");
 			const bool reflexAvailable = streamline.initialized && streamline.featureReflex;
 			const auto markerOptimization = ReflexPolicy::ResolveCSXMarkerOptimization(
 				reflexAvailable,
@@ -17919,7 +17911,7 @@ void Upscaling::DrawSettings()
 				}
 			}
 			if (reflexBlockedByFrameGeneration)
-				ImGui::TextDisabled("Reflex is disabled while Frame Generation is active on the DX12 swap chain.");
+				MenuUI::AvailabilityNotice("Reflex is disabled while Frame Generation is active on the DX12 swap chain.");
 			if (!markerOptimization.available)
 				ImGui::TextDisabled(
 					reflexAvailable && streamline.featurePCL ?
@@ -17935,17 +17927,16 @@ void Upscaling::DrawSettings()
 				settings.pipelineDiagnosticsStructured = false;
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Logs VRPIPE environment metadata during VR startup.");
+				ImGui::TextUnformatted("Logs VRPIPE environment metadata during VR startup. Changes require a restart.");
 			}
 			if (Util::Widgets::Checkbox("Pipeline Diagnostics JSONL", &settings.pipelineDiagnosticsStructured) &&
 				settings.pipelineDiagnosticsStructured) {
 				settings.pipelineDiagnostics = true;
 			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::TextUnformatted("Also writes structured JSON Lines records to VRPipeline-CS.jsonl in the SKSE log directory.");
+				ImGui::TextUnformatted("Also writes structured JSON Lines records to VRPipeline-CS.jsonl in the SKSE log directory. Changes require a restart.");
 				ImGui::TextUnformatted("Use this for automated comparison of CSX and OCU environment records.");
 			}
-			ImGui::TextUnformatted("Changing these options requires a restart to take effect.");
 			ImGui::Separator();
 		}
 #endif
@@ -17957,9 +17948,8 @@ void Upscaling::DrawSettings()
 		if (Util::Widgets::Combo("Streamline Logging", &logLevelIdx, logLevels, IM_ARRAYSIZE(logLevels))) {
 			settings.streamlineLogLevel = static_cast<uint>(logLevelIdx);
 		}
-		ImGui::TextUnformatted("Changing this requires a restart to take effect.");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Control NVIDIA Streamline log detail for DLSS/DLSS-G troubleshooting.");
+			ImGui::Text("Control NVIDIA Streamline log detail for DLSS/DLSS-G troubleshooting. Changes require a restart.");
 		}
 
 		if (upscaleMethod == UpscaleMethod::kFSR) {
@@ -18309,7 +18299,7 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 	}
 
 	if (!globals::game::isVR) {
-		ImGui::SeparatorText("Frame Generation");
+		MenuUI::SectionHeading("Frame Generation");
 		DrawFrameGenerationEnabledToggle(settings);
 		if (!a_advanced && (settings.frameGenerationMode != 0) != IsFrameGenerationDx12PathActive())
 			Util::Text::Warning("Warning: Requires restart");
@@ -18332,7 +18322,7 @@ void Upscaling::DrawPerformanceSettings(bool a_advanced)
 			renderScaleProfile.dlssPreset);
 
 		if (!a_advanced)
-			ImGui::SeparatorText("VR FOV");
+			MenuUI::SectionHeading("VR FOV");
 		SanitizeFoveatedSettings(settings);
 		const bool foveatedDispatchSupportedForMethod = SupportsFoveatedVendorDispatch(upscaleMethod);
 		if (foveatedDispatchSupportedForMethod) {
@@ -18724,123 +18714,76 @@ void Upscaling::DrawNeuralRenderingEnableControl()
 	const bool renderScaleAvailable = IsNeuralRenderingUpscalingAvailable();
 	{
 		auto guard = Util::DisableGuard(!runtimeInstalled || !renderScaleAvailable || ((driver.RequiresUpdate() || status.failureLatched || status.quarantined) && !settings.neuralRenderingEnabled));
-		bool enabled = settings.neuralRenderingEnabled && renderScaleAvailable && hardwareSupported;
+		bool enabled = settings.neuralRenderingEnabled;
 		if (Util::Widgets::Checkbox("Enabled", &enabled)) {
 			std::string error;
 			if (!ToggleNeuralRendering(&error))
 				logger::warn("[NeuralRendering] UI toggle rejected: {}", error);
 		}
-		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted(!hardwareSupported ? NeuralRendering::Runtime::kUnsupportedHardwareNotice : driver.RequiresUpdate() ? driver.Message().c_str() :
-																										   renderScaleAvailable        ? "Enhance scene detail with NR. Off removes its rendering cost and keeps settings. Enabling NR turns FOV + TAA off." :
-																																		 "Before DLSS requires scaled DLSS and, in VR, Render Scale. After upscaling remains available with or without Render Scale.");
+		if (auto tooltip = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Enabled is your saved choice, not confirmation that NR is running. The header shows runtime readiness.");
+			if (!runtimeInstalled)
+				ImGui::TextUnformatted(NeuralRendering::Runtime::kMissingRuntimeNotice);
+			else if (!hardwareSupported)
+				ImGui::TextUnformatted(NeuralRendering::Runtime::kUnsupportedHardwareNotice);
+			else if (driver.RequiresUpdate())
+				ImGui::TextUnformatted(driver.Message().c_str());
+			else if (status.quarantined)
+				ImGui::TextUnformatted("Restart the game before enabling NR; its resources cannot recover safely in this session.");
+			else if (status.failureLatched)
+				ImGui::TextUnformatted("Reset Neural Rendering Runtime below, or wait for automatic recovery, before enabling NR.");
+			else if (!renderScaleAvailable)
+				ImGui::TextUnformatted(GetNeuralRenderingUpscalingWaitMessage().c_str());
+			else {
+				ImGui::TextUnformatted("Enhance scene detail with NR. Off removes its rendering cost and keeps settings. Enabling NR turns FOV + TAA off.");
+				if (settings.neuralRenderingEnabled && status.runtimeStatus == NeuralRendering::RuntimeStatus::NotProbed)
+					ImGui::TextUnformatted("NR has not checked its runtime yet. Load a save and resume gameplay with game menus closed. If it remains inactive, use Mode > Reset Neural Rendering Runtime.");
+			}
+		}
 	}
 }
 
-void Upscaling::DrawNeuralRenderingMasterControl(bool a_showDiagnostics)
+std::string Upscaling::GetNeuralRenderingUpscalingWaitMessage() const
+{
+	if (GetNeuralRenderingMode() != NeuralRendering::RenderingMode::ReducedResolution)
+		return "This NR mode cannot run with the current upscaler. Review Mode and Display > Upscaling.";
+	if (IsOpenCompositeUpscalingBlocked())
+		return "NR Before DLSS needs CSX Render Scale. Use SteamVR, or select After upscaling in Mode.";
+	if (IsRenderDocUpscalingBlocked())
+		return std::format("NR Before DLSS is unavailable: {}. Disable RenderDoc and restart, or select After upscaling in Mode.", GetRenderDocUpscalingBlockReason());
+	const auto profile = GetPendingVRRenderScaleDesiredProfile();
+	if (const auto* blocker = GetNeuralRenderingUpscalingProfileBlocker(GetNeuralRenderingMode(), profile.method, profile.qualityMode, profile.renderScaleModeEnabled))
+		return std::format("NR Before DLSS is waiting: incompatible upscaling setting ({}). {}", blocker,
+			globals::game::isVR ? "Choose below-native DLSS and enable Render Scale in Display > Upscaling." : "Choose below-native DLSS in Display > Upscaling.");
+	if (globals::game::isVR && IsVRStartupNativeFallbackRestartRequired())
+		return "Render Scale could not start. Open Display > Upscaling for recovery options, or restart.";
+	if (globals::game::isVR && IsVRStartupMainMenuRenderStateActive())
+		return "Load a save to activate DLSS, Render Scale and NR Before DLSS.";
+	if (const auto* blocker = GetNeuralRenderingUpscalingProfileBlocker(GetNeuralRenderingMode(), GetRuntimeUpscaleMethod(), GetRuntimeQualityMode(), GetVRRenderScaleModeRequested()))
+		return std::format("NR is waiting for compatible rendering ({}). Check active settings in Display > Upscaling.", blocker);
+	return "NR is waiting for Render Scale to become active. Check Display > Upscaling, or select After upscaling in Mode.";
+}
+
+void Upscaling::DrawNeuralRenderingMasterControl([[maybe_unused]] bool a_showDiagnostics)
 {
 	const bool hardwareSupported = IsNeuralRenderingHardwareSupported();
-	if (!hardwareSupported)
-		Util::Text::WrappedWarning("%s", NeuralRendering::Runtime::kUnsupportedHardwareNotice);
 	const auto& driver = NeuralRendering::Runtime::GetDriverSupport();
-	if (hardwareSupported && (!driver.installedRelease || driver.RequiresUpdate()))
-		Util::Text::WrappedWarning("%s", driver.Message().c_str());
+	if (hardwareSupported && !driver.installedRelease && !driver.RequiresUpdate())
+		MenuUI::AvailabilityNotice(driver.Message().c_str());
 	auto hardwareGuard = Util::DisableGuard(!hardwareSupported);
 	const bool runtimeInstalled = NeuralRendering::Runtime::IsInstalled();
-	if (!runtimeInstalled && hardwareSupported) {
-		Util::Text::WrappedWarning("%s", NeuralRendering::Runtime::kMissingRuntimeNotice);
-		Util::Text::WrappedWarning("%s", NeuralRendering::Runtime::kUserRuntimeNotice);
-	}
 	const auto status = NeuralRendering::Renderer::Instance().GetSnapshot();
 	const bool renderScaleAvailable = IsNeuralRenderingUpscalingAvailable();
-	const bool reducedResolution = GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution;
-	if (reducedResolution && !renderScaleAvailable && runtimeInstalled && hardwareSupported && !status.failureLatched && !status.quarantined) {
-		const auto desiredProfile = GetPendingVRRenderScaleDesiredProfile();
-		const auto configuredMethod = desiredProfile.method;
-		const auto quality = desiredProfile.qualityMode;
-		const bool renderScale = desiredProfile.renderScaleModeEnabled;
-		const char* blocker = GetNeuralRenderingUpscalingProfileBlocker(GetNeuralRenderingMode(), configuredMethod, quality, renderScale);
-		if (IsOpenCompositeUpscalingBlocked()) {
-			Util::Text::WrappedWarning("%s", kOpenCompositeRenderScaleBlockWarning);
-			ImGui::TextWrapped("Use SteamVR to enable CSX Render Scale and NR Before DLSS.");
-		} else if (IsRenderDocUpscalingBlocked()) {
-			Util::Text::WrappedWarning("NR Before DLSS is waiting: %s, so DLSS is disabled.", GetRenderDocUpscalingBlockReason());
-			ImGui::TextWrapped("Disable RenderDoc capture and restart without RenderDoc to use Before DLSS.");
-		} else if (blocker) {
-			Util::Text::WrappedWarning("NR Before DLSS is waiting: incompatible upscaling setting (%s).", blocker);
-			if (!GetNeuralRenderingUpscalingProfileBlocker(GetNeuralRenderingMode(), configuredMethod, quality, true))
-				ImGui::TextWrapped("Enable Render Scale in Upscaling to use Before DLSS.");
-			else
-				ImGui::TextWrapped("%s", globals::game::isVR ?
-											 "Select below-native DLSS and enable Render Scale in Upscaling to use Before DLSS." :
-											 "Select below-native DLSS in Upscaling to use Before DLSS.");
-		} else if (globals::game::isVR && IsVRStartupNativeFallbackRestartRequired()) {
-			Util::Text::WrappedWarning("NR Before DLSS is waiting: Render Scale startup activation failed; rendering remains at native resolution.");
-			ImGui::TextWrapped("Open Upscaling for Render Scale recovery options, or restart the game to retry.");
-		} else if (globals::game::isVR && IsVRStartupMainMenuRenderStateActive()) {
-			Util::Text::WrappedWarning("NR Before DLSS is waiting: the main menu uses None with Render Scale off.");
-			ImGui::TextWrapped("Load a save to activate your DLSS and Render Scale settings.");
-		} else {
-			const char* activeBlocker = GetNeuralRenderingUpscalingProfileBlocker(GetNeuralRenderingMode(),
-				GetRuntimeUpscaleMethod(), GetRuntimeQualityMode(), GetVRRenderScaleModeRequested());
-			if (activeBlocker)
-				Util::Text::WrappedWarning("NR Before DLSS is waiting: selected upscaling settings are compatible, but current rendering is still blocked by %s.", activeBlocker);
-			else
-				Util::Text::WrappedWarning("NR Before DLSS is waiting: Render Scale is selected but not active.");
-			ImGui::TextWrapped("Check the active upscaling and Render Scale status in Upscaling.");
-			static bool loggedScalingWait = false;
-			if (!loggedScalingWait && globals::state && globals::state->IsDeveloperMode()) {
-				logger::debug("[NeuralRendering] Renderscale NR is waiting for scaling to become active.");
-				loggedScalingWait = true;
-			}
-		}
-		if (settings.neuralRenderingEnabled)
-			ImGui::TextWrapped("Alternatively, select After upscaling in NR > Mode, or turn NR off. Your settings are retained.");
-	} else if (renderScaleAvailable && runtimeInstalled && !settings.neuralRenderingEnabled)
-		ImGui::TextDisabled("NR is off. Actor and colour preferences are retained.");
 	if (!renderScaleAvailable && runtimeInstalled && settings.neuralRenderingEnabled) {
 		if (ImGui::Button("Turn off NR"))
 			settings.neuralRenderingEnabled = false;
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Turns off your saved NR choice so it stays off when compatible upscaling is available.");
 	}
-	const auto combatPause = GetNeuralCombatPauseSnapshot();
-	if (settings.neuralRenderingEnabled && settings.neuralRenderingPauseInCombat && combatPause.IsPaused()) {
-		if (combatPause.phase == NeuralRendering::CombatPausePhase::Combat)
-			ImGui::TextWrapped("NR paused during combat. Normal upscaling continues.");
-		else if (combatPause.phase == NeuralRendering::CombatPausePhase::Cooldown)
-			ImGui::TextWrapped("Combat resume delay: %.1f seconds of active gameplay remaining.", static_cast<double>(combatPause.remainingMs) / 1000.0);
-		else
-			ImGui::TextWrapped("NR combat pause is waiting for active gameplay.");
-	}
-	if (status.quarantined) {
-		Util::Text::WrappedError("Neural Rendering cannot recover safely in this session. Restart the game to try again.");
-	} else if (status.failureLatched && status.stallRecovery.pending) {
-		Util::Text::WrappedWarning("NR paused after a transient GPU stall. Waiting for GPU completion and cooldown before automatic retry %u/%u. Settings are kept.",
-			status.stallRecovery.attempts + 1, NeuralRendering::StallRecoveryPolicy::kMaximumAttempts);
-	} else if (status.failureLatched) {
-		Util::Text::WrappedError("NR paused after an error. Use Reset Neural Rendering Runtime below to retry. Settings are kept.");
-	} else if (IsNeuralRenderingRequested() && status.memoryRecovery.phase == NeuralRendering::MemoryRecoveryPhase::Probation) {
-		Util::Text::WrappedWarning("Neural Rendering is active while memory stability is being checked.");
-	} else if (IsNeuralRenderingRequested() && status.memoryRecovery.phase != NeuralRendering::MemoryRecoveryPhase::Ready) {
-		const char* recoveryStage = "rebuilding resources and resetting history";
-		if (status.memoryRecovery.phase == NeuralRendering::MemoryRecoveryPhase::Retiring)
-			recoveryStage = "safely releasing resources";
-		else if (status.memoryRecovery.phase == NeuralRendering::MemoryRecoveryPhase::Waiting)
-			recoveryStage = "waiting for enough GPU memory";
-		Util::Text::WrappedWarning("%sNR is recovering: %s. Normal rendering continues; NR resumes automatically. Settings are kept.",
-			status.memoryRecovery.dlssWarning ? "DLSS reported GPU memory pressure. " : "", recoveryStage);
-	} else if (IsNeuralRenderingRequested() && status.memoryConservation.active) {
-		Util::Text::WrappedWarning("NR memory saving releases unused resources and oversized buffers without changing image quality. Normal caching resumes when GPU memory pressure eases.");
-	}
-	if (IsNeuralRenderingRequested() && status.pressureResolutionEnabled && status.effectiveModelResolutionPercent < settings.neuralRenderingModelResolutionPercent)
-		ImGui::TextWrapped("NR resolution under memory pressure: %u%% (requested %u%%).", status.effectiveModelResolutionPercent, settings.neuralRenderingModelResolutionPercent);
-	if ((status.failureLatched || status.quarantined) && !status.detail.empty())
-		ImGui::TextWrapped("Reason: %s", status.detail.c_str());
-	if (runtimeInstalled && (a_showDiagnostics || status.failureLatched) && !status.quarantined) {
+	if (runtimeInstalled && !status.quarantined) {
 		const bool resetRuntime = ImGui::Button("Reset Neural Rendering Runtime");
 		if (auto tooltip = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Retry NR without changing settings. Some failures require a game restart.");
+			ImGui::TextUnformatted("Retry NR without changing your settings. Resume gameplay with game menus closed to check activation. Quarantined resources require a game restart.");
 		if (resetRuntime) {
 			if (NeuralRendering::Renderer::Instance().Reset()) {
 				NeuralRendering::CharacterRendering::Instance().Reset();
@@ -18861,8 +18804,10 @@ void Upscaling::DrawNeuralRenderingCropControl(bool a_showDiagnostics)
 	const int choice = MenuUI::ChoiceCards("Actor processing area", static_cast<int>(std::min(settings.neuralCharacterCropMode, 2u)) - first, std::span(modes).subspan(first));
 	if (choice >= 0)
 		settings.neuralCharacterCropMode = static_cast<uint>(choice + first);
-	if (!a_showDiagnostics && settings.neuralCharacterCropMode == 0)
-		MenuUI::DetailNote("Session calibration is active. Choose Cropped or Uncropped to change the processing area.");
+	if (!a_showDiagnostics && settings.neuralCharacterCropMode == 0) {
+		ImGui::TextUnformatted("Session calibration active");
+		Util::AddTooltip("Choose Cropped or Uncropped to change the processing area.");
+	}
 }
 
 namespace
@@ -18923,9 +18868,6 @@ namespace
 		const int choice = MenuUI::ChoiceCards("Strength application", settings.neuralCharacterProviderBlending ? 1 : 0, choices);
 		if (choice >= 0)
 			settings.neuralCharacterProviderBlending = choice == 1;
-		MenuUI::DetailNote("Used for category adjustments or Actors only. Actor/material choices and strengths are in Selection.");
-		ImGui::Spacing();
-		MenuUI::DetailText("Works with After upscaling and Before DLSS.");
 	}
 
 	void DrawNeuralExecutionSettings(Upscaling::Settings& settings)
@@ -18934,13 +18876,13 @@ namespace
 		Util::AddTooltip("Processes smaller areas around selected actors to try to save work. Off uses one enclosing area. Requires Actors only and cropped evaluation. Experimental: movement may cause brightness flicker; speed gains are not guaranteed.");
 		if (settings.neuralCharacterPackedCrops && (!settings.neuralCharacterRenderingEnabled ||
 													   settings.neuralCharacterCropMode != static_cast<std::uint32_t>(NeuralRendering::CharacterCropMode::Cropped)))
-			MenuUI::DetailNote("Crop packing requires Actors only and cropped actor evaluation.");
+			MenuUI::AvailabilityNotice("Crop packing requires Actors only and cropped actor evaluation.");
 		if (globals::game::isVR) {
 			Util::Widgets::Checkbox("Parallel Eyes", &settings.neuralRenderingParallelEyes);
 			Util::AddTooltip("Processes both eyes at the same time to try to finish NR sooner. Off processes them one after the other. Keeps the same appearance settings; errors disable this option until restart.");
 			const auto parallel = NeuralRendering::Renderer::Instance().GetSnapshot();
 			if (settings.neuralRenderingParallelEyes && parallel.parallelEyesDisabled)
-				MenuUI::DetailNote("Parallel evaluation unavailable this session; NR uses serial evaluation.");
+				MenuUI::AvailabilityNotice("Parallel evaluation unavailable this session; NR uses serial evaluation.");
 			const bool prewarmSupported = NeuralRendering::PrewarmConfigurationBlocker(settings, true) == nullptr;
 			bool prewarmEnabled = settings.neuralRenderingPrewarmEnabled && prewarmSupported;
 			{
@@ -19000,10 +18942,11 @@ namespace
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	void DrawNeuralReconstructionExperiments(Upscaling::Settings& settings)
 	{
-		if (!ImGui::TreeNode("Reconstruction comparisons (DevBench)"))
+		const bool expanded = ImGui::TreeNode("Reconstruction comparisons (DevBench)");
+		Util::AddTooltip("Session only. Defaults use production shaders. First use warms each experimental variant; measure after the condition settles.");
+		if (!expanded)
 			return;
 		auto& tuning = settings.neuralReconstructionTuning;
-		ImGui::TextWrapped("Session only. Defaults use production shaders. First use warms each experimental variant; measure after the condition settles.");
 		DrawNeuralIntegerSetting("Shadow transfer protection", tuning.shadowTransferPercent, 0, NeuralRendering::kMaximumShadowTransferPercent, "%d%%");
 		Util::AddTooltip("Compressed NR only. 100% bounds brightness transfer into shadows; 0% applies the unbounded residual. Applies on release. Values below 100% share a cached shader; subsequent strength changes do not compile.");
 		int footprint = static_cast<int>(std::ranges::find(NeuralRendering::kReconstructionFootprintSubdivisions, tuning.footprintSubdivisions) - NeuralRendering::kReconstructionFootprintSubdivisions.begin());
@@ -19103,7 +19046,6 @@ namespace
 			ImGui::TextUnformatted("Choose Standard, Natural or Cinematic. Compare in the same scene; styles are appearances, not quality levels.");
 		if (customTuningChanged)
 			settings.neuralRenderingPreset = 0;
-		MenuUI::DetailNote("Intensity sets the shared NR result. Selection's material strengths set how much each material receives.");
 	}
 
 	void DrawNeuralRenderingCategoryControls(Upscaling::Settings& settings, bool missingFov)
@@ -19141,10 +19083,6 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 		const bool foveatedRouteEnabled =
 			IsFoveatedVendorDispatchRequested(settings, a_upscaleMethod);
 		const bool fovAvailable = IsNeuralRenderingFovConfigurationAvailable(a_upscaleMethod);
-		DrawNeuralRenderingMasterControl(showDiagnostics);
-		auto settingsAvailabilityGuard = Util::DisableGuard(!IsNeuralRenderingEnabled());
-		ApplyNeuralRenderingFovConstraint(settings);
-		DrawNeuralRenderingFovWarning(true);
 		const bool usesFov = NeuralRendering::RequiresFoveatedMask(GetNeuralRenderingMode(), settings.neuralRenderingFovOnly, globals::game::isVR, settings.neuralRenderingRenderscaleFov);
 		const char* modeName = GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution ? "Before DLSS" : "After upscaling";
 		const auto coverageName = settings.neuralRenderingCentralAreaPercent < NeuralRendering::kMaximumCentralAreaPercent ?
@@ -19155,15 +19093,21 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 		const char* selectionName = settings.neuralCharacterRenderingEnabled ? "Actors only" : settings.neuralCharacterSceneStrengthsEnabled ? "Scene + category adjustments" :
 		                                                                                                                                       "Entire scene";
 		MenuUI::SettingsPage page("NeuralRendering", {
-														 { "mode", "Mode", "Where NR runs", std::format("{} / {}", modeName, coverageName), true, true, "Set the foundation", "Mode & coverage", "Choose where NR runs before tuning its appearance." },
+														 { "mode", "Mode", "Where NR runs", std::format("{} / {}", modeName, coverageName), true, true, "Set the foundation", "Mode & coverage", "Choose where NR runs before tuning its appearance.", true, true, nullptr, "blending" },
 														 { "blending", "Blending", "How selected edits are applied", blendingName, true, true, nullptr, nullptr, "Choose how your strength adjustments are applied." },
-														 { "look", "Look", "Preset, detail and overall intensity", std::format("{} / Intensity {:.2f}", NeuralRendering::kStyleNames[NeuralRendering::ClampStyle(settings.neuralRenderingStyle)], settings.neuralRenderingIntensity), true, true, "Shape the shared picture", nullptr, "One appearance for the scene and all selected actors." },
+														 { "look", "Look", "Preset, detail and overall intensity", std::format("{} / Intensity {:.2f}", NeuralRendering::kStyleNames[NeuralRendering::ClampStyle(settings.neuralRenderingStyle)], settings.neuralRenderingIntensity), true, true, "Shape the shared picture", nullptr, "One appearance for the scene and all selected actors.", true, true, nullptr, "colour" },
 														 { "colour", "Colour", "Colour and lighting preservation", "Refine the shared appearance", true, true, nullptr, nullptr, "Refine colour while preserving the lighting you prefer." },
-														 { "selection", "Selection", "Actor types, materials and strengths", selectionName, true, true, "Refine where it is applied", nullptr, "Choose where the enhancement appears and adjust its strength." },
+														 { "selection", "Selection", "Actor types, materials and strengths", selectionName, true, true, "Refine where it is applied", nullptr, "Choose where the enhancement appears and adjust its strength.", true, true, nullptr, "actors" },
 														 { "actors", "Actors", "Optional: distance, focus and edges", settings.neuralCharacterRenderingEnabled ? "Actor coverage and edges" : "Not used in scene mode", true, true, nullptr, nullptr, "With Actors only selected, refine distance, coverage and edges.", settings.neuralCharacterRenderingEnabled && (!usesFov || fovAvailable) },
 														 { "diagnostics", "Diagnostics", "Inspect diagnostic controls and experiments.", {}, showDiagnostics, false },
 													 },
-			"Your NR setup", "Choose a mode, then refine the picture.");
+			"", "");
+		if (!page.Is("overview"))
+			DrawNeuralRenderingMasterControl(showDiagnostics);
+		auto settingsAvailabilityGuard = Util::DisableGuard(!IsNeuralRenderingEnabled());
+		ApplyNeuralRenderingFovConstraint(settings);
+		if (!page.Is("overview"))
+			DrawNeuralRenderingFovWarning(true);
 		if (page.Is("mode")) {
 			auto& runtime = NeuralRendering::Runtime::Instance();
 			{
@@ -19238,7 +19182,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 		const bool missingRenderScale = !IsNeuralRenderingUpscalingAvailable();
 		const bool routeAvailable = !missingRenderScale && !missingFov && (NeuralRendering::UsesIndependentFinalLdrInputs(GetNeuralRenderingMode(), a_upscaleMethod == UpscaleMethod::kFSR) || (dlssSelected && (GetNeuralRenderingMode() == NeuralRendering::RenderingMode::ReducedResolution || foveatedRouteEnabled)));
 		if (!routeAvailable && !missingFov && !missingRenderScale)
-			ImGui::TextDisabled("This mode requires NVIDIA DLSS.");
+			MenuUI::AvailabilityNotice("This mode requires NVIDIA DLSS.");
 
 		{
 			if (page.Is("diagnostics") && showDiagnostics && ImGui::TreeNode("Execution diagnostics")) {
@@ -19298,7 +19242,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 					globals::game::isVR ? NeuralRendering::GetImplementationDisplayName(
 											  batchedStereo, directCommit) :
 										  (directCommit ? "Mono + direct" : "Mono + staged"));
-				ImGui::TextDisabled("Execution comparisons do not change the selected model or actor materials.");
+				Util::AddTooltip("Execution comparisons do not change the selected model or actor materials.");
 				ImGui::TreePop();
 			}
 		}
@@ -19312,7 +19256,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 				DrawNeuralRenderingCategoryControls(settings, missingFov);
 			if (page.Is("actors")) {
 				if (!settings.neuralCharacterRenderingEnabled &&
-					MenuUI::DetailNote("These controls are inactive in scene mode. Choose Actors only in Selection to use them.", "Open Selection"))
+					MenuUI::AvailabilityNotice("These controls are inactive in scene mode. Choose Actors only in Selection to use them.", "Open Selection"))
 					MenuUI::SettingsPage::Select("NeuralRendering", "selection");
 				auto actorGuard = Util::DisableGuard(!settings.neuralCharacterRenderingEnabled || missingFov);
 				DrawNeuralRenderingCropControl(showDiagnostics);
@@ -19446,9 +19390,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 					if (auto tooltip = Util::HoverTooltipWrapper())
 						ImGui::TextUnformatted("Diagnostic actor mask: zero, full, half, inverted or no visibility rejection. Authored restores selected types/materials; use it for normal play.");
 					if (maskTestMode != 0) {
-						ImGui::TextColored(
-							Util::Colors::GetWarning(),
-							"Calibration override active; normal actor selection is not being tested.");
+						Util::Text::WrappedWarning("Calibration override active; normal actor selection is not being tested.");
 					}
 					ImGui::TreePop();
 				}
@@ -19460,15 +19402,11 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 					"Status: %s | Identity: %s",
 					neuralStatus.status.c_str(),
 					neuralStatus.trust.c_str());
+				Util::AddTooltip("Any compatible user-supplied NR 310.8 or newer runtime is accepted; SHA-256 is diagnostic only. User-supplied NR DLLs execute in-process. NVIDIA license terms and NGX compatibility checks apply.");
 				ImGui::TextDisabled(
 					"Successful eyes: %llu | Renderer failures: %llu",
 					static_cast<unsigned long long>(neuralStatus.successes),
 					static_cast<unsigned long long>(neuralStatus.failures));
-				ImGui::TextDisabled(
-					"Any compatible user-supplied NR 310.8 or newer runtime is accepted; SHA-256 is diagnostic only.");
-				ImGui::TextColored(
-					Util::Colors::GetWarning(),
-					"User-supplied NR DLLs execute in-process. NVIDIA license terms and NGX compatibility checks apply.");
 
 				if (settings.neuralCharacterRenderingEnabled || settings.neuralCharacterSceneStrengthsEnabled) {
 					const auto characterStatus =
@@ -19476,6 +19414,7 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 					ImGui::TextDisabled(settings.neuralCharacterProviderBlending ?
 											"Selection: NR provider strength mask with CSX output ownership." :
 											"Selection: CSX output compositor and strength mask.");
+					Util::AddTooltip("Feature 18 evaluates inside each active region; the exact mask controls compositing.");
 					const auto categoryCaptureFrame =
 						characterStatus.categoryCaptureReady ?
 							std::to_string(characterStatus.categoryCaptureFrame) :
@@ -19568,15 +19507,11 @@ void Upscaling::DrawNeuralRenderingSettings(UpscaleMethod a_upscaleMethod, const
 								eyeStatus.capturedJitterY);
 						}
 					}
-					ImGui::TextDisabled(
-						"Feature 18 evaluates inside each active region; the exact mask controls compositing.");
-
 					const auto debugView =
 						NeuralRendering::ClampCharacterDebugView(
 							settings.neuralCharacterDebugView);
 					if (debugView != NeuralRendering::CharacterDebugView::Off) {
-						ImGui::SeparatorText("Last Character Debug Preview");
-						ImGui::TextDisabled(
+						MenuUI::SectionHeading("Last Character Debug Preview",
 							"Hard menu/loading contexts suppress Neural Rendering; safe late-menu continuity may update these images.");
 						for (uint32_t eye = 0; eye < (globals::game::isVR ? 2u : 1u); ++eye) {
 							ID3D11ShaderResourceView* preview = nullptr;
@@ -20014,17 +19949,15 @@ void Upscaling::DrawFoveatedCalibration()
 		}
 	}
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextWrapped("Check each eye separately, then with both eyes open. Confirms this outer fit and unlocks FOV + TAA. Available shared-view checks must pass. Changing the outer mask requires confirmation again.");
+		ImGui::TextWrapped("Check each eye separately, then with both eyes open. Confirms this outer fit and unlocks FOV + TAA when NR is off. Available shared-view checks must pass. Changing the outer mask requires confirmation again. Save settings to keep this fit.");
 	if (!foveatedCalibrationMessage.empty()) {
 		if (foveatedCalibrationWarning)
 			Util::Text::WrappedWarning("%s", foveatedCalibrationMessage.c_str());
 		else
 			ImGui::TextWrapped("%s", foveatedCalibrationMessage.c_str());
 	}
-	if (FoveatedMaskCalibration::HasFovOnlySetup(settings))
-		ImGui::TextUnformatted(IsNeuralRenderingEnabled(settings) ?
-								   "Mask setup finished. FOV + TAA is unavailable while NR is enabled. Save settings to keep this fit." :
-								   "Mask setup finished. FOV + TAA is available. Save settings to keep this fit.");
+	if (FoveatedMaskCalibration::HasFovOnlySetup(settings) && IsNeuralRenderingEnabled(settings))
+		ImGui::TextUnformatted("FOV + TAA is unavailable while NR is enabled.");
 }
 
 void Upscaling::DrawFoveatedSetupInstructions()
@@ -20046,11 +19979,11 @@ void Upscaling::DrawFoveatedSetupInstructions()
 void Upscaling::DrawFoveatedSettings()
 {
 	if (!globals::game::isVR) {
-		ImGui::TextDisabled("VR FOV mask setup is available only in VR.");
+		MenuUI::AvailabilityNotice("VR FOV mask setup is available only in VR.");
 		return;
 	}
 	if (!loaded) {
-		ImGui::TextDisabled("VR FOV mask setup requires Upscaling.");
+		MenuUI::AvailabilityNotice("VR FOV mask setup requires Upscaling.");
 		return;
 	}
 
@@ -20111,7 +20044,7 @@ void Upscaling::DrawFoveatedSettings()
 				GetFoveatedUpscalingModeName(activeFoveatedProfile.mode),
 				activeFoveatedProfile.sharedVisibleScale);
 		} else if (IsFoveatedMaskConfigured(settings, upscaleMethod, settings.periphery_taa_enable && !Upscaling::IsNeuralRenderingEnabled(settings))) {
-			ImGui::TextDisabled("FOV is configured; waiting for runtime upscaling.");
+			MenuUI::AvailabilityNotice("FOV is configured; waiting for runtime upscaling.");
 		} else {
 			ImGui::TextDisabled("Active FOV mode: Off (full visible coverage).");
 		}
@@ -20121,7 +20054,7 @@ void Upscaling::DrawFoveatedSettings()
 	DrawFoveatedSetupInstructions();
 
 	if (IsDefaultFoveatedMaskGeometry(settings)) {
-		ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.05f, 1.0f), "Default FOV mask active. Tune it for your HMD for best image and performance.");
+		Util::Text::WrappedWarning("Default FOV mask active. Tune it for your HMD for best image and performance.");
 	}
 
 	Util::Widgets::Checkbox("FOV Mask Visualization", &settings.foveatedPeripheryMaskVisualization);
@@ -20141,20 +20074,19 @@ void Upscaling::DrawFoveatedSettings()
 	if (settings.foveatedVendorDispatch) {
 		const auto binocular = GetFoveatedBinocularCoverage();
 		if (!binocular.available)
-			ImGui::TextDisabled("Shared-view check unavailable. Check each eye separately, then with both eyes open.");
+			MenuUI::AvailabilityNotice("Shared-view check unavailable. Check each eye separately, then with both eyes open.");
 		else if (binocular.hasGap)
 			Util::Text::WrappedWarning("Shared-view coverage gap. Run Automatic Headset Setup, or refit the outer edges in FOV only and press Calibrate Masks.");
-		else
-			ImGui::TextDisabled("Shared-view coverage: no gaps detected. The outer regions may differ between eyes.");
+		else {
+			ImGui::TextDisabled("Shared-view coverage: no gaps detected.");
+			Util::AddTooltip("The outer regions may differ between eyes.");
+		}
 	}
 	const auto coverage = GetFoveatedMaskCoverage();
 	ImGui::Text("FOV area saved (approx.): L %.1f%% / R %.1f%%", coverage[0].savedPercent, coverage[1].savedPercent);
-	ImGui::TextWrapped("Area saved estimates eye-texture pixels outside the mask, including pixels hidden by headset lenses. It includes feathering and is not a performance estimate.");
+	Util::AddTooltip("Area saved estimates eye-texture pixels outside the mask, including pixels hidden by headset lenses. It includes feathering and is not a performance estimate.");
 
-	ImGui::Dummy(ImVec2(0.0f, 6.0f));
-	ImGui::Separator();
-	ImGui::Dummy(ImVec2(0.0f, 4.0f));
-	ImGui::TextUnformatted("Upscaling FOV Controls");
+	MenuUI::SectionHeading("Upscaling FOV Controls");
 
 	const auto previousSettings = settings;
 	auto coverageTransition = ScopeExit([&]() {
@@ -20181,7 +20113,7 @@ void Upscaling::DrawFoveatedSettings()
 				minimum, settings.foveatedCenterArea, "%.2f");
 		}
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextUnformatted("Smaller = less DLSS/FSR processing and more TAA around the centre. The visible boundary stays fixed.");
+			ImGui::TextUnformatted("Smaller = less DLSS/FSR processing and more TAA around the centre. TAA fills the rest of your confirmed mask; the visible boundary stays fixed. To change its outer edges, return to FOV only and finish setup again.");
 		if (minimum > FoveatedCommon::kCenterScaleMin)
 			ImGui::TextWrapped("This wide mask needs the current centre to retain its feathered edge. Reduce the FOV-only visible scale first to use a smaller TAA centre.");
 		{
@@ -20192,7 +20124,6 @@ void Upscaling::DrawFoveatedSettings()
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Softens the transition from DLSS/FSR to TAA. The effective width is limited to keep it inside your outer mask.");
 		DrawFoveatedBlendSettings();
-		ImGui::TextWrapped("TAA fills the rest of your confirmed mask. To change its outer edges, return to FOV only and finish setup again.");
 		FoveatedMaskCalibration::InheritFovOnlyBoundary(settings);
 		drawActiveFoveatedProfileStatus();
 		if (resourceSettingsKeyBefore != BuildUpscalingResourceMutationSettingsKey(settings))
@@ -23594,6 +23525,13 @@ bool Upscaling::GetRuntimeFSR4Enabled() const
 		return runtimeProfile->fsr4RuntimeEnabled;
 
 	return settings.fsr4RuntimeEnable;
+}
+
+const char* Upscaling::GetUpscalingSelectionBlockReason() const
+{
+	if (IsOpenCompositeUpscalingBlocked())
+		return "Upscaling is unavailable with the current OpenComposite runtime.";
+	return IsRenderDocUpscalingBlocked() ? GetRenderDocUpscalingBlockReason() : nullptr;
 }
 
 bool Upscaling::SupportsPerformanceCostMeasurement() const

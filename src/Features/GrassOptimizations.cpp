@@ -107,14 +107,15 @@ void GrassOptimizations::PrepareGeometry(RE::BSRenderPass* pass, RE::BSShader* s
 
 std::pair<std::string, std::vector<std::string>> GrassOptimizations::GetFeatureSummary()
 {
-	return { "Reduce the work needed to display grass. Optional density, distance and detail settings trade visual quality for performance.",
+	return { "Balance grass visibility, density, distance, and mesh detail to control rendering work.",
 		{ "Independent distant density, fading and mesh cost controls", "Optional middle/far meshes and simpler distant shading", "Separate grass Hi-Z switch for performance comparisons" } };
 }
 
 Feature::SettingsHeaderStatus GrassOptimizations::GetSettingsHeaderStatus() const
 {
-	const bool available = renderer->IsRenderingAvailable();
-	return { available ? "Ready" : "Unavailable", !available };
+	if (!renderer->IsRenderingAvailable())
+		return { "Unavailable", true, "Grass optimizations are unavailable; native grass rendering is active. Check CSX.log for startup or rendering failures." };
+	return Feature::GetSettingsHeaderStatus();
 }
 
 void GrassOptimizations::DrawSettings()
@@ -260,8 +261,6 @@ void GrassOptimizations::DrawControls(bool advanced, std::string_view section)
 		if (!SetSettings(next, error))
 			logger::warn("Grass settings rejected: {}", error);
 	}
-	if (!renderer->IsRenderingAvailable())
-		MenuUI::DetailNote("Native grass rendering is active; optimizations are unavailable.");
 }
 #ifdef DEVBENCH_BRIDGE_ENABLED
 void GrassOptimizations::SetDiagnosticsEnabled(bool enabled) { renderer->SetDiagnosticsEnabled(enabled); }

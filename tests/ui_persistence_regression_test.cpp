@@ -1,21 +1,26 @@
 #define NOMINMAX
 #include "Utils/StringUtils.h"
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <cmath>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <imgui.h>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 #include <windows.h>
 
 using json = nlohmann::json;
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ImVec4, x, y, z, w)
 static void Require(bool value, const char* message)
 {
 	if (!value)
@@ -62,25 +67,26 @@ struct ThemeManager
 	bool SaveTheme(const std::string&, const json&, const std::string&, const std::string&, std::string&, bool = true);
 };
 #include "ui_theme_save.h"
-namespace PresetExportTest
-{
-#include "ui_preset_export.h"
-}
 struct EditorWindow
 {
 	static constexpr std::size_t maxRecordMarkers = 10;
-	struct
-	{
-		std::map<std::string, ImVec4> recordMarkers;
-		std::map<std::string, std::string> markedRecords;
-	} settings;
+#include "ui_editor_settings.h"
+	Settings settings;
+	json j;
 	std::unordered_map<std::string, std::string> markerLabelBuffers;
 	int saves = 0;
 	void Save() { ++saves; }
+	void SaveSettings();
+	void LoadSettings();
+	void SanitizeSettings();
 	bool AddRecordMarker();
 	std::string RenameRecordMarker(const std::string&, const std::string&);
 	void DeleteRecordMarker(const std::string&);
 };
+#include "ui_editor_serialization.h"
+static json GetWidgetTypeSizesJson() { return json::object(); }
+static void SetWidgetTypeSizesFromJson(const json&) {}
+#include "ui_editor_persistence.h"
 #include "ui_markers.h"
 static std::string Bytes(const std::filesystem::path& file)
 {
@@ -121,12 +127,12 @@ static void CheckThemes()
 		Require(entry.path().extension() == ".json", "no staging files remain");
 	std::filesystem::remove_all(directory);
 }
-static void CheckPresetExports()
+static void CheckAtomicJsonWrites()
 {
-	const auto root = std::filesystem::temp_directory_path() / std::format("csx-preset-write-test-{}-{}", GetCurrentProcessId(), GetTickCount64());
+	const auto root = std::filesystem::temp_directory_path() / std::format("csx-json-write-test-{}-{}", GetCurrentProcessId(), GetTickCount64());
 	const auto directory = root / std::filesystem::path(u8"Shared_\u00e9_\u6f22");
-	Require(std::filesystem::create_directories(directory), "preset writes own a fresh Unicode test directory");
-	const auto file = directory / "Default_AdaptiveBrightness_Full.json";
+	Require(std::filesystem::create_directories(directory), "JSON writes own a fresh Unicode test directory");
+	const auto file = directory / "Settings.json";
 	auto temporary = file;
 	temporary += ".tmp";
 	auto backup = file;
@@ -134,19 +140,19 @@ static void CheckPresetExports()
 	std::ofstream(temporary) << "user temporary bytes";
 	std::ofstream(backup) << "user backup bytes";
 	std::string error;
-	Require(PresetExportTest::WriteJsonFileAtomic(file, { { "revision", 1 } }, error), "preset export supports Unicode destinations");
-	Require(json::parse(Bytes(file))["revision"] == 1 && error.empty(), "preset export writes complete JSON");
-	Require(PresetExportTest::WriteJsonFileAtomic(file, { { "revision", 2 } }, error), "preset export replaces an existing preset");
+	Require(Util::FileHelpers::WriteTextFileAtomic(file, json{ { "revision", 1 } }.dump(), error, false), "atomic JSON writes support Unicode destinations");
+	Require(json::parse(Bytes(file))["revision"] == 1 && error.empty(), "atomic writes produce complete JSON");
+	Require(Util::FileHelpers::WriteTextFileAtomic(file, json{ { "revision", 2 } }.dump(), error, false), "atomic JSON writes replace existing settings");
 	const auto original = Bytes(file);
-	Require(SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_READONLY), "mark exported preset read-only");
-	const bool saved = PresetExportTest::WriteJsonFileAtomic(file, { { "revision", 3 } }, error);
+	Require(SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_READONLY), "mark saved JSON read-only");
+	const bool saved = Util::FileHelpers::WriteTextFileAtomic(file, json{ { "revision", 3 } }.dump(), error, false);
 	const auto retained = Bytes(file);
 	SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_NORMAL);
-	Require(!saved && !error.empty() && retained == original, "a failed export preserves the existing preset and reports the error");
-	Require(Bytes(temporary) == "user temporary bytes" && Bytes(backup) == "user backup bytes", "preset exports never touch unrelated .tmp or .bak files");
-	Require(Util::FileHelpers::directWriteAttempts == 0, "preset exports disable destructive write fallback");
+	Require(!saved && !error.empty() && retained == original, "a failed write preserves existing JSON and reports the error");
+	Require(Bytes(temporary) == "user temporary bytes" && Bytes(backup) == "user backup bytes", "atomic writes never touch unrelated .tmp or .bak files");
+	Require(Util::FileHelpers::directWriteAttempts == 0, "disabling direct fallback prevents destructive writes");
 	for (const auto& entry : std::filesystem::directory_iterator(directory))
-		Require(entry.path() == file || entry.path() == temporary || entry.path() == backup, "preset exports leave no staging files after success or failure");
+		Require(entry.path() == file || entry.path() == temporary || entry.path() == backup, "atomic writes leave no staging files after success or failure");
 	std::filesystem::remove_all(root);
 }
 
@@ -154,6 +160,7 @@ static void CheckMarkers()
 {
 	EditorWindow editor;
 	auto& markers = editor.settings.recordMarkers;
+	markers.clear();
 	Require(editor.AddRecordMarker() && editor.AddRecordMarker() && editor.AddRecordMarker(), "create markers");
 	markers["New marker 2"] = { 1, 0, 0, 1 };
 	editor.DeleteRecordMarker("New marker 1");
@@ -173,12 +180,37 @@ static void CheckMarkers()
 	while (markers.size() < EditorWindow::maxRecordMarkers) Require(editor.AddRecordMarker(), "fill marker capacity");
 	Require(!editor.AddRecordMarker(), "marker capacity enforced");
 }
+static void CheckEditorScale()
+{
+	for (const float scale : { 0.5f, 0.75f, 1.0f, 1.35f, 2.0f }) {
+		EditorWindow editor;
+		editor.settings.editorUIScale = scale;
+		editor.SaveSettings();
+		EditorWindow reopened;
+		reopened.j = json::parse(editor.j.dump());
+		reopened.LoadSettings();
+		Require(reopened.settings.editorUIScale == scale, "editor scale survives serialized settings reload");
+	}
+	EditorWindow editor;
+	editor.j = { { "autoApplyChanges", false } };
+	editor.LoadSettings();
+	Require(editor.settings.editorUIScale == 1.0f, "legacy editor settings default to 100 percent");
+	for (const auto [saved, expected] : { std::pair{ -1.0f, 0.5f }, std::pair{ 9.0f, 2.0f } }) {
+		editor.j = { { "editorUIScale", saved } };
+		editor.LoadSettings();
+		Require(editor.settings.editorUIScale == expected, "editor scale is clamped on load");
+	}
+	editor.settings.editorUIScale = std::numeric_limits<float>::quiet_NaN();
+	editor.SanitizeSettings();
+	Require(editor.settings.editorUIScale == 1.0f, "non-finite editor scale falls back to 100 percent");
+}
 int main()
 {
 	try {
 		CheckThemes();
-		CheckPresetExports();
+		CheckAtomicJsonWrites();
 		CheckMarkers();
+		CheckEditorScale();
 		std::cout << "UI persistence regressions passed\n";
 		return 0;
 	} catch (const std::exception& error) {

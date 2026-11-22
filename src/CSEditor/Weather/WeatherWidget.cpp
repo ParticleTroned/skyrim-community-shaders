@@ -1765,10 +1765,6 @@ void WeatherWidget::DrawFeatureSettings()
 	static constexpr std::string_view kIblFeatureName = "ImageBasedLighting";
 	static constexpr std::string_view kIblWeatherToggle = "EnableIBL";
 
-	ImGui::TextWrapped(
-		"Override this feature's global settings while this weather is active.");
-	ImGui::Spacing();
-
 	auto* globalRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
 
 	for (auto* feature : Feature::GetFeatureList()) {
@@ -1784,7 +1780,7 @@ void WeatherWidget::DrawFeatureSettings()
 			continue;
 		}
 
-		std::string displayName = feature->GetName();
+		std::string displayName = feature->GetDisplayName();
 		bool disableIblWeatherEnableToggle = false;
 		if (featureName == kIblFeatureName) {
 			for (const auto& variable : featureRegistry->GetVariables()) {
@@ -1814,7 +1810,9 @@ void WeatherWidget::DrawFeatureSettings()
 			ImGui::SetNextItemOpen(true);
 		}
 
-		if (ImGui::TreeNodeEx(displayName.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth)) {
+		const bool featureOpen = ImGui::TreeNodeEx(displayName.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth);
+		Util::AddTooltip("Override this feature's global settings while this weather is active.");
+		if (featureOpen) {
 			const bool featureJsonValid =
 				!featureJsonView ||
 				(featureJsonView->is_object() &&

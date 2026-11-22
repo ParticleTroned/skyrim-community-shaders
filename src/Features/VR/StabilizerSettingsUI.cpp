@@ -248,10 +248,9 @@ namespace VRFpsStabilizer
 			if (locations) {
 				DrawLocations(editor);
 			} else if (Equal(group, "Quality Levels")) {
-				ImGui::TextWrapped("Level 0 is highest quality; level 9 is lowest. Stabilizer chooses a level using your frame-time targets.");
 				constexpr std::array levels{ "Level 0 (highest)", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5", "Level 6", "Level 7", "Level 8", "Level 9 (lowest)" };
 				Util::Widgets::Combo("Quality level", &editor.level, levels.data(), static_cast<int>(levels.size()));
-				Tooltip("Choose the level to configure. This edits that level's rules without forcing the current game to that level.");
+				Tooltip("Choose the level to configure. Level 0 is highest quality; level 9 is lowest. Stabilizer chooses a level using your frame-time targets. This edits that level's rules without forcing the current game to that level.");
 				DrawQualityRows(editor, std::format("Level{}", editor.level).c_str());
 			} else if (Equal(group, "Commands")) {
 				constexpr std::array help{

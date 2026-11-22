@@ -1,6 +1,7 @@
 #include "LensFlareWidget.h"
 #include "../EditorWindow.h"
 #include "../WeatherUtils.h"
+#include "Menu/SettingsPage.h"
 
 namespace
 {
@@ -23,7 +24,7 @@ void LensFlareWidget::DrawWidget()
 		bool changed = false;
 		auto drawSection = [&](const char* settingId, const char* sectionLabel, float& value) {
 			DrawSearchSectionIfMatches(settingId, [&](const char* label) {
-				ImGui::SeparatorText(sectionLabel);
+				MenuUI::SectionHeading(sectionLabel);
 				if (WeatherUtils::DrawSliderFloat(label, value, 0.0f, 1.0f))
 					changed = true;
 			});

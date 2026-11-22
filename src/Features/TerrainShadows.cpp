@@ -45,7 +45,12 @@ void TerrainShadows::DrawSettings()
 												});
 
 	if (page.Is("appearance")) {
-		MenuUI::DetailText("Shadows use the worldspace height map. Toggle Enabled in the header; inspect terrain data in Diagnostics.");
+		MenuUI::SectionHeading("Landscape shadows");
+		MenuUI::DetailText("Hills and mountains block directional light, casting broad shadows over the landscape. The shadows move as the scene's light direction changes.");
+		MenuUI::SectionHeading("Where it works");
+		MenuUI::DetailText("Requires a terrain height map for the current worldspace. It uses that map to determine which areas are hidden behind higher ground.");
+		MenuUI::SectionHeading("Controls");
+		MenuUI::DetailText("Use Enabled in the header to compare the effect. If shadows are missing, Diagnostics shows the current worldspace and whether its height map is available.");
 	}
 	if (page.Is("diagnostics")) {
 		std::string curr_worldspace = "N/A";

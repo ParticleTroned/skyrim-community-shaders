@@ -33,7 +33,7 @@ modules outside `src/Features`, such as True PBR. Every listed module is
 part of the CSX core AIO, independent of its inherited standalone metadata.
 The obsolete Wetness Effects package is excluded; Wetterness is included.
 
-Module counts are not a count of all CSX capabilities. Adaptive Balance
+Module counts are not a count of all CSX capabilities. Visuals
 and Performance Tuning are versioned modules; shader-cache management is
 a built-in system and must also appear in the release description.
 The main feature table lists modules and built-in systems together in
@@ -73,6 +73,15 @@ Publishing the GitHub
 release triggers only the existing dry run, never a Nexus upload.
 
 ## Validate packaging
+
+The FidelityFX runtime component includes the binary redistribution licence
+and third-party notices from the same pinned AMD SDK revision as its DLLs.
+It also carries the original notices for the statically linked FidelityFX
+and Anti-Lag 2 SDKs. Update both runtime notice hashes when changing the
+runtime pin. The Streamline component retains its original NVIDIA notices,
+including the NVAPI and Neural Rendering SDK licences.
+Home credits identify these technologies; the distributed licence files
+remain authoritative. Missing or unverified runtime notices block packaging.
 
 Run the focused release suites before publishing a fork's AIO:
 

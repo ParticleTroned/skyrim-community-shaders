@@ -1,4 +1,5 @@
 #include "SettingsOverrideManager.h"
+#include "FeatureSettingsScope.h"
 
 #include "FeatureIssues.h"
 #include "Features/LightLimitFix/ShadowCullingPolicy.h"
@@ -623,7 +624,7 @@ std::unique_ptr<SettingsOverrideManager::OverrideInfo> SettingsOverrideManager::
 
 		if (overrideInfo->isGlobal) {
 			if (SettingsMigrations::MigrateAdaptiveBalanceRootLayer(overrideInfo->overrideData, true))
-				logger::info("Migrated legacy Adaptive Balance settings in global override {}", filePath.string());
+				logger::info("Migrated legacy appearance settings in global override {}", filePath.string());
 			if (auto adaptiveIt = overrideInfo->overrideData.find(SettingsMigrations::kAdaptiveBalanceSettingsName.data());
 				adaptiveIt != overrideInfo->overrideData.end())
 				SettingsMigrations::MarkExplicitAdaptiveBalanceWaterProfiles(*adaptiveIt);
@@ -633,14 +634,14 @@ std::unique_ptr<SettingsOverrideManager::OverrideInfo> SettingsOverrideManager::
 				overrideInfo->routedFeatureData.emplace(
 					std::string(SettingsMigrations::kAdaptiveBalanceFeatureName),
 					std::move(adaptiveBalancePatch));
-				logger::info("Routed legacy utility settings in {} to Adaptive Balance", filePath.string());
+				logger::info("Routed legacy utility settings in {} to Visuals", filePath.string());
 			}
 		} else if (overrideInfo->featureName == SettingsMigrations::kVolumetricLightingFeatureName) {
 			auto patch = SettingsMigrations::ExtractAdaptiveBalanceGodrayFeaturePatch(overrideInfo->overrideData);
 			if (!patch.empty()) {
 				overrideInfo->routedFeatureData.emplace(
 					std::string(SettingsMigrations::kAdaptiveBalanceFeatureName), std::move(patch));
-				logger::info("Routed legacy Volumetric Lighting appearance settings in {} to Adaptive Balance", filePath.string());
+				logger::info("Routed legacy Volumetric Lighting appearance settings in {} to Visuals", filePath.string());
 			}
 		} else if (overrideInfo->featureName == SettingsMigrations::kUnifiedWaterFeatureName) {
 			auto adaptiveBalancePatch = SettingsMigrations::ExtractAdaptiveBalanceWaterFeaturePatch(overrideInfo->overrideData);
@@ -648,7 +649,7 @@ std::unique_ptr<SettingsOverrideManager::OverrideInfo> SettingsOverrideManager::
 				overrideInfo->routedFeatureData.emplace(
 					std::string(SettingsMigrations::kAdaptiveBalanceFeatureName),
 					std::move(adaptiveBalancePatch));
-				logger::info("Routed legacy Unified Water appearance settings in {} to Adaptive Balance", filePath.string());
+				logger::info("Routed legacy Unified Water appearance settings in {} to Visuals", filePath.string());
 			}
 		} else if (overrideInfo->featureName == SettingsMigrations::kAdaptiveBalanceFeatureName) {
 			SettingsMigrations::MigrateCloudSettingsLayer(overrideInfo->overrideData);
@@ -1144,12 +1145,12 @@ bool SettingsOverrideManager::LoadUserOverride(const std::string& featureName, j
 			MergeJson(pendingLegacyUtilityUserPatch, patch);
 			MergeJson(featureJson, patch);
 			applied = true;
-			logger::info("Loaded legacy {} user settings for Adaptive Balance", alias);
+			logger::info("Loaded legacy {} user settings for Visuals", alias);
 		}
 	}
 
 	// Preserve feature-scoped water customizations saved before the appearance
-	// controls moved into Adaptive Balance. Apply the native destination user
+	// controls moved into Visuals. Apply the native destination user
 	// layer afterward so explicitly saved profile values retain final precedence.
 	if (featureName == SettingsMigrations::kAdaptiveBalanceFeatureName) {
 		json legacyUnifiedWaterUser;
@@ -1159,7 +1160,7 @@ bool SettingsOverrideManager::LoadUserOverride(const std::string& featureName, j
 				SettingsMigrations::ClearExplicitAdaptiveBalanceWaterProfiles(featureJson);
 				MergeJson(featureJson, adaptiveBalancePatch);
 				applied = true;
-				logger::info("Loaded legacy Unified Water user appearance settings for Adaptive Balance");
+				logger::info("Loaded legacy Unified Water user appearance settings for Visuals");
 			}
 		}
 	}
@@ -1212,13 +1213,24 @@ bool SettingsOverrideManager::LoadUserOverride(const std::string& featureName, j
 	return true;
 }
 
-bool SettingsOverrideManager::SaveUserOverride(const std::string& featureName, const json& currentSettings, const json& overrideSettings)
+bool SettingsOverrideManager::SaveUserOverride(const std::string& featureName, const json& currentSettings, const json& overrideSettings, const std::string& a_section)
 {
 	if (!enabled || featureName.empty()) {
 		return false;
 	}
 
 	json userOverride = BuildUserOverride(currentSettings, overrideSettings);
+	if (!a_section.empty()) {
+		json saved = json::object();
+		std::string error;
+		const auto path = GetUserOverridesDirectory() / (featureName + ".user.json");
+		if (ReadUserSettingsLayer(path, saved, error) == Util::FileHelpers::JsonFileReadResult::Error) {
+			logger::warn("Cannot preserve other settings in {}: {}", path.string(), error);
+			return false;
+		}
+		FeatureSettingsScope::Copy(saved, userOverride, a_section);
+		userOverride = std::move(saved);
+	}
 	if (featureName == SettingsMigrations::kVolumetricLightingFeatureName) {
 		json saved;
 		std::string error;
@@ -1269,7 +1281,7 @@ bool SettingsOverrideManager::SaveUserOverride(const std::string& featureName, c
 				MergeJson(userOverride, CaptureUnprovidedUserValues(currentSettings, saved, overrideSettings));
 			}
 		} catch (const std::exception& error) {
-			logger::warn("Cannot preserve existing Adaptive Balance user settings {}: {}", path.string(), error.what());
+			logger::warn("Cannot preserve existing Visuals user settings {}: {}", path.string(), error.what());
 			return false;
 		}
 	}

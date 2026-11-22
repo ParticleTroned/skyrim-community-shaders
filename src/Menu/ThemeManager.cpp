@@ -194,7 +194,7 @@ void ThemeManager::SetupImGuiStyle(const Menu& menu)
 	// Scale style sizes by GlobalScale and font-size ratio (theme values target 1080p baseline)
 	float fontScale = 1.0f;
 	auto& io = ImGui::GetIO();
-	const float globalScale = MenuUI::Layout::EffectiveScale(themeSettings.GlobalScale,
+	const float globalScale = MenuUI::Layout::EffectiveScale(menu.GetSettings().GlobalScale,
 		io.FontDefault ? io.FontDefault->LegacySize : Constants::DEFAULT_FONT_SIZE, io.DisplaySize, style.FontScaleDpi);
 	if (io.FontDefault) {
 		const float baselineFontSize = REL::Module::IsVR() ?
@@ -511,7 +511,7 @@ bool ThemeManager::ReloadFont(const Menu& menu, float& cachedFontSize)
 		return false;
 	}
 
-	ImGui::GetStyle().FontScaleMain = MenuUI::Layout::EffectiveScale(themeSettings.GlobalScale,
+	ImGui::GetStyle().FontScaleMain = MenuUI::Layout::EffectiveScale(menu.GetSettings().GlobalScale,
 		io.FontDefault->LegacySize, io.DisplaySize, ImGui::GetStyle().FontScaleDpi);
 	ImGui::GetStyle().FontSizeBase = 0.0f;  // Force UpdateFontsNewFrame to re-detect from font->LegacySize
 

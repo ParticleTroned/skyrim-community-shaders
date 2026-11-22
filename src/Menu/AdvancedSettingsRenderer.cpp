@@ -1,6 +1,9 @@
 #include "AdvancedSettingsRenderer.h"
+#include "FeatureListRenderer.h"
 #include "Menu/SettingsPage.h"
+#include "Menu/SettingsSearch.h"
 #include "SettingsActions.h"
+#include "SettingsTabRenderer.h"
 #include "Utils/WinApi.h"
 
 #include <algorithm>
@@ -15,6 +18,7 @@
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
 #include "Features/RenderDoc.h"
 #include "Features/ReverseZ.h"
+#include "Features/VR.h"
 #include "Fonts.h"
 #include "Globals.h"
 #include "Menu.h"
@@ -23,29 +27,53 @@
 #include "State.h"
 #include "Util.h"
 #include "Utils/Format.h"
+#include "Utils/ShaderCachePack.h"
 #include "Utils/TracyZones.h"
 #include "Utils/UI.h"
 
-void AdvancedSettingsRenderer::RenderAdvancedSettings(
-	const std::function<void()>& drawDisableAtBootSettings)
+void AdvancedSettingsRenderer::RenderAdvancedSettings()
 {
-	MenuUI::SettingsPage page("Advanced", {
-											  { "startup", "Startup", "Choose which features load when the game starts.", "Features loaded at startup", true, true, "Choose startup and compilation" },
-											  { "shaders", "Shaders", "Refine compilation and shader replacement.", "Compilation and replacement", true, true, nullptr },
-											  { "diagnostics", "Diagnostics", "Choose logging and inspect runtime state.", "Logs and runtime state", true, false, "Inspect and record" },
-											  { "capture", "Capture", "Choose frame capture and recording options.", "Frame capture and storage", true, true, nullptr },
-											  { "testing", "Testing", "Compare controlled settings and test scenes.", "Controlled scene comparisons", true, true, "Validate your setup" },
-										  });
-	if (page.Is("startup"))
-		RenderDisableAtBootSection(drawDisableAtBootSettings);
-	if (page.Is("shaders"))
-		RenderShadersSection();
-	if (page.Is("diagnostics"))
-		RenderDiagnosticsSection();
-	if (page.Is("capture")) {
-		if (MenuUI::DetailNote("RenderDoc has its own feature page for capture setup, storage and recorded files.", "Open RenderDoc"))
-			globals::menu->SelectFeatureMenu(globals::features::renderDoc.GetShortName());
+	RenderPage({});
+}
+
+void AdvancedSettingsRenderer::RenderRenderDocSettings(const std::function<void()>& a_draw)
+{
+	RenderPage(a_draw);
+}
+
+void AdvancedSettingsRenderer::RenderPage(const std::function<void()>& a_renderDoc)
+{
+	const MenuUI::FeatureScope builtinScope(nullptr);
+	MenuUI::SettingsPage page("DevTools", { { "renderdoc", "RenderDoc", "Capture frames, inspect storage use, and manage recorded files.", "RenderDoc capture and files" }, { "shaders", "Shaders & Cache", "Configure shader compilation and cache behaviour.", "Compilation, flags and file watching" }, { "shader_debug", "Shader Debug", "Inspect active shaders, replacements and blocking.", "Active shaders and replacement controls" }, { "testing", "Testing", "Compare controlled settings and test scenes.", "Controlled A/B tests and scene preparation" }, { "logging", "Logging", "Choose logging and inspect runtime state.", "Developer mode, logs and runtime data" }, { "vr_diagnostics", "VR Diagnostics", "Inspect headset and controller diagnostics.", "Headset, controller and input state", globals::game::isVR } }, "Dev Tools", "Capture RenderDoc frames, manage shaders and caches, or inspect and test rendering.");
+	if (a_renderDoc) {
+		if (page.Is("renderdoc")) {
+			const MenuUI::SettingsSearch::PageScope searchScope("DevTools");
+			a_renderDoc();
+		} else if (MenuUI::SettingsPage::Selected("DevTools") != "renderdoc")
+			globals::menu->SelectFeatureMenu(FeatureListRenderer::GetBuiltInPageMenuEntryId("DevTools"));
+		return;
 	}
+	if (page.Is("vr_diagnostics"))
+		VR::DrawInterfaceDiagnostics();
+	if (page.Is("shaders")) {
+		RenderShaderCacheStatus();
+		SettingsTabRenderer::RenderShaderSettings();
+		RenderShadersSection();
+	}
+	if (page.Is("shader_debug")) {
+		SettingsTabRenderer::RenderDeveloperShortcuts();
+		RenderShaderReplacementTable();
+		if (globals::state->IsDeveloperMode())
+			RenderShaderBlockingPanel();
+		else if (MenuUI::AvailabilityNotice("Active-shader inspection requires Debug or Trace logging.", "Open Logging"))
+			MenuUI::SettingsPage::Select("DevTools", "logging");
+	}
+	if (page.Is("logging"))
+		RenderDiagnosticsSection();
+	if (page.Is("renderdoc")) {
+		globals::menu->SelectFeatureMenu(globals::features::renderDoc.GetShortName());
+	}
+
 	if (page.Is("testing"))
 		RenderTestingSection();
 }
@@ -54,31 +82,151 @@ void AdvancedSettingsRenderer::RenderAdvancedSettings(
 // Shaders tab
 // -----------------------------------------------------------------------------
 
+void AdvancedSettingsRenderer::RenderShaderCacheStatus()
+{
+	auto* shaderCache = globals::shaderCache;
+	if (!shaderCache) {
+		Util::Text::WrappedWarning("Shader cache status is not available yet.");
+		return;
+	}
+	using InstallationIssue = Util::ShaderCachePack::InstallationIssue;
+	const auto installationIssue = shaderCache->GetDiskCacheInstallationIssue();
+	if (installationIssue == InstallationIssue::NotChecked) {
+		MenuUI::AvailabilityNotice("Shader cache installation has not been checked yet.");
+		return;
+	}
+	if (Util::ShaderCachePack::RequiresInstallationRepair(installationIssue)) {
+		if (installationIssue == InstallationIssue::InvalidPack) {
+			MenuUI::SectionHeading("Shader Cache Unavailable");
+			Util::Text::WrappedWarning("CSX could not validate or open the installed shader cache.");
+		} else {
+			MenuUI::SectionHeading("Wrong Shader Cache Installed");
+			Util::Text::WrappedWarning(installationIssue == InstallationIssue::FlatCacheInVR ?
+										   "This shader cache was built for Skyrim SE/AE, but you are running Skyrim VR." :
+										   "This shader cache was built for Skyrim VR, but you are running Skyrim SE/AE.");
+		}
+		ImGui::TextWrapped("%s", "Shaders compiled in this session cannot be saved. They will need to compile again after restarting until the cache installation is repaired.");
+		ImGui::Spacing();
+		if (installationIssue == InstallationIssue::InvalidPack) {
+			ImGui::TextWrapped("%s", "Check CSX.log for the cause. Resolve any file-access or compatibility issue, or reinstall the matching shader cache from the CSX installer, then restart the game.");
+		} else {
+			ImGui::TextWrapped("%s", installationIssue == InstallationIssue::FlatCacheInVR ?
+										 "Reinstall the Skyrim VR shader cache from the CSX installer, then restart the game." :
+										 "Reinstall the Skyrim SE/AE shader cache from the CSX installer, then restart the game.");
+		}
+		return;
+	}
+	const auto flags = shaderCache->GetRollbackFlags();
+	if (!flags.diskCacheHeld && !flags.featureSetChanged &&
+		!flags.featureSetRevertPending && !flags.previousDiskCacheAvailable) {
+		ImGui::TextDisabled("Shader cache ready.");
+		Util::AddTooltip("Your shader cache matches the current feature setup. No cache action is needed.");
+		return;
+	}
+
+	const auto rollback = shaderCache->GetRollbackState();
+	const bool featureSetChanged = rollback.flags.featureSetChanged;
+	const bool revertPending = rollback.flags.featureSetRevertPending;
+	const bool featureSetCacheBackedUp = rollback.flags.featureSetCacheBackedUp;
+	const bool featureSetCacheSelectivelySeeded = rollback.flags.featureSetCacheSelectivelySeeded;
+	const bool previousCacheAvailable = rollback.flags.previousDiskCacheAvailable;
+	const bool cacheHeld = rollback.flags.diskCacheHeld && !featureSetChanged && !revertPending;
+	const bool featureChangeHeld = rollback.flags.diskCacheHeld && featureSetChanged && !featureSetCacheBackedUp;
+
+	MenuUI::SectionHeading("Shader Cache Changes");
+
+	if (revertPending) {
+		Util::Text::Warning("Cache restored; restart required");
+		Util::AddTooltip("Restart the game to use the restored shader cache and earlier feature setup.");
+		return;
+	}
+
+	const char* summaryText = "A previous cache is available. Restore it if you want to go back to the earlier feature setup.";
+	const char* actionText = "To go back, restore the previous cache and restart:";
+	if (cacheHeld) {
+		summaryText = "Saved shader cache cannot be used because a required feature is missing or failed to load.";
+		actionText = "Check CSX > Feature Issues if present. Fix the install and restart to use the saved cache, or rebuild for this setup if the change was intentional:";
+	} else if (featureChangeHeld) {
+		summaryText = "Feature setup changed; no usable previous cache could be kept. CSX is compiling this session's shaders and will rebuild the cache when finished.";
+		actionText = "Restore unavailable: no usable previous cache was kept. Let compilation finish to rebuild for this setup.";
+	} else if (featureSetChanged && featureSetCacheBackedUp) {
+		if (!featureSetCacheSelectivelySeeded) {
+			summaryText = "Feature setup changed. The complete previous cache was saved, but individual shader families could not be retained safely. The active cache is rebuilding.";
+			actionText = previousCacheAvailable ?
+			                 "Let rebuilding finish; the previous cache can then be restored." :
+			                 "Let compilation finish so CSX can verify the saved previous cache.";
+		} else if (previousCacheAvailable) {
+			summaryText = "Feature setup changed. Unaffected shaders were kept and the complete previous cache saved. Only affected shaders are compiling. Restore becomes available when compilation finishes.";
+		} else {
+			summaryText = "Feature setup changed. Unaffected shaders were kept; only affected shaders are compiling. Restore availability is checked after compilation finishes.";
+			actionText = "Let compilation finish so CSX can verify the saved previous cache.";
+		}
+	} else if (featureSetChanged) {
+		summaryText = "Feature setup changed. CSX is building a new cache; no previous cache is available to restore.";
+		actionText = "Let compilation finish to rebuild the cache for the current setup.";
+	}
+
+	ImGui::TextWrapped("%s", summaryText);
+	ImGui::Spacing();
+
+	using MismatchKind = Util::CacheInvalidation::CacheMismatch::Kind;
+	const auto& mismatches = (cacheHeld || featureChangeHeld) ? rollback.cacheMismatches :
+	                                                            rollback.previousCacheMismatches;
+	for (const auto& mismatch : mismatches) {
+		const char* detail = mismatch.detail.c_str();
+		if (mismatch.kind == MismatchKind::EnabledFlip) {
+			if (cacheHeld) {
+				detail = mismatch.nowPresent ?
+				             "enabled now, but missing from the saved cache" :
+				             "in the saved cache, but missing or failed now";
+			} else {
+				detail = mismatch.nowPresent ?
+				             "enabled now; previous cache had it disabled" :
+				             "disabled now; previous cache had it enabled";
+			}
+		}
+		ImGui::BulletText("%s: %s", mismatch.feature.c_str(), detail);
+	}
+	ImGui::Spacing();
+
+	ImGui::TextWrapped("%s", actionText);
+
+	if (!cacheHeld && !featureChangeHeld) {
+		const bool restoreDisabled = shaderCache->IsCompiling() || !previousCacheAvailable || (featureSetChanged && !featureSetCacheBackedUp);
+		if (restoreDisabled)
+			ImGui::BeginDisabled();
+
+		const bool restoreClicked = ImGui::Button("Restore Previous Cache");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Go back to the earlier shader setup. Restart required.");
+		}
+		if (restoreClicked)
+			shaderCache->RestorePreviousDiskCache();
+
+		if (restoreDisabled)
+			ImGui::EndDisabled();
+
+		if (shaderCache->IsCompiling())
+			ImGui::TextDisabled("Available after shader compilation finishes.");
+	}
+
+	if (cacheHeld) {
+		if (ImGui::Button("Rebuild Cache for Current Features")) {
+			shaderCache->AcceptCacheRebuild();
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted("Keep the current feature setup and rebuild shaders for it.");
+		}
+	}
+}
+
 void AdvancedSettingsRenderer::RenderShadersSection()
 {
 	RenderShaderCompileFlags();
 
-	ImGui::Spacing();
-	ImGui::Separator();
-	ImGui::Spacing();
-
 	RenderShaderThreading();
 
-	ImGui::Spacing();
-	ImGui::Separator();
-	ImGui::Spacing();
-
 	RenderShaderCacheControls();
-
-	ImGui::Spacing();
-	ImGui::Separator();
-	ImGui::Spacing();
-
-	RenderShaderReplacementTable();
-
-	ImGui::Spacing();
-	ImGui::Separator();
-	ImGui::Spacing();
 
 	RenderShaderCompileStatistics();
 }
@@ -87,7 +235,7 @@ void AdvancedSettingsRenderer::RenderShaderCompileFlags()
 {
 	auto shaderCache = globals::shaderCache;
 
-	Util::DrawSectionHeader("Compile Flags");
+	MenuUI::SectionHeading("Compile Flags");
 
 	// Keep drafts private until application; a hidden field abandons its draft.
 	static std::string shaderDefines;
@@ -146,7 +294,7 @@ void AdvancedSettingsRenderer::RenderShaderThreading()
 {
 	auto shaderCache = globals::shaderCache;
 
-	Util::DrawSectionHeader("Threading");
+	MenuUI::SectionHeading("Threading");
 
 	// Pool capacity enforces the same CPU headroom for both compilation modes.
 	const int32_t poolThreads = static_cast<int32_t>(shaderCache->compilationPool.get_thread_count());
@@ -186,13 +334,15 @@ void AdvancedSettingsRenderer::RenderShaderThreading()
 				"On: show compilation status in HMD and desktop. Off (default): desktop only.");
 		}
 	}
+	SettingsTabRenderer::RenderShaderShortcuts();
 }
 
 void AdvancedSettingsRenderer::RenderShaderCacheControls()
 {
 	auto shaderCache = globals::shaderCache;
 
-	Util::DrawSectionHeader("Cache & File Watcher");
+	MenuUI::SectionHeading("Cache & File Watcher");
+	SettingsTabRenderer::RenderShaderCacheActions();
 
 	// File Watcher option
 	bool useFileWatcher = shaderCache->UseFileWatcher();
@@ -227,7 +377,7 @@ void AdvancedSettingsRenderer::RenderShaderReplacementTable()
 {
 	auto state = globals::state;
 
-	Util::DrawSectionHeader("Replace Original Shaders");
+	MenuUI::SectionHeading("Replace Original Shaders");
 	ImGui::BeginDisabled(globals::features::reverseZ.IsActive());
 	const SKSE::stl::scope_exit restoreDisabled([]() noexcept { ImGui::EndDisabled(); });
 	if (globals::features::reverseZ.IsActive())
@@ -484,40 +634,26 @@ void AdvancedSettingsRenderer::RenderShaderCompileStatistics()
 
 	ImGui::TreePop();
 
-	ImGui::Spacing();
-	ImGui::Separator();
-	ImGui::Spacing();
-
 	RenderCompileTraceExport();
 }
 
 // -----------------------------------------------------------------------------
-// Diagnostics tab
+// Logging tab
 // -----------------------------------------------------------------------------
 
 void AdvancedSettingsRenderer::RenderDiagnosticsSection()
 {
 	RenderLoggingControls();
 
-	ImGui::Spacing();
-	ImGui::Separator();
-	ImGui::Spacing();
-
 	RenderRuntimeDebugControls();
 
-	// Shader blocking only meaningful in developer mode (matches prior behavior).
-	if (globals::state->IsDeveloperMode()) {
-		ImGui::Spacing();
-		ImGui::Separator();
-		ImGui::Spacing();
-
-		RenderShaderBlockingPanel();
-	}
+	ImGui::Text("Developer mode: %s", globals::state->IsDeveloperMode() ? "On" : "Off");
+	Util::AddTooltip("Debug or Trace logging enables developer mode.");
 }
 
 void AdvancedSettingsRenderer::RenderCompileTraceExport()
 {
-	Util::DrawSectionHeader("Compile Trace Export");
+	MenuUI::SectionHeading("Compile Trace Export");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Writes every compiled task from the current build to Chrome Trace JSON.");
 		ImGui::Text("Open the result in Perfetto to compare compile cost with queue contention.");
@@ -548,16 +684,16 @@ void AdvancedSettingsRenderer::RenderCompileTraceExport()
 
 	if (!lastExportPath.empty()) {
 		if (lastExportOk) {
-			ImGui::TextColored({ 0.4f, 0.9f, 0.4f, 1.0f }, "Exported: %s", lastExportPath.c_str());
+			MenuUI::PageNotice("Shader compilation statistics exported.", MenuUI::NoticeKind::Information, lastExportPath);
 		} else {
-			ImGui::TextColored({ 0.9f, 0.4f, 0.4f, 1.0f }, "Export failed; check CSX.log.");
+			MenuUI::PageNotice("Export failed; check CSX.log.", MenuUI::NoticeKind::Error);
 		}
 	}
 }
 
 void AdvancedSettingsRenderer::RenderLoggingControls()
 {
-	Util::DrawSectionHeader("Logging");
+	MenuUI::SectionHeading("Logging");
 
 	// Log Level selection. Resync from state every frame so external changes
 	// (config reload, console command, another caller of SetLogLevel) don't
@@ -602,7 +738,7 @@ void AdvancedSettingsRenderer::RenderLoggingControls()
 
 void AdvancedSettingsRenderer::RenderRuntimeDebugControls()
 {
-	Util::DrawSectionHeader("Runtime Debug");
+	MenuUI::SectionHeading("Runtime Debug");
 
 	// Frame annotations toggle
 	Util::Widgets::Checkbox("Frame Annotations", &globals::state->frameAnnotations);
@@ -635,7 +771,7 @@ void AdvancedSettingsRenderer::RenderShaderBlockingPanel()
 {
 	auto shaderCache = globals::shaderCache;
 
-	Util::DrawSectionHeader("Shader Blocking");
+	MenuUI::SectionHeading("Shader Blocking");
 
 	// Show blocked shader status as a regular section
 	if (!shaderCache->blockedKey.empty()) {
@@ -758,7 +894,7 @@ void AdvancedSettingsRenderer::RenderShaderBlockingPanel()
 	// "Shader Blocking", so a nested CollapsingHeader was redundant noise.
 	{
 		ImGui::Spacing();
-		Util::DrawSectionHeader("Active Shaders (Used Recently)");
+		MenuUI::SectionHeading("Active Shaders (Used Recently)");
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"Recently used shaders; entries expire after about one second. Enable Shader Blocking above to cycle/block them with hotkeys.");
@@ -922,15 +1058,6 @@ void AdvancedSettingsRenderer::RenderShaderBlockingPanel()
 
 // -----------------------------------------------------------------------------
 // Disable at Boot tab
-// -----------------------------------------------------------------------------
-
-void AdvancedSettingsRenderer::RenderDisableAtBootSection(const std::function<void()>& drawDisableAtBootSettings)
-{
-	drawDisableAtBootSettings();
-}
-
-// -----------------------------------------------------------------------------
-// Testing tab
 // -----------------------------------------------------------------------------
 
 void AdvancedSettingsRenderer::RenderTestingSection()

@@ -321,12 +321,14 @@ class MemoryRecoveryContracts(unittest.TestCase):
         self.assertIn("if (state_->memoryRecovery_.phase == MemoryRecoveryPhase::Retiring)", source)
         self.assertIn("backendMaintenancePending_.store(true", source)
         self.assertNotIn("SampleMemoryBudgetLocked(", source)
-        ui = UPSCALING.split('Neural Rendering cannot recover safely in this session.', 1)[1].split('if ((status.failureLatched || status.quarantined)', 1)[0]
-        self.assertIn("else if (status.failureLatched)", ui)
-        self.assertIn("else if (IsNeuralRenderingRequested()", ui)
-        self.assertIn("IsNeuralRenderingRequested() && status.memoryConservation.active", ui)
+        feature = (ROOT / "src/Features/NeuralRenderingFeature.cpp").read_text()
+        ui = body(feature, "Feature::SettingsHeaderStatus NeuralRenderingFeature::GetSettingsHeaderStatus() const", "")
+        self.assertLess(ui.index("status.failureLatched || status.quarantined"), ui.index("IsNeuralRenderingRequested()"))
+        self.assertLess(ui.index("!upscaling.settings.neuralRenderingEnabled"), ui.index("status.memoryConservation.active"))
         self.assertIn("MemoryRecoveryPhase::Retiring", ui)
         self.assertIn("MemoryRecoveryPhase::Waiting", ui)
+        controls = body(UPSCALING, "void Upscaling::DrawNeuralRenderingMasterControl(", "")
+        self.assertLess(controls.index("runtimeInstalled && !status.quarantined"), controls.index("Renderer::Instance().Reset()"))
 
     def test_colour_allocation_preserves_errors_and_one_sizing_rule(self):
         allocation = body(PIPELINE, "bool CreateTexture(", "\t\t")

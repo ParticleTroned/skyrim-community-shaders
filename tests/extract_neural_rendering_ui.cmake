@@ -56,7 +56,7 @@ extract("src/Features/Upscaling.cpp"
     "bool Upscaling::IsNeuralRenderingFovConfigurationAvailable()" profile_gate)
 # The policy harness visits each panel together; native navigation has a separate ImGui test.
 string(FIND "${selection_controls}" "\t\tconst bool usesFov =" page_start)
-string(FIND "${selection_controls}" "\t\tif (page.Is(\"mode\")) {" page_end)
+string(FIND "${selection_controls}" "\t\tauto settingsAvailabilityGuard =" page_end)
 if(page_start LESS 0 OR page_end LESS_EQUAL page_start)
     message(FATAL_ERROR "NR tab declaration boundaries are missing")
 endif()
@@ -68,7 +68,7 @@ foreach(panel IN ITEMS selection_controls appearance_controls)
 endforeach()
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 file(WRITE "${OUTPUT_DIRECTORY}/neural_rendering_ui_under_test.h"
-    "${fov_profile}\n${fov_request}\n${fov_readiness}\n${developer_mode}\n${draw_settings}\n${availability_policy}\n${execution_gate}\n${dispatch_gate}\n${profile_gate}\n${image_preset}\n${master_control}\nvoid Upscaling::DrawSelectionControls() {\nconst auto a_upscaleMethod = GetUpscaleMethod();\nconst bool showDiagnostics = globals::state && globals::state->IsDeveloperMode();\nconst std::function<void(bool)> a_drawColourSettings;\nDrawNeuralRenderingEnableControl();\n${selection_controls}\n(void)missingRenderScale;\n(void)reducedResolution;\n${appearance_controls}\n}\n}\n")
+    "${fov_profile}\n${fov_request}\n${fov_readiness}\n${developer_mode}\n${draw_settings}\n${availability_policy}\n${execution_gate}\n${dispatch_gate}\n${profile_gate}\n${image_preset}\n${master_control}\nvoid Upscaling::DrawSelectionControls() {\nconst auto a_upscaleMethod = GetUpscaleMethod();\nconst bool showDiagnostics = NeuralRendering::kDevelopmentDiagnostics && globals::state && globals::state->IsDeveloperMode();\nconst std::function<void(bool)> a_drawColourSettings;\nDrawNeuralRenderingEnableControl();\nDrawNeuralRenderingMasterControl(showDiagnostics);\n${selection_controls}\n(void)missingRenderScale;\n(void)reducedResolution;\n${appearance_controls}\n}\n}\n")
 
 extract("src/Features/VR/Input.cpp"
     "bool VR::IsControllerComboPressed("
@@ -80,7 +80,7 @@ file(WRITE "${OUTPUT_DIRECTORY}/neural_controller_toggle_under_test.h" "${contro
 
 extract("src/Menu/StabilizerPage.cpp"
     "\t\tconst auto& upscaling = globals::features::upscaling;"
-    "\t\tImGui::Spacing();\n\t\tImGui::SeparatorText(\"Features\");" stabilizer_warning)
+    "\t\tImGui::Spacing();\n\t\tMenuUI::SectionHeading(\"Features\");" stabilizer_warning)
 file(APPEND "${OUTPUT_DIRECTORY}/neural_rendering_ui_under_test.h"
     "\nvoid DrawStabilizerNRWarnings(const Upscaling::VRFpsStabilizerConfig& config, bool showNotConfigured) {\n${stabilizer_warning}\n}\n")
 

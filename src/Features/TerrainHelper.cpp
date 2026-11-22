@@ -37,16 +37,20 @@ void TerrainHelper::DataLoaded()
 void TerrainHelper::DrawSettings()
 {
 	MenuUI::SettingsPage page("TerrainHelper", {
-												   { "appearance", "How it works", "Learn how distant terrain matches nearby ground.", "Distant-to-near ground matching", true, true, "Refine terrain continuity", nullptr, nullptr, featureAvailable },
+												   { "appearance", "How it works", "Learn how compatible terrain textures gain surface depth.", "Terrain texture depth and requirements", true, true, "Understand terrain detail", nullptr, nullptr, featureAvailable },
 											   });
 	if (!featureAvailable && (page.Is("overview") || page.Is("appearance"))) {
 		Util::Text::WrappedWarning("TerrainHelper.esp was not detected. Install and enable its plugin, then restart to use Terrain Helper.");
-		return;
 	}
 	if (!page.Is("appearance"))
 		return;
 
-	MenuUI::DetailText("Match distant terrain to nearby ground using Terrain Helper's companion plugin. Control it with Enabled in the header; no further tuning.");
+	MenuUI::SectionHeading("Terrain texture depth");
+	MenuUI::DetailText("Lets compatible landscape textures supply height detail, so ground such as stones and soil can appear raised or recessed as you move.");
+	MenuUI::SectionHeading("Requirements");
+	MenuUI::DetailText("Requires TerrainHelper.esp and landscape textures with height data. The installed texture pack determines which surfaces gain detail.");
+	MenuUI::SectionHeading("Controls");
+	MenuUI::DetailText("Use Enabled in the header to switch Terrain Helper on or off. Adjust surface depth with Parallax Strength in Extended Materials > Depth.");
 }
 
 void TerrainHelper::SetPerformanceCostMeasurementEnabled(bool a_enabled)

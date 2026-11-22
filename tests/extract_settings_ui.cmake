@@ -32,9 +32,15 @@ string(SUBSTRING "${color_rest}" 0 ${color_length} secondary_text)
 file(WRITE "${OUTPUT_DIRECTORY}/settings_widget_declarations.h"
     "#pragma once\nnamespace Util { ${declarations} }")
 
+file(READ "${PROJECT_ROOT}/src/Utils/UI.cpp" color_source)
+string(FIND "${color_source}" "\t\tImVec4 Readiness(bool ready)" readiness_start)
+string(FIND "${color_source}" "\t\tImVec4 PerformanceDelta(" readiness_end)
+math(EXPR readiness_length "${readiness_end} - ${readiness_start}")
+string(SUBSTRING "${color_source}" ${readiness_start} ${readiness_length} readiness)
+
 file(READ "${OUTPUT_DIRECTORY}/settings_page_under_test.h" page_body)
 file(WRITE "${OUTPUT_DIRECTORY}/settings_page_under_test.h"
-    "#include \"settings_widget_declarations.h\"\nnamespace Util::Color { ${secondary_text} }\n${page_body}")
+    "#include \"settings_widget_declarations.h\"\nnamespace Util::Color { ${secondary_text} ${readiness} }\n${page_body}")
 
 file(READ "${PROJECT_ROOT}/src/Features/VolumetricLighting.cpp" source)
 set(prefixes "")
@@ -87,7 +93,11 @@ string(FIND "${rest}" ")" end)
 math(EXPR length "${end} + 1")
 string(SUBSTRING "${rest}" 0 ${length} serializer)
 file(WRITE "${OUTPUT_DIRECTORY}/menu_settings_under_test.h"
-    "struct Menu { using ThemeSettings = nlohmann::json; ${declaration} };\n${serializer}\n")
+    "struct Menu { struct ThemeSettings { float GlobalScale = 0; }; ${declaration} };\n${serializer}\n")
+extract_between("${source}" "\tsettings.GlobalScale = MenuUI::Layout::SanitizeGlobalScale(" "\n\n\tif (settings.BackgroundShaderCompilationOnBoot)" "menu_zoom_load_under_test.h")
+file(READ "${OUTPUT_DIRECTORY}/menu_zoom_load_under_test.h" zoom_load)
+file(APPEND "${OUTPUT_DIRECTORY}/menu_settings_under_test.h"
+    "inline void RestoreMenuZoom(Menu::Settings& settings, const nlohmann::json& o_json) { ${zoom_load} }\n")
 
 # Exercise RenderDoc toggle/load/default transitions without loading its runtime DLL.
 file(READ "${PROJECT_ROOT}/src/Features/RenderDoc.cpp" source)
@@ -146,6 +156,7 @@ endif()
 string(SUBSTRING "${source}" ${warning_start} -1 warning_body)
 string(REPLACE "ImGui::Selectable(" "TrackedSelectable(" warning_body "${warning_body}")
 file(WRITE "${OUTPUT_DIRECTORY}/settings_constraint_warning_under_test.h" "${warning_body}")
+extract_between("${source}" "void FeatureListRenderer::RenderPerformancePage(" "void FeatureListRenderer::SetSidebarVisible(" "settings_performance_navigation_under_test.h")
 
 file(READ "${PROJECT_ROOT}/src/State.cpp" source)
 extract_between("${source}" "bool State::RestoreDefaultSettings(" "void State::Load(" "settings_restore_under_test.h")
@@ -164,16 +175,49 @@ string(FIND "${source}" "namespace MenuUI" start)
 string(SUBSTRING "${source}" ${start} -1 body)
 file(WRITE "${OUTPUT_DIRECTORY}/settings_global_actions_under_test.h" "${body}")
 
+file(READ "${PROJECT_ROOT}/src/State.cpp" source)
+extract_between("${source}" "\tstd::vector<std::string> SaveUserOverrides(" "\tstd::string JoinSettingLayerNames(" "feature_settings_save_under_test.h")
+file(READ "${OUTPUT_DIRECTORY}/feature_settings_save_under_test.h" overrides)
+extract_between("${source}" "bool State::Save(ConfigMode" "bool State::ValidateCache(" "feature_settings_save_under_test.h")
+file(READ "${OUTPUT_DIRECTORY}/feature_settings_save_under_test.h" save)
+file(WRITE "${OUTPUT_DIRECTORY}/feature_settings_save_under_test.h" "${overrides}\n${save}")
+
 file(READ "${PROJECT_ROOT}/src/Menu/AdaptiveBalancePresets.cpp" source)
 string(FIND "${source}" "namespace MenuUI::AdaptiveBalancePresets" start)
 string(SUBSTRING "${source}" ${start} -1 body)
 string(REPLACE "ImGui::Button(" "TrackedPresetButton(" body "${body}")
 string(REPLACE "ImGui::InputTextWithHint(" "TrackedPresetNameInput(" body "${body}")
 file(WRITE "${OUTPUT_DIRECTORY}/settings_adaptive_presets_under_test.h" "${body}")
+file(READ "${PROJECT_ROOT}/src/Menu/ProfileExchange.cpp" exchange_source)
+string(FIND "${exchange_source}" "namespace MenuUI" exchange_start)
+string(SUBSTRING "${exchange_source}" ${exchange_start} -1 exchange_body)
+string(REPLACE "ImGui::Button(" "TrackedPresetButton(" exchange_body "${exchange_body}")
+file(APPEND "${OUTPUT_DIRECTORY}/settings_adaptive_presets_under_test.h" "\n${exchange_body}")
 
-file(READ "${PROJECT_ROOT}/src/Features/AdaptiveBrightness.cpp" source)
-extract_between("${source}" "\tconstexpr std::string_view kGlobalPresetFilenameSuffix" "\tusing ContextProfileScope" "settings_preset_files_under_test.h")
-file(READ "${OUTPUT_DIRECTORY}/settings_preset_files_under_test.h" constants)
-extract_between("${source}" "\tbool EndsWithCaseInsensitive(" "\tstd::string GetPresetNotFoundMessage(" "settings_preset_files_under_test.h")
-file(READ "${OUTPUT_DIRECTORY}/settings_preset_files_under_test.h" functions)
-file(WRITE "${OUTPUT_DIRECTORY}/settings_preset_files_under_test.h" "${constants}\n${functions}")
+
+# Exercise shared warning/error routing through the production notice functions.
+extract_between("${color_source}" "\t\tstatic void PageNoticeV(" "#undef UTIL_TEXT_WRAPPED" "settings_notices_under_test.h")
+file(READ "${OUTPUT_DIRECTORY}/settings_notices_under_test.h" notices)
+string(REGEX REPLACE "\n[\t ]+UTIL_TEXT[^\n]+" "" notices "${notices}")
+file(WRITE "${OUTPUT_DIRECTORY}/settings_notices_under_test.h" "namespace Util::Text {\n${notices}\n#undef UTIL_TEXT_WRAPPED\n}\n")
+
+file(READ "${PROJECT_ROOT}/src/Menu/PerformanceResultsUI.cpp" source)
+extract_between("${source}" "\t\tvoid ContextLine(" "\n\t}\n\n\tvoid Draw()" "settings_results_under_test.h")
+file(READ "${OUTPUT_DIRECTORY}/settings_results_under_test.h" body)
+file(WRITE "${OUTPUT_DIRECTORY}/settings_results_under_test.h" "namespace MenuUI::PerformanceResultsPage { namespace {\n${body}\n} }\n")
+
+# Exercise Advanced Skin's production serialization, controls and shared page layout.
+file(READ "${PROJECT_ROOT}/src/Features/Skin.h" source)
+extract_between("${source}" "	struct Settings
+" "
+	struct alignas(16) SkinData" "settings_advanced_skin_fields_under_test.h")
+file(READ "${PROJECT_ROOT}/src/Features/Skin.cpp" source)
+extract_between("${source}" "namespace
+{" "
+std::pair<std::string, std::vector<std::string>> Skin::GetFeatureSummary()" "settings_advanced_skin_metadata_under_test.h")
+extract_between("${source}" "void Skin::LoadSettings(" "
+void Skin::DrawPerformanceSettings(" "settings_advanced_skin_save_under_test.h")
+string(REPLACE "Util::Widgets::Checkbox(" "TrackedShadowCheckbox(" source "${source}")
+string(REPLACE "Util::Widgets::SliderFloat(" "TrackedShadowSlider(" source "${source}")
+extract_between("${source}" "void Skin::DrawSettings()" "
+Skin::SkinData Skin::GetCommonBufferData()" "settings_advanced_skin_under_test.h")

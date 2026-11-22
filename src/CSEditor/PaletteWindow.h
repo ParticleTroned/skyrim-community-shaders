@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Layout.h"
 #include "WeatherUtils.h"
 
 class PaletteWindow
@@ -30,7 +31,8 @@ public:
 		bool isFavorite = false;
 	};
 
-	void Draw();
+	/** Draw the palette using the editor's shared first-use or reset geometry. */
+	void Draw(const CSXEditorLayout::Panel& a_default, ImGuiCond a_condition);
 	void TrackColorUsage(const float3& color);
 	void TrackValueUsage(const std::string& name, float value);
 	void Save();

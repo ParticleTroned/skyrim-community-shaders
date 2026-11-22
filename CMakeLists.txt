@@ -1917,6 +1917,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_page_under_test.h"
             "${_settings_ui_dir}/settings_widget_under_test.h"
             "${_settings_ui_dir}/settings_widget_declarations.h"
+            "${_settings_ui_dir}/settings_notices_under_test.h"
             "${_settings_ui_dir}/settings_lighting_pages_under_test.h"
             "${_settings_ui_dir}/settings_grass_under_test.h"
             "${_settings_ui_dir}/settings_shadow_culling_under_test.h"
@@ -1925,6 +1926,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/menu_settings_under_test.h"
             "${_settings_ui_dir}/settings_footer_under_test.h"
             "${_settings_ui_dir}/settings_global_actions_under_test.h"
+            "${_settings_ui_dir}/feature_settings_save_under_test.h"
             "${_settings_ui_dir}/settings_restore_under_test.h"
             "${_settings_ui_dir}/settings_renderdoc_under_test.h"
             "${_settings_ui_dir}/settings_renderdoc_frames_under_test.h"
@@ -1939,12 +1941,17 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_skin_controls_under_test.h"
             "${_settings_ui_dir}/settings_skin_under_test.h"
             "${_settings_ui_dir}/settings_skin_fields_under_test.h"
+            "${_settings_ui_dir}/settings_advanced_skin_fields_under_test.h"
+            "${_settings_ui_dir}/settings_advanced_skin_metadata_under_test.h"
+            "${_settings_ui_dir}/settings_advanced_skin_save_under_test.h"
+            "${_settings_ui_dir}/settings_advanced_skin_under_test.h"
             "${_settings_ui_dir}/settings_ui_inventory_under_test.h"
             "${_settings_ui_dir}/settings_shell_under_test.h"
             "${_settings_ui_dir}/settings_capture_feedback_under_test.h"
             "${_settings_ui_dir}/settings_constraint_warning_under_test.h"
+            "${_settings_ui_dir}/settings_performance_navigation_under_test.h"
             "${_settings_ui_dir}/settings_adaptive_presets_under_test.h"
-            "${_settings_ui_dir}/settings_preset_files_under_test.h"
+            "${_settings_ui_dir}/settings_results_under_test.h"
         COMMAND
             "${Python3_EXECUTABLE}"
             "${PROJECT_SOURCE_DIR}/tests/ui_page_inventory.py" --root
@@ -1957,6 +1964,8 @@ if(BUILD_CONTROLLER_TESTS)
         DEPENDS
             src/Menu/FeatureListRenderer.cpp
             src/Menu/SettingsActions.cpp
+            src/Menu/ProfileExchange.cpp
+            src/State.cpp
             src/Menu/ExternalSettingsPage.h
             src/Menu/StabilizerPage.cpp
             src/Menu/SettingsPage.cpp
@@ -1969,6 +1978,8 @@ if(BUILD_CONTROLLER_TESTS)
             src/Features/FoliageLighting.h
             src/Features/SubsurfaceScattering.cpp
             src/Features/SubsurfaceScattering.h
+            src/Features/Skin.cpp
+            src/Features/Skin.h
             src/Utils/UI.cpp
             src/Utils/WinApi.cpp
             src/Features/Upscaling.cpp
@@ -1987,6 +1998,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_page_under_test.h"
             "${_settings_ui_dir}/settings_widget_under_test.h"
             "${_settings_ui_dir}/settings_widget_declarations.h"
+            "${_settings_ui_dir}/settings_notices_under_test.h"
             "${_settings_ui_dir}/settings_lighting_pages_under_test.h"
             "${_settings_ui_dir}/settings_grass_under_test.h"
             "${_settings_ui_dir}/settings_shadow_culling_under_test.h"
@@ -1995,6 +2007,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/menu_settings_under_test.h"
             "${_settings_ui_dir}/settings_footer_under_test.h"
             "${_settings_ui_dir}/settings_global_actions_under_test.h"
+            "${_settings_ui_dir}/feature_settings_save_under_test.h"
             "${_settings_ui_dir}/settings_restore_under_test.h"
             "${_settings_ui_dir}/settings_renderdoc_under_test.h"
             "${_settings_ui_dir}/settings_renderdoc_frames_under_test.h"
@@ -2009,13 +2022,19 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_skin_controls_under_test.h"
             "${_settings_ui_dir}/settings_skin_under_test.h"
             "${_settings_ui_dir}/settings_skin_fields_under_test.h"
+            "${_settings_ui_dir}/settings_advanced_skin_fields_under_test.h"
+            "${_settings_ui_dir}/settings_advanced_skin_metadata_under_test.h"
+            "${_settings_ui_dir}/settings_advanced_skin_save_under_test.h"
+            "${_settings_ui_dir}/settings_advanced_skin_under_test.h"
             "${_settings_ui_dir}/settings_ui_inventory_under_test.h"
             "${_settings_ui_dir}/settings_shell_under_test.h"
             "${_settings_ui_dir}/settings_capture_feedback_under_test.h"
             "${_settings_ui_dir}/settings_constraint_warning_under_test.h"
+            "${_settings_ui_dir}/settings_performance_navigation_under_test.h"
             "${_settings_ui_dir}/settings_adaptive_presets_under_test.h"
-            "${_settings_ui_dir}/settings_preset_files_under_test.h"
+            "${_settings_ui_dir}/settings_results_under_test.h"
     )
+    target_sources(settings_ui_test PRIVATE src/Menu/PerformanceResults.cpp)
     target_include_directories(settings_ui_test PRIVATE "${_settings_ui_dir}")
     find_package(fmt CONFIG REQUIRED)
     target_link_libraries(
@@ -2024,6 +2043,170 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_compile_definitions(settings_ui_test PRIVATE DEVBENCH_BRIDGE_ENABLED)
     set_tests_properties(SettingsUI PROPERTIES TIMEOUT 30)
+
+    set(_menu_ui_navigation_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/menu_ui_navigation_test"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_menu_ui_navigation_dir}/menu_ui_navigation_under_test.h"
+            "${_menu_ui_navigation_dir}/feature_settings_action_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_menu_ui_navigation_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_menu_ui_navigation.cmake"
+        DEPENDS
+            src/MenuDevBenchBridge.cpp
+            src/Menu/SettingsNavigation.h
+            tests/extract_menu_ui_navigation.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(menu_ui_navigation_test MenuUINavigation tests/menu_ui_navigation_test.cpp)
+    target_sources(
+        menu_ui_navigation_test
+        PRIVATE
+            "${_menu_ui_navigation_dir}/menu_ui_navigation_under_test.h"
+            "${_menu_ui_navigation_dir}/feature_settings_action_under_test.h"
+    )
+    target_include_directories(
+        menu_ui_navigation_test
+        PRIVATE "${_menu_ui_navigation_dir}"
+    )
+    target_link_libraries(
+        menu_ui_navigation_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+
+    set(_vr_interface_settings_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/vr_interface_settings_test"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_vr_interface_settings_dir}/vr_interface_settings_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_vr_interface_settings_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_vr_interface_settings.cmake"
+        DEPENDS
+            src/Features/VR.cpp
+            src/Features/VR.h
+            tests/extract_vr_interface_settings.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(vr_interface_settings_test VRInterfaceSettings tests/vr_interface_settings_test.cpp)
+    target_sources(
+        vr_interface_settings_test
+        PRIVATE
+            "${_vr_interface_settings_dir}/vr_interface_settings_under_test.h"
+    )
+    target_include_directories(
+        vr_interface_settings_test
+        PRIVATE "${_vr_interface_settings_dir}"
+    )
+    target_link_libraries(
+        vr_interface_settings_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+
+    add_controller_test(look_scene_runtime_test LookSceneRuntime tests/look_scene_runtime_test.cpp)
+    set(_look_scene_test
+        "${CMAKE_CURRENT_BINARY_DIR}/look_scene_runtime_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_look_scene_test}"
+        COMMAND
+            ${CMAKE_COMMAND} -DPROJECT_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+            -DOUTPUT_FILE=${_look_scene_test} -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/extract_look_scene_runtime.cmake"
+        DEPENDS
+            src/Presets/LookSceneRuntime.cpp
+            src/SceneSettingsManager.cpp
+            tests/extract_look_scene_runtime.cmake
+        VERBATIM
+    )
+    target_sources(
+        look_scene_runtime_test
+        PRIVATE
+            "${_look_scene_test}"
+            src/Presets/LookScenes.cpp
+            src/Presets/SettingsDomains.cpp
+    )
+    target_include_directories(
+        look_scene_runtime_test
+        PRIVATE "${CMAKE_CURRENT_BINARY_DIR}"
+    )
+    target_link_libraries(
+        look_scene_runtime_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+
+    add_controller_test(look_profiles_test LookProfiles tests/look_profiles_test.cpp)
+    set(_look_profiles_test
+        "${CMAKE_CURRENT_BINARY_DIR}/look_profiles_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_look_profiles_test}"
+        COMMAND
+            ${CMAKE_COMMAND} -DPROJECT_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+            -DOUTPUT_FILE=${_look_profiles_test} -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/extract_look_profiles.cmake"
+        DEPENDS src/Presets/LookProfiles.cpp tests/extract_look_profiles.cmake
+        VERBATIM
+    )
+    target_sources(
+        look_profiles_test
+        PRIVATE
+            "${_look_profiles_test}"
+            src/Presets/SettingsDomains.cpp
+            src/Presets/LookScenes.cpp
+            src/Presets/LookPack.cpp
+            src/Utils/PathValidation.cpp
+    )
+    target_include_directories(
+        look_profiles_test
+        PRIVATE "${CMAKE_CURRENT_BINARY_DIR}"
+    )
+    target_link_libraries(
+        look_profiles_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+
+    add_controller_test(performance_profiles_test PerformanceProfiles tests/performance_profiles_test.cpp)
+    set(_performance_profiles_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/performance-profiles"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_performance_profiles_dir}/performance_profile_actions_under_test.h"
+            "${_performance_profiles_dir}/ssgi_presets_under_test.h"
+        COMMAND
+            ${CMAKE_COMMAND} -DPROJECT_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+            -DOUTPUT_DIRECTORY=${_performance_profiles_dir} -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/extract_performance_profiles.cmake"
+        DEPENDS
+            src/Menu/PerformancePage.cpp
+            src/Features/ScreenSpaceGI.cpp
+            src/Features/ScreenSpaceGI.h
+            tests/extract_performance_profiles.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    target_sources(
+        performance_profiles_test
+        PRIVATE
+            "${_performance_profiles_dir}/performance_profile_actions_under_test.h"
+            "${_performance_profiles_dir}/ssgi_presets_under_test.h"
+    )
+    target_include_directories(
+        performance_profiles_test
+        PRIVATE "${_performance_profiles_dir}"
+    )
+    target_link_libraries(
+        performance_profiles_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
 
     add_controller_test(grass_placement_test GrassPlacement tests/grass_placement_test.cpp)
     target_link_libraries(
@@ -3770,6 +3953,15 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_link_libraries(
         motion_sharpening_settings_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    add_controller_test(performance_results_test PerformanceResults tests/performance_results_test.cpp)
+    target_sources(
+        performance_results_test
+        PRIVATE src/Menu/PerformanceResults.cpp
+    )
+    target_link_libraries(
+        performance_results_test
         PRIVATE nlohmann_json::nlohmann_json
     )
     add_controller_test(

@@ -15,7 +15,7 @@ public:
 
 	virtual inline std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
-		return { "Browse, inspect, and switch weather in-game.",
+		return { "Preview weather and time, and inspect weather-driven feature responses.",
 			{ "Instantly switch between any weather with immediate or gradual transitions",
 				"Filter weather by type (Pleasant, Cloudy, Rainy, Snow, Aurora) for easy browsing",
 				"View detailed weather information including wind, precipitation, and lightning data",
@@ -23,7 +23,11 @@ public:
 				"Persistent overlay window for continuous weather monitoring while playing" } };
 	}
 
+	SettingsHeaderStatus GetSettingsHeaderStatus() const override;
 	void DrawSettingsEnabledControl() override;
+	bool SupportsPerformanceProfileToggle() const override { return true; }
+	bool IsPerformanceCostMeasurementEnabled() const override { return WeatherDetailsWindow.ShowInOverlay; }
+	void SetPerformanceCostMeasurementEnabled(bool value) override { SetOverlayVisible(value); }
 	virtual void DrawSettings() override;
 	virtual void DataLoaded() override;
 	virtual void Prepass() override;

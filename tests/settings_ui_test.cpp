@@ -1,10 +1,17 @@
+#include "FeatureSettingsScope.h"
 #include "Features/GrassOptimizations/GrassPolicy.h"
 #include "Features/LightLimitFix/ShadowCullingPolicy.h"
 #include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
 #include "Features/Upscaling/NeuralRendering/GuidedReconstructionPolicy.h"
 #include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
 #include "Menu/AdaptiveBalancePresets.h"
+#include "Menu/Layout.h"
+#include "Menu/PerformancePage.h"
+#include "Menu/PerformanceResults.h"
+#include "Menu/ProfileExchange.h"
+#include "Menu/SectionDivider.h"
 #include "Menu/SettingsActions.h"
+#include "Menu/SettingsNavigation.h"
 #include "Menu/SettingsPage.h"
 #include "Menu/SettingsSearch.h"
 #include "Utils/FeatureProfiling.h"
@@ -44,6 +51,10 @@ struct InputCombo
 	static InputCombo Keyboard(int code) { return { code }; }
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(InputCombo, key)
+namespace ThemeManager::Constants
+{
+	constexpr float DEFAULT_GLOBAL_SCALE = 0.0f;
+}
 #include "menu_settings_under_test.h"
 
 // Only game services are substituted. Layout, input, tabs and popups use real ImGui.
@@ -51,11 +62,29 @@ struct Feature
 {
 	std::string name;
 	bool supportsMeasurement = true;
+	bool loaded = true;
+	bool hasSettings = true;
+	nlohmann::json settings = { { "Enabled", true } };
+	std::string GetName() const { return name; }
+	bool HasFeatureSettings() const { return hasSettings; }
+	int loadFailures = 0;
+	void SaveSettings(nlohmann::json& value) const { value = settings; }
+	void LoadSettings(nlohmann::json& value)
+	{
+		settings = value;
+		if (loadFailures > 0) {
+			--loadFailures;
+			throw std::runtime_error("Feature load failed");
+		}
+	}
+	void RestoreDefaultSettings() { settings = { { "Enabled", true } }; }
 	std::string GetShortName() const { return name; }
 	bool SupportsPerformanceCostMeasurement() const { return supportsMeasurement; }
 	std::string GetDisplayName() const { return name; }
+	std::string_view GetSettingsFooterText() const { return {}; }
 	static std::vector<Feature*> GetFeatureList() { return {}; }
 };
+
 namespace globals
 {
 	namespace game
@@ -99,6 +128,8 @@ namespace globals
 		const Theme& GetTheme() const { return theme; }
 		bool dirty = false, messageError = false;
 		std::string message;
+		std::string destination;
+		void SelectFeatureMenu(const std::string& value) { destination = value; }
 		int dirtyChecks = 0;
 		bool mutationAllowed = true;
 		std::optional<nlohmann::json> mutationBaseline;
@@ -106,6 +137,17 @@ namespace globals
 		bool IsSettingsSaveMessageError() const { return messageError; }
 		std::string GetSettingsSaveMessage() const { return message; }
 		bool HasUnsavedSettings() const { return dirty; }
+		std::unordered_map<std::string, nlohmann::json> savedFeatures;
+		bool HasUnsavedFeatureSettings(const std::string& name) const { return savedFeatures.contains(name); }
+		bool CopySavedFeatureSettings(const std::string& name, nlohmann::json& value)
+		{
+			if (!savedFeatures.contains(name))
+				return false;
+			value = { { name, savedFeatures.at(name) } };
+			return true;
+		}
+		void CaptureFeatureMenuSettings(const std::string&, nlohmann::json&) const {}
+		void ApplyFeatureMenuSettings(const std::string&, const nlohmann::json*) {}
 		void RequestSettingsDirtyCheck() { ++dirtyChecks; }
 		void ClearSettingsSaveResult()
 		{
@@ -123,6 +165,7 @@ namespace globals
 	{
 		enum class ConfigMode
 		{
+			USER,
 			DEFAULT
 		};
 		bool blocked = false, snapshotFailure = false;
@@ -134,7 +177,19 @@ namespace globals
 		}
 		int applyFailures = 0, saves = 0, loads = 0, snapshots = 0, applies = 0;
 		nlohmann::json settings{ { "current", true } };
-		void Save() { ++saves; }
+		bool Save()
+		{
+			++saves;
+			return true;
+		}
+		Feature* savedFeature = nullptr;
+		bool Save(ConfigMode, Feature* feature)
+		{
+			savedFeature = feature;
+			return true;
+		}
+		bool startupDisabled = false;
+		bool IsFeatureDisabled(const std::string&) const { return startupDisabled; }
 		void Load() { ++loads; }
 		bool IsPersistentMutationBlocked() const { return blocked; }
 		bool IsDeveloperMode() const { return developerMode; }
@@ -211,7 +266,7 @@ struct ProfilingRenderer
 	};
 	static inline bool eligible = true;
 	static inline bool summaryRequestedCapture = false;
-	static PerformanceTimingSummary CapturePerformanceTimingSummary(const std::vector<std::string>&, bool requestCapture)
+	static PerformanceTimingSummary CaptureFrameTimingSummary(bool requestCapture)
 	{
 		summaryRequestedCapture = requestCapture;
 		return {};
@@ -249,7 +304,12 @@ struct PerformanceTuningRenderer
 	static inline int globalDraws = 0;
 	static inline int inactiveNotifications = 0;
 	static inline bool measuring = false;
+	static inline bool sceneControlled = false;
 	static bool HasActiveMeasurements() { return measuring; }
+	static inline std::string requestedView;
+	static void SelectView(std::string_view section) { requestedView = section; }
+	static const char* GetFeatureSceneControlBlockReason(Feature*) { return sceneControlled ? "Scene owns feature settings" : nullptr; }
+	static bool ApplyFeatureSettingsTransaction(const std::vector<Feature*>&, const std::function<bool()>& apply, bool = false) { return apply(); }
 	static void NotifyOverviewInactive() { ++inactiveNotifications; }
 	static inline std::string feature;
 	static inline std::function<void()> inspect;
@@ -269,14 +329,8 @@ namespace Util
 {
 	namespace Text
 	{
-		void WrappedWarning(const char* text)
-		{
-			if (ImGui::GetCurrentContext()->CurrentItemFlags & ImGuiItemFlags_Disabled)
-				throw std::runtime_error("SPS warning must remain readable outside the disabled controls");
-			ImGui::PushStyleColor(ImGuiCol_Text, globals::menu->GetTheme().StatusPalette.Warning);
-			ImGui::TextWrapped("%s", text);
-			ImGui::PopStyleColor();
-		}
+		void WrappedWarning(const char* text, ...);
+		void WrappedError(const char* text, ...);
 	}
 	bool HoverTooltipWrapper() { return false; }
 	const char* GetClearShaderCacheTooltip() { return "Clear compiled shaders"; }
@@ -313,7 +367,9 @@ namespace Util
 	{
 		SaveSettings,
 		LoadSettings,
-		RestoreDefaults
+		RestoreDefaults,
+		PerformanceTuning,
+		Profiling
 	};
 	void DrawActionGlyph(ImDrawList*, ActionGlyph, ImVec2, ImVec2, ImU32) {}
 	struct StyledButtonWrapper
@@ -332,6 +388,7 @@ namespace MenuUI::SettingsSearch
 	void NotifyControl(const char*) {}
 	bool SelectNavigationChoice(const char*, int&, const char* const[], int) { return false; }
 }
+#include "settings_notices_under_test.h"
 #include "settings_page_under_test.h"
 #include "settings_widget_under_test.h"
 namespace Util
@@ -387,7 +444,40 @@ struct WeatherManager
 		return &manager;
 	}
 	void RefreshFeatureOverrides() { ++refreshes; }
+	void NotifyUserSettingsChanged() {}
 };
+namespace WeatherVariables
+{
+	struct GlobalWeatherRegistry
+	{
+		static GlobalWeatherRegistry* GetSingleton()
+		{
+			static GlobalWeatherRegistry registry;
+			return &registry;
+		}
+		bool HasWeatherSupport(const std::string&) { return false; }
+		void CaptureFeatureUserSettings(const std::string&) {}
+	};
+}
+struct SceneSettingsManager
+{
+	struct BaseSettingsScope
+	{
+		void Finish() {}
+	};
+};
+namespace Presets
+{
+	struct LookProfiles
+	{
+		static LookProfiles& Get()
+		{
+			static LookProfiles instance;
+			return instance;
+		}
+		void OnDefaultsRestored() {}
+	};
+}
 namespace globals
 {
 	using json = nlohmann::json;
@@ -406,6 +496,8 @@ bool TryGetDisplayCpuMs(const ProfilingRenderer::PerformanceTimingSummary& summa
 	return summary.hasGameCpu;
 }
 #include "settings_footer_under_test.h"
+using State = globals::State;
+using json = nlohmann::json;
 #include "settings_global_actions_under_test.h"
 std::vector<Feature*> BuildPerformanceFeatureList() { return {}; }
 std::vector<std::string> BuildPerformanceFeaturePrefixes(const std::vector<Feature*>& features)
@@ -414,6 +506,10 @@ std::vector<std::string> BuildPerformanceFeaturePrefixes(const std::vector<Featu
 	for (auto* feature : features)
 		prefixes.push_back(feature->GetShortName());
 	return prefixes;
+}
+namespace MenuUI::PerformancePage
+{
+	void DrawSaveChoice(Feature*, float) {}
 }
 #include "settings_performance_counters_under_test.h"
 #include "settings_stabilizer_navigation_under_test.h"
@@ -594,6 +690,26 @@ struct SubsurfaceScattering : Feature
 };
 #include "Utils/StringUtils.h"
 #include "settings_skin_under_test.h"
+namespace AdvancedSkinFixture
+{
+	struct Skin
+	{
+#include "settings_advanced_skin_fields_under_test.h"
+		bool wetnessActive = true;
+		int reloads = 0;
+		bool IsWetnessEnabled() const { return wetnessActive; }
+		void ReloadTextures() { ++reloads; }
+		void DrawSettings();
+		void LoadSettings(json&);
+		void SaveSettings(json&);
+		void RestoreDefaultSettings();
+		json CapturePerformanceSettingsState() const;
+		void RestorePerformanceToggleState(const json&);
+	};
+#include "settings_advanced_skin_metadata_under_test.h"
+#include "settings_advanced_skin_save_under_test.h"
+#include "settings_advanced_skin_under_test.h"
+}
 #include "settings_ui_inventory_under_test.h"
 namespace
 {
@@ -643,6 +759,13 @@ bool g_reactiveWarningShow = false, g_dontShowAgainCheckbox = false;
 std::vector<std::pair<FeatureConstraints::SettingId, FeatureConstraints::ConstraintResult>> g_reactiveWarningConstraints;
 struct FeatureListRenderer
 {
+	static void RenderPerformancePage(const char* page, const std::function<void()>& draw, const char* section = nullptr);
+	static std::string GetBuiltInPageMenuEntryId(const std::string& page)
+	{
+		return page == "PerformancePresets" ? "builtin:Performance Presets" : (page == "PerformanceOverlay" || page == "TextureStreaming") ? "" :
+		                                                                  page == "PerformanceTuning"                                      ? "builtin:Performance Tuning" :
+		                                                                                                                                     "builtin:" + page;
+	}
 	struct DrawMenuVisitor
 	{
 		std::string pendingFeatureSelection;
@@ -656,6 +779,7 @@ bool TrackedSelectable(const char* label)
 	return clicked;
 }
 #include "settings_constraint_warning_under_test.h"
+#include "settings_performance_navigation_under_test.h"
 
 std::map<std::string, ImVec4> presetButtonColors;
 ImGuiID presetNameInputId = 0;
@@ -668,7 +792,7 @@ bool TrackedPresetNameInput(const char* label, const char* hint, std::string* na
 	}
 	return changed;
 }
-bool TrackedPresetButton(const char* label, ImVec2 size)
+bool TrackedPresetButton(const char* label, ImVec2 size = {})
 {
 	presetButtonColors[label] = ImGui::GetStyleColorVec4(ImGuiCol_Button);
 	const bool clicked = ImGui::Button(label, size);
@@ -683,17 +807,7 @@ namespace Util::PathHelpers
 	std::filesystem::path GetCommunityShaderPath() { return presetTestRoot; }
 	std::filesystem::path GetOverridesPath() { return presetTestRoot / "Overrides"; }
 }
-namespace PresetFilesTest
-{
-	struct AdaptiveBrightness
-	{
-		static constexpr const char* kDefaultGlobalPresetName = "Default";
-		static constexpr const char* kDefaultLocationOverridePresetName = "Default";
-		static constexpr const char* kDefaultFullPresetName = "Default";
-		static constexpr std::string_view kFeatureShortName = "AdaptiveBrightness";
-	};
-#include "settings_preset_files_under_test.h"
-}
+#include "settings_results_under_test.h"
 
 void require(bool condition, const char* reason)
 {
@@ -752,9 +866,12 @@ void key(ImGuiKey keyCode, const std::function<void()>& draw)
 	io.AddKeyEvent(keyCode, false);
 	frame(draw);
 }
+#include "feature_settings_save_test.h"
+
 int main()
 {
 	try {
+		FeatureSettingsSaveTest::Run(require);
 		{
 			RenderDoc capture;
 			auto& state = globals::stateStorage;
@@ -780,6 +897,25 @@ int main()
 			state.frameAnnotations = state.useFrameAnnotations = false;
 		}
 		using MenuUI::ParseNumber;
+		{
+			json legacy{ { "CS Editor", { { "legacy", true } } }, { "Untouched", 42 } };
+			require(SettingsMigrations::MigrateEditorSettingsRootLayer(legacy) && legacy["CSX Editor"]["legacy"] == true && !legacy.contains("CS Editor") && legacy["Untouched"] == 42,
+				"legacy editor settings move to the CSX Editor name without changing other features");
+			require(!SettingsMigrations::MigrateEditorSettingsRootLayer(legacy), "editor settings migration is idempotent");
+			json explicitCurrent{ { "CS Editor", { { "legacy", true } } }, { "CSX Editor", nullptr } };
+			SettingsMigrations::MigrateEditorSettingsRootLayer(explicitCurrent);
+			require(explicitCurrent["CSX Editor"].is_null() && !explicitCurrent.contains("CS Editor"), "explicit current editor settings take precedence, including null");
+			json defaults{ { "CSX Editor", nullptr } };
+			json user{ { "CS Editor", { { "fromUser", true } } } };
+			SettingsMigrations::MigrateEditorSettingsRootLayer(user);
+			defaults.merge_patch(user);
+			require(defaults["CSX Editor"]["fromUser"] == true, "legacy user settings override current defaults after layer migration");
+			json scoped{ { "CS Editor", nullptr }, { "Untouched", 42 } };
+			const json saved{ { "CS Editor", { { "legacy", true } } } };
+			FeatureSettingsScope::Copy(scoped, saved, "CSX Editor");
+			require(scoped["CSX Editor"]["legacy"] == true && !scoped.contains("CS Editor") && scoped["Untouched"] == 42,
+				"scoped editor settings accept legacy presets and write only the canonical name");
+		}
 		require(ParseNumber<float>("0.25", 0, 1) == .25f, "fraction parsing");
 		require(ParseNumber<int>("-2", -5, 5) == -2, "signed parsing");
 		for (const char* invalid : { "", " ", "0.2x", "nan", "inf", "1e99", "1.1", "-0.1" })
@@ -795,6 +931,22 @@ int main()
 			{ "FirstTimeSetupCompleted", true }, { "RequireShiftToDock", false }
 		};
 		const auto expectedMenu = nlohmann::json(savedMenu.get<Menu::Settings>());
+		for (const float scale : { -1.0f, -0.5f, 0.0f, 0.35f, 1.0f }) {
+			auto preferences = savedMenu.get<Menu::Settings>();
+			preferences.GlobalScale = scale;
+			const nlohmann::json saved = preferences;
+			require(saved.at("GlobalScale") == scale && saved.get<Menu::Settings>().GlobalScale == scale,
+				"menu zoom survives Save settings and Load saved without saving a theme");
+			require(!saved.contains("Theme"), "saving menu zoom does not publish unsaved theme edits");
+			auto reopened = saved.get<Menu::Settings>();
+			reopened.Theme.GlobalScale = 0.7f;
+			RestoreMenuZoom(reopened, saved);
+			require(reopened.GlobalScale == scale, "saved menu zoom wins over the selected theme on reload");
+			auto legacy = savedMenu.get<Menu::Settings>();
+			legacy.Theme.GlobalScale = scale;
+			RestoreMenuZoom(legacy, savedMenu);
+			require(legacy.GlobalScale == scale, "legacy theme zoom migrates when menu zoom is absent");
+		}
 		for (const auto* key : { "UI Mode", "PerformanceUiMode" }) {
 			for (const auto& obsoleteValue : nlohmann::json::array({ 0, 1, -1, "invalid", nullptr })) {
 				auto legacyMenu = savedMenu;
@@ -852,229 +1004,110 @@ int main()
 		ImGui::GetStyle().FontScaleMain = 1;
 
 		{
-			namespace Presets = MenuUI::AdaptiveBalancePresets;
-			const auto exportRoot = std::filesystem::current_path() / std::format("preset-folder-test-{}-{}", GetCurrentProcessId(), GetTickCount64());
-			require(std::filesystem::create_directory(exportRoot), "folder browser tests own a fresh directory");
-			const SKSE::stl::scope_exit cleanupExportRoot([&] { std::filesystem::remove_all(exportRoot); });
-			const auto customFolder = exportRoot / std::filesystem::path(u8"Shared_\u00e9_\u6f22##presets");
-			std::filesystem::create_directory(customFolder);
-			const auto regularFile = exportRoot / "not-a-folder.json";
-			std::ofstream(regularFile) << "{}";
-			Presets::State exchange;
-			Presets::ExportFolder exportFolder;
-			const Presets::Palette exportColors{ { .42f, .34f, .12f, 1 }, { .50f, .40f, .16f, 1 }, { .60f, .48f, .20f, 1 }, { .8f, .7f, .4f, 1 } };
-			const Presets::Palette importColors{ { .21f, .17f, .06f, 1 }, { .30f, .24f, .08f, 1 }, { .40f, .32f, .12f, 1 }, { .6f, .5f, .2f, 1 } };
-			const Presets::Targets targets{ "Tamriel", "The Reach", "Markarth" };
-			const std::array<std::string, 2> files{ std::string(96, 'W') + "_AdaptiveBrightness_City.json", "Clear_Nights_AdaptiveBrightness_City.json" };
-			std::string name = "My appearance", feedback;
-			const char* unavailable = nullptr;
-			bool refresh = false;
-			int transfers = 0;
-			float panelWidth = 850, panelHeight = 600, fontSize = 22, presetLine = 0, presetAvailableHeight = 0;
-			ImRect panelBounds;
-			MenuUI::SettingsPage::Select("PresetExchangeTest", "presets");
-			const auto draw = [&] {
-				ImGui::PushFont(ImGui::GetFont(), fontSize);
-				ImGui::BeginChild("PresetHMDPanel", { panelWidth, panelHeight });
-				panelBounds = ImGui::GetCurrentWindow()->Rect();
+			float dividerPanelWidth = 840, dividerFontSize = 13, scrollOffset = 0;
+			std::vector<ImRect> visibleDividers;
+			const auto drawDividers = [&] {
+				visibleDividers.clear();
+				ImGui::PushFont(ImGui::GetFont(), dividerFontSize);
+				ImGui::SetNextWindowScroll({ 0, scrollOffset });
+				ImGui::BeginChild("ScrollingHeadings", { dividerPanelWidth, 350 });
 				{
-					MenuUI::SettingsPage page("PresetExchangeTest", { { "presets", "Presets", "Exchange appearances" } });
-					if (page.Is("presets")) {
-						const auto colors = GImGui->ColorStack.Size;
-						const auto disabled = GImGui->DisabledStackSize;
-						presetLine = ImGui::GetTextLineHeight();
-						presetAvailableHeight = ImGui::GetContentRegionAvail().y;
-						Presets::DrawSelection(exchange, exportColors, importColors, targets, exportFolder, exportRoot / "Presets");
-						transfers += Presets::DrawTransfer(exchange, exchange.mode == Presets::Mode::Export ? exportColors : importColors,
-							name, files, "Presets/example.json", feedback, unavailable, refresh);
-						require(colors == GImGui->ColorStack.Size && disabled == GImGui->DisabledStackSize,
-							"preset exchange restores button colours and enclosing disabled state");
+					MenuUI::DetailGrid grid("HeadingProfiles", 2, ImGui::GetFontSize() * 32);
+					for (int heading = 0; heading < 12; ++heading) {
+						grid.Next();
+						auto* draw = ImGui::GetWindowDrawList();
+						const int firstVertex = draw->VtxBuffer.Size;
+						MenuUI::SectionHeading(heading % 2 ? "Humanoid Skin (Female)" : "Humanoid Skin (Male)");
+						const ImRect bounds{ ImGui::GetItemRectMin(), ImGui::GetItemRectMax() };
+						const auto clip = ImGui::GetCurrentWindow()->ClipRect;
+						if (bounds.Min.y >= clip.Min.y && bounds.Max.y <= clip.Max.y && bounds.Min.x < clip.Max.x && bounds.Max.x > clip.Min.x) {
+							int dividers = 0;
+							for (int index = firstVertex; index + 3 < draw->VtxBuffer.Size; index += 4) {
+								ImRect quad(draw->VtxBuffer[index].pos, draw->VtxBuffer[index].pos);
+								for (int corner = 1; corner < 4; ++corner)
+									quad.Add(draw->VtxBuffer[index + corner].pos);
+								if (quad.GetWidth() > 100 && quad.GetHeight() < dividerFontSize) {
+									visibleDividers.push_back(quad);
+									++dividers;
+								}
+							}
+							require(dividers == 1, "every fully visible section heading retains exactly one divider while scrolling");
+						}
+						ImGui::Dummy({ 0, 100 });
 					}
 				}
 				ImGui::EndChild();
 				ImGui::PopFont();
 			};
-			for (const ImVec2 panel : { ImVec2{ 850, 600 }, ImVec2{ 700, 500 }, ImVec2{ 620, 440 } }) {
-				panelWidth = panel.x;
-				panelHeight = panel.y;
-				for (float size : { 18.0f, 22.0f, 27.0f }) {
-					fontSize = size;
-					for (const auto mode : { Presets::Mode::Export, Presets::Mode::Import }) {
-						for (int collection = 0; collection < static_cast<int>(Presets::Collection::Count); ++collection) {
-							exchange.collection = static_cast<Presets::Collection>(collection);
-							exchange.mode = mode;
-							frame(draw);
-							frame(draw);
-							const auto viewport = MenuUI::DevBenchViewport::Describe(true);
-							require(viewport["scrollMaxY"].get<float>() == 0, std::format("Preset viewport {}x{} font {} mode {} collection {}: scroll {}, height {}, line {}, available {}", panelWidth, panelHeight, fontSize, static_cast<int>(mode), static_cast<int>(exchange.collection), viewport["scrollMaxY"].get<float>(), viewport["height"].get<float>(), presetLine, presetAvailableHeight).c_str());
-							const auto action = std::format("{} {}", mode == Presets::Mode::Export ? "Export" : "Import", Presets::CollectionName(exchange.collection));
-							const auto button = Util::controls.at(action);
-							require(button.Min.x >= 0 && button.Max.x <= panelWidth && button.Max.y <= panelHeight,
-								"preset action stays inside the visible HMD panel");
-							const auto fullBox = Util::controls.at("##full");
-							const auto baseBox = Util::controls.at("##base");
-							const auto locationsBox = Util::controls.at("##locations");
-							require(fullBox.GetHeight() <= presetLine * 2.5f && baseBox.Min.y - fullBox.Max.y >= presetLine * .6f,
-								"compact preset boxes leave visible space for the parent-child connectors");
-							require(locationsBox.Min.x - baseBox.Max.x >= presetLine * .5f,
-								"sibling preset boxes remain visibly separated");
-						}
-						if (mode == Presets::Mode::Import) {
-							refresh = false;
-							click(Util::controls.at("Choose a matching JSON preset from the Presets folder.").GetCenter(), draw);
-							frame(draw);
-							require(refresh && !GImGui->OpenPopupStack.empty(), "opening the preset picker requests a fresh file inventory");
-							const auto* popup = GImGui->OpenPopupStack.back().Window;
-							require(popup != nullptr, "the file picker has a visible window");
-							require(panelBounds.Contains(popup->Rect()) && popup->ScrollMax.x == 0,
-								std::format("Picker must fit panel {}x{} font {}: panel ({},{})-({},{}), popup ({},{})-({},{}), horizontal scroll {}",
-									panelWidth, panelHeight, fontSize, panelBounds.Min.x, panelBounds.Min.y, panelBounds.Max.x, panelBounds.Max.y,
-									popup->Pos.x, popup->Pos.y, popup->Rect().Max.x, popup->Rect().Max.y, popup->ScrollMax.x)
-									.c_str());
-							click(Util::controls.at(files[0]).GetCenter(), draw);
-							require(name == files[0] && transfers == 0, "choosing a file preserves its full name and never imports automatically");
-						} else {
-							click(Util::controls.at("Choose folder##ExportFolder").GetCenter(), draw);
-							frame(draw);
-							require(!GImGui->OpenPopupStack.empty(), "Choose folder opens an in-menu browser");
-							const auto* popup = GImGui->OpenPopupStack.back().Window;
-							require(popup != nullptr, "the folder browser has a visible window");
-							require(panelBounds.Contains(popup->Rect()) && popup->ScrollMax.x == 0 && popup->ScrollMax.y == 0,
-								std::format("Folder browser {}x{} font {}: panel ({},{})-({},{}), popup ({},{})-({},{}), horizontal scroll {}",
-									panelWidth, panelHeight, fontSize, panelBounds.Min.x, panelBounds.Min.y, panelBounds.Max.x, panelBounds.Max.y,
-									popup->Pos.x, popup->Pos.y, popup->Rect().Max.x, popup->Rect().Max.y, popup->ScrollMax.x)
-									.c_str());
-							click(Util::controls.at("Cancel").GetCenter(), draw);
-							require(exportFolder.directory.empty() && transfers == 0 && !std::filesystem::exists(exportRoot / "Presets"),
-								"opening and cancelling the browser leaves the destination unchanged and creates no files");
-						}
+			for (const float panelWidth : { 360.0f, 840.0f })
+				for (const float fontSize : { 13.0f, 22.0f, 32.0f }) {
+					dividerPanelWidth = panelWidth;
+					dividerFontSize = fontSize;
+					for (const float offset : { 0.0f, 1.0f, 17.25f, 71.5f, 132.75f, 240.0f }) {
+						scrollOffset = offset;
+						frame(drawDividers);
+						frame(drawDividers);
+						require(!visibleDividers.empty(), "scrolling fixture must exercise visible headings");
+						for (const auto& line : visibleDividers)
+							for (const float scale : { .5f, .75f, 1.0f, 1.5f })
+								for (const float phase : { 0.0f, .25f, .5f, .75f }) {
+									const float top = line.Min.y * scale + phase, bottom = line.Max.y * scale + phase;
+									const float firstPixelCentre = std::ceil(top - .5f) + .5f;
+									require(firstPixelCentre < bottom, "section dividers must survive desktop downscaling at every scrolling pixel phase");
+								}
 					}
 				}
-			}
-			panelWidth = 850;
-			panelHeight = 600;
-			fontSize = 22;
-			exchange = {};
-			frame(draw);
-			frame(draw);
-			click(Util::controls.at("Choose folder##ExportFolder").GetCenter(), draw);
-			click(Util::controls.at(Util::PathToUtf8(customFolder)).GetCenter(), draw);
-			require(exportFolder.browsing == std::filesystem::canonical(customFolder) && exportFolder.directory.empty(),
-				"clicking a Unicode subfolder with ImGui marker characters navigates without selecting an export destination");
-			click(Util::controls.at("Parent folder").GetCenter(), draw);
-			exportFolder.input = Util::PathToUtf8(customFolder);
-			click(Util::controls.at("Go").GetCenter(), draw);
-			require(exportFolder.browsing == std::filesystem::canonical(customFolder) && exportFolder.directory.empty(),
-				"browsing a Unicode folder does not select it or export a preset");
-			click(Util::controls.at("Use this folder").GetCenter(), draw);
-			require(exportFolder.directory == std::filesystem::canonical(customFolder) && transfers == 0,
-				"explicit folder selection changes the shared export destination without writing a preset");
-			std::string folderError;
-			for (const auto& invalid : { std::string("relative"), Util::PathToUtf8(exportRoot / "missing"), Util::PathToUtf8(regularFile), std::string(4097, 'x'), std::string("bad\0path", 8) })
-				require(!Presets::SetExportFolder(exportFolder, invalid, folderError) && !folderError.empty() && exportFolder.directory == std::filesystem::canonical(customFolder),
-					"invalid folder input reports an error and preserves the selected destination");
-			click(Util::controls.at("Choose folder##ExportFolder").GetCenter(), draw);
-			exportFolder.input.clear();
-			click(Util::controls.at("Use this folder").GetCenter(), draw);
-			require(exportFolder.directory == std::filesystem::canonical(customFolder) && !exportFolder.error.empty() && !GImGui->OpenPopupStack.empty(),
-				"an empty path cannot silently reset the destination or close the browser");
-			click(Util::controls.at("Default folder").GetCenter(), draw);
-			require(exportFolder.directory.empty() && transfers == 0, "Default folder restores preset routing without writing a file");
-			const auto exportTint = presetButtonColors.at("##full");
-			click(Util::controls.at("Select import mode, then choose the contents and file and use the Import button below.").GetCenter(), draw);
-			require(exchange.mode == Presets::Mode::Import && transfers == 0, "switching to import changes mode without applying a file");
-			const auto importTint = presetButtonColors.at("##full");
-			require(importTint.x < exportTint.x && importTint.y < exportTint.y, "import changes the complete diagram to the darker palette");
-			for (int index = 0; index < static_cast<int>(Presets::Collection::Count); ++index) {
-				const auto collection = static_cast<Presets::Collection>(index);
-				click(Util::controls.at(std::format("##{}", Presets::CollectionId(collection))).GetCenter(), draw);
-				require(exchange.collection == collection && transfers == 0, "collection boxes select contents without performing a transfer");
-				const auto action = std::format("Import {}", Presets::CollectionName(collection));
-				require(Util::controls.contains(action), "the final action names both mode and selected collection");
-			}
-			unavailable = "Apply or cancel the open location edit before exchanging presets.";
-			frame(draw);
-			click(Util::controls.at("Import City").GetCenter(), draw);
-			require(transfers == 0, "unavailable and pending-edit transfers cannot apply a file");
-			unavailable = nullptr;
-			frame(draw);
-			click(Util::controls.at("Import City").GetCenter(), draw);
-			require(transfers == 1, "only the explicit named import button requests a transfer");
-			click(Util::controls.at("Preset name input").GetCenter(), draw);
-			const auto cityInput = presetNameInputId;
-			require(GImGui->ActiveId == cityInput, "preset name editing is active before external navigation");
-			exchange.collection = Presets::Collection::Base;
-			frame(draw);
-			frame(draw);
-			require(presetNameInputId != cityInput && GImGui->ActiveId != cityInput,
-				"external collection selection cannot retain the previous collection's text edit buffer");
-			const auto importInput = presetNameInputId;
-			click(Util::controls.at("Select export mode, then choose the contents and use the Export button below.").GetCenter(), draw);
-			require(exchange.mode == Presets::Mode::Export && transfers == 1, "the export mode selector never writes a file");
-			require(presetNameInputId != importInput, "import and export filename fields have independent edit identities");
-			click(Util::controls.at("Export Base appearance").GetCenter(), draw);
-			require(transfers == 2, "only the named export action requests a file write");
-			feedback = "Status line\nSecond line must stay in the tooltip";
-			frame(draw);
-			const auto feedbackBounds = Util::controls.at(feedback);
-			require(VisibleTextIndices({ { feedbackBounds.Min.x, feedbackBounds.Max.y },
-						{ feedbackBounds.Max.x, feedbackBounds.Max.y + ImGui::GetTextLineHeight() * 2 } }) == 0,
-				"multiline feedback cannot draw below its reserved single row");
-			name.assign(300, 'X');
-			feedback.assign(500, 'Y');
-			panelWidth = 620;
-			panelHeight = 440;
-			fontSize = 27;
-			frame(draw);
-			frame(draw);
-			require(MenuUI::DevBenchViewport::Describe(true)["scrollMaxY"].get<float>() == 0,
-				"long preset names and feedback do not make the HMD view scroll");
 		}
 
 		{
-			using namespace PresetFilesTest;
-			auto& root = Util::PathHelpers::presetTestRoot;
-			root = std::filesystem::current_path() / std::format("preset-picker-test-{}-{}", GetCurrentProcessId(), GetTickCount64());
-			require(std::filesystem::create_directory(root), "preset picker tests own a fresh temporary directory");
-			const SKSE::stl::scope_exit cleanup([&] { std::filesystem::remove_all(root); });
-			const auto directory = GetPresetDirectory();
-			const auto customDirectory = root / "custom-export";
-			std::filesystem::create_directory(customDirectory);
-			for (const auto kind : { PresetKind::Full, PresetKind::Global, PresetKind::Location, PresetKind::Worldspace, PresetKind::Region, PresetKind::City }) {
-				const auto customPath = GetPresetPath("Warm", kind, customDirectory);
-				require(customPath.parent_path() == customDirectory && customPath.filename() == GetPresetPath("Warm", kind).filename(),
-					"every preset export kind uses the chosen folder and preserves its importable filename");
-			}
-			std::filesystem::create_directories(directory);
-			std::filesystem::create_directories(Util::PathHelpers::GetOverridesPath());
-			const auto write = [](const std::filesystem::path& path) { std::ofstream(path) << "{}"; };
-			const auto full = GetPresetFilename("Warm", PresetKind::Full);
-			const auto suffixName = std::string("Warm_AdaptiveBrightness_Global_AdaptiveBrightness_Full.json");
-			write(directory / full);
-			write(directory / suffixName);
-			write(directory / "Warm tone_AdaptiveBrightness_Full.json");
-			write(directory / GetPresetFilename("Warm", PresetKind::City));
-			std::filesystem::create_directory(directory / GetPresetFilename("Folder", PresetKind::Full));
-			std::vector<std::string> files;
-			std::string status;
-			ReadPresetNames(PresetKind::Full, files, status);
-			require(files.size() == 2 && std::ranges::find(files, suffixName) != files.end(), "picker filters directories and incompatible names while keeping full exported filenames");
-			for (const auto& file : files)
-				require(ResolvePresetImportPath(file, PresetKind::Full) == directory / file, "every selectable file resolves to that exact exported file");
-			require(!status.empty(), "incompatible file names are explained");
-			const auto locations = GetPresetFilename("Places", PresetKind::Location);
-			write(directory / locations);
-			write(Util::PathHelpers::GetOverridesPath() / locations);
-			ReadPresetNames(PresetKind::Location, files, status);
-			require(files.size() == 1 && status.empty(), "duplicate live/preset names are removed and a successful refresh clears earlier errors");
-			require(ResolvePresetImportPath(files[0], PresetKind::Location) == directory / locations, "picker and importer give the Presets directory the same priority");
-			std::filesystem::remove_all(directory);
-			write(directory);
-			ReadPresetNames(PresetKind::Location, files, status);
-			require(files.size() == 1 && !status.empty(), "a failed preset directory scan reports its error and still offers readable legacy files");
-			std::filesystem::remove(directory);
-			ReadPresetNames(PresetKind::Location, files, status);
-			require(files.size() == 1 && status.empty(), "missing preset directories are harmless and a recovered scan clears errors");
+			MenuUI::ProfileExchangeState exchange;
+			exchange.name = "My shared profile";
+			exchange.source = std::filesystem::current_path() / "profile.json";
+			int imports = 0, exports = 0;
+			float exchangeWidth = 620, font = 22;
+			const char* blocked = nullptr;
+			const auto draw = [&] {
+				ImGui::PushFont(ImGui::GetFont(), font);
+				ImGui::BeginChild("UnifiedProfileExchange", { exchangeWidth, 600 });
+				const auto colors = GImGui->ColorStack.Size;
+				const auto disabled = GImGui->DisabledStackSize;
+				MenuUI::DrawProfileExchange(exchange, "Share Visuals", std::filesystem::current_path(), true, blocked, [&](const auto&, const auto&) { ++imports; }, [&](const auto&, const auto&) { ++exports; });
+				require(colors == GImGui->ColorStack.Size && disabled == GImGui->DisabledStackSize, "unified exchange restores ImGui state");
+				require(ImGui::GetScrollMaxX() == 0, "unified exchange has no horizontal overflow");
+				ImGui::EndChild();
+				ImGui::PopFont();
+			};
+			for (float panelWidth : { 620.f, 850.f })
+				for (float fontSize : { 18.f, 27.f })
+					for (int mode : { 0, 1 }) {
+						exchangeWidth = panelWidth;
+						font = fontSize;
+						exchange.mode = mode;
+						frame(draw);
+						frame(draw);
+						const auto action = Util::controls.at(mode ? "Export profile" : "Import profile");
+						require(action.GetWidth() <= exchangeWidth && action.GetHeight() > 0, "unified exchange action fits");
+						const auto previous = imports + exports;
+						click(action.GetCenter(), draw);
+						require(imports + exports == previous + 1, "unified exchange dispatches its selected action once");
+						blocked = "Measurement running";
+						frame(draw);
+						click(Util::controls.at(mode ? "Export profile" : "Import profile").GetCenter(), draw);
+						require(imports + exports == previous + 1, "blocked exchange cannot dispatch");
+						blocked = nullptr;
+					}
+		}
+
+		{
+			namespace Presets = MenuUI::AdaptiveBalancePresets;
+			Presets::ExportFolder folder;
+			std::string error;
+			const auto root = std::filesystem::current_path();
+			require(Presets::SetExportFolder(folder, Util::PathToUtf8(root), error), "existing export folder accepted");
+			const auto saved = folder.directory;
+			require(!Presets::SetExportFolder(folder, "relative/folder", error) && folder.directory == saved,
+				"invalid folder preserves the destination");
+			require(Presets::SetExportFolder(folder, {}, error) && folder.directory.empty(), "default export folder restored");
 		}
 
 		using Viewport = MenuUI::DevBenchViewport;
@@ -1149,6 +1182,7 @@ int main()
 		auto* originalContext = ImGui::GetCurrentContext();
 		ImGui::SetCurrentContext(ImGui::CreateContext());
 		require(!Viewport::Describe(true)["fresh"].get<bool>() && !Viewport::Describe(true)["pending"].get<bool>() && !Viewport::Scroll("ScrollTest", "content", 0), "a different ImGui context cannot use prior observations or requests");
+
 		ImGui::DestroyContext();
 		ImGui::SetCurrentContext(originalContext);
 		frame(drawScroll);
@@ -1237,6 +1271,106 @@ int main()
 		key(ImGuiKey_Tab, drawChoices);
 		key(ImGuiKey_Enter, drawChoices);
 		require(selectedChoice == 2, "keyboard navigation skips the disabled choice and Enter selects a card");
+		std::array independentSelections{ true, false };
+		const auto drawIndependentChoices = [&] {
+			const MenuUI::Choice choices[]{
+				{ "one", "Feature one", "First feature", "First preset feature", true, independentSelections[0], { .2f, .6f, .9f, 1 } },
+				{ "two", "Feature two", "Second feature", "Second preset feature", true, independentSelections[1], { .2f, .6f, .9f, 1 } }
+			};
+			const int clicked = MenuUI::ChoiceCards("Included features", -1, choices);
+			if (clicked >= 0)
+				independentSelections[clicked] = !independentSelections[clicked];
+		};
+		frame(drawIndependentChoices);
+		click(Util::controls.at("Second preset feature").GetCenter(), drawIndependentChoices);
+		require(independentSelections[0] && independentSelections[1], "selecting one preset tile must preserve the other selections");
+		click(Util::controls.at("Second preset feature").GetCenter(), drawIndependentChoices);
+		require(independentSelections[0] && !independentSelections[1], "clicking a selected preset tile again must deselect only that tile");
+		for (const bool vr : { false, true }) {
+			globals::game::isVR = vr;
+			const auto drawRuntimeSettings = [] {
+				MenuUI::SettingsPage page("Settings", { { "hotkeys", "Bindings", "Keyboard settings" },
+														  { "vr_menu", "VR Menu", "Headset settings" },
+														  { "vr_controls", "VR Controls", "Controller settings" },
+														  { "desktop", "Desktop Mirror", "Mirror settings" } });
+			};
+			frame(drawRuntimeSettings);
+			for (const char* section : { "vr_menu", "vr_controls", "desktop" })
+				require(MenuUI::SettingsPage::Navigate("Settings", section) == vr, "VR settings routes must be unavailable on SE/AE");
+			for (const auto& page : MenuUI::SettingsPage::Describe())
+				if (page["page"] == "Settings")
+					require(page["tabs"].size() == (vr ? 5 : 2), "unsupported VR sections must not appear as tabs or overview cards");
+			MenuUI::SettingsPage::Select("Settings", "overview");
+		}
+		{
+			int noticeCount = 0;
+			bool showDialog = false;
+			float panelWidth = 800, fontScale = 1;
+			ImRect noticeBounds;
+			ImVec2 controlPosition;
+			float tabsY = 0, contentHeight = 0;
+			const auto drawNotices = [&] {
+				ImGui::PushFont(ImGui::GetFont(), 13 * fontScale);
+				ImGui::BeginChild("NoticePage", { panelWidth, 600 });
+				{
+					MenuUI::PageNoticeScope notices;
+					ImGui::TextUnformatted("Settings");
+					if (noticeCount > 1)
+						Util::Text::WrappedWarning("%s required.", "Restart");
+					const auto start = ImGui::GetCursorScreenPos();
+					const float width = ImGui::GetContentRegionAvail().x;
+					notices.Reserve();
+					tabsY = ImGui::GetCursorScreenPos().y;
+					noticeBounds = { start, { start.x + width, tabsY } };
+					ImGui::BeginChild("NoticeBody", { 0, 0 });
+					{
+						MenuUI::SettingsPage page("NoticeFixture", { { "controls", "Controls", "Test controls" } });
+						if (page.Is("controls")) {
+							contentHeight = ImGui::GetContentRegionAvail().y;
+							if (noticeCount > 0)
+								MenuUI::PageNotice("Theme edits are not saved. Use Save Theme or Save As New Theme in Settings > Theme. Longer notification text must stay in the header at narrow widths.", MenuUI::NoticeKind::Pending);
+							for (int i = 2; i < noticeCount; ++i)
+								Util::Text::WrappedError("Action %d failed.", i);
+							ImGui::Button("Stable control");
+							controlPosition = ImGui::GetItemRectMin();
+							if (showDialog)
+								ImGui::OpenPopup("Notice dialog");
+							if (ImGui::BeginPopupModal("Notice dialog")) {
+								const float before = ImGui::GetCursorPosY();
+								Util::Text::WrappedError("%s", "Dialog error stays here.");
+								require(ImGui::GetCursorPosY() > before, "dialog feedback remains inside its dialog");
+								ImGui::CloseCurrentPopup();
+								ImGui::EndPopup();
+							}
+						}
+					}
+					ImGui::EndChild();
+				}
+				ImGui::EndChild();
+				ImGui::PopFont();
+			};
+			frame(drawNotices);
+			require(MenuUI::SettingsPage::Select("NoticeFixture", "controls"), "notification fixture selects its controls");
+			for (const float noticeWidth : { 800.0f, 360.0f })
+				for (const float scale : { 1.0f, 1.8f }) {
+					panelWidth = noticeWidth;
+					fontScale = scale;
+					noticeCount = 0;
+					for (int i = 0; i < 3; ++i) frame(drawNotices);
+					const auto expectedControl = controlPosition;
+					const float expectedTabs = tabsY, expectedHeight = contentHeight;
+					for (const int count : { 1, 2, 4, 0 }) {
+						noticeCount = count;
+						frame(drawNotices);
+						require(controlPosition.x == expectedControl.x && controlPosition.y == expectedControl.y && tabsY == expectedTabs && contentHeight == expectedHeight,
+							"notices must not shift tabs, controls or the scrolling viewport");
+						require((VisibleTextIndices(noticeBounds) > 0) == (count > 0), "notices render above tabs and disappear without stale text");
+					}
+				}
+			showDialog = true;
+			frame(drawNotices);
+			require(VisibleTextIndices(noticeBounds) == 0, "dialog errors must not leak into the page header");
+		}
 		frame(drawPage);
 
 		require(MenuUI::SettingsPage::Navigate("TestPage", "extra"), "visible tab accepted");
@@ -1265,21 +1399,21 @@ int main()
 		globals::profiler = &globals::profilerStorage;
 		MenuUI::SettingsPage::Select("FeaturePage", "overview");
 		for (int i = 0; i < 3; ++i) frame(drawPerformance);
-		const auto measurementCard = Util::controls.at("Measures in-game frame times and FPS with the current feature settings.");
+		const auto measurementCard = Util::controls.at("Tune this feature: compare its performance cost with the current settings.");
 		const auto setupCard = Util::controls.at("Appearance");
-		require(measurementCard.Min.x == setupCard.Min.x && measurementCard.GetSize().x == setupCard.GetSize().x && measurementCard.Min.y > setupCard.Max.y, "measurement card keeps setup column width and follows its independently sized row");
+		require(measurementCard.Max.y < setupCard.Min.y, "measurement icon remains in the tab bar above the setup cards");
 		require(MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "live profiling remains reachable alongside performance tuning");
 		MenuUI::SettingsPage::Select("FeaturePage", "overview");
 		const int measurementsBefore = PerformanceTuningRenderer::draws;
 		int profilingBefore = ProfilingRenderer::draws;
 		click(measurementCard.GetCenter(), drawPerformance);
 		for (int i = 0; i < 3; ++i) frame(drawPerformance);
-		require(MenuUI::SettingsPage::Selected("FeaturePage") == "performance" && PerformanceTuningRenderer::draws > measurementsBefore, "measurement card opens the shared suite");
+		require(MenuUI::SettingsPage::Selected("FeaturePage") == "performance" && PerformanceTuningRenderer::draws > measurementsBefore, "measurement icon opens the shared suite");
 		require(ProfilingRenderer::draws == profilingBefore, "measurement suite does not invoke a separate profiling mode selector");
 		auto profilingCardIsActive = [&] {
 			const auto& sections = MenuUI::navigation.at("FeaturePage").sections;
 			const auto profilingCard = std::ranges::find_if(sections, [](const auto& section) { return std::string_view(section.id) == "profiling"; });
-			require(profilingCard != sections.end() && profilingCard->visible, "supported profiling card must remain visible");
+			require(profilingCard != sections.end() && profilingCard->visible, "supported profiling icon must remain visible");
 			return profilingCard->active;
 		};
 		globals::profilerStorage.enabled = false;
@@ -1287,21 +1421,21 @@ int main()
 		Util::controls.clear();
 		for (int i = 0; i < 3; ++i) frame(drawPerformance);
 		const auto* disabledProfilingHelp = ProfilingRenderer::GetProfilingDisabledReason();
-		require(!profilingCardIsActive(), "off profiling uses the shared dotted inactive card style");
+		require(!profilingCardIsActive(), "off profiling keeps its icon disabled");
 		require(Util::tooltipFlags.at(disabledProfilingHelp) & ImGuiHoveredFlags_AllowWhenDisabled, "disabled profiling retains its enable-on-main-page tooltip");
 		profilingBefore = ProfilingRenderer::draws;
 		click(Util::controls.at(disabledProfilingHelp).GetCenter(), drawPerformance);
 		for (int i = 0; i < 3; ++i) frame(drawPerformance);
-		require(MenuUI::SettingsPage::Selected("FeaturePage") == "overview" && ProfilingRenderer::draws == profilingBefore, "disabled profiling card must not open");
+		require(MenuUI::SettingsPage::Selected("FeaturePage") == "overview" && ProfilingRenderer::draws == profilingBefore, "disabled profiling icon must not open");
 		require(!MenuUI::SettingsPage::Navigate("FeaturePage", "profiling") && !MenuUI::SettingsPage::Select("FeaturePage", "profiling"), "direct navigation cannot bypass the main profiling switch");
 		globals::profilerStorage.enabled = true;
-		require(MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "enabling profiling unlocks direct navigation before cached cards redraw");
+		require(MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "enabling profiling unlocks direct navigation before cached icons redraw");
 		MenuUI::SettingsPage::Select("FeaturePage", "overview");
 		for (int i = 0; i < 3; ++i) frame(drawPerformance);
 		require(profilingCardIsActive(), "main profiling switch makes the feature controls available");
-		click(Util::controls.at("Choose CPU, GPU or Off to inspect timings.").GetCenter(), drawPerformance);
+		click(Util::controls.at("Profile this feature: open its live CPU and GPU timings.").GetCenter(), drawPerformance);
 		for (int i = 0; i < 3; ++i) frame(drawPerformance);
-		require(MenuUI::SettingsPage::Selected("FeaturePage") == "profiling" && ProfilingRenderer::draws > profilingBefore, "enabled profiling card opens its controls");
+		require(MenuUI::SettingsPage::Selected("FeaturePage") == "profiling" && ProfilingRenderer::draws > profilingBefore, "enabled profiling icon opens its controls");
 		profilingBefore = ProfilingRenderer::draws;
 		globals::profilerStorage.enabled = false;
 		for (const auto& page : MenuUI::SettingsPage::Describe())
@@ -1309,13 +1443,13 @@ int main()
 				for (const auto& tab : page["tabs"])
 					if (tab["id"] == "profiling")
 						require(tab["enabled"] == false && tab["disabledReason"] == disabledProfilingHelp, "inactive-page metadata follows the live main switch");
-		require(!MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "the live switch blocks navigation before cached card state refreshes");
+		require(!MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "the live switch blocks navigation before cached icon state refreshes");
 		frame(drawPerformance);
 		require(!profilingCardIsActive() && MenuUI::SettingsPage::Selected("FeaturePage") == "overview" && ProfilingRenderer::draws == profilingBefore, "switching profiling off closes an open feature view");
 		globals::profilerStorage.enabled = true;
 		globals::profilerStorage.initialized = false;
 		frame(drawPerformance);
-		require(!profilingCardIsActive() && !MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "uninitialized profiler keeps a visible disabled card");
+		require(!profilingCardIsActive() && !MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "uninitialized profiler keeps a visible disabled icon");
 		globals::profiler = nullptr;
 		frame(drawPerformance);
 		require(!profilingCardIsActive() && !MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "unavailable profiler cannot be opened");
@@ -1344,8 +1478,8 @@ int main()
 		require(PerformanceTuningRenderer::inactiveNotifications > inactiveBeforeRemoval, "removing tuning releases temporary capture when selection falls back");
 		for (int i = 0; i < 3; ++i) frame(drawPerformance);
 		require(MenuUI::SettingsPage::Selected("FeaturePage") == "overview", "removing tuning returns a previously selected measurement tab to overview");
-		require(!MenuUI::SettingsPage::Navigate("FeaturePage", "performance") && !Util::controls.contains("Measures in-game frame times and FPS with the current feature settings."), "removed tuning has neither a reachable tab nor an overview card");
-		require(Util::controls.contains("Appearance") && Util::controls.contains("Choose CPU, GPU or Off to inspect timings."), "ordinary settings and profiling cards remain without tuning");
+		require(!MenuUI::SettingsPage::Navigate("FeaturePage", "performance") && !Util::controls.contains("Tune this feature: compare its performance cost with the current settings."), "removed tuning has neither a reachable route nor a tool icon");
+		require(Util::controls.contains("Appearance") && Util::controls.contains("Profile this feature: open its live CPU and GPU timings."), "ordinary settings and profiling icons remain without tuning");
 		require(MenuUI::SettingsPage::Navigate("FeaturePage", "look"), "ordinary settings remain reachable without tuning");
 		frame(drawPerformance);
 		profilingBefore = ProfilingRenderer::draws;
@@ -1360,24 +1494,60 @@ int main()
 		auto drawNoTuning = [&] { MenuUI::FeatureScope scope(&feature); MenuUI::SettingsPage page("Unused", {}); };
 		for (int i = 0; i < 3; ++i) frame(drawNoTuning);
 		require(!MenuUI::SettingsPage::Navigate("FeaturePage", "performance") && !MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "unsupported tools cannot be opened");
-		require(Util::controls.size() == 1 && Util::controls.contains("Start here. Choose a card to open its settings."), "a feature without tuning or eligible tools keeps only Overview navigation");
+		require(Util::controls.empty(), "a continuous feature page has no redundant tab bar");
 		feature.supportsMeasurement = true;
 		for (int i = 0; i < 3; ++i) frame(drawNoTuning);
-		require(MenuUI::SettingsPage::Navigate("FeaturePage", "performance") && !MenuUI::SettingsPage::Navigate("FeaturePage", "profiling"), "measurement eligibility is independent of profiling");
-		for (int settle = 0; settle < 3; ++settle) frame(drawNoTuning);
-		require(MenuUI::SettingsPage::Selected("FeaturePage") == "performance", "a feature without ordinary tabs still opens its performance card section");
-		for (const auto& entry : MenuUI::SettingsPage::Describe())
-			if (entry["page"] == "FeaturePage")
-				for (const auto& tab : entry["tabs"])
-					require(tab["showTab"].get<bool>() == (tab["id"] == "overview"), "a feature with only tool cards keeps Overview visible");
-		click(Util::controls.at("Start here. Choose a card to open its settings.").GetCenter(), drawNoTuning);
-		for (int settle = 0; settle < 3; ++settle) frame(drawNoTuning);
-		require(MenuUI::SettingsPage::Selected("FeaturePage") == "overview", "Overview returns from a page with only tool cards");
+		require(!MenuUI::SettingsPage::Navigate("FeaturePage", "performance"), "continuous pages do not inject hidden tool destinations");
 		ProfilingRenderer::eligible = true;
-		auto drawGlobalPerformance = [&] { MenuUI::SettingsPage page("PerformanceTuning", { { "compare", "Compare total feature set", "Compare features" } }); };
-		frame(drawGlobalPerformance);
-		require(!MenuUI::SettingsPage::Navigate("PerformanceTuning", "performance"), "global measurement view cannot recursively open itself");
-		require(!MenuUI::SettingsPage::Navigate("PerformanceTuning", "profiling") && MenuUI::SettingsPage::Navigate("PerformanceTuning", "compare"), "global tuning exposes comparison without profiling");
+		for (const auto* tool : { "Performance", "PerformancePresets", "Profiling", "PerformanceTuning", "PerformanceOverlay" }) {
+			int bodyDraws = 0;
+			auto drawTool = [&] { FeatureListRenderer::RenderPerformancePage(tool, [&] { ++bodyDraws; }); };
+			for (int i = 0; i < 3; ++i) frame(drawTool);
+			require(MenuUI::SettingsPage::Selected(tool) == MenuUI::SettingsNavigation::PerformanceSection(tool) && bodyDraws > 0, "each tool opens its native content without another overview");
+			for (const auto& entry : MenuUI::SettingsPage::Describe())
+				if (entry["page"] == tool) {
+					require(entry["tabs"].size() == 6, "Performance tools share exactly six parent tabs");
+					require(entry["tabs"][1]["id"] == "presets", "Presets is the first destination after Overview");
+					require(entry["tabs"][2]["id"] == "streaming" && entry["tabs"][3]["id"] == "timings", "Texture Streaming sits between Presets and Profiling");
+					for (const auto& tab : entry["tabs"])
+						require(tab["showTab"].get<bool>(), "all parent tabs remain visible");
+				}
+			for (const auto* section : { "overview", "presets", "streaming", "timings", "tuning", "overlay" }) {
+				globals::menu->destination.clear();
+				require(MenuUI::SettingsPage::Navigate(tool, section), "parent tab navigation is available from every tool");
+				for (int i = 0; i < 3; ++i) frame(drawTool);
+				if (section != MenuUI::SettingsNavigation::PerformanceSection(tool))
+					require(!globals::menu->destination.empty(), "parent tab queues its native tool page");
+				if (std::string_view(section) == "streaming")
+					require(globals::menu->destination == "TextureStreaming", "streaming navigation targets the registered feature, not a duplicate built-in");
+			}
+			MenuUI::SettingsPage::Select(tool, MenuUI::SettingsNavigation::PerformanceSection(tool).data());
+		}
+		require(!MenuUI::SettingsPage::Navigate("PerformanceTuning", "performance") && !MenuUI::SettingsPage::Navigate("PerformanceTuning", "profiling"), "global tools cannot recursively inject internal performance tabs");
+		require(MenuUI::SettingsPage::Navigate("PerformanceTuning", "quick_scan") && PerformanceTuningRenderer::requestedView == "quick_scan", "legacy scan link retains its radio selection");
+
+		Feature streamingFeature{ "TextureStreaming", false };
+		auto drawStreaming = [&] {
+			FeatureListRenderer::RenderPerformancePage("Performance", [&] {
+				require((ImGui::GetCurrentWindow()->Flags & ImGuiWindowFlags_NoScrollbar) && ImGui::GetCursorPosX() == 0, "streaming host adds neither a second scrollbar nor indentation");
+				MenuUI::FeatureScope scope(&streamingFeature);
+				MenuUI::SettingsPage page("TextureStreaming", {}); }, "streaming");
+		};
+		MenuUI::SettingsPage::Select("Performance", "streaming");
+		MenuUI::SettingsPage::Select("TextureStreaming", "quality");
+		for (int i = 0; i < 3; ++i) frame(drawStreaming);
+		require(MenuUI::SettingsPage::Selected("Performance") == "streaming" && MenuUI::SettingsPage::Selected("TextureStreaming") == "overview", "legacy streaming sections open the combined page below the parent tab");
+		for (const auto& page : MenuUI::SettingsPage::Describe())
+			if (page["page"] == "TextureStreaming")
+				require(page["tabs"].size() == 1 && !page["tabs"][0]["showTab"].get<bool>(), "streaming has no nested feature tabs or overview tiles");
+		require(!MenuUI::SettingsPage::Navigate("TextureStreaming", "profiling") && !MenuUI::SettingsPage::Navigate("TextureStreaming", "performance"), "hosting streaming preserves its existing profiling and measurement exclusions");
+		require(MenuUI::SettingsPage::Navigate("TextureStreaming", "status") && MenuUI::SettingsPage::Navigate("TextureStreaming", "categories"), "streaming status and coverage links resolve to the combined page");
+		for (int i = 0; i < 3; ++i) frame(drawStreaming);
+		require(MenuUI::SettingsPage::Selected("Performance") == "streaming" && MenuUI::SettingsPage::Selected("TextureStreaming") == "overview", "streaming status retains the parent tab and single continuous view");
+		require(MenuUI::SettingsPage::Navigate("Performance", "presets"), "streaming can return to the other Performance tools");
+		globals::menu->destination.clear();
+		for (int i = 0; i < 3; ++i) frame(drawStreaming);
+		require(globals::menu->destination == "builtin:Performance Presets", "streaming routes parent navigation through the existing preset page");
 
 		std::vector<std::string> profilingPages{ "Screenshot", "TextureStreaming" };
 		for (const auto& view : Util::FeatureProfiling::views)
@@ -1394,8 +1564,8 @@ int main()
 				Util::controls.clear();
 				for (int i = 0; i < 3; ++i) frame(drawProfiledPage);
 				const bool excluded = Util::FeatureProfiling::IsExcluded(name);
-				const auto* help = enabled ? "Choose CPU, GPU or Off to inspect timings." : disabledProfilingHelp;
-				require(Util::controls.contains(help) != excluded, "profiling cards remain visible independently of the main switch");
+				const auto* help = enabled ? "Profile this feature: open its live CPU and GPU timings." : disabledProfilingHelp;
+				require(Util::controls.contains(help) != excluded, "profiling icons remain visible independently of the main switch");
 				if (!excluded) {
 					const auto& sections = MenuUI::navigation.at(name).sections;
 					const auto profilingCard = std::ranges::find_if(sections, [](const auto& section) { return std::string_view(section.id) == "profiling"; });
@@ -1407,11 +1577,11 @@ int main()
 									require(tab["enabled"] == enabled && tab["disabledReason"] == (enabled ? "" : disabledProfilingHelp), "DevBench exposes disabled tool availability and its explanation");
 					click(Util::controls.at(help).GetCenter(), drawProfiledPage);
 					for (int i = 0; i < 3; ++i) frame(drawProfiledPage);
-					require(MenuUI::SettingsPage::Selected(name.c_str()) == (enabled ? "profiling" : "overview"), "profiling cards obey the main switch when clicked");
+					require(MenuUI::SettingsPage::Selected(name.c_str()) == (enabled ? "profiling" : "overview"), "profiling icons obey the main switch when clicked");
 				}
 				require(MenuUI::SettingsPage::Navigate(name.c_str(), "profiling") == (enabled && !excluded), "direct profiling navigation obeys the main switch");
 				if (name == "TextureStreaming")
-					require(!MenuUI::SettingsPage::Navigate(name.c_str(), "performance") && !Util::controls.contains("Measures in-game frame times and FPS with the current feature settings."), "texture streaming must not expose performance tuning");
+					require(!MenuUI::SettingsPage::Navigate(name.c_str(), "performance") && !Util::controls.contains("Tune this feature: compare its performance cost with the current settings."), "texture streaming must not expose performance tuning");
 				require(MenuUI::SettingsPage::Navigate(name.c_str(), "settings"), "profiling changes must preserve ordinary settings");
 			}
 		}
@@ -1428,7 +1598,7 @@ int main()
 		MenuUI::SettingsPage::Select("NeuralRendering", "overview");
 		Util::controls.clear();
 		for (int i = 0; i < 3; ++i) frame(drawNeuralRendering);
-		require(Util::controls.contains("Choose CPU, GPU or Off to inspect timings.") && Util::controls.contains("Measures in-game frame times and FPS with the current feature settings."), "NR must expose independent profiling and measurement tiles together");
+		require(Util::controls.contains("Profile this feature: open its live CPU and GPU timings.") && Util::controls.contains("Tune this feature: compare its performance cost with the current settings."), "NR must expose independent profiling and measurement icons together");
 		require(MenuUI::SettingsPage::Navigate("NeuralRendering", "profiling"), "NR profiling tab is reachable through DevBench navigation with measurement available");
 		profilingBefore = ProfilingRenderer::draws;
 		const int nrMeasurementBefore = PerformanceTuningRenderer::draws;
@@ -1437,42 +1607,42 @@ int main()
 		require(MenuUI::SettingsPage::Navigate("NeuralRendering", "performance") && MenuUI::SettingsPage::Navigate("NeuralRendering", "mode"), "NR independent profiling preserves measurement and route navigation");
 
 		auto* featureTabs = GImGui->TabBars.GetByKey(neuralTabBar);
-		require(featureTabs && featureTabs->Tabs.Size == 2, "feature top bar contains only Overview and its settings tab");
+		require(featureTabs && featureTabs->Tabs.Size == 4, "feature top bar contains Overview, its settings tab and two tool icons");
 		for (auto& tab : featureTabs->Tabs)
 			require(std::string_view(ImGui::TabBarGetTabName(featureTabs, &tab)) == "Overview" ||
-						std::string_view(ImGui::TabBarGetTabName(featureTabs, &tab)) == "Mode",
-				"performance and profiling tools must not appear in feature top tabs");
+						std::string_view(ImGui::TabBarGetTabName(featureTabs, &tab)) == "Mode" ||
+						((tab.Flags & ImGuiTabItemFlags_Button) && (tab.Flags & ImGuiTabItemFlags_Trailing)),
+				"feature tools use trailing icon buttons rather than additional labelled tabs");
 		for (const auto& entry : MenuUI::SettingsPage::Describe())
 			if (entry["page"] == "NeuralRendering")
 				for (const auto& tab : entry["tabs"])
-					require(tab["showTab"] == (tab["id"] == "overview" || tab["id"] == "mode"), "DevBench distinguishes card-only tools from top tabs without losing navigation");
+					require(tab["showTab"] == (tab["id"] == "overview" || tab["id"] == "mode"), "DevBench distinguishes icon tools from top tabs without losing navigation");
 
 		for (const char* previous : { "overview", "mode" })
 			for (const char* tool : { "performance", "profiling" })
 				for (const char* target : { "overview", "mode" }) {
-					require(MenuUI::SettingsPage::Navigate("NeuralRendering", previous), "feature settings can precede a card-only tool");
+					require(MenuUI::SettingsPage::Navigate("NeuralRendering", previous), "feature settings can precede an icon tool");
 					for (int settle = 0; settle < 3; ++settle) frame(drawNeuralRendering);
-					require(MenuUI::SettingsPage::Navigate("NeuralRendering", tool), "DevBench can still open card-only tools");
+					require(MenuUI::SettingsPage::Navigate("NeuralRendering", tool), "DevBench can still open icon tools");
 					for (int settle = 0; settle < 3; ++settle) frame(drawNeuralRendering);
-					require(MenuUI::SettingsPage::Selected("NeuralRendering") == tool, "retained ImGui top selection cannot replace a card-only tool");
+					require(MenuUI::SettingsPage::Selected("NeuralRendering") == tool, "retained ImGui top selection cannot replace an icon tool");
 					const char* help = std::string_view(target) == "overview" ? "Start here. Choose a card to open its settings." : "NR route";
 					click(Util::controls.at(help).GetCenter(), drawNeuralRendering);
 					for (int settle = 0; settle < 3; ++settle) frame(drawNeuralRendering);
-					require(MenuUI::SettingsPage::Selected("NeuralRendering") == target, "top tabs leave card-only tools even when ImGui already retains the clicked tab");
-					require(MenuUI::SettingsPage::Navigate("NeuralRendering", tool), "retained-tab right-click fixture opens a card-only tool");
+					require(MenuUI::SettingsPage::Selected("NeuralRendering") == target, "top tabs leave icon tools even when ImGui already retains the clicked tab");
+					require(MenuUI::SettingsPage::Navigate("NeuralRendering", tool), "retained-tab right-click fixture opens an icon tool");
 					for (int settle = 0; settle < 3; ++settle) frame(drawNeuralRendering);
 					click(Util::controls.at(help).GetCenter(), drawNeuralRendering, 1);
 					for (int settle = 0; settle < 3; ++settle) frame(drawNeuralRendering);
-					require(MenuUI::SettingsPage::Selected("NeuralRendering") == target, "right-clicks leave card-only tools even when ImGui already retains the clicked tab");
+					require(MenuUI::SettingsPage::Selected("NeuralRendering") == target, "right-clicks leave icon tools even when ImGui already retains the clicked tab");
 				}
 
 		Feature toolNavigation{ "FeaturePage", true };
 		ImGuiID toolNavigationBar = 0;
 		bool allowTopNavigation = true, showRouteTab = true;
-		float toolPanelWidth = 850, toolTabFontSize = 0;
+		float toolPanelWidth = 850;
 		auto drawToolNavigation = [&] {
 			ImGui::BeginChild("ToolNavigation", { toolPanelWidth, 600 });
-			toolTabFontSize = ImGui::GetFontSize();
 			{
 				ImGui::PushID("FeaturePage");
 				toolNavigationBar = ImGui::GetID("##SetupTabs");
@@ -1488,37 +1658,36 @@ int main()
 		for (const char* tool : { "performance", "profiling" }) {
 			require(MenuUI::SettingsPage::Navigate("FeaturePage", "overview"), "overflow fixture starts at Overview");
 			for (int settle = 0; settle < 3; ++settle) frame(drawToolNavigation);
-			require(MenuUI::SettingsPage::Navigate("FeaturePage", tool), "overflow fixture opens a card-only tool");
+			require(MenuUI::SettingsPage::Navigate("FeaturePage", tool), "overflow fixture opens an icon tool");
 			toolPanelWidth = 210;
 			for (int settle = 0; settle < 3; ++settle) frame(drawToolNavigation);
 			auto* bar = GImGui->TabBars.GetByKey(toolNavigationBar);
-			require(bar && bar->ScrollButtonEnabled, "narrow feature pages expose native overflow arrows");
-			const ImVec2 rightArrow{ bar->BarRect.Max.x - (toolTabFontSize - 2) * .5f, bar->BarRect.GetCenter().y };
-			click(rightArrow, drawToolNavigation);
+			require(bar && !bar->ScrollButtonEnabled, "narrow feature pages fit their tabs without overflow arrows");
+			click(Util::controls.at("Navigation route").GetCenter(), drawToolNavigation);
 			for (int settle = 0; settle < 3; ++settle) frame(drawToolNavigation);
-			require(MenuUI::SettingsPage::Selected("FeaturePage") == "route", "overflow arrows leave card-only tools and select ordinary settings");
+			require(MenuUI::SettingsPage::Selected("FeaturePage") == "route", "fitted tabs leave tool views and select ordinary settings");
 			toolPanelWidth = 850;
 			for (int settle = 0; settle < 3; ++settle) frame(drawToolNavigation);
-			require(MenuUI::SettingsPage::Navigate("FeaturePage", tool), "right-click fixture opens a card-only tool");
+			require(MenuUI::SettingsPage::Navigate("FeaturePage", tool), "right-click fixture opens an icon tool");
 			for (int settle = 0; settle < 3; ++settle) frame(drawToolNavigation);
 			click(Util::controls.at("Navigation appearance").GetCenter(), drawToolNavigation, 1);
 			for (int settle = 0; settle < 3; ++settle) frame(drawToolNavigation);
-			require(MenuUI::SettingsPage::Selected("FeaturePage") == "look", "right-click selection leaves card-only tools");
+			require(MenuUI::SettingsPage::Selected("FeaturePage") == "look", "right-click selection leaves icon tools");
 
-			require(MenuUI::SettingsPage::Navigate("FeaturePage", tool), "guard fixture opens a card-only tool");
+			require(MenuUI::SettingsPage::Navigate("FeaturePage", tool), "guard fixture opens an icon tool");
 			for (int settle = 0; settle < 3; ++settle) frame(drawToolNavigation);
 			allowTopNavigation = false;
 			click(Util::controls.at("Navigation route").GetCenter(), drawToolNavigation);
 			for (int settle = 0; settle < 3; ++settle) frame(drawToolNavigation);
-			require(MenuUI::SettingsPage::Selected("FeaturePage") == tool, "top-tab selection cannot bypass a guard while a card-only tool is open");
+			require(MenuUI::SettingsPage::Selected("FeaturePage") == tool, "top-tab selection cannot bypass a guard while an icon tool is open");
 			allowTopNavigation = true;
 			click(Util::controls.at("Navigation route").GetCenter(), drawToolNavigation);
 			for (int settle = 0; settle < 3; ++settle) frame(drawToolNavigation);
 			require(MenuUI::SettingsPage::Selected("FeaturePage") == "route", "a released guard restores top-tab navigation");
-			require(MenuUI::SettingsPage::Navigate("FeaturePage", tool), "visibility fixture opens a card-only tool");
+			require(MenuUI::SettingsPage::Navigate("FeaturePage", tool), "visibility fixture opens an icon tool");
 			showRouteTab = false;
 			for (int settle = 0; settle < 4; ++settle) frame(drawToolNavigation);
-			require(MenuUI::SettingsPage::Selected("FeaturePage") == tool, "automatic replacement of a hidden retained tab cannot leave a card-only tool");
+			require(MenuUI::SettingsPage::Selected("FeaturePage") == tool, "automatic replacement of a hidden retained tab cannot leave an icon tool");
 			showRouteTab = true;
 			for (int settle = 0; settle < 3; ++settle) frame(drawToolNavigation);
 		}
@@ -1539,12 +1708,12 @@ int main()
 					for (int settle = 0; settle < 8; ++settle) frame(draw);
 					const auto overview = Util::controls.at("Start here. Choose a card to open its settings.");
 					const auto* bar = GImGui->TabBars.GetByKey(toolNavigationBar);
-					require(bar && bar->ScrollButtonEnabled, "pinning retains scrolling for overflowing tabs");
-					require(std::abs(original.Min.x - overview.Min.x) < .1f && std::abs(original.Max.x - overview.Max.x) < .1f && std::abs(original.Min.y - overview.Min.y) < .1f, "Overview does not move when ordinary tabs scroll horizontally");
-					require(overview.Min.x >= bar->BarRect.Min.x && overview.Max.x <= bar->ScrollingRectMinX && VisibleTextIndices(overview) >= 8 * 6, "the entire Overview label stays visible outside the scrolling tabs");
+					require(bar && !bar->ScrollButtonEnabled && bar->ScrollingAnim == 0, "fitted tabs do not scroll horizontally");
+					require(std::abs(original.Min.x - overview.Min.x) < .1f && std::abs(original.Max.x - overview.Max.x) < .1f && std::abs(original.Min.y - overview.Min.y) < .1f, "Overview does not move when selecting settings or tool icons");
+					require(overview.Min.x >= bar->BarRect.Min.x && overview.Max.x <= bar->ScrollingRectMinX, "Overview remains inside its allocated area");
 					click(overview.GetCenter(), draw);
 					for (int settle = 0; settle < 3; ++settle) frame(draw);
-					require(MenuUI::SettingsPage::Selected("FeaturePage") == "overview", "pinned Overview returns from settings and card-only tools on narrow panels");
+					require(MenuUI::SettingsPage::Selected("FeaturePage") == "overview", "pinned Overview returns from settings and icon tools on narrow panels");
 				}
 			}
 		}
@@ -1566,22 +1735,22 @@ int main()
 				for (int settle = 0; settle < 3; ++settle) frame(draw);
 				const auto first = Util::controls.at("Where NR runs");
 				const auto last = Util::controls.at("Optional: distance, focus and edges");
-				const auto measurement = Util::controls.at("Measures in-game frame times and FPS with the current feature settings.");
-				const auto profiling = Util::controls.at("Choose CPU, GPU or Off to inspect timings.");
-				require(measurement.Min.y > last.Max.y && profiling.Min.y > last.Max.y, "NR tools follow all six setup cards without overlap");
-				require(std::abs(measurement.Min.x - first.Min.x) < 1 && std::abs(profiling.Max.x - last.Max.x) < 1, "NR tool cards align with the setup grid");
-				require(measurement.Max.x <= profiling.Min.x || measurement.Max.y <= profiling.Min.y, "NR profiling and measurement cards do not overlap");
-				for (const char* help : { "Measures in-game frame times and FPS with the current feature settings.", "Choose CPU, GPU or Off to inspect timings." }) {
+				const auto measurement = Util::controls.at("Tune this feature: compare its performance cost with the current settings.");
+				const auto profiling = Util::controls.at("Profile this feature: open its live CPU and GPU timings.");
+				require(measurement.Max.y < first.Min.y && profiling.Max.y < last.Min.y, "NR tool icons stay above the setup cards");
+				require(std::abs(measurement.Min.y - profiling.Min.y) < 1 && std::abs(measurement.GetHeight() - profiling.GetHeight()) < 1, "tool icons share the tab row and height");
+				require(measurement.Max.x <= profiling.Min.x, "NR profiling and measurement icons do not overlap");
+				for (const char* help : { "Tune this feature: compare its performance cost with the current settings.", "Profile this feature: open its live CPU and GPU timings." }) {
 					MenuUI::SettingsPage::Select("NeuralRendering", "overview");
 					for (int settle = 0; settle < 3; ++settle) frame(draw);
-					require(Viewport::Scroll("NeuralRendering", "overview", 1), "NR tool cards remain reachable by scrolling");
+					require(Viewport::Scroll("NeuralRendering", "overview", 1), "NR content can scroll while tool icons remain pinned");
 					frame(draw);
 					frame(draw);
 					click(Util::controls.at(help).GetCenter(), draw);
 					frame(draw);
 					frame(draw);
-					const bool profilingCard = std::string_view(help).starts_with("Choose CPU");
-					require(MenuUI::SettingsPage::Selected("NeuralRendering") == (profilingCard ? "profiling" : "performance"), "each NR tool card opens its own section");
+					const bool profilingCard = std::string_view(help).starts_with("Profile this");
+					require(MenuUI::SettingsPage::Selected("NeuralRendering") == (profilingCard ? "profiling" : "performance"), "each NR tool icon opens its own section");
 					const auto back = Util::controls.at("Start here. Choose a card to open its settings.");
 					require(Viewport::Scroll("NeuralRendering", profilingCard ? "profiling" : "performance", 1), "NR tool body scrolls beneath the pinned tabs");
 					frame(draw);
@@ -1747,6 +1916,36 @@ int main()
 			require(inspected > 0 && lighting.sanitizations > 0, "lighting keeps validation and performance controls");
 		}
 		PerformanceTuningRenderer::inspect = {};
+		{
+			Feature scopedFeature{ "Skylighting" }, other{ "Unrelated" };
+			require(MenuUI::GetFeatureMutationBlockReason(nullptr), "missing scopedFeature cannot expose a writable master switch");
+			for (bool* unavailable : { &globals::state->blocked, &globals::state->startupDisabled, &PerformanceTuningRenderer::measuring, &PerformanceTuningRenderer::sceneControlled }) {
+				*unavailable = true;
+				require(MenuUI::GetFeatureMutationBlockReason(&scopedFeature) && !MenuUI::InvokeFeatureSettingsAction(MenuUI::GlobalSettingsAction::Load, &scopedFeature), "master switches and scoped persistence share every ownership guard");
+				*unavailable = false;
+			}
+			scopedFeature.loaded = false;
+			require(MenuUI::GetFeatureMutationBlockReason(&scopedFeature), "unloaded scopedFeature cannot expose a writable master switch");
+			scopedFeature.loaded = true;
+			scopedFeature.supportsMeasurement = scopedFeature.hasSettings = false;
+			require(!MenuUI::GetFeatureMutationBlockReason(&scopedFeature) && MenuUI::GetFeatureSettingsActionBlockReason(&scopedFeature), "runtime-only master switches do not require profiling or persistent settings support");
+			scopedFeature.supportsMeasurement = scopedFeature.hasSettings = true;
+			scopedFeature.settings = { { "Enabled", false }, { "value", 7 } };
+			other.settings = { { "value", 99 } };
+			globals::menu->savedFeatures[scopedFeature.name] = { { "Enabled", true }, { "value", 2 } };
+			using Action = MenuUI::GlobalSettingsAction;
+			require(MenuUI::InvokeFeatureSettingsAction(Action::Save, &scopedFeature) && globals::state->savedFeature == &scopedFeature, "scopedFeature Save invokes scoped persistence");
+			require(MenuUI::InvokeFeatureSettingsAction(Action::Load, &scopedFeature) && scopedFeature.settings["value"] == 2 && other.settings["value"] == 99, "scopedFeature Load changes only the selected scopedFeature");
+			scopedFeature.settings["value"] = 8;
+			scopedFeature.loadFailures = 1;
+			require(!MenuUI::InvokeFeatureSettingsAction(Action::Load, &scopedFeature) && scopedFeature.settings["value"] == 8, "failed native load rolls back the complete scopedFeature settings");
+			require(MenuUI::InvokeFeatureSettingsAction(Action::RestoreDefaults, &scopedFeature) && scopedFeature.settings == nlohmann::json({ { "Enabled", true } }) && other.settings["value"] == 99, "scopedFeature defaults preserve unrelated pending values");
+			globals::state->blocked = true;
+			require(!MenuUI::InvokeFeatureSettingsAction(Action::Load, &scopedFeature), "scopedFeature actions retain save/load availability guards");
+			globals::state->blocked = false;
+			globals::menu->savedFeatures.clear();
+			globals::state->savedFeature = nullptr;
+		}
 
 		{
 			for (const float labelScale : { 1.0f, 1.4f, 2.0f }) {
@@ -1816,7 +2015,7 @@ int main()
 			const auto digit = Util::controls.at("Add this digit.");
 			const auto apply = Util::controls.at("Use this value.");
 			const auto cancel = Util::controls.at("Keep the previous value.");
-			require(digit.GetHeight() > firstNumber.GetHeight() && apply.GetHeight() >= firstNumber.GetHeight() && cancel.GetHeight() == apply.GetHeight(), "digits and keypad actions retain large HMD targets");
+			require(digit.GetHeight() == digit.GetWidth() && apply.GetHeight() > 0 && apply.GetHeight() < digit.GetHeight() && cancel.GetHeight() == apply.GetHeight(), "compact keypad keeps square digits and matching action heights");
 			click(Util::controls.at("Clear this entry. Your setting is unchanged.").GetCenter(), form);
 			click(Util::controls.at("Add this digit.").GetCenter(), form);
 			click(Util::controls.at("Use this value.").GetCenter(), form);
@@ -2344,9 +2543,12 @@ int main()
 			require(!GImGui->OpenPopupStack.empty(), std::format("{} supports the headset keypad", test.label).c_str());
 			click(Util::controls.at("Clear this entry. Your setting is unchanged.").GetCenter(), drawNeuralSlider);
 			auto zeroKey = Util::controls.at("Add this digit.");
+			const auto backspace = Util::controls.at("Remove the last digit.");
+			const auto clear = Util::controls.at("Clear this entry. Your setting is unchanged.");
+			const ImVec2 keyGap{ clear.Min.x - backspace.Max.x, clear.Min.y - zeroKey.Max.y };
 			// The keypad's 7 is three rows above and one column left of 0.
-			const ImVec2 sevenKey(zeroKey.GetCenter().x - zeroKey.GetWidth() - ImGui::GetStyle().ItemSpacing.x,
-				zeroKey.GetCenter().y - 3 * (zeroKey.GetHeight() + ImGui::GetStyle().ItemSpacing.y));
+			const ImVec2 sevenKey(zeroKey.GetCenter().x - zeroKey.GetWidth() - keyGap.x,
+				zeroKey.GetCenter().y - 3 * (zeroKey.GetHeight() + keyGap.y));
 			click(sevenKey, drawNeuralSlider);
 			click(Util::controls.at("Add this digit.").GetCenter(), drawNeuralSlider);
 			require(neuralSettings.*test.member == draggedValue, "NR slider keypad stages a draft without resizing");
@@ -2437,6 +2639,23 @@ int main()
 				}
 			}
 			conflict = false;
+			available = true;
+			LLFShadowsFixture noticeShadows;
+			const auto drawShadowNotice = [&] {
+				MenuUI::PageNoticeScope notices;
+				notices.Reserve();
+				noticeShadows.Draw();
+			};
+			frame(drawShadowNotice);
+			const auto shadowPosition = shadowControls.at("Sun shadows").center;
+			available = false;
+			failure = "Shadow resources unavailable. A long failure explanation must stay in the header tooltip rather than moving controls.";
+			frame(drawShadowNotice);
+			require(shadowControls.at("Sun shadows").center.y == shadowPosition.y,
+				"Native shadow failure feedback must not move the controls");
+			require(shadowControls.at("Sun shadows").disabled && !shadowControls.at("Enable Point Light Contact Shadows").disabled,
+				"Native shadow failure leaves independent contact shadows editable");
+			failure.clear();
 			available = true;
 			globals::features::vr.headset = false;
 			Settings tuned;
@@ -2730,7 +2949,7 @@ int main()
 			require(state.saves == 0 && state.loads == 0 && globals::menuStorage.dirtyChecks > 0, "restoration preserves saved files and requests a check against the existing dirty baseline");
 		}
 		{
-			for (const char* page : { "Home", "General", "Advanced" }) {
+			for (const char* page : { "Home", "Settings", "DevTools" }) {
 				const auto draw = [&] { DrawUiReviewPage(page, true); };
 				frame(draw);
 				frame(draw);
@@ -2741,11 +2960,12 @@ int main()
 						for (const auto& tab : entry["tabs"])
 							require(tab["id"] != "performance" && tab["id"] != "profiling", "DevBench sees no measurement tools on ordinary built-in pages");
 			}
-			require(MenuUI::SettingsPage::Selected("Home") == "welcome", "Home defaults to Welcome on first draw");
-			MenuUI::SettingsPage::Select("Home", "cache");
+			require(MenuUI::SettingsPage::Selected("Home") == "overview", "Home opens its single welcome page");
+			require(MenuUI::SettingsPage::Navigate("Home", "welcome"), "legacy welcome links open Home");
+			require(MenuUI::SettingsPage::Navigate("Home", "cache") && MenuUI::SettingsPage::Selected("DevTools") == "shaders", "legacy Home cache links route to developer shader settings");
 			frame([] { DrawUiReviewPage("Home", true); });
 			frame([] { DrawUiReviewPage("Home", true); });
-			require(MenuUI::SettingsPage::Selected("Home") == "cache", "Welcome default does not override later Home navigation");
+			require(MenuUI::SettingsPage::Selected("Home") == "overview", "cache navigation cannot replace the Home welcome page");
 			MenuUI::SettingsPage::Select("Home", "overview");
 			for (const bool dirty : { false, true })
 				for (const bool error : { false, true })
@@ -2772,7 +2992,7 @@ int main()
 									const auto bounds = Util::controls.at(help);
 									require(bounds.Min.x > start.x + layout.backgroundLeft && bounds.Max.x < start.x + available, "all footer actions are inset from the aligned outer edges");
 									require(bounds.Max.y < start.y + height, "every footer action fits the reserved height");
-									require(std::abs(bounds.GetHeight() - font * 2.1f) < .1f, "footer buttons retain the compact reference height");
+									require(std::abs(bounds.GetHeight() - SettingsActionButtonHeight()) < .1f, "footer buttons fit inside the shared settings bar height");
 									require(std::abs(bounds.GetCenter().y - statusBounds.GetCenter().y) < 1, "saved, unsaved and error statuses stay on the same row as every action");
 									require(bounds.Min.x > previousRight, "status and actions never overlap at any supported font or panel width");
 									previousRight = bounds.Max.x;
@@ -2781,7 +3001,7 @@ int main()
 								require(layout.statusLeft > layout.backgroundLeft, "status marker is padded inside the footer");
 								if (panelWidth >= font * 25)
 									require(layout.statusWidth >= font + SettingsActionTextWidth(status), "normal menu widths preserve the full status label");
-								require(std::abs(height - (1 + font * 3.3f) * .75f) < 1, "footer remains compact while retaining readable text and button hit areas");
+								require(std::abs(height - MenuUI::SettingsBarHeight()) < .1f, "footer uses the settings tab bar height");
 								ImGui::EndChild();
 								ImGui::PopFont();
 							};
@@ -2944,13 +3164,13 @@ int main()
 		}
 
 		{
-			MenuUI::SettingsPage::Select("General", "overview");
+			MenuUI::SettingsPage::Select("Settings", "overview");
 			for (const float font : { 13.0f, 21.0f }) {
 				const auto draw = [&] {
 					ImGui::PushFont(ImGui::GetFont(), font);
 					ImGui::BeginChild("CompactOverview", { 850, 600 });
 					{
-						MenuUI::SettingsPage page("General", { { "compact", "Coverage", "Configure this step.", "Shared controls" } });
+						MenuUI::SettingsPage page("Settings", { { "compact", "Coverage", "Configure this step.", "Shared controls" } });
 					}
 					ImGui::EndChild();
 					ImGui::PopFont();
@@ -2958,14 +3178,15 @@ int main()
 				frame(draw);
 				frame(draw);
 				const auto compactCard = Util::controls.at("Configure this step.");
-				require(compactCard.GetHeight() <= font * 6 + .1f && compactCard.GetHeight() >= font * 5.0f, "overview cards use the shorter height without consuming spare vertical space");
+				require(std::abs(compactCard.GetHeight() - font * 4.25f) < .1f, "overview cards use the shared compact height without consuming spare vertical space");
 			}
 		}
 
 		{
-			for (const char* page : { "Home", "NeuralRendering" })
+			for (const char* page : { "NeuralRendering" })
 				for (const float font : { 13.0f, 21.0f }) {
 					MenuUI::SettingsPage::Select(page, "overview");
+					float tabHeight = 0, footerHeight = 0;
 					const auto draw = [&] {
 						ImGui::PushFont(ImGui::GetFont(), font);
 						ImGui::BeginChild("AlignedFooter", { 850, 650 }, ImGuiChildFlags_Borders);
@@ -2976,8 +3197,10 @@ int main()
 						const auto layout = GetSettingsFooterLayout(page);
 						const auto right = start.x + ImGui::GetContentRegionAvail().x - layout.backgroundRight;
 						DrawSettingsFooter(page);
-						const auto first = Util::controls.at(std::string_view(page) == "Home" ? "About Community Shaders Expanded and its contributors." : "Where NR runs");
-						const auto last = Util::controls.at(std::string_view(page) == "Home" ? "Review changes affecting your compiled shaders." : "How selected edits are applied");
+						tabHeight = Util::controls.at("Start here. Choose a card to open its settings.").GetHeight();
+						footerHeight = SettingsFooterHeight(page);
+						const auto first = Util::controls.at("Where NR runs");
+						const auto last = Util::controls.at("How selected edits are applied");
 						require(std::abs(first.Min.x - (start.x + layout.backgroundLeft)) < .1f, "footer left edge follows the first overview card");
 						if (std::abs(last.Max.x - right) >= .1f)
 							throw std::runtime_error(std::format("Footer right edge mismatch: page {}, font {}, card {}, footer {}", page, font, last.Max.x, right));
@@ -2987,6 +3210,7 @@ int main()
 					frame(draw);
 					frame(draw);
 					frame(draw);
+					require(tabHeight > 0 && std::abs(footerHeight - tabHeight) < .1f, "footer and rendered navigation tabs have equal heights");
 				}
 		}
 
@@ -2998,47 +3222,15 @@ int main()
 				stageHeight = ImGui::GetFont()->CalcTextSizeA(font * 1.25f, FLT_MAX, font * 5.65f, stage).y;
 				ImGui::BeginChild("StageRail", { 850, 320 });
 				{
-					MenuUI::SettingsPage page("General", { { "water", "Water", "Water step", {}, true, true, stage }, { "reflection", "Reflections", "Reflection step" },
-															 { "depth", "Depth", "Depth step" }, { "foam", "Foam", "Foam step" }, { "waves", "Waves", "Waves step" }, { "lighting", "Lighting", "Lighting step" } });
+					MenuUI::SettingsPage page("Settings", { { "water", "Water", "Water step", {}, true, true, stage }, { "reflection", "Reflections", "Reflection step" },
+															  { "depth", "Depth", "Depth step" }, { "foam", "Foam", "Foam step" }, { "waves", "Waves", "Waves step" }, { "lighting", "Lighting", "Lighting step" } });
 				}
 				ImGui::EndChild();
 			};
-			MenuUI::SettingsPage::Select("General", "overview");
+			MenuUI::SettingsPage::Select("Settings", "overview");
 			frame(draw);
 			frame(draw);
-			require(Util::controls.at("Water step").GetHeight() >= stageHeight + ImGui::GetFontSize() * .4f, "compact overview rows reserve space around the full stage label");
-		}
-
-		{
-			const char* explanation = "This longer tool explanation must wrap inside its own card while preserving every word and keeping the normal setup cards compact. Compare the current scene, then review the complete measurement report before applying any changes.";
-			for (const float panelWidth : { 850.0f, 420.0f }) {
-				bool toolsOnly = false;
-				const auto draw = [&] {
-					ImGui::BeginChild("IndependentToolRows", { panelWidth, 600 });
-					{
-						MenuUI::SettingsPage page("General", {
-																 { "compact", "Coverage", "Short setup.", "Shared", !toolsOnly },
-																 { "performance", "Performance", explanation, "Measured results", true, false },
-																 { "profiling", "Profiling", "Inspect timing information.", "CPU and GPU", true, false },
-															 });
-					}
-					ImGui::EndChild();
-				};
-				MenuUI::SettingsPage::Select("General", "overview");
-				frame(draw);
-				frame(draw);
-				const auto setup = Util::controls.at("Short setup.");
-				const auto tool = Util::controls.at(explanation);
-				require(setup.GetHeight() <= ImGui::GetFontSize() * 6 + .1f, "long tool copy cannot inflate the setup row");
-				require(tool.Min.y > setup.Max.y, "tool rows follow compact setup rows without overlap");
-				toolsOnly = true;
-				frame(draw);
-				frame(draw);
-				const auto first = Util::controls.at(explanation);
-				const auto second = Util::controls.at("Inspect timing information.");
-				require(std::isfinite(first.GetHeight()) && first.GetHeight() > ImGui::GetFontSize() * 2, "a tools-only overview retains finite text-sized cards");
-				require(first.Max.x <= second.Min.x || first.Max.y <= second.Min.y, "tool cards remain separate in one- and two-column overviews");
-			}
+			require(Util::controls.at("Water step").GetHeight() < stageHeight + ImGui::GetFontSize() * .4f, "long guide labels use their section title without inflating every overview row");
 		}
 
 		{
@@ -3229,6 +3421,93 @@ int main()
 			require(toggle == 0, "integer-backed toggles can clear values outside the low byte");
 		}
 
+		{
+			AdvancedSkinFixture::Skin skin;
+			json baseline;
+			skin.SaveSettings(baseline);
+			for (const bool enabled : { false, true }) {
+				skin.settings.EnableSkin = enabled;
+				for (const bool effects : { false, true }) {
+					skin.settings.EnableSkinDetail = skin.settings.UseSSS = effects;
+					skin.wetnessActive = effects;
+					for (const char* section : { "overview", "lighting", "detail", "transmission", "wetness" }) {
+						MenuUI::SettingsPage::Select("Skin", section);
+						std::string text;
+						const auto draw = [&] {
+							shadowControls.clear();
+							ImGui::LogToBuffer();
+							skin.DrawSettings();
+							text = GImGui->LogBuffer.c_str();
+							ImGui::LogFinish();
+						};
+						frame(draw);
+						frame(draw);
+						require(text.find("Enable Advanced Skin") == text.npos, "Advanced Skin master control belongs only in the shared header");
+						for (const auto& field : AdvancedSkinFixture::Numbers) {
+							if (std::string_view(section) != field.section)
+								continue;
+							const auto& control = shadowControls.at(field.label);
+							const std::string_view path(field.path);
+							const bool inactive = !enabled || (!effects && (std::string_view(section) == "detail" ||
+																			   std::string_view(section) == "wetness" || path == "/Translucency" || path == "/sssWidth"));
+							require(control.disabled == inactive, "Advanced Skin controls respect master and effect availability without disabling diffusion with transmission");
+							require(control.minimum == field.minimum && control.maximum == field.maximum, "Advanced Skin numeric controls retain validated ranges");
+							require(field.help && *field.help, "Advanced Skin controls explain their effect in tooltips");
+						}
+					}
+				}
+			}
+			skin.LoadSettings(baseline);
+			skin.settings.F0 = .05f;
+			skin.settings.WetParams.x = 128;
+			const auto captured = skin.CapturePerformanceSettingsState();
+			skin.RestoreDefaultSettings();
+			skin.RestorePerformanceToggleState(captured);
+			require(skin.settings.F0 == .05f && skin.settings.WetParams.x == 128, "Advanced Skin tuning rollback preserves appearance and wetness");
+			skin.RestorePerformanceToggleState(false);
+			require(!skin.settings.EnableSkin && skin.settings.F0 == .05f, "Advanced Skin master switch preserves personal tuning");
+			json invalid{ { "WetParams", { 1, 2 } } };
+			bool rejected = false;
+			try {
+				skin.LoadSettings(invalid);
+			} catch (const std::exception&) {
+				rejected = true;
+			}
+			require(rejected && skin.settings.F0 == .05f, "Invalid Advanced Skin settings cannot partially replace current values");
+		}
+
+		{
+			PerformanceResults::View view;
+			json record = json::parse(R"({"schema":1,"id":"test-1","started":"test","kind":"quick_scan","status":"complete","context":{"runtime":"VR","timingDefinitions":2},"settings":{},"results":[{"id":"test","label":"Saved feature","metrics":{"gpu":{"unit":"ms","value":0.0},"cpu":{"unit":"ms","value":null}}}]})");
+			view.first = std::make_shared<const json>(record);
+			const auto draw = [&] { MenuUI::PerformanceResultsPage::DrawResults(view); };
+			frame(draw);
+			frame(draw);
+			std::string text;
+			frame([&] {
+				ImGui::LogToBuffer();
+				draw();
+				text = GImGui->LogBuffer.c_str();
+				ImGui::LogFinish();
+			});
+			require(text.find("Instrumented self-time") != text.npos && text.find("Saved feature") != text.npos &&
+						text.find("0.000") != text.npos && text.find("--") != text.npos,
+				"history UI distinguishes true zero from unavailable self-time");
+			record["results"][0]["metrics"]["gpu"]["value"] = 2.5;
+			view.second = std::make_shared<const json>(record);
+			frame(draw);
+			frame([&] {
+				ImGui::LogToBuffer();
+				draw();
+				text = GImGui->LogBuffer.c_str();
+				ImGui::LogFinish();
+			});
+			require(text.find("Difference") != text.npos && text.find("2.500") != text.npos, "saved-run comparison renders measured difference");
+			record["kind"] = "feature_comparison";
+			view.second = std::make_shared<const json>(record);
+			frame(draw);
+			require(!PerformanceResults::Compare(*view.first, *view.second)["compatible"].get<bool>(), "UI comparison retains semantics guard");
+		}
 		ImGui::DestroyContext();
 		std::cout << "Settings navigation and numeric interaction checks passed\n";
 	} catch (const std::exception& error) {

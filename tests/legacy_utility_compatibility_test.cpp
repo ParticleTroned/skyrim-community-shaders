@@ -136,7 +136,7 @@ namespace
 			assert(LegacyUtilityCompatibility::IsAlias(alias));
 			auto& adapter = Adapter(alias);
 			assert(adapter.GetName() == alias && adapter.GetShortName() == alias);
-			assert(adapter.GetDisplayName() == "Adaptive Balance");
+			assert(adapter.GetDisplayName() == "Visuals");
 			assert(!adapter.IsInMenu() && adapter.IsHiddenFromUserView() && adapter.SupportsVR() && adapter.IsCore());
 			assert(adapter.loaded && adapter.version == balance.version);
 		}

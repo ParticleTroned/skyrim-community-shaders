@@ -83,9 +83,6 @@ public:
 	/// When true, resets all window positions/sizes on next frame (auto-cleared).
 	bool resetLayout = false;
 
-	/// Bottom Y of the viewport window, set during layout for palette positioning.
-	float viewportBottomY = 0.0f;
-
 	// Time control constants
 	static constexpr float kVanillaTimeScale = 20.0f;
 	static constexpr float kGameHourMax = 23.99f;

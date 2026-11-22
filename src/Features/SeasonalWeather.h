@@ -19,7 +19,12 @@ struct SeasonalWeather : Feature
 	bool IsCore() const override { return true; }
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override;
 	void DataLoaded() override;
+	SettingsHeaderStatus GetSettingsHeaderStatus() const override;
 	void DrawSettingsEnabledControl() override;
+	bool SupportsPerformanceProfileToggle() const override { return true; }
+	bool IsPerformanceCostMeasurementEnabled() const override { return enabled.load(); }
+	void SetPerformanceCostMeasurementEnabled(bool value) override;
+	const char* GetPerformanceToggleBlockReason() const override;
 	void DrawSettings() override;
 	void LoadSettings(json& settings) override;
 	void SaveSettings(json& settings) override;
@@ -27,7 +32,7 @@ struct SeasonalWeather : Feature
 
 	/** Inspects regional candidates or atomically applies a validated settings patch. */
 	json Control(const json& request);
-	/** Draws the same controls in CS Editor; selected weather can supply regional snow. */
+	/** Draws the same controls in CSX Editor; selected weather can supply regional snow. */
 	void DrawEditorSettings(RE::TESWeather* selectedWeather);
 
 private:

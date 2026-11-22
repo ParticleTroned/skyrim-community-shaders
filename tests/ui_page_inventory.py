@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|//[^\n]*|/\*.*?\*/|[{}()[\],]', re.S)
-PAGE = re.compile(r'(?:MenuUI::)?SettingsPage\s+page\(\s*("[^"\n]+")\s*,\s*\{')
+PAGE = re.compile(r'(?:MenuUI::)?SettingsPage\s+page\(\s*("[^"\n]+"|a_page)\s*,\s*\{')
 STRING = re.compile(r'"(?:\\.|[^"\\])*"')
 
 
@@ -45,6 +45,8 @@ def fields(source):
 def inventory(root):
     result = []
     files = sorted(root.glob("src/**/*.cpp"))
+    performance_pages = sorted({m[1] for path in files for m in re.finditer(
+        r'RenderPerformancePage\(("[^"\n]+")', path.read_text(encoding="utf-8"))})
     for path in files:
         source = path.read_text(encoding="utf-8")
         for match in PAGE.finditer(source):
@@ -61,7 +63,8 @@ def inventory(root):
             ids = [s[0] for s in sections]
             if len(ids) != len(set(ids)) or any(i in ('"overview"', '"performance"', '"profiling"') for i in ids):
                 raise ValueError(f"duplicate or reserved section ID in {path}")
-            result.append({"id": match[1], "file": path.relative_to(root).as_posix(), "sections": sections})
+            for page_id in performance_pages if match[1] == "a_page" else [match[1]]:
+                result.append({"id": page_id, "file": path.relative_to(root).as_posix(), "sections": sections})
     ids = [page["id"] for page in result]
     if not result or len(ids) != len(set(ids)):
         raise ValueError("missing or duplicate production page IDs")
@@ -91,7 +94,7 @@ def write_header(pages, path):
             for i in range(3, len(parts)):
                 if i == 4:
                     parts[i] = "true" if parts[i] == "true" else "conditional"
-                elif i in (5, 9):
+                elif i in (5, 9, 10):
                     parts[i] = "true" if parts[i] == "true" else "false" if parts[i] == "false" else "conditional"
                 elif not STRING.fullmatch(parts[i]) and parts[i] != "nullptr":
                     parts[i] = '""' if i == 3 else "nullptr"

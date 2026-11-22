@@ -1,6 +1,6 @@
 set(_wetterness_runtime_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/wetterness-runtime")
 set(_wetterness_runtime_headers)
-foreach(part members state constants weather shader_settings packing sanitization reset activity update)
+foreach(part members state constants weather shader_settings packing sanitization reset activity update preset_definitions reflection_ui presets)
     list(APPEND _wetterness_runtime_headers "${_wetterness_runtime_dir}/wetterness_${part}.h")
 endforeach()
 add_custom_command(

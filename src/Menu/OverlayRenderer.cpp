@@ -94,9 +94,7 @@ namespace
 		if (!window || !window->Active || window->Hidden)
 			return nullptr;
 
-		// Desktop-only status remains active in ImGui after its HMD draw lists are filtered.
-		if (std::strcmp(a_windowName, "ShaderCompilationInfo") == 0 && IsShaderStatusDesktopOnly())
-			return nullptr;
+		// The desktop mirror shares menu geometry even when this panel is hidden in the headset.
 		return window;
 	}
 

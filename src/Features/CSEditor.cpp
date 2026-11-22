@@ -82,7 +82,7 @@ namespace
 		try {
 			widget.LoadSettings();
 		} catch (const std::exception& e) {
-			logger::error("Failed to apply saved CS Editor override for {}: {}", widget.GetEditorID(), e.what());
+			logger::error("Failed to apply saved CSX Editor override for {}: {}", widget.GetEditorID(), e.what());
 			return false;
 		}
 		return true;
@@ -427,13 +427,13 @@ void CSEditor::DrawLauncherRow(float width, float height)
 	if (!canOpen) {
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			if (!loaded) {
-				ImGui::TextUnformatted("CS Editor is not loaded.");
+				ImGui::TextUnformatted("CSX Editor is not loaded.");
 			} else if (!state) {
-				ImGui::TextUnformatted("CS Editor is not ready.");
+				ImGui::TextUnformatted("CSX Editor is not ready.");
 			} else if (state->isLoadingMenuOpen) {
-				ImGui::TextUnformatted("CS Editor cannot be opened during a loading screen.");
+				ImGui::TextUnformatted("CSX Editor cannot be opened during a loading screen.");
 			} else {
-				ImGui::TextUnformatted("Enter the game world to open CS Editor.");
+				ImGui::TextUnformatted("Enter the game world to open CSX Editor.");
 			}
 		}
 	}

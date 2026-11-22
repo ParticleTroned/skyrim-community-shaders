@@ -7387,7 +7387,7 @@ namespace SIE
 		if (timing.enabled && !(a_timeOnly && a_elapsedOnly))
 			estimated = !timing.active     ? elapsed :
 			            !timing.calibrated ? std::string("estimating...") :
-			                                 fmt::format("~{}-{}", GetHumanTime(totalMs + timing.lowerRemainingMs),
+			                                 fmt::format("~{} to {}", GetHumanTime(totalMs + timing.lowerRemainingMs),
 												 GetHumanTime(totalMs + timing.upperRemainingMs));
 
 		if (a_timeOnly) {

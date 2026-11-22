@@ -9,6 +9,7 @@
 #include "Menu/Fonts.h"
 #include "Menu/OverlayPolicy.h"
 #include "Menu/OverlayRenderer.h"
+#include "Menu/PerformanceTuningRenderer.h"
 #include "Menu/SettingsPage.h"
 #include "RE/B/BSOpenVR.h"
 #include "RE/B/BSOpenVRControllerDevice.h"
@@ -1113,6 +1114,7 @@ namespace
 	void DrawControlsSettings();
 	void DrawDepthCullingSettings(VR& a_vr, const char* a_id);
 	void DrawMenuSettings();
+	void DrawDesktopSettings();
 	void DrawMouseSettings();
 	void DrawStereoSettings();
 	void DrawStereoSyncSettings();
@@ -1121,6 +1123,92 @@ namespace
 	void DrawKeyBindings();
 	void DrawDebugSection();
 	bool pendingFovTabSelection = false;
+}
+
+namespace
+{
+	bool CanDrawInterfaceSettings()
+	{
+		return globals::game::isVR && globals::menu && globals::state;
+	}
+
+	MenuUI::ActionFeedback controllerBindingFeedback;
+
+	const char* InterfaceSettingsBlockReason()
+	{
+		// Only loaded feature settings participate in global persistence.
+		if (!globals::features::vr.loaded)
+			return "VR settings were not loaded. Enable VR in Settings > Startup and restart before editing these preferences.";
+		if (PerformanceTuningRenderer::HasActiveMeasurements())
+			return "Finish the active measurement before changing VR interface settings.";
+		return PerformanceTuningRenderer::GetFeatureSceneControlBlockReason(&globals::features::vr);
+	}
+
+	void DrawInterfacePanel(void (*draw)())
+	{
+		if (!CanDrawInterfaceSettings())
+			return;
+		auto& vr = globals::features::vr;
+		const auto previous = vr.settings;
+		{
+			const auto* reason = InterfaceSettingsBlockReason();
+			const auto disabled = Util::DisableGuard(reason != nullptr);
+			if (reason)
+				MenuUI::DetailText(reason);
+			draw();
+		}
+		if (previous != vr.settings) {
+			globals::menu->RequestSettingsDirtyCheck();
+			PerformanceTuningRenderer::NotifyFeatureSettingsChanged(&vr);
+		}
+	}
+
+}
+
+void VR::DrawMenuInterfaceSettings()
+{
+	DrawInterfacePanel([] { DrawMenuSettings(); });
+}
+
+void VR::DrawControlInterfaceSettings()
+{
+	DrawInterfacePanel([] {
+		DrawControlsSettings();
+		globals::features::vr.DrawComboRecordingPopup();
+	});
+	if (CanDrawInterfaceSettings())
+		controllerBindingFeedback.Draw();
+}
+
+void VR::DrawComboRecordingPopup()
+{
+	if (!CanDrawInterfaceSettings() || !isCapturingCombo)
+		return;
+	ImGui::OpenPopup("Record Combo");
+	if (auto popup = Util::CenteredPopupModal("Record Combo")) {
+		const char* reason = InterfaceSettingsBlockReason();
+		if (!reason && !openVRInfo.isCompatible)
+			reason = "Controller bindings require a compatible VR runtime.";
+		if (reason) {
+			controllerBindingFeedback.message = std::string("Controller recording cancelled. ") + reason;
+			controllerBindingFeedback.error = true;
+			ResetComboRecordingState();
+			ImGui::CloseCurrentPopup();
+			return;
+		}
+		controllerBindingFeedback = {};
+		DrawComboRecordingContents();
+	}
+}
+
+void VR::DrawDesktopInterfaceSettings()
+{
+	DrawInterfacePanel([] { DrawDesktopSettings(); });
+}
+
+void VR::DrawInterfaceDiagnostics()
+{
+	DrawInterfacePanel([] { DrawDebugSection(); });
 }
 
 bool VR::OpenFovSettings()
@@ -1139,23 +1227,16 @@ void VR::DrawSettings()
 	if (pendingFovTabSelection)
 		MenuUI::SettingsPage::Select("VR", "fov");
 	MenuUI::SettingsPage page("VR", {
-										{ "fov", "FOV", "Choose the area to render, then refine its edges.", "Foveated area and edges", true, true, "Set up rendering" },
+										{ "fov", "FOV", "Choose the area to render, then refine its edges.", "Foveated area and edges", true, true, "Set up rendering", nullptr, nullptr, true, true, nullptr, "fov-effects" },
 										{ "fov-effects", "FOV effects", "Choose which effects use the shared FOV mask.", "Effect coverage and detail budgets", true, true, nullptr },
 										{ "depth-culling", "Depth culling", "Choose visibility checks for exterior and interior objects.", "Object visibility and culling method", true, true, "Balance visibility and appearance" },
 										{ "stereo", "Stereo", "Refine the appearance shared between your eyes.", "Shared stereo appearance", true, true, nullptr },
-										{ "layout", "Menu", "Choose menu placement, presentation and desktop behaviour.", "Headset placement and desktop settings", true, true, "Set up interaction" },
-										{ "controls", "Controls", "Choose navigation, pointer response and controller shortcuts.", "Navigation, pointer and shortcuts", true, true, nullptr, nullptr, nullptr, openVRInfo.isCompatible },
-										{ "diagnostics", "Diagnostics", "Inspect headset and controller diagnostics.", "Headset and controller state", true, false, nullptr },
 									});
 
 	auto menu = globals::menu;
 	if (!menu)
 		return;
 
-	if (page.Is("layout"))
-		DrawMenuSettings();
-	if (page.Is("controls"))
-		DrawControlsSettings();
 	if (page.Is("depth-culling"))
 		DrawDepthCullingSettings(*this, "DepthCullingSettings");
 
@@ -1177,168 +1258,136 @@ void VR::DrawSettings()
 			DrawStereoSettings();
 		}
 	}
+}
 
-	if (page.Is("diagnostics")) {
-		{
-			DrawDebugSection();
+void VR::DrawComboRecordingContents()
+{
+	auto applyRecordedCombo = [&]() {
+		if (this->recordedCombo.empty())
+			return;
+
+		switch (this->currentComboType) {
+		case VR::ComboType::MenuOpen:
+			settings.VRMenuOpenKeys = this->recordedCombo;
+			break;
+		case VR::ComboType::MenuClose:
+			settings.VRMenuCloseKeys = this->recordedCombo;
+			break;
+		case VR::ComboType::OverlayOpen:
+			settings.VROverlayOpenKeys = this->recordedCombo;
+			break;
+		case VR::ComboType::NeuralRenderingToggle:
+			settings.VRNeuralRenderingToggleKeys = this->recordedCombo;
+			UpdateNeuralRenderingToggleFromInput(false);
+			break;
+		case VR::ComboType::OverlayClose:
+			settings.VROverlayCloseKeys = this->recordedCombo;
+			break;
+		default:
+			return;
+		}
+		globals::menu->RequestSettingsDirtyCheck();
+	};
+
+	ImGui::Text("Recording combo for: %s", this->currentComboName ? this->currentComboName : "Unknown");
+	Util::AddTooltip("Record with either controller. The controller requirement applies only when using the binding.");
+	ImGui::Spacing();
+
+	// Show countdown timer with color
+	double remainingTime = this->comboTimeout - (Util::GetNowSecs() - this->comboStartTime);
+	ImVec4 timerColor = remainingTime > 2.0 ? Util::Colors::GetTimerGood() :
+	                    remainingTime > 1.0 ? Util::Colors::GetTimerWarning() :
+	                                          Util::Colors::GetTimerCritical();
+	ImGui::TextColored(timerColor, "Time remaining: %.1f seconds", remainingTime);
+
+	ImGui::Spacing();
+
+	// Show recorded buttons
+	if (this->recordedCombo.empty()) {
+		ImGui::Text("Press buttons to record combo...");
+	} else {
+		ImGui::Text("Recorded buttons:");
+		// Create a sorted list of decoded buttons for consistent display
+		std::vector<ButtonCombo> sortedRecordedCombos;
+		for (size_t i = 0; i < this->recordedCombo.size(); ++i) {
+			sortedRecordedCombos.push_back(this->recordedCombo[i]);
+		}
+		std::sort(sortedRecordedCombos.begin(), sortedRecordedCombos.end(),
+			[](const ButtonCombo& a, const ButtonCombo& b) {
+				return a.GetKey() < b.GetKey();
+			});
+
+		Util::DrawButtonCombo(sortedRecordedCombos, false);
+	}
+
+	ImGui::Spacing();
+	ImGui::Separator();
+	ImGui::Spacing();
+
+	// Instructions
+	ImGui::Text("Press ENTER to accept, ESC to cancel");
+
+	// Handle button recording
+	// Check for VR controller button presses - record them (any controller allowed during recording)
+	bool buttonPressed = false;
+	uint32_t pressedKey = 0;
+	ControllerDevice pressedDevice = ControllerDevice::Both;  // Default to Both, will set below
+
+	// Check primary controller buttons
+	for (const auto& [keyCode, buttonState] : primaryControllerState.GetActiveButtons()) {
+		if (buttonState->isPressed) {
+			pressedKey = keyCode;
+			buttonPressed = true;
+			pressedDevice = ControllerDevice::Primary;
+			break;
 		}
 	}
 
-	// Combo recording popup
-	if (this->isCapturingCombo) {
-		ImGui::OpenPopup("Record Combo");
-		if (auto popup = Util::CenteredPopupModal("Record Combo")) {
-			auto applyRecordedCombo = [&]() {
-				if (this->recordedCombo.empty())
-					return;
-
-				switch (this->currentComboType) {
-				case VR::ComboType::MenuOpen:
-					settings.VRMenuOpenKeys = this->recordedCombo;
-					break;
-				case VR::ComboType::MenuClose:
-					settings.VRMenuCloseKeys = this->recordedCombo;
-					break;
-				case VR::ComboType::OverlayOpen:
-					settings.VROverlayOpenKeys = this->recordedCombo;
-					break;
-				case VR::ComboType::NeuralRenderingToggle:
-					settings.VRNeuralRenderingToggleKeys = this->recordedCombo;
-					UpdateNeuralRenderingToggleFromInput(false);
-					break;
-				case VR::ComboType::OverlayClose:
-					settings.VROverlayCloseKeys = this->recordedCombo;
-					break;
-				default:
-					return;
-				}
-				globals::menu->RequestSettingsDirtyCheck();
-			};
-
-			// Helper function to get button name
-			auto GetButtonName = [](uint32_t key) -> const char* {
-				switch (key) {
-				case static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kTrigger):
-					return "Trigger";
-				case static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kGrip):
-					return "Grip";
-				case static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kTouchpadClick):
-					return "Touchpad";
-				case static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kJoystickTrigger):
-					return "Stick Click";
-				case static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kXA):
-					return "A/X";
-				case static_cast<uint32_t>(RE::BSOpenVRControllerDevice::Keys::kBY):
-					return "B/Y";
-				default:
-					return "Unknown";
-				}
-			};
-
-			ImGui::Text("Recording combo for: %s", this->currentComboName ? this->currentComboName : "Unknown");
-			ImGui::Spacing();
-
-			ImGui::TextDisabled("Record with either controller. The controller requirement applies only when using the binding.");
-
-			ImGui::Spacing();
-
-			// Show countdown timer with color
-			double remainingTime = this->comboTimeout - (Util::GetNowSecs() - this->comboStartTime);
-			ImVec4 timerColor = remainingTime > 2.0 ? Util::Colors::GetTimerGood() :
-			                    remainingTime > 1.0 ? Util::Colors::GetTimerWarning() :
-			                                          Util::Colors::GetTimerCritical();
-			ImGui::TextColored(timerColor, "Time remaining: %.1f seconds", remainingTime);
-
-			ImGui::Spacing();
-
-			// Show recorded buttons
-			if (this->recordedCombo.empty()) {
-				ImGui::Text("Press buttons to record combo...");
-			} else {
-				ImGui::Text("Recorded buttons:");
-				// Create a sorted list of decoded buttons for consistent display
-				std::vector<ButtonCombo> sortedRecordedCombos;
-				for (size_t i = 0; i < this->recordedCombo.size(); ++i) {
-					sortedRecordedCombos.push_back(this->recordedCombo[i]);
-				}
-				std::sort(sortedRecordedCombos.begin(), sortedRecordedCombos.end(),
-					[](const ButtonCombo& a, const ButtonCombo& b) {
-						return a.GetKey() < b.GetKey();
-					});
-
-				Util::DrawButtonCombo(sortedRecordedCombos, false);
-			}
-
-			ImGui::Spacing();
-			ImGui::Separator();
-			ImGui::Spacing();
-
-			// Instructions
-			ImGui::Text("Press ENTER to accept, ESC to cancel");
-
-			// Handle button recording
-			// Check for VR controller button presses - record them (any controller allowed during recording)
-			bool buttonPressed = false;
-			uint32_t pressedKey = 0;
-			ControllerDevice pressedDevice = ControllerDevice::Both;  // Default to Both, will set below
-
-			// Check primary controller buttons
-			for (const auto& [keyCode, buttonState] : primaryControllerState.GetActiveButtons()) {
-				if (buttonState->isPressed) {
-					pressedKey = keyCode;
-					buttonPressed = true;
-					pressedDevice = ControllerDevice::Primary;
-					break;
-				}
-			}
-
-			// Check secondary controller buttons if primary didn't have any
-			if (!buttonPressed) {
-				for (const auto& [keyCode, buttonState] : secondaryControllerState.GetActiveButtons()) {
-					if (buttonState->isPressed) {
-						pressedKey = keyCode;
-						buttonPressed = true;
-						pressedDevice = ControllerDevice::Secondary;
-						break;
-					}
-				}
-			}
-
-			// Record button press
-			if (buttonPressed) {
-				// Check if this button is already in the combo (avoid duplicates)
-				auto it = recordingButtonControllers.find(pressedKey);
-				if (it == recordingButtonControllers.end()) {
-					// Not yet recorded, add with the current device
-					recordingButtonControllers[pressedKey] = pressedDevice;
-				} else {
-					// Already recorded, if the other controller is now pressed, set to BOTH
-					if (it->second != pressedDevice && it->second != ControllerDevice::Both) {
-						it->second = ControllerDevice::Both;
-					}
-				}
-				// Update the recordedCombo vector to match the map
-				this->recordedCombo.clear();
-				for (const auto& [key, device] : recordingButtonControllers) {
-					this->recordedCombo.push_back(ButtonCombo(device, key));
-				}
-			}
-
-			bool accept = false;
-			{
-				Util::DisableGuard disabled(this->recordedCombo.empty());
-				accept = ImGui::Button("Use combo");
-			}
-			ImGui::SameLine();
-			const bool cancel = ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape);
-			accept |= ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter) || remainingTime <= 0.0;
-			if (accept || cancel) {
-				if (!cancel)
-					applyRecordedCombo();
-				ResetComboRecordingState();
-				ImGui::CloseCurrentPopup();
+	// Check secondary controller buttons if primary didn't have any
+	if (!buttonPressed) {
+		for (const auto& [keyCode, buttonState] : secondaryControllerState.GetActiveButtons()) {
+			if (buttonState->isPressed) {
+				pressedKey = keyCode;
+				buttonPressed = true;
+				pressedDevice = ControllerDevice::Secondary;
+				break;
 			}
 		}
+	}
+
+	// Record button press
+	if (buttonPressed) {
+		// Check if this button is already in the combo (avoid duplicates)
+		auto it = recordingButtonControllers.find(pressedKey);
+		if (it == recordingButtonControllers.end()) {
+			// Not yet recorded, add with the current device
+			recordingButtonControllers[pressedKey] = pressedDevice;
+		} else {
+			// Already recorded, if the other controller is now pressed, set to BOTH
+			if (it->second != pressedDevice && it->second != ControllerDevice::Both) {
+				it->second = ControllerDevice::Both;
+			}
+		}
+		// Update the recordedCombo vector to match the map
+		this->recordedCombo.clear();
+		for (const auto& [key, device] : recordingButtonControllers) {
+			this->recordedCombo.push_back(ButtonCombo(device, key));
+		}
+	}
+
+	bool accept = false;
+	{
+		Util::DisableGuard disabled(this->recordedCombo.empty());
+		accept = ImGui::Button("Use combo");
+	}
+	ImGui::SameLine();
+	const bool cancel = ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape);
+	accept |= ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter) || remainingTime <= 0.0;
+	if (accept || cancel) {
+		if (!cancel)
+			applyRecordedCombo();
+		ResetComboRecordingState();
+		ImGui::CloseCurrentPopup();
 	}
 }
 
@@ -1348,7 +1397,7 @@ namespace
 	{
 		auto& settings = a_vr.settings;
 		ImGui::PushID(a_id);
-		ImGui::SeparatorText("Depth Culling");
+		MenuUI::SectionHeading("Depth Culling");
 		bool changed = false;
 		if (ImGui::BeginTable("##Options", 2, ImGuiTableFlags_SizingStretchSame)) {
 			const auto drawLocation = [&](const char* a_label, bool& a_enabled, float& a_minimumExtent) {
@@ -1405,7 +1454,7 @@ namespace
 void VR::DrawPerformanceSettings(bool a_advanced)
 {
 	if (!REL::Module::IsVR()) {
-		ImGui::TextDisabled("VR performance settings are available only in VR.");
+		MenuUI::AvailabilityNotice("VR performance settings are available only in VR.");
 		return;
 	}
 
@@ -1419,7 +1468,7 @@ void VR::DrawPerformanceSettings(bool a_advanced)
 	const bool screenSpaceShadowsEnabled = screenSpaceShadows.loaded && screenSpaceShadows.bendSettings.Enable != 0;
 	const bool screenSpaceGIEnabled = screenSpaceGI.loaded && screenSpaceGI.settings.Enabled;
 
-	ImGui::SeparatorText("Stereo");
+	MenuUI::SectionHeading("Stereo");
 	{
 		auto guard = Util::DisableGuard(!screenSpaceShadowsEnabled);
 		Util::Widgets::Checkbox("Stereo Sync SSS", &screenSpaceShadows.enableStereoSync);
@@ -1438,7 +1487,7 @@ void VR::DrawPerformanceSettings(bool a_advanced)
 	}
 	Util::Widgets::Checkbox("Blend Between Eyes", &settings.EnableStereoBlend);
 
-	ImGui::SeparatorText("Shader FOV");
+	MenuUI::SectionHeading("Shader FOV");
 	auto& dynamicCubemaps = globals::features::dynamicCubemaps;
 	auto& waterEffects = globals::features::waterEffects;
 	auto& wetnessEffects = globals::features::wetnessEffects;
@@ -1463,11 +1512,11 @@ void VR::DrawPerformanceSettings(bool a_advanced)
 		Util::Widgets::Checkbox("Wetterness", &settings.EnableWetternessFoveation);
 	}
 	if (!ssrAvailable)
-		ImGui::TextDisabled("SSR foveation requires runtime-active Screen Space Reflections.");
+		MenuUI::AvailabilityNotice("SSR foveation requires runtime-active Screen Space Reflections.");
 	if (!waterParallaxAvailable)
-		ImGui::TextDisabled("Water Parallax Detail requires Water Effects.");
+		MenuUI::AvailabilityNotice("Water Parallax Detail requires Water Effects.");
 	if (!wetternessAvailable)
-		ImGui::TextDisabled(wetnessEffectsRuntimeActive ? "Wetterness foveation is not available with legacy Wetness Effects." : "Wetterness foveation requires Wetterness to be enabled.");
+		MenuUI::AvailabilityNotice(wetnessEffectsRuntimeActive ? "Wetterness foveation is not available with legacy Wetness Effects." : "Wetterness foveation requires Wetterness to be enabled.");
 	{
 		auto guard = Util::DisableGuard(!dynamicCubemapsAvailable);
 		Util::Widgets::Checkbox("Dynamic Cubemap Cadence", &settings.EnableDynamicCubemapFoveation);
@@ -1480,12 +1529,12 @@ void VR::DrawPerformanceSettings(bool a_advanced)
 		Util::Widgets::Checkbox("Low-Visibility Cubemap Throttle", &settings.EnableDynamicCubemapVisibilityThrottle);
 	}
 	if (!dynamicCubemapsAvailable)
-		ImGui::TextDisabled("Dynamic Cubemap FOV controls require Dynamic Cubemaps.");
+		MenuUI::AvailabilityNotice("Dynamic Cubemap FOV controls require Dynamic Cubemaps.");
 	if (dynamicCubemapVisibilityThrottleBlockedByWetterness)
-		ImGui::TextDisabled("Low-Visibility Cubemap Throttle is disabled while Wetterness is active.");
+		MenuUI::AvailabilityNotice("Low-Visibility Cubemap Throttle is disabled while Wetterness is active.");
 
 	if (IsRenderScaleDesktopMirrorQualityAvailable()) {
-		ImGui::SeparatorText("Desktop Mirror");
+		MenuUI::SectionHeading("Desktop Mirror");
 		Util::Widgets::Checkbox("Improve Render-Scale Desktop Mirror Quality", &settings.StabilizeRenderScaleDesktopMirror);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Improve the desktop mirror when VR Render Scale lowers resolution.");
@@ -1523,7 +1572,7 @@ namespace
 			return;
 
 		auto& settings = vr.settings;
-		ImGui::SeparatorText("CSX Menu Navigation");
+		MenuUI::SectionHeading("CSX Menu Navigation");
 
 		const bool effectiveWandNavigation = vr.CanUseWandPointing();
 		auto setWandNavigation = [&](bool a_enabled) {
@@ -1545,8 +1594,6 @@ namespace
 			Util::Widgets::Checkbox("Show Both Lasers", &settings.ShowBothWandLasers);
 		}
 		Util::AddTooltip("The brighter laser controls the cursor. Aim and press the other hand's trigger to take control. A drag stays with the hand that started it.", ImGuiHoveredFlags_AllowWhenDisabled);
-		if (vr.CanUseWandPointing() && settings.ShowBothWandLasers)
-			MenuUI::DetailNote("Bright laser: active hand. Aim and press either trigger to take control; keep using that hand until you release the drag.");
 
 		if (vr.CanUseWandPointing()) {
 			ImGui::SetNextItemWidth(220.0f);
@@ -1802,7 +1849,7 @@ namespace
 					Util::AddTooltip("Moves the headset menu while preserving its apparent size. Applies when released.");
 				}
 				Util::Widgets::SliderFloatOnRelease("Menu Scale", &settings.VRMenuScale, VR::Config::kMinMenuScale, VR::Config::kMaxMenuScale, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-				ImGui::TextWrapped("Move/resize the desktop window with the mouse. Grip-drag the HMD menu; Menu Scale sets its size.");
+				Util::AddTooltip("Sets the headset menu size. Grip-drag the HMD menu to move it; move or resize the desktop window with the mouse.");
 				Util::Widgets::Checkbox("Enable Controller Grip Drag", &settings.EnableDragToReposition);
 				Util::AddTooltip("Hold the controller grip to move the headset menu. Off keeps it in place so grip presses cannot accidentally reposition it.");
 
@@ -1821,7 +1868,7 @@ namespace
 				}
 
 				if (showOnHMD && settings.VRMenuPositioningMethod == 0) {
-					ImGui::SeparatorText("HMD-relative offset");
+					MenuUI::SectionHeading("HMD-relative offset");
 					Util::Widgets::SliderFloat("Horizontal##HMDMenuOffset", &settings.VRMenuOffsetX, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
 					Util::Widgets::SliderFloat("Vertical##HMDMenuOffset", &settings.VRMenuOffsetY, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
 				} else if (showOnHMD) {
@@ -1837,7 +1884,7 @@ namespace
 					int controller = static_cast<int>(settings.VRMenuAttachController);
 					if (MenuUI::ChoiceSetting("Attach to Controller", &controller, controllers, IM_ARRAYSIZE(controllers)))
 						settings.VRMenuAttachController = static_cast<ControllerDevice>(controller);
-					ImGui::SeparatorText("Controller-relative offset");
+					MenuUI::SectionHeading("Controller-relative offset");
 					Util::Widgets::SliderFloat("Horizontal##ControllerMenuOffset", &settings.VRMenuControllerOffsetX, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
 					Util::Widgets::SliderFloat("Vertical##ControllerMenuOffset", &settings.VRMenuControllerOffsetY, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
 					Util::Widgets::SliderFloat("Depth##ControllerMenuOffset", &settings.VRMenuControllerOffsetZ, VR::Config::kMinMenuOffset, VR::Config::kMaxMenuOffset, "%.2f m");
@@ -1867,7 +1914,10 @@ namespace
 		Util::AddTooltip("Restore menu size, sidebar, zoom, fonts and headset placement. Emergency shortcut: Ctrl+Shift+End.");
 		ImGui::Spacing();
 		DrawHeadsetMenuSettings();
-		MenuUI::SectionHeading("Desktop");
+	}
+
+	void DrawDesktopSettings()
+	{
 		DrawKeepDesktopWindowFocusedForVRMenuSetting();
 		DrawStabilizeRenderScaleDesktopMirrorSetting();
 	}
@@ -1880,7 +1930,7 @@ namespace
 		VR::Settings& settings = vr.settings;
 		MenuUI::SectionHeading("Pointer response");
 		{
-			ImGui::Text("Joystick Settings");
+			MenuUI::SectionHeading("Joystick Settings");
 			Util::Widgets::SliderFloat("Mouse Deadzone", &settings.mouseDeadzone, 0.0f, 1.0f, "%.2f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				if (vr.CanUseWandPointing()) {
@@ -1992,11 +2042,8 @@ namespace
 		const bool screenSpaceEffectActive = VR::AnyScreenSpaceEffectActive();
 		const bool blendCanRun = settings.EnableStereoBlend && settings.StereoBlendMaxFactor > VR::Config::kMinStereoBlendMaxFactor && screenSpaceEffectActive;
 
-		MenuUI::SectionHeading("Stereo blending");
+		MenuUI::SectionHeading("Stereo blending", "Default-off fallback for VR screen-space mismatches. Runs only with an active supported screen-space effect and costs extra while active. Use Performance Tuning to compare its cost.");
 		{
-			ImGui::TextWrapped("Default-off fallback for VR screen-space mismatches. Runs only with an active supported screen-space effect.");
-			ImGui::Spacing();
-
 			Util::Widgets::Checkbox("Blend Between Eyes", &settings.EnableStereoBlend);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::TextUnformatted("Helps hide left/right eye mismatches from some effects.");
@@ -2033,10 +2080,6 @@ namespace
 			}
 
 			ImGui::EndDisabled();
-
-			ImGui::TextDisabled("Performance: costs extra while active.");
-			ImGui::Spacing();
-			ImGui::TextWrapped("This is a broad fallback. Use the cost check to decide if it is worth keeping on.");
 		}
 	}
 
@@ -2053,7 +2096,7 @@ namespace
 		auto& wetterness = globals::features::wetterness;
 		const bool isVR = REL::Module::IsVR();
 		if (!isVR) {
-			ImGui::TextDisabled("VR foveation controls are available only in VR.");
+			MenuUI::AvailabilityNotice("VR foveation controls are available only in VR.");
 			return;
 		}
 		DisableDynamicCubemapVisibilityThrottleForWetterness(settings);
@@ -2061,7 +2104,7 @@ namespace
 		auto drawSection = [](const char* a_label) {
 			ImGui::Spacing();
 			MenuFonts::FontRoleGuard headingFont(Menu::FontRole::Subheading);
-			ImGui::SeparatorText(a_label);
+			MenuUI::SectionHeading(a_label);
 		};
 
 		auto drawDetailBudget = [](const char* a_label, bool& a_enabled, const char* a_hardCutoffLabel, bool& a_hardCutoff,
@@ -2146,9 +2189,9 @@ namespace
 		drawSection("Screen-Space Effects");
 		screenSpaceShadows.DrawFoveationSettings();
 		if (!screenSpaceShadows.loaded)
-			ImGui::TextDisabled("Screen Space Shadows FOV requires Screen Space Shadows.");
+			MenuUI::AvailabilityNotice("Screen Space Shadows FOV requires Screen Space Shadows.");
 		else if (!screenSpaceShadowsRuntimeActive)
-			ImGui::TextDisabled("Screen Space Shadows FOV requires Screen Space Shadows to be enabled.");
+			MenuUI::AvailabilityNotice("Screen Space Shadows FOV requires Screen Space Shadows to be enabled.");
 		ImGui::Separator();
 		screenSpaceGI.DrawFoveationSettings();
 		if (!foveatedProfileActive)
@@ -2232,9 +2275,8 @@ namespace
 			else
 				ImGui::TextDisabled("No Shader FOV features available");
 		}
-		ImGui::Separator();
 		if (!foveatedProfileActive)
-			ImGui::TextDisabled("Lighting, SSR, Water and Wetterness budgets need active foveated upscaling. Set FOV Only Visible Scale below 1.00 in VR > FOV.");
+			MenuUI::AvailabilityNotice("Lighting, SSR, Water and Wetterness budgets need active foveated upscaling. Set FOV Only Visible Scale below 1.00 in VR > FOV.");
 
 		ImGui::BeginDisabled(!foveatedProfileActive);
 		drawDetailBudget(
@@ -2248,7 +2290,6 @@ namespace
 			"Stronger version of the setting above.",
 			"Saves more performance, but edge changes may be more visible.",
 			"");
-		ImGui::Separator();
 
 		ImGui::BeginDisabled(!ssrAvailable);
 		drawDetailBudget(
@@ -2264,11 +2305,10 @@ namespace
 			"");
 		ImGui::EndDisabled();
 		if (!ssrAvailable) {
-			ImGui::TextDisabled("SSR foveation requires Dynamic Cubemaps SSR.");
+			MenuUI::AvailabilityNotice("SSR foveation requires Dynamic Cubemaps SSR.");
 			if (dynamicCubemaps.loaded && dynamicCubemaps.settings.EnabledSSR != 0 && !dynamicCubemaps.enabledAtBoot)
 				ImGui::TextDisabled("VR SSR must be enabled before startup.");
 		}
-		ImGui::Separator();
 
 		ImGui::BeginDisabled(!waterParallaxAvailable);
 		drawDetailBudget(
@@ -2284,8 +2324,7 @@ namespace
 			"");
 		ImGui::EndDisabled();
 		if (!waterParallaxAvailable)
-			ImGui::TextDisabled("Water parallax foveation requires Water Effects.");
-		ImGui::Separator();
+			MenuUI::AvailabilityNotice("Water parallax foveation requires Water Effects.");
 
 		ImGui::BeginDisabled(!wetternessSettingsAvailable);
 		drawDetailBudget(
@@ -2301,11 +2340,11 @@ namespace
 			"");
 		ImGui::EndDisabled();
 		if (wetnessEffectsRuntimeActive)
-			ImGui::TextDisabled("Wetterness dynamic-detail foveation requires Wetterness; legacy Wetness Effects is unsupported.");
+			MenuUI::AvailabilityNotice("Wetterness dynamic-detail foveation requires Wetterness; legacy Wetness Effects is unsupported.");
 		else if (!wetternessFeatureAvailable)
-			ImGui::TextDisabled("Wetterness dynamic-detail foveation requires Wetterness.");
+			MenuUI::AvailabilityNotice("Wetterness dynamic-detail foveation requires Wetterness.");
 		else if (!wetternessSettingsAvailable)
-			ImGui::TextDisabled("Wetterness dynamic-detail foveation requires Wetterness to be enabled.");
+			MenuUI::AvailabilityNotice("Wetterness dynamic-detail foveation requires Wetterness to be enabled.");
 		else if (settings.EnableWetternessFoveation && !wetternessFoveationRuntimeActive)
 			ImGui::TextDisabled("Wetterness detail foveation waits for rain, wetness, drying or debug overrides.");
 		ImGui::EndDisabled();
@@ -2332,11 +2371,11 @@ namespace
 		}
 		ImGui::EndDisabled();
 		if (dynamicCubemapVisibilityThrottleBlockedByWetterness)
-			ImGui::TextDisabled("Low-Visibility Cubemap Throttle is disabled while Wetterness is active.");
+			MenuUI::AvailabilityNotice("Low-Visibility Cubemap Throttle is disabled while Wetterness is active.");
 		if (!foveatedProfileActive)
-			ImGui::TextDisabled("Dynamic Cubemap foveation needs active foveated upscaling. Set FOV Only Visible Scale below 1.00 in VR > FOV.");
+			MenuUI::AvailabilityNotice("Dynamic Cubemap foveation needs active foveated upscaling. Set FOV Only Visible Scale below 1.00 in VR > FOV.");
 		if (!dynamicCubemapsRuntimeActive)
-			ImGui::TextDisabled("Dynamic Cubemap foveation requires Dynamic Cubemaps.");
+			MenuUI::AvailabilityNotice("Dynamic Cubemap foveation requires Dynamic Cubemaps.");
 
 		ImGui::Spacing();
 		ImGui::SetNextItemOpen(false, ImGuiCond_Once);
@@ -2353,9 +2392,6 @@ namespace
 			const auto statusSSRMode = FoveatedCommon::GetDetailMode(ssrFoveationEnabled, settings.EnableSSRFoveationHardCutoff);
 			const auto statusWaterParallaxMode = FoveatedCommon::GetDetailMode(waterParallaxFoveationEnabled, settings.EnableWaterParallaxFoveationHardCutoff);
 			const auto statusWetternessMode = FoveatedCommon::GetDetailMode(wetternessFoveationEnabled, settings.EnableWetternessFoveationHardCutoff);
-			const bool statusAnyCubemapFoveationEnabled =
-				settings.EnableDynamicCubemapFoveation ||
-				settings.EnableDynamicCubemapVisibilityThrottle;
 			ImGui::Text("Shared FOV area: %s", foveatedProfileActive ? "active" : profile.available ? "full visible coverage" :
 																									  "unavailable");
 			ImGui::Text("Lighting auxiliary detail: %s (%s)", statusLightingActive ? "active" : "inactive", FoveatedCommon::GetDetailModeName(statusLightingMode));
@@ -2366,27 +2402,6 @@ namespace
 			ImGui::Text("Screen Space GI: %s", statusSsgiFoveatedEnabled && foveatedProfileActive ? "active" : "inactive");
 			ImGui::Text("Dynamic cubemap cadence: %s", statusCubemapCadenceActive ? "active" : "inactive");
 			ImGui::Text("Dynamic cubemap visibility throttle: %s", statusCubemapVisibilityActive ? "active" : "inactive");
-			if (statusAnyCubemapFoveationEnabled && !dynamicCubemaps.loaded)
-				ImGui::TextDisabled("Dynamic Cubemap foveation requires Dynamic Cubemaps.");
-			if (settings.EnableSSRFoveation && !ssrAvailable) {
-				ImGui::TextDisabled("SSR foveation requires Dynamic Cubemaps SSR.");
-				if (dynamicCubemaps.loaded && dynamicCubemaps.settings.EnabledSSR != 0 && !dynamicCubemaps.enabledAtBoot)
-					ImGui::TextDisabled("VR SSR must be enabled before startup.");
-			}
-			if (settings.EnableWaterParallaxFoveation && !waterParallaxAvailable)
-				ImGui::TextDisabled("Water parallax foveation requires Water Effects.");
-			if (screenSpaceShadows.bendSettings.EnableFoveated != 0 && !screenSpaceShadowsRuntimeActive)
-				ImGui::TextDisabled("Screen Space Shadows FOV requires active Screen Space Shadows.");
-			if (screenSpaceGI.settings.EnableFoveated && !screenSpaceGIRuntimeActive)
-				ImGui::TextDisabled("SSGI FOV requires active Screen Space GI.");
-			if (settings.EnableWetternessFoveation && wetnessEffectsRuntimeActive)
-				ImGui::TextDisabled("Wetterness dynamic-detail foveation requires Wetterness; legacy Wetness Effects is unsupported.");
-			else if (settings.EnableWetternessFoveation && !wetternessFeatureAvailable)
-				ImGui::TextDisabled("Wetterness dynamic-detail foveation requires Wetterness.");
-			else if (settings.EnableWetternessFoveation && !wetternessSettingsAvailable)
-				ImGui::TextDisabled("Wetterness dynamic-detail foveation requires Wetterness to be enabled.");
-			else if (settings.EnableWetternessFoveation && !wetternessFoveationRuntimeActive)
-				ImGui::TextDisabled("Wetterness detail foveation waits for rain, wetness, drying or debug overrides.");
 		}
 	}
 
@@ -2413,14 +2428,6 @@ namespace
 			comboTypes[i] = keyBindingConfigs[i].label;
 		}
 
-		ImGui::TextWrapped("CSX settings bindings open the menu from Skyrim Main or Tween Menu.");
-		if (vr.CanOpenMenuFromWorld()) {
-			ImGui::TextWrapped("The active headset presentation also permits opening settings during gameplay.");
-		}
-		ImGui::TextWrapped("Performance Overlay bindings work during gameplay and menus, independently of CSX settings.");
-		ImGui::TextDisabled("Unbound actions are disabled. Save settings to persist binding changes.");
-		ImGui::Spacing();
-
 		// Combo Settings
 		if (ImGui::CollapsingHeader("Combo Settings")) {
 			Util::Widgets::SliderFloat("Combo Timeout", &settings.comboTimeout, 1.0f, 10.0f, "%.1f seconds");
@@ -2435,6 +2442,13 @@ namespace
 			vr.ResetComboRecordingState();
 		}
 		auto& selectedConfig = keyBindingConfigs[static_cast<size_t>(selectedComboIndex)];
+		if (auto tooltip = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted(selectedConfig.description);
+			ImGui::TextUnformatted("CSX settings bindings open the menu from Skyrim Main or Tween Menu.");
+			if (vr.CanOpenMenuFromWorld())
+				ImGui::TextUnformatted("The active headset presentation also permits opening settings during gameplay.");
+			ImGui::TextUnformatted("Performance Overlay bindings work during gameplay and menus. Unbound actions are disabled. Save settings to keep binding changes.");
+		}
 		if (ImGui::Button("Record Selected Combo")) {
 			vr.ResetComboRecordingState();
 			vr.isCapturingCombo = true;
@@ -2512,7 +2526,7 @@ namespace
 			if (info.isAvailable) {
 				ImGui::Text("OpenVR System: %s", info.isCompatible ? "Active & Compatible" : "Active but INCOMPATIBLE");
 				if (!info.isCompatible) {
-					ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "Reason: Required OpenVR system/compositor interfaces are unavailable. VR menus disabled.");
+					Util::Text::WrappedError("Required OpenVR system/compositor interfaces are unavailable. VR menus disabled.");
 				}
 				ImGui::Text("DLL Path: %s", info.dllPath.c_str());
 				ImGui::Text("DLL Version: %s", info.version.c_str());
@@ -2534,7 +2548,7 @@ namespace
 			if (Util::Widgets::Checkbox("Test Mode: Disable controller menu input (except scroll controller and triggers)", &settings.VRMenuControllerDiagnosticsTestMode)) {
 				ImGui::SetScrollHereY(0.0f);  // Scroll to top of the window when toggled
 			}
-			ImGui::SeparatorText("Button State");
+			MenuUI::SectionHeading("Button State");
 			double nowSecs = Util::GetNowSecs();
 			// Get highlight color from theme
 			ImVec4 highlightColor = menu->GetTheme().StatusPalette.InfoColor;
@@ -2630,7 +2644,7 @@ namespace
 				printRowWithHandedness("A/X", RE::BSOpenVRControllerDevice::Keys::kXA);
 				ImGui::EndTable();
 			}
-			ImGui::SeparatorText("VR Thumbstick State");
+			MenuUI::SectionHeading("VR Thumbstick State");
 			// Helper to draw a thumbstick quadrant visualization (returns ImVec2 for label alignment)
 			auto DrawThumbstickPad = [&](float x, float y, ImU32 highlightCol) -> ImVec2 {
 				ImVec2 padSize = ImVec2(80, 80);
@@ -2756,8 +2770,7 @@ namespace
 				ImGui::EndGroup();
 				ImGui::EndTable();
 			}
-			ImGui::SeparatorText("Recent VR Controller Events");
-			ImGui::TextDisabled("Note: For thumbstick events, KeyCode/Value columns show X/Y floats.");
+			MenuUI::SectionHeading("Recent VR Controller Events", "For thumbstick events, KeyCode/Value columns show X/Y floats.");
 			if (ImGui::BeginTable("eventlog", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
 				ImGui::TableSetupColumn("Device", ImGuiTableColumnFlags_WidthFixed, 60.0f);
 				ImGui::TableSetupColumn("KeyCode/X", ImGuiTableColumnFlags_WidthFixed, 80.0f);
@@ -2818,7 +2831,7 @@ namespace
 			}
 
 			// Wand Pointing Diagnostics
-			ImGui::SeparatorText("Wand Pointing State");
+			MenuUI::SectionHeading("Wand Pointing State");
 			if (ImGui::BeginTable("##WandPointingState", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
 				ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 200.0f);
 				ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);

@@ -657,18 +657,20 @@ void UnifiedWater::DrawSettings()
 	SanitizeSettings(settings);
 
 	if (page.Is("look")) {
-		MenuUI::DetailText("Use Enabled in the header to switch optimized meshes. Mesh changes apply after a location change or restart.");
-		MenuUI::SectionHeading("Water appearance");
+		MenuUI::SectionHeading("Water appearance", "Use Enabled in the header to switch optimized meshes. Mesh changes apply after a location change or restart.");
 		DrawWaterTintSettings(settings);
 
 		ImGui::Spacing();
 	}
 	if (page.Is("shore")) {
-		if (settings.UseOpenShadersDepthBehaviour &&
-			MenuUI::DetailNote("Shore tuning is inactive while Open Shaders depth behaviour is enabled. Your values are preserved.", "Open Depth"))
-			MenuUI::SettingsPage::Select("UnifiedWater", "depth");
+		if (settings.UseOpenShadersDepthBehaviour) {
+			MenuUI::PageNotice("Shore tuning is inactive while Open Shaders depth behaviour is enabled.", MenuUI::NoticeKind::Unavailable,
+				"Your shore values are preserved. In Dev Tools > Logging, select Debug logging, then turn off Use Open Shaders Depth Behaviour in Unified Water > Depth.");
+			if (globals::state && globals::state->GetLogLevel() == spdlog::level::debug && ImGui::Button("Open Depth"))
+				MenuUI::SettingsPage::Select("UnifiedWater", "depth");
+		}
 		ImGui::BeginDisabled(settings.UseOpenShadersDepthBehaviour);
-		ImGui::SeparatorText("Shore Contact");
+		MenuUI::SectionHeading("Shore Contact");
 
 		Util::Widgets::SliderFloat(
 			"Edge Fade Depth",
@@ -700,10 +702,15 @@ void UnifiedWater::DrawSettings()
 	ImGui::Spacing();
 
 	if (page.Is("depth")) {
-		Util::Widgets::Checkbox("Use Open Shaders Depth Behaviour", &settings.UseOpenShadersDepthBehaviour);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"On: uses Open Shaders water blending. Off: adds CSX's shallow-water visibility adjustment, helping distinguish clear streams from their beds. Your shore settings are kept.");
+		if (settings.UseOpenShadersDepthBehaviour)
+			MenuUI::PageNotice("Shallow-water adjustment is inactive while Open Shaders depth behaviour is enabled.", MenuUI::NoticeKind::Unavailable,
+				"To change this diagnostic option, select Debug logging in Dev Tools > Logging. Your shallow-water values are preserved.");
+		if (globals::state && globals::state->GetLogLevel() == spdlog::level::debug) {
+			Util::Widgets::Checkbox("Use Open Shaders Depth Behaviour", &settings.UseOpenShadersDepthBehaviour);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text(
+					"On: uses Open Shaders water blending. Off: adds CSX's shallow-water visibility adjustment, helping distinguish clear streams from their beds. Your shore settings are kept.");
+			}
 		}
 
 		ImGui::BeginDisabled(settings.UseOpenShadersDepthBehaviour);
@@ -724,7 +731,7 @@ void UnifiedWater::DrawSettings()
 			ImGui::Spacing();
 			ImGui::BeginDisabled(settings.UseOpenShadersDepthBehaviour);
 
-			ImGui::SeparatorText("Deep Water Protection");
+			MenuUI::SectionHeading("Deep Water Protection");
 
 			Util::Widgets::SliderFloat(
 				"Connection Search Reach",
@@ -763,7 +770,7 @@ void UnifiedWater::DrawSettings()
 			}
 
 			ImGui::Spacing();
-			ImGui::SeparatorText("Depth Separation");
+			MenuUI::SectionHeading("Depth Separation");
 
 			Util::Widgets::SliderFloat(
 				"Shallow Surface Depth",
@@ -778,7 +785,9 @@ void UnifiedWater::DrawSettings()
 			}
 
 			ImGui::Spacing();
-			ImGui::SeparatorText("Shore Contact");
+			MenuUI::SectionHeading("Shore Contact",
+				"Up to two bounded connection reads run only for unresolved shallow pixels inside the fallback distance. "
+				"Native/Open remains the base. Pixels outside the shallow range, disabled or distance-culled skip connected-depth reads.");
 
 			Util::Widgets::SliderFloat(
 				"Minimum Edge Fade Width",
@@ -790,13 +799,6 @@ void UnifiedWater::DrawSettings()
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text(
 					"Minimum screen-space width of the terrain-contact fade. Prevents subpixel seams without extra samples. 0 uses only Edge Fade Depth.");
-			}
-
-			ImGui::TextDisabled(
-				"Up to two bounded connection reads run only for unresolved shallow pixels inside the fallback distance.");
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				ImGui::Text(
-					"Native/Open remains the base. Pixels outside the shallow range, disabled or distance-culled skip connected-depth reads.");
 			}
 
 			ImGui::EndDisabled();
@@ -831,6 +833,17 @@ UnifiedWater::CommonBufferData UnifiedWater::GetCommonBufferData() const
 	data.ShallowFallbackMaxDistance = sanitizedSettings.ShallowFallbackMaxDistance;
 	data.DeepContextTransitionUnits = sanitizedSettings.DeepContextTransitionUnits;
 	return data;
+}
+
+Feature::SettingsHeaderStatus UnifiedWater::GetSettingsHeaderStatus() const
+{
+	if (!settings.UseOptimisedMeshes)
+		return { "Off", true, "Optimized water meshes are turned off. Use Enabled to enable them for newly created water after a location change or restart." };
+	if (waterCache && waterCache->HasBuildFailed())
+		return { "Cache error", true, "Water caches could not be generated or loaded completely. Check the installation and CSX.log." };
+	if (waterCache && waterCache->IsBuildRunning())
+		return { "Preparing", true, "Water cache generation is in progress. Wait for it to finish." };
+	return {};
 }
 
 void UnifiedWater::DrawSettingsEnabledControl()

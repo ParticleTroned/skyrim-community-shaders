@@ -1,3 +1,4 @@
+#include "Menu/SettingsPage.h"
 #include "SeasonalWeather.h"
 
 #include "Globals.h"
@@ -41,7 +42,8 @@ namespace
 	}
 	bool DrawSeasonControls(SeasonalWeatherConfig::Settings& edited, RE::TESWeather* selectedWeather)
 	{
-		bool changed = ImGui::Checkbox("Leave regions with weather globals unchanged", &edited.SkipGlobalControlledRegions);
+		MenuUI::SectionHeading("Seasonal selection", "Adjust weather through the year using the same game calendar as Snow Cover. Changes apply at the next natural weather change. Save CSX settings to keep them.");
+		bool changed = Util::Widgets::Checkbox("Leave regions with weather globals unchanged", &edited.SkipGlobalControlledRegions);
 		Util::AddTooltip("Recommended when another mod controls seasons. Seasonal Weathers Framework always takes priority when detected, regardless of this setting.");
 		if (selectedWeather) {
 			const auto weatherKey = Util::ToLowerAscii(Util::GetFormFileKey(selectedWeather));
@@ -55,10 +57,19 @@ namespace
 			}
 			Util::AddTooltip("Changes which seasonal weight is used for selection. It does not change this weather's precipitation or appearance.");
 		}
-		if (ImGui::CollapsingHeader("Monthly weather weights")) {
-			ImGui::TextWrapped("Each row is Clear / Cloudy / Rain / Snow. Higher weights make that category more likely relative to the others. A zero weight excludes that category while this controller is active.");
-			for (size_t i = 0; i < Months.size(); ++i)
-				changed |= ImGui::SliderFloat4(Months[i], edited.MonthlyWeights[i].data(), 0.0f, SeasonalWeatherPolicy::MaxMultiplier, "%.2fx");
+		const bool monthlyWeights = ImGui::CollapsingHeader("Monthly weather weights");
+		Util::AddTooltip("Higher weights make a weather category more likely relative to the others. A zero weight excludes that category while this controller is active.");
+		if (monthlyWeights) {
+			constexpr std::array categories{ "Clear", "Cloudy", "Rain", "Snow" };
+			for (size_t i = 0; i < Months.size(); ++i) {
+				ImGui::PushID(static_cast<int>(i));
+				const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
+				MenuUI::SectionHeading(Months[i]);
+				for (size_t category = 0; category < categories.size(); ++category) {
+					changed |= Util::Widgets::SliderFloat(categories[category], &edited.MonthlyWeights[i][category], 0.0f, SeasonalWeatherPolicy::MaxMultiplier, "%.2fx");
+					Util::AddTooltip("Relative chance at the next natural weather change. Zero excludes this category; 1 uses its normal weight.");
+				}
+			}
 			if (ImGui::Button("Restore monthly weights")) {
 				edited.MonthlyWeights = SeasonalWeatherPolicy::DefaultWeights;
 				changed = true;
@@ -74,7 +85,7 @@ namespace
 		RE::TESRegion* region = globals::game::sky ? globals::game::sky->region : nullptr;
 		if (!selectedRegionKey.empty())
 			region = RE::TESForm::LookupByID<RE::TESRegion>(Util::SpidToFormId(selectedRegionKey));
-		ImGui::SeparatorText("Regional weather");
+		MenuUI::SectionHeading("Regional weather");
 		const auto regionName = region ? Util::GetFormDisplayName(region->GetFormID(), &editorIDs) : "Current sky region";
 		if (ImGui::BeginCombo("Region", regionName.c_str())) {
 			const SKSE::stl::scope_exit endCombo([] { ImGui::EndCombo(); });
@@ -110,7 +121,7 @@ namespace
 		if (region) {
 			const auto regionKey = Util::ToLowerAscii(Util::GetFormFileKey(region));
 			bool excluded = std::ranges::find(edited.ExcludedRegions, regionKey) != edited.ExcludedRegions.end();
-			if (ImGui::Checkbox("Exclude this region", &excluded)) {
+			if (Util::Widgets::Checkbox("Exclude this region", &excluded)) {
 				std::erase(edited.ExcludedRegions, regionKey);
 				if (excluded)
 					edited.ExcludedRegions.push_back(regionKey);
@@ -120,7 +131,7 @@ namespace
 				const auto worldKey = Util::ToLowerAscii(Util::GetFormEditorID(region->worldSpace, &editorIDs));
 				bool worldExcluded = std::ranges::find(edited.ExcludedWorldspaces, worldKey) != edited.ExcludedWorldspaces.end();
 				Util::DisableGuard noKey(worldKey.empty());
-				if (ImGui::Checkbox("Exclude this world", &worldExcluded)) {
+				if (Util::Widgets::Checkbox("Exclude this world", &worldExcluded)) {
 					std::erase(edited.ExcludedWorldspaces, worldKey);
 					if (worldExcluded)
 						edited.ExcludedWorldspaces.push_back(worldKey);
@@ -160,7 +171,7 @@ namespace
 				ImGui::PushID(static_cast<int>(i));
 				const SKSE::stl::scope_exit popId([] { ImGui::PopID(); });
 				ImGui::TextUnformatted(entry.Weather.c_str());
-				changed |= ImGui::SliderFloat("Base weight", &entry.Weight, SeasonalWeatherPolicy::MinAssignmentWeight, SeasonalWeatherPolicy::MaxAssignmentWeight, "%.2f");
+				changed |= Util::Widgets::SliderFloat("Base weight", &entry.Weight, SeasonalWeatherPolicy::MinAssignmentWeight, SeasonalWeatherPolicy::MaxAssignmentWeight, "%.2f");
 				if (ImGui::Button("Remove assignment")) {
 					edited.SnowAssignments.erase(edited.SnowAssignments.begin() + i);
 					changed = true;
@@ -197,27 +208,53 @@ namespace
 
 }
 
+Feature::SettingsHeaderStatus SeasonalWeather::GetSettingsHeaderStatus() const
+{
+	std::lock_guard lock(mutex);
+	if (!available.load())
+		return { "Unavailable", true, installationError.empty() ? "Seasonal weather selection could not initialize. Check CSX.log and restart the game." : installationError };
+	if (faulted.load())
+		return { "Paused", true, "Seasonal selection stopped after a runtime failure. The game's usual weather selection is retained; check CSX.log." };
+	return enabled.load() ? SettingsHeaderStatus{} : SettingsHeaderStatus{ "Off", true, "Seasonal weather changes are turned off. Use Enabled to adjust future natural weather changes." };
+}
+
 void SeasonalWeather::DrawSettingsEnabledControl()
 {
 	bool value = enabled.load();
 	Util::DisableGuard disabled(!value && (!available.load() || faulted.load()));
-	if (Util::Widgets::Checkbox("Enabled", &value)) {
-		std::lock_guard lock(mutex);
-		settings.Enabled = value;
-		enabled.store(value, std::memory_order_relaxed);
-	}
+	if (Util::Widgets::Checkbox("Enabled", &value))
+		SetPerformanceCostMeasurementEnabled(value);
 	Util::AddTooltip("Adjusts future natural weather changes. Save settings to retain this preference.");
 }
 
-void SeasonalWeather::DrawSettings() { DrawEditorSettings(nullptr); }
+void SeasonalWeather::SetPerformanceCostMeasurementEnabled(bool value)
+{
+	if (value && (!available.load() || faulted.load()))
+		return;
+	std::lock_guard lock(mutex);
+	settings.Enabled = value;
+	enabled.store(value, std::memory_order_relaxed);
+}
+
+const char* SeasonalWeather::GetPerformanceToggleBlockReason() const
+{
+	return !enabled.load() && (!available.load() || faulted.load()) ? "Seasonal Weathers is unavailable; check its feature page for the installation or runtime issue." : nullptr;
+}
+
+void SeasonalWeather::DrawSettings()
+{
+	MenuUI::SettingsPage page("SeasonalWeather", {});
+	DrawEditorSettings(nullptr);
+}
 
 void SeasonalWeather::DrawEditorSettings(RE::TESWeather* selectedWeather)
 {
 	if (selectedWeather)
 		DrawSettingsEnabledControl();
-	ImGui::TextWrapped("Adjust weather through the year using the same game calendar as Snow Cover. Changes apply at the next natural weather change. Use Save settings in the CSX menu to keep them.");
-	if (frameworkDetected.load())
-		ImGui::TextWrapped("Seasonal Weathers Framework detected: CSX only adjusts regions without weather globals. Snow Cover, melting and wetness remain independent.");
+	if (frameworkDetected.load()) {
+		ImGui::TextUnformatted("Seasonal Weathers Framework detected");
+		Util::AddTooltip("CSX only adjusts regions without weather globals. Snow Cover, melting and wetness remain independent.");
+	}
 	SeasonalWeatherConfig::Settings original;
 	{
 		std::lock_guard lock(mutex);

@@ -3,62 +3,75 @@
 #include "SettingsPage.h"
 #include "Utils/WinApi.h"
 
+#include <cmath>
+#include <cstring>
 #include <imgui.h>
+#include <imgui_internal.h>
 
-#include "Feature.h"
 #include "Globals.h"
 #include "Menu.h"
 #include "Plugin.h"
-#include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
-#include "Utils/ShaderCachePack.h"
 #include "Utils/UI.h"
 
 #include <algorithm>
+#include <array>
 #include <initializer_list>
 #include <string>
 
 namespace
 {
-	constexpr float FORK_NOTICE_OFFSET_LINES = 1.15f;
-	constexpr float FORK_NOTICE_ITALIC_SLANT = 0.18f;
-
 	float CenteredTextX(float windowWidth, float textWidth)
 	{
 		return std::max(0.0f, (windowWidth - textWidth) * 0.5f);
 	}
 
+	void DrawCenteredText(const char* text, float left, float width, const ImVec4& color, bool italic = false)
+	{
+		const float slant = italic ? ImGui::GetTextLineHeight() * .18f : 0;
+		const float wrapWidth = std::max(1.0f, width - slant);
+		ImGui::PushTextWrapPos(-1);
+		const SKSE::stl::scope_exit restoreWrap([] { ImGui::PopTextWrapPos(); });
+		auto* draw = ImGui::GetWindowDrawList();
+		const int start = draw->VtxBuffer.Size;
+		const float top = ImGui::GetCursorScreenPos().y;
+		const float localTop = ImGui::GetCursorPosY();
+		const char* end = text + std::strlen(text);
+		int row = 0;
+		for (const char* line = text; line < end; ++row) {
+			const char* paragraphEnd = std::find(line, end, '\n');
+			const char* lineEnd = ImGui::GetFont()->CalcWordWrapPosition(ImGui::GetFontSize(), line, paragraphEnd, wrapWidth);
+			if (lineEnd == line && line < paragraphEnd) {
+				unsigned int character;
+				lineEnd += std::max(1, ImTextCharFromUtf8(&character, line, paragraphEnd));
+			}
+			const auto size = ImGui::CalcTextSize(line, lineEnd, false);
+			ImGui::SetCursorPos({ left + CenteredTextX(width, size.x + slant), localTop + row * ImGui::GetTextLineHeight() });
+			ImGui::TextColored(color, "%.*s", static_cast<int>(lineEnd - line), line);
+			line = lineEnd;
+			while (line < paragraphEnd && (*line == ' ' || *line == '\t'))
+				++line;
+			if (line == paragraphEnd && line < end)
+				++line;
+		}
+		if (italic) {
+			const float height = ImGui::GetTextLineHeight();
+			for (int i = start; i < draw->VtxBuffer.Size; ++i) {
+				auto& vertex = draw->VtxBuffer[i];
+				vertex.pos.x += (height - std::fmod(std::max(0.0f, vertex.pos.y - top), height)) * .18f;
+			}
+		}
+	}
+
 	void DrawCenteredTextColored(const char* text, float windowWidth, const ImVec4& color)
 	{
-		const ImVec2 textSize = ImGui::CalcTextSize(text);
-		ImGui::SetCursorPosX(CenteredTextX(windowWidth, textSize.x));
-		ImGui::TextColored(color, "%s", text);
+		DrawCenteredText(text, ImGui::GetStyle().WindowPadding.x, windowWidth - ImGui::GetStyle().WindowPadding.x * 2, color);
 	}
 
 	void DrawCenteredItalicTextLine(const char* text, float windowWidth, const ImVec4& color)
 	{
-		const ImVec2 textSize = ImGui::CalcTextSize(text);
-		const float lineHeight = ImGui::GetTextLineHeight();
-		const float lineHeightWithSpacing = ImGui::GetTextLineHeightWithSpacing();
-		const float slantWidth = lineHeight * FORK_NOTICE_ITALIC_SLANT;
-		const float localX = CenteredTextX(windowWidth, textSize.x + slantWidth);
-		const float localY = ImGui::GetCursorPosY();
-
-		ImGui::SetCursorPosX(localX);
-		const ImVec2 textPos = ImGui::GetCursorScreenPos();
-		ImDrawList* drawList = ImGui::GetWindowDrawList();
-		const int vtxStart = drawList->VtxBuffer.Size;
-		drawList->AddText(textPos, ImGui::GetColorU32(color), text);
-		const int vtxEnd = drawList->VtxBuffer.Size;
-
-		const float lineBottom = textPos.y + lineHeight;
-		for (int i = vtxStart; i < vtxEnd; ++i) {
-			ImDrawVert& vtx = drawList->VtxBuffer[i];
-			vtx.pos.x += (lineBottom - vtx.pos.y) * FORK_NOTICE_ITALIC_SLANT;
-		}
-
-		ImGui::SetCursorPosY(localY + lineHeightWithSpacing);
+		DrawCenteredText(text, ImGui::GetStyle().WindowPadding.x, windowWidth - ImGui::GetStyle().WindowPadding.x * 2, color, true);
 	}
 
 	void DrawCenteredItalicTextBlock(std::initializer_list<const char*> lines, float windowWidth, const ImVec4& color)
@@ -85,11 +98,9 @@ bool HomePageRenderer::ShouldSkipKeyRelease(uint32_t key)
 
 void HomePageRenderer::RenderHomePage()
 {
-	MenuUI::SettingsPage page("Home", { { "welcome", "Welcome", "About Community Shaders Expanded and its contributors.", "Project, credits and community", true, true, "Explore your installation" }, { "cache", "Shader cache", "Review changes affecting your compiled shaders.", "Shader cache compatibility", true, true } }, "Welcome", "Choose a page to get started.");
-	if (page.Is("welcome"))
+	MenuUI::SettingsPage page("Home", {});
+	if (page.Is("overview"))
 		RenderWelcomeSection();
-	if (page.Is("cache"))
-		RenderCacheMismatchSection();
 }
 
 void HomePageRenderer::RenderWelcomeSection()
@@ -112,39 +123,21 @@ void HomePageRenderer::RenderWelcomeSection()
 		titleFont = io.Fonts->Fonts[1];
 	}
 
-	// Reserve the previous large title footprint so the fork notice stays in place.
-	ImGui::SetWindowFontScale(TITLE_FONT_SCALE);
-
 	// Only push font if we have a valid one, otherwise use default scaled
 	if (titleFont) {
 		ImGui::PushFont(titleFont, titleFont->LegacySize);
 	}
 
 	ImVec2 windowSize = ImGui::GetWindowSize();
-	const float titleBlockY = ImGui::GetCursorPosY();
-	const float titleBlockHeight = ImGui::GetTextLineHeightWithSpacing();
-	const float baseLineHeightWithSpacing = titleBlockHeight / TITLE_FONT_SCALE;
 	const char* forkTitle = Plugin::DISPLAY_NAME.data();
 	const char* forkVersion = Plugin::FORK_VERSION.data();
 	const float titleLineGap = 2.0f * scale;
-	const float titleAreaBottomY = titleBlockY + titleBlockHeight + ImGui::GetStyle().ItemSpacing.y +
-	                               baseLineHeightWithSpacing * FORK_NOTICE_OFFSET_LINES;
 
 	ImGui::SetWindowFontScale(TITLE_PRIMARY_LINE_FONT_SCALE);
-	const float titleLineHeight = ImGui::GetTextLineHeight();
-
-	ImGui::SetWindowFontScale(TITLE_SECONDARY_LINE_FONT_SCALE);
-	const float versionLineHeight = ImGui::GetTextLineHeight();
-
-	const float titleGroupHeight = titleLineHeight + titleLineGap + versionLineHeight;
-	const float titleGroupY = titleBlockY + std::max(0.0f, (titleAreaBottomY - titleBlockY - titleGroupHeight) * 0.5f);
-
-	ImGui::SetWindowFontScale(TITLE_PRIMARY_LINE_FONT_SCALE);
-	ImGui::SetCursorPosY(titleGroupY);
 	DrawCenteredTextColored(forkTitle, windowSize.x, titleColor);
 
+	ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetStyle().ItemSpacing.y + titleLineGap);
 	ImGui::SetWindowFontScale(TITLE_SECONDARY_LINE_FONT_SCALE);
-	ImGui::SetCursorPosY(titleGroupY + titleLineHeight + titleLineGap);
 	DrawCenteredTextColored(forkVersion, windowSize.x, titleColor);
 
 	// Only pop font if we pushed one
@@ -154,23 +147,16 @@ void HomePageRenderer::RenderWelcomeSection()
 
 	// Reset text scale back to normal
 	ImGui::SetWindowFontScale(1.0f);
-	ImGui::SetCursorPosY(titleAreaBottomY);
-
-	// windowSize is already captured above for title centering
 
 	// Intro text - centered line-by-line so the fork notice remains visually aligned.
 	DrawCenteredItalicTextBlock({
-									"This is an unofficial fork of Community Shaders restoring Particle Lights.",
+									"This is an unofficial fork of Community Shaders focussed on VR, performance and customisability.",
 									"Not affiliated with or endorsed by the Community Shaders team",
-									"- Visit their Discord to get the Original and support their outstanding efforts -",
+									"\xE2\x80\x93 Visit their Discord to get the Original and support their efforts \xE2\x80\x93",
 								},
 		windowSize.x, forkNoticeColor);
 
 	ImGui::Spacing();
-	ImGui::Spacing();
-
-	// Vertical padding between intro text and the social artwork.
-	ImGui::Dummy(ImVec2(0.0f, 25.0f * scale));
 
 	// Faultier artwork - centered with proper error checking.
 	bool faultierAvailable = false;
@@ -179,256 +165,75 @@ void HomePageRenderer::RenderWelcomeSection()
 		faultierAvailable = true;
 	}
 
-	if (faultierAvailable) {
-		const ImVec2 originalSize(menu->uiIcons.faultier.size.x, menu->uiIcons.faultier.size.y);
-		const float aspectRatio = originalSize.y / originalSize.x;
-		const float maxAllowedWidth = std::max(1.0f, windowSize.x - HOME_LINK_ROW_PADDING_MARGIN * scale);
-		const float upperWidth = std::min(FAULTIER_MAX_WIDTH * scale, maxAllowedWidth);
-		const float lowerWidth = std::min(FAULTIER_MIN_WIDTH * scale, upperWidth);
-		float targetWidth = std::clamp(windowSize.x * FAULTIER_TARGET_WIDTH_RATIO, lowerWidth, upperWidth);
-		float targetHeight = targetWidth * aspectRatio;
-		const float maxHeight = FAULTIER_MAX_HEIGHT * scale;
-		if (targetHeight > maxHeight) {
-			targetHeight = maxHeight;
-			targetWidth = targetHeight / aspectRatio;
-		}
-
-		const ImVec2 imageSize(targetWidth, targetHeight);
-		ImGui::SetCursorPosX(CenteredTextX(windowSize.x, imageSize.x));
-		ImGui::Image(menu->uiIcons.faultier.texture, imageSize);
-	} else {
-		const float dummyWidth = FAULTIER_MAX_WIDTH * scale;
-		const float dummyHeight = FAULTIER_MAX_HEIGHT * scale;
-		ImGui::SetCursorPosX(CenteredTextX(windowSize.x, dummyWidth));
-		ImGui::Dummy(ImVec2(dummyWidth, dummyHeight));
+	const auto& style = ImGui::GetStyle();
+	const float linkButtonHeight = HOME_LINK_BUTTON_HEIGHT * scale;
+	// Keep the links and third-party heading visible below the artwork.
+	const float footerHeight = linkButtonHeight + ImGui::GetFrameHeight() + style.ItemSpacing.y * 4;
+	const ImVec2 originalSize = faultierAvailable ? menu->uiIcons.faultier.size : ImVec2(FAULTIER_MAX_WIDTH, FAULTIER_MAX_HEIGHT);
+	const float aspectRatio = originalSize.y / originalSize.x;
+	const float maxAllowedWidth = std::max(1.0f, windowSize.x - HOME_LINK_ROW_PADDING_MARGIN * scale);
+	const float upperWidth = std::min(FAULTIER_MAX_WIDTH * scale, maxAllowedWidth);
+	const float lowerWidth = std::min(FAULTIER_MIN_WIDTH * scale, upperWidth);
+	float targetWidth = std::clamp(windowSize.x * FAULTIER_TARGET_WIDTH_RATIO, lowerWidth, upperWidth);
+	float targetHeight = targetWidth * aspectRatio;
+	const float maxHeight = std::max(1.0f, std::min(FAULTIER_MAX_HEIGHT * scale, ImGui::GetContentRegionAvail().y - footerHeight));
+	if (targetHeight > maxHeight) {
+		targetHeight = maxHeight;
+		targetWidth = targetHeight / aspectRatio;
 	}
+	const ImVec2 imageSize(targetWidth, targetHeight);
+	ImGui::SetCursorPosX(CenteredTextX(windowSize.x, imageSize.x));
+	if (faultierAvailable)
+		ImGui::Image(menu->uiIcons.faultier.texture, imageSize);
+	else
+		ImGui::Dummy(imageSize);
 
 	ImGui::Spacing();
 
-	// Discord + GitHub actions - centered beneath Faultier.
-	bool discordIconAvailable = false;
-	if (menu && menu->uiIcons.discord.texture != nullptr &&
-		menu->uiIcons.discord.size.x > 0 && menu->uiIcons.discord.size.y > 0) {
-		discordIconAvailable = true;
-	}
-
-	const float linkButtonHeight = HOME_LINK_BUTTON_HEIGHT * scale;
+	struct HomeLink
+	{
+		const char* label;
+		const char* url;
+		const char* tooltip;
+	};
+	constexpr std::array<HomeLink, 3> links{ {
+		{ "GitHub##HomeGitHubButton", GITHUB_URL, "Open the CSX GitHub repository." },
+		{ "Nexus Mods##HomeNexusModsButton", NEXUS_MODS_URL, "Open the CSX Nexus Mods page." },
+		{ "Discord##HomeDiscordButton", DISCORD_URL, "Open the MGO Discord invite." },
+	} };
 	const float linkButtonSpacing = HOME_LINK_BUTTON_SPACING * scale;
-	const float githubButtonWidth = HOME_LINK_GITHUB_BUTTON_WIDTH * scale;
-	ImVec2 discordButtonSize(HOME_LINK_DISCORD_BUTTON_MIN_WIDTH * scale, linkButtonHeight);
-	if (discordIconAvailable) {
-		const ImVec2 originalSize(menu->uiIcons.discord.size.x, menu->uiIcons.discord.size.y);
-		const float aspectRatio = originalSize.x / originalSize.y;
-		discordButtonSize.x = std::max(discordButtonSize.x, linkButtonHeight * aspectRatio);
-	}
-
-	const float linkRowWidth = discordButtonSize.x + linkButtonSpacing + githubButtonWidth;
+	float minimumButtonWidth = 0;
+	for (const auto& link : links)
+		minimumButtonWidth = std::max(minimumButtonWidth, ImGui::CalcTextSize(link.label, nullptr, true).x + style.FramePadding.x * 2);
+	const float linkCount = static_cast<float>(links.size());
+	const float availableButtonWidth = (windowSize.x - style.WindowPadding.x * 2 - linkButtonSpacing * (linkCount - 1)) / linkCount;
+	const float linkButtonWidth = std::max(minimumButtonWidth, std::min(HOME_LINK_BUTTON_WIDTH * scale, availableButtonWidth));
+	const float linkRowWidth = linkButtonWidth * linkCount + linkButtonSpacing * (linkCount - 1);
 	ImGui::SetCursorPosX(CenteredTextX(windowSize.x, linkRowWidth));
-
-	if (discordIconAvailable) {
-		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
-		[[maybe_unused]] auto discordButtonStyle = Util::TransparentIconButtonStyle();
-		ImGui::PushID("HomeDiscordButton");
-		const bool clicked = ImGui::InvisibleButton("##button", discordButtonSize);
-		const bool hovered = ImGui::IsItemHovered();
-		const bool hasActiveFlash = Util::IsButtonFlashActive("HomeDiscordButton");
-		if (clicked) {
-			feedback.error = !Util::OpenInShell(DISCORD_URL, feedback.message);
-			Util::TriggerButtonFlash("HomeDiscordButton");
-		}
-		const ImVec2 buttonMin = ImGui::GetItemRectMin();
-		const ImVec2 buttonMax = ImGui::GetItemRectMax();
-		const ImVec2 originalSize(menu->uiIcons.discord.size.x, menu->uiIcons.discord.size.y);
-		const float imageAspectRatio = originalSize.x / originalSize.y;
-		ImVec2 imageSize(discordButtonSize.x, discordButtonSize.x / imageAspectRatio);
-		if (imageSize.y > discordButtonSize.y) {
-			imageSize.y = discordButtonSize.y;
-			imageSize.x = imageSize.y * imageAspectRatio;
-		}
-		const ImVec2 imageMin(
-			buttonMin.x + (discordButtonSize.x - imageSize.x) * 0.5f,
-			buttonMin.y + (discordButtonSize.y - imageSize.y) * 0.5f);
-		const ImVec2 imageMax(imageMin.x + imageSize.x, imageMin.y + imageSize.y);
-		ImDrawList* drawList = ImGui::GetWindowDrawList();
-		if (hovered || hasActiveFlash) {
-			ImVec4 feedbackColor = hasActiveFlash ?
-			                           Util::GetButtonFlashColor(ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered)) :
-			                           ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered);
-			feedbackColor.w = hasActiveFlash ? 0.34f : 0.18f;
-			drawList->AddRectFilled(buttonMin, buttonMax, ImGui::GetColorU32(feedbackColor), ImGui::GetStyle().FrameRounding);
-		}
-		drawList->AddImage(menu->uiIcons.discord.texture, imageMin, imageMax);
-		ImGui::PopID();
-		ImGui::PopStyleVar();
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("Open MGO Discord");
-		}
-	} else if (Util::ButtonWithFlash("Discord##HomeDiscordButton", discordButtonSize)) {
-		feedback.error = !Util::OpenInShell(DISCORD_URL, feedback.message);
+	for (size_t i = 0; i < links.size(); ++i) {
+		if (i > 0)
+			ImGui::SameLine(0.0f, linkButtonSpacing);
+		const auto& link = links[i];
+		if (Util::ButtonWithFlash(link.label, ImVec2(linkButtonWidth, linkButtonHeight)))
+			feedback.error = !Util::OpenInShell(link.url, feedback.message);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(link.tooltip);
 	}
-
-	ImGui::SameLine(0.0f, linkButtonSpacing);
-	if (Util::ButtonWithFlash("GitHub##HomeGitHubButton", ImVec2(githubButtonWidth, linkButtonHeight))) {
-		feedback.error = !Util::OpenInShell(GITHUB_URL, feedback.message);
-	}
-
 	feedback.Draw();
 
 	ImGui::Spacing();
-	MenuUI::SectionHeading("Third-party technologies");
-	ImGui::TextWrapped("%s",
-		"Includes NVIDIA DLSS / NGX and NVIDIA Reflex technology. "
-		"NVIDIA GeForce RTX is a trademark of NVIDIA Corporation.");
-	MenuUI::DetailNote("NVIDIA components retain their own license terms, included under Shaders/Upscaling/Streamline.");
+	const char* technologiesLabel = "Third-party technologies##HomeThirdPartyTechnologies";
+	const float technologiesWidth = ImGui::CalcTextSize(technologiesLabel, nullptr, true).x + ImGui::GetTreeNodeToLabelSpacing();
+	ImGui::SetCursorPosX(CenteredTextX(windowSize.x, technologiesWidth));
+	if (ImGui::TreeNodeEx(technologiesLabel, ImGuiTreeNodeFlags_NoTreePushOnOpen)) {
+		DrawCenteredTextColored("Includes NVIDIA DLSS / NGX and NVIDIA Reflex technology. NVIDIA GeForce RTX is a trademark of NVIDIA Corporation.", windowSize.x, forkNoticeColor);
+		DrawCenteredTextColored("Includes AMD FidelityFX Super Resolution (FSR) and AMD Radeon Anti-Lag 2 technology. AMD, FidelityFX and Radeon are trademarks of Advanced Micro Devices, Inc.", windowSize.x, forkNoticeColor);
+		DrawCenteredTextColored("NVIDIA and AMD components retain their own licences. Licence files and third-party notices are included with their components.", windowSize.x, Util::Color::SecondaryText());
+	}
 
 	// Pop the style var we pushed at the start
 	ImGui::PopStyleVar();
 	// Close RenderWelcomeSection()
-}
-
-void HomePageRenderer::RenderCacheMismatchSection()
-{
-	auto* shaderCache = globals::shaderCache;
-	if (!shaderCache) {
-		Util::Text::WrappedWarning("Shader cache status is not available yet.");
-		return;
-	}
-	using InstallationIssue = Util::ShaderCachePack::InstallationIssue;
-	const auto installationIssue = shaderCache->GetDiskCacheInstallationIssue();
-	if (installationIssue == InstallationIssue::NotChecked) {
-		MenuUI::DetailNote("Shader cache installation has not been checked yet.");
-		return;
-	}
-	if (Util::ShaderCachePack::RequiresInstallationRepair(installationIssue)) {
-		if (installationIssue == InstallationIssue::InvalidPack) {
-			MenuUI::SectionHeading("Shader Cache Unavailable");
-			Util::Text::WrappedWarning("CSX could not validate or open the installed shader cache.");
-		} else {
-			MenuUI::SectionHeading("Wrong Shader Cache Installed");
-			Util::Text::WrappedWarning(installationIssue == InstallationIssue::FlatCacheInVR ?
-										   "This shader cache was built for Skyrim SE/AE, but you are running Skyrim VR." :
-										   "This shader cache was built for Skyrim VR, but you are running Skyrim SE/AE.");
-		}
-		ImGui::TextWrapped("%s", "Shaders compiled in this session cannot be saved. They will need to compile again after restarting until the cache installation is repaired.");
-		ImGui::Spacing();
-		if (installationIssue == InstallationIssue::InvalidPack) {
-			ImGui::TextWrapped("%s", "Check CSX.log for the cause. Resolve any file-access or compatibility issue, or reinstall the matching shader cache from the CSX installer, then restart the game.");
-		} else {
-			ImGui::TextWrapped("%s", installationIssue == InstallationIssue::FlatCacheInVR ?
-										 "Reinstall the Skyrim VR shader cache from the CSX installer, then restart the game." :
-										 "Reinstall the Skyrim SE/AE shader cache from the CSX installer, then restart the game.");
-		}
-		return;
-	}
-	const auto flags = shaderCache->GetRollbackFlags();
-	if (!flags.diskCacheHeld && !flags.featureSetChanged &&
-		!flags.featureSetRevertPending && !flags.previousDiskCacheAvailable) {
-		MenuUI::DetailNote("Your shader cache matches the current feature setup. No cache action is needed.");
-		return;
-	}
-
-	const auto rollback = shaderCache->GetRollbackState();
-	auto* menu = Menu::GetSingleton();
-	const bool featureSetChanged = rollback.flags.featureSetChanged;
-	const bool revertPending = rollback.flags.featureSetRevertPending;
-	const bool featureSetCacheBackedUp = rollback.flags.featureSetCacheBackedUp;
-	const bool featureSetCacheSelectivelySeeded = rollback.flags.featureSetCacheSelectivelySeeded;
-	const bool previousCacheAvailable = rollback.flags.previousDiskCacheAvailable;
-	const bool cacheHeld = rollback.flags.diskCacheHeld && !featureSetChanged && !revertPending;
-	const bool featureChangeHeld = rollback.flags.diskCacheHeld && featureSetChanged && !featureSetCacheBackedUp;
-
-	MenuUI::SectionHeading("Shader Cache Changes");
-
-	if (revertPending) {
-		const ImVec4 restartColor = menu ? menu->GetTheme().StatusPalette.RestartNeeded : ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
-		ImGui::TextColored(restartColor, "%s", "Previous cache restored. Restart to use it.");
-		ImGui::Spacing();
-		ImGui::Separator();
-		ImGui::Spacing();
-		return;
-	}
-
-	const char* summaryText = "A previous cache is available. Restore it if you want to go back to the earlier feature setup.";
-	const char* actionText = "To go back, restore the previous cache and restart:";
-	if (cacheHeld) {
-		summaryText = "Saved shader cache cannot be used because a required feature is missing or failed to load.";
-		actionText = "Check CSX > Feature Issues if present. Fix the install and restart to use the saved cache, or rebuild for this setup if the change was intentional:";
-	} else if (featureChangeHeld) {
-		summaryText = "Feature setup changed; no usable previous cache could be kept. CSX is compiling this session's shaders and will rebuild the cache when finished.";
-		actionText = "Restore unavailable: no usable previous cache was kept. Let compilation finish to rebuild for this setup.";
-	} else if (featureSetChanged && featureSetCacheBackedUp) {
-		if (!featureSetCacheSelectivelySeeded) {
-			summaryText = "Feature setup changed. The complete previous cache was saved, but individual shader families could not be retained safely. The active cache is rebuilding.";
-			actionText = previousCacheAvailable ?
-			                 "Let rebuilding finish; the previous cache can then be restored." :
-			                 "Let compilation finish so CSX can verify the saved previous cache.";
-		} else if (previousCacheAvailable) {
-			summaryText = "Feature setup changed. Unaffected shaders were kept and the complete previous cache saved. Only affected shaders are compiling. Restore becomes available when compilation finishes.";
-		} else {
-			summaryText = "Feature setup changed. Unaffected shaders were kept; only affected shaders are compiling. Restore availability is checked after compilation finishes.";
-			actionText = "Let compilation finish so CSX can verify the saved previous cache.";
-		}
-	} else if (featureSetChanged) {
-		summaryText = "Feature setup changed. CSX is building a new cache; no previous cache is available to restore.";
-		actionText = "Let compilation finish to rebuild the cache for the current setup.";
-	}
-
-	ImGui::TextWrapped("%s", summaryText);
-	ImGui::Spacing();
-
-	using MismatchKind = Util::CacheInvalidation::CacheMismatch::Kind;
-	const auto& mismatches = (cacheHeld || featureChangeHeld) ? rollback.cacheMismatches :
-	                                                            rollback.previousCacheMismatches;
-	for (const auto& mismatch : mismatches) {
-		const char* detail = mismatch.detail.c_str();
-		if (mismatch.kind == MismatchKind::EnabledFlip) {
-			if (cacheHeld) {
-				detail = mismatch.nowPresent ?
-				             "enabled now, but missing from the saved cache" :
-				             "in the saved cache, but missing or failed now";
-			} else {
-				detail = mismatch.nowPresent ?
-				             "enabled now; previous cache had it disabled" :
-				             "disabled now; previous cache had it enabled";
-			}
-		}
-		ImGui::BulletText("%s: %s", mismatch.feature.c_str(), detail);
-	}
-	ImGui::Spacing();
-
-	ImGui::TextWrapped("%s", actionText);
-
-	if (!cacheHeld && !featureChangeHeld) {
-		const bool restoreDisabled = shaderCache->IsCompiling() || !previousCacheAvailable || (featureSetChanged && !featureSetCacheBackedUp);
-		if (restoreDisabled)
-			ImGui::BeginDisabled();
-
-		const bool restoreClicked = ImGui::Button("Restore Previous Cache");
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Go back to the earlier shader setup. Restart required.");
-		}
-		if (restoreClicked)
-			shaderCache->RestorePreviousDiskCache();
-
-		if (restoreDisabled)
-			ImGui::EndDisabled();
-
-		if (shaderCache->IsCompiling())
-			ImGui::TextDisabled("Available after shader compilation finishes.");
-	}
-
-	if (cacheHeld) {
-		if (ImGui::Button("Rebuild Cache for Current Features")) {
-			shaderCache->AcceptCacheRebuild();
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted("Keep the current feature setup and rebuild shaders for it.");
-		}
-	}
-
-	ImGui::Spacing();
-	ImGui::Separator();
-	ImGui::Spacing();
 }
 
 void HomePageRenderer::RenderFirstTimeSetupDialog()
@@ -605,15 +410,15 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 		ImGui::Text("%s", pressKeyText);
 	}
 
-	// CS Editor hotkey status — updates live as user picks keys
+	// CSX Editor hotkey status — updates live as user picks keys
 	{
 		auto& weatherKey = menu->GetSettings().CSEditorToggleKey;
 		if (weatherKey.empty()) {
-			const char* warnText = "CS Editor hotkey unbound \xe2\x80\x94 chosen key uses Shift";
+			const char* warnText = "CSX Editor hotkey unbound \xe2\x80\x94 chosen key uses Shift";
 			ImGui::SetCursorPosX(CenteredTextX(windowWidth, ImGui::CalcTextSize(warnText).x));
 			Util::Text::Warning("%s", warnText);
 		} else {
-			std::string infoStr = "CS Editor hotkey will be: " + Util::Input::KeyIdToString(weatherKey);
+			std::string infoStr = "CSX Editor hotkey will be: " + Util::Input::KeyIdToString(weatherKey);
 			ImGui::SetCursorPosX(CenteredTextX(windowWidth, ImGui::CalcTextSize(infoStr.c_str()).x));
 			ImGui::TextDisabled("%s", infoStr.c_str());
 		}
@@ -622,7 +427,7 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
 	ImGui::Spacing();
 
 	// "You can change this later" text - wrapped and centered
-	const char* laterText = "You can change this later in General > Keybindings.";
+	const char* laterText = "You can change this later in Settings > Bindings.";
 	float laterWidth = ImGui::CalcTextSize(laterText).x;
 	if (laterWidth > windowWidth - 40.0f * uiScale) {
 		// Text is too wide, use wrapped text with centering

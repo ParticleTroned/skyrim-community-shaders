@@ -337,7 +337,7 @@ void WetnessEffects::DrawSettings()
 
 	// Climate Preset Selection - Always visible at the top
 	if (page.Is("presets")) {
-		Util::DrawSectionHeader("Climate Presets", false, false);
+		MenuUI::SectionHeading("Climate Presets");
 
 		// Extract names for combo box
 		const char* presetNames[CLIMATE_PRESET_INFO.size()];
@@ -394,10 +394,6 @@ void WetnessEffects::DrawSettings()
 				}
 			}
 		}
-
-		ImGui::Spacing();
-		ImGui::Separator();
-		ImGui::Spacing();
 	}
 	if (page.Is("surface")) {
 		Util::Widgets::SliderFloat("Rain Wetness", &settings.MaxRainWetness, 0.0f, 2.5f);
@@ -450,12 +446,10 @@ void WetnessEffects::DrawSettings()
 			Util::DrawMultiLineTooltip(tooltipLines);
 		}
 		if (page.Is("rain")) {
-			ImGui::BulletText(
-				"Each interval places a drop in every grid cell. Only the selected fraction produces splashes and ripples.");
-
 			Util::Widgets::SliderFloat("Grid Size", &settings.RaindropGridSize, 1.0f, 10.0f, "%.1f units");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				std::vector<std::string> tooltipLines = {
+					"Each interval places a drop in every grid cell. Only the selected fraction produces splashes and ripples.",
 					"Spatial grid size for raindrop placement (smaller = more grid cells, higher GPU cost)",
 					"This is the most performance-sensitive setting. Lower only if needed for realism.",
 					Util::Units::FormatDistance(settings.RaindropGridSize)
@@ -670,7 +664,7 @@ void WetnessEffects::DrawPerformanceSettings(bool a_advanced)
 		return;
 	}
 
-	ImGui::SeparatorText("Rain Effects");
+	MenuUI::SectionHeading("Rain Effects");
 	bool enableRaindrops = settings.EnableRaindropFx != 0;
 	if (Util::Widgets::Checkbox("Enable Raindrop Effects", &enableRaindrops))
 		settings.EnableRaindropFx = enableRaindrops ? 1u : 0u;

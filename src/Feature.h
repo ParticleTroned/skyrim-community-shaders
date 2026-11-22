@@ -118,20 +118,41 @@ public:
 	{
 		std::string_view label = "Ready";
 		bool needsAttention = false;
+		std::string message;
+		bool pendingChange = false;  // Awaiting application or restart, rather than a failure.
 	};
-	/** Feature-specific readiness; placement and appearance belong to the shared header. */
-	virtual SettingsHeaderStatus GetSettingsHeaderStatus() const { return {}; }
+	/** Feature-specific readiness and its visible explanation; appearance belongs to the shared header. */
+	virtual SettingsHeaderStatus GetSettingsHeaderStatus() const
+	{
+		if (IsRuntimeDisabledByMissingDependency())
+			return { "Dependency required", true, "A required companion plugin is unavailable. Enable or install it and restart the game." };
+		if (SupportsPerformanceCostMeasurement()) {
+			if (!IsPerformanceToggleEnabled())
+				return { "Off", true, "This feature is turned off. Use Enabled to turn it on; your settings are preserved." };
+			if (!IsPerformanceCostMeasurementReady())
+				return { "Not ready", true, GetPerformanceCostMeasurementWaitText() };
+		}
+		return {};
+	}
 	/** Uses the existing runtime toggle, retaining the feature's enabled configuration. */
 	virtual void DrawSettingsEnabledControl();
-	/** Additional header information; master switches belong in DrawSettingsEnabledControl(). */
+	/** Shared context shown inside tab content; master switches belong in DrawSettingsEnabledControl(). */
 	virtual void DrawSettingsHeaderControls() {}
-	/** Brief requirements shown above the settings actions. */
+	/** Additional context shown in the settings footer's status tooltip. */
 	virtual std::string_view GetSettingsFooterText() const { return {}; }
 	virtual void DrawSettings();
+	/** Named quality presets shared by tuning and the unified Performance profiles. */
+	virtual std::vector<std::string> GetPerformancePresetNames() const { return {}; }
+	virtual std::string GetPerformancePresetName() const { return {}; }
+	virtual bool ApplyPerformancePreset(std::string_view) { return false; }
 	virtual bool HasPerformanceSettings() const { return false; }
 	virtual void DrawPerformanceSettings(bool a_advanced) { (void)a_advanced; }
 	virtual json CapturePerformanceSettingsState() const { return CapturePerformanceCostMeasurementState(); }
 	virtual bool SupportsPerformanceCostMeasurement() const { return false; }
+	/** The feature's Enabled setting can be stored in a preset without requiring timing instrumentation. */
+	virtual bool SupportsPerformanceProfileToggle() const { return SupportsPerformanceCostMeasurement(); }
+	/** Non-null shows a read-only Included Features tile using the requested on/off state. */
+	virtual const char* GetPerformanceProfileReadOnlyReason() const { return nullptr; }
 	/** Returns the requested on/off state, including features inactive in the current scene. */
 	virtual bool IsPerformanceToggleEnabled() const { return IsPerformanceCostMeasurementEnabled(); }
 	/** Applies the persistent runtime control used by the compact tuning overview. */
@@ -196,6 +217,8 @@ public:
 	void Save(json& o_json);
 
 	virtual void SaveSettings(json&) {}
+	/** Serializes persistent values without reloading features or retaining transient scene/weather values. */
+	void SaveBaseSettings(json& settings);
 	virtual void LoadSettings(json&) {}
 	// Called only after the user settings file has been written successfully.
 	virtual void OnSettingsSaved() {}

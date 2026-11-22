@@ -144,6 +144,34 @@ int main()
         return ("#include <nlohmann/json.hpp>\nusing json = nlohmann::json;\n" + prelude + "\n" +
                 self.normalizer + "\n" + serialization + "\n" + methods + "\n")
 
+    def test_quality_presets_cover_roof_occluders(self) -> None:
+        signatures = (
+            "struct SkylightingPerformancePreset", "constexpr std::array<SkylightingPerformancePreset, 4> kSkylightingPerformancePresets",
+            "float GetPresetProbeFieldSize(", "bool MatchesSkylightingPerformancePreset(",
+            "void ApplySkylightingRuntimeSettingsChange(", "void ApplySkylightingPerformancePreset(",
+        )
+        definitions = "\n".join(block(self.source, signature) + (";" if index < 2 else "")
+                                  for index, signature in enumerate(signatures))
+        driver = r'''
+int main()
+{
+    Skylighting feature;
+    feature.settings.EnableSkylighting = false;
+    for (const auto& preset : kSkylightingPerformancePresets) {
+        feature.settings.IncludeMarkedRoofOccluders = false;
+        ApplySkylightingPerformancePreset(feature, preset);
+        if (feature.settings.EnableSkylighting || !feature.settings.IncludeMarkedRoofOccluders ||
+            !MatchesSkylightingPerformancePreset(feature, preset) || !feature.resetQueued)
+            return 1;
+        feature.settings.IncludeMarkedRoofOccluders = false;
+        if (MatchesSkylightingPerformancePreset(feature, preset))
+            return 2;
+    }
+}
+'''
+        result = self.compile_and_run(self.settings_fixture() + definitions + driver, os.environ["CSX_JSON_INCLUDE"])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_retired_sampling_setting_preserves_defaults_and_user_overrides(self) -> None:
         include = os.environ["CSX_JSON_INCLUDE"]
         driver = r'''

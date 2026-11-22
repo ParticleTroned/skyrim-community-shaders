@@ -1,29 +1,18 @@
 #include "PaletteWindow.h"
 #include "EditorWindow.h"
+#include "Menu/SettingsPage.h"
 #include "Menu/ThemeManager.h"
 #include "Utils/UI.h"
 
 // Forward declaration from EditorWindow.cpp
 void DrawIconStar(ImVec2 center, float radius, ImU32 color, bool filled);
 
-void PaletteWindow::Draw()
+void PaletteWindow::Draw(const CSXEditorLayout::Panel& a_default, ImGuiCond a_condition)
 {
 	if (!open)
 		return;
 
-	const auto* editor = EditorWindow::GetSingleton();
-	const float scale = Util::GetUIScale();
-	const float pad = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
-	const auto& displaySize = ImGui::GetIO().DisplaySize;
-	const float paletteWidth = std::min(600.0f * scale, displaySize.x - pad * 2.0f);
-	const float bottomY = displaySize.y - pad;
-	const float spaceBelow = bottomY - editor->viewportBottomY - pad;  // room between viewport bottom and screen bottom
-	const float paletteHeight = std::min(400.0f * scale, spaceBelow);
-	const auto layoutCond = editor->resetLayout ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
-	ImGui::SetNextWindowSize(ImVec2(paletteWidth, paletteHeight), layoutCond);
-	ImGui::SetNextWindowPos(
-		ImVec2(displaySize.x - paletteWidth - pad, bottomY - paletteHeight),
-		layoutCond);
+	CSXEditorLayout::ApplyDefaults(a_default, a_condition);
 	if (Util::BeginWithRoundedClose("Palette", &open, ImGuiWindowFlags_NoFocusOnAppearing)) {
 		if (ImGui::BeginTabBar("PaletteTabs")) {
 			if (ImGui::BeginTabItem("Colours")) {
@@ -45,16 +34,16 @@ void PaletteWindow::Draw()
 void PaletteWindow::DrawColorsTab()
 {
 	const float scale = Util::GetUIScale();
-	const float buttonSize = 32.0f * scale;
+	const float availableWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+	const float buttonSize = std::min(32.0f * scale, availableWidth);
 	const float spacing = 8.0f * scale;
+	const int columns = static_cast<int>(std::clamp((availableWidth + spacing) / (buttonSize + spacing), 1.0f, static_cast<float>(maxFavoriteSlots)));
 
 	// Favorites section at top
-	ImGui::SeparatorText("Favourites");
-	ImGui::TextWrapped("Drag colours here to save as favourites.");
-	ImGui::Spacing();
+	MenuUI::SectionHeading("Favourites", "Drag colours here to save as favourites.");
 
 	for (int i = 0; i < maxFavoriteSlots; i++) {
-		if (i > 0)
+		if (i % columns != 0)
 			ImGui::SameLine(0.0f, spacing);
 
 		std::string id = "##favorite_" + std::to_string(i);
@@ -121,14 +110,14 @@ void PaletteWindow::DrawColorsTab()
 	ImGui::Spacing();
 
 	// Recently Used section
-	ImGui::SeparatorText("Recently Used");
+	MenuUI::SectionHeading("Recently Used");
 	auto recentColors = GetRecentColors(5);
 
 	if (recentColors.empty()) {
 		ImGui::TextDisabled("No recent colors");
 	} else {
 		for (size_t i = 0; i < recentColors.size(); i++) {
-			if (i > 0)
+			if (i % static_cast<size_t>(columns) != 0)
 				ImGui::SameLine(0.0f, spacing);
 
 			auto* entry = recentColors[i];
@@ -156,22 +145,17 @@ void PaletteWindow::DrawColorsTab()
 	ImGui::Spacing();
 
 	// Most Used section
-	ImGui::Separator();
-	ImGui::Spacing();
-	ImGui::TextUnformatted("Most Used");
-	ImGui::Spacing();
-	ImGui::TextWrapped("Favourite/most commonly used colours here.");
-	ImGui::Spacing();
+	MenuUI::SectionHeading("Most Used", "Favourite and most commonly used colours. Colours used three or more times appear here.");
 
 	auto mostUsedColors = GetMostUsedColors(20);
 
 	if (mostUsedColors.empty()) {
 		ImGui::TextDisabled("No frequently used colors yet");
-		ImGui::TextDisabled("(Colors used 3+ times will appear here)");
+		Util::AddTooltip("Colours used three or more times appear here.");
 	} else {
 		int colorIndex = 0;
 		for (auto* entry : mostUsedColors) {
-			if (colorIndex > 0 && colorIndex % 10 != 0)
+			if (colorIndex % columns != 0)
 				ImGui::SameLine(0.0f, spacing);
 
 			ImVec4 color(entry->color.x, entry->color.y, entry->color.z, 1.0f);
@@ -215,7 +199,7 @@ void PaletteWindow::DrawColorsTab()
 void PaletteWindow::DrawValuesTab()
 {
 	// Recently Used section
-	ImGui::SeparatorText("Recently Used");
+	MenuUI::SectionHeading("Recently Used");
 	auto recentValues = GetRecentValues(3);
 	if (recentValues.empty()) {
 		ImGui::TextDisabled("No recent values");
@@ -234,18 +218,13 @@ void PaletteWindow::DrawValuesTab()
 	}
 	ImGui::Spacing();
 	// Most Used section
-	ImGui::Separator();
-	ImGui::Spacing();
-	ImGui::TextUnformatted("Most Used");
-	ImGui::Spacing();
-	ImGui::TextWrapped("Favourite/most commonly used values here.");
-	ImGui::Spacing();
+	MenuUI::SectionHeading("Most Used", "Favourite and most commonly used values. Values used three or more times appear here.");
 
 	auto mostUsedValues = GetMostUsedValues(20);
 
 	if (mostUsedValues.empty()) {
 		ImGui::TextDisabled("No frequently used values yet");
-		ImGui::TextDisabled("(Values used 3+ times will appear here)");
+		Util::AddTooltip("Values used three or more times appear here.");
 	} else {
 		for (auto* entry : mostUsedValues) {
 			std::string label = std::format("{}: {:.3f}##{}", entry->name, entry->value, (void*)entry);

@@ -24,6 +24,7 @@ struct Menu
 	{
 		bool FirstTimeSetupCompleted = false;
 		bool ShowCompilationHUDInVR = false;
+		float GlobalScale = 0.0f;
 	} settings;
 	const Settings& GetSettings() const { return settings; }
 	struct Theme
@@ -283,9 +284,7 @@ static bool CheckStatusPresentationLayout()
 							ImGui::TextUnformatted("Changing desktop status");
 							ImGui::End();
 						}
-						const bool hiddenFromHMD = isVR && compatible && attachMode != AttachMode::None &&
-						                           std::strcmp(name, "ShaderCompilationInfo") == 0 && !menu.settings.ShowCompilationHUDInVR;
-						const bool expectedReservation = statusPresent && !hiddenFromHMD;
+						const bool expectedReservation = statusPresent;
 						ImVec2 minimum(2, 2);
 						float left = 2;
 						const bool reserved = OverlayRenderer::ExcludeTopStatusWindowsFromLayout(minimum, ImVec2(1918, 1618), left);
@@ -293,7 +292,7 @@ static bool CheckStatusPresentationLayout()
 						const float nextStatusTop = OverlayRenderer::GetTopStatusWindowBottom(2, nullptr);
 						const float selfExcludedTop = OverlayRenderer::GetTopStatusWindowBottom(2, name);
 						if (nextStatusTop != expectedMinY || selfExcludedTop != 2) {
-							std::puts("FAIL: status stacking reserves invisible panels or stacks a panel below itself");
+							std::puts("FAIL: status stacking misses a visible desktop panel or stacks a panel below itself");
 							passed = false;
 						}
 						if (reserved != expectedReservation || minimum.y != expectedMinY || left != (expectedReservation ? 12 : 2)) {
@@ -305,7 +304,7 @@ static bool CheckStatusPresentationLayout()
 							position = ApplyStatusLayout(position, ImVec2(300, 300), false, { reserved }, frame == 0);
 							const ImVec2 expectedPosition = expectedReservation ? ImVec2(200, 250) : original;
 							if (position.x != expectedPosition.x || position.y != expectedPosition.y) {
-								std::puts("FAIL: hidden status moves the HMD menu or visible status fails to restore placement");
+								std::puts("FAIL: shared status reservation fails to move or restore menu placement");
 								passed = false;
 							}
 						}
@@ -344,7 +343,7 @@ static bool CheckCombinedStatusStacking()
 			ImGui::SetNextWindowSize(ImVec2(600, shaderHeight));
 			ImGui::Begin("ShaderCompilationInfo");
 			ImGui::End();
-			float expectedWaterTop = menu.settings.ShowCompilationHUDInVR ? 8 + shaderHeight + spacing : 8;
+			float expectedWaterTop = 8 + shaderHeight + spacing;
 			if (blocking) {
 				const float top = OverlayRenderer::ShaderBlockingTop(8);
 				passed &= top == expectedWaterTop;
@@ -371,7 +370,7 @@ static bool CheckCombinedStatusStacking()
 	globals::menu = nullptr;
 	REL::Module::vr = false;
 	if (!passed)
-		std::puts("FAIL: hidden shader status indirectly displaces water or shader-blocking panels");
+		std::puts("FAIL: status panels overlap in the desktop mirror");
 	return passed;
 }
 
@@ -497,7 +496,8 @@ int main()
 				io.FontDefault = io.Fonts->AddFontDefault(&config);
 				io.Fonts->Build();
 				Menu menu;
-				menu.theme.GlobalScale = globalScale;
+				menu.settings.GlobalScale = globalScale;
+				menu.theme.GlobalScale = -0.5f;
 				ImGui::GetStyle().FontScaleMain = std::exp2(globalScale);
 				float previousWelcomeFont = 0;
 				ImVec2 previousWelcomeSize{};

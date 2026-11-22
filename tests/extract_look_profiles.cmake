@@ -1,0 +1,7 @@
+file(READ "${PROJECT_ROOT}/src/Presets/LookProfiles.cpp" source)
+string(FIND "${source}" "namespace Presets" start)
+if(start EQUAL -1)
+    message(FATAL_ERROR "Visuals profile implementation was not found")
+endif()
+string(SUBSTRING "${source}" ${start} -1 body)
+file(WRITE "${OUTPUT_FILE}" "${body}")

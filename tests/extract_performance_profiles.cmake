@@ -1,0 +1,21 @@
+if(NOT DEFINED PROJECT_ROOT OR NOT DEFINED OUTPUT_DIRECTORY)
+    message(FATAL_ERROR "PROJECT_ROOT and OUTPUT_DIRECTORY are required")
+endif()
+file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
+include("${PROJECT_ROOT}/tests/extract_source_region.cmake")
+file(READ "${PROJECT_ROOT}/src/Menu/PerformancePage.cpp" source)
+extract_between("${source}" "\t\tusing json = nlohmann::json;" "\t\tvoid DrawPresets()" "profile_helpers.h")
+extract_between("${source}" "\tvoid Save(nlohmann::json&" "\tvoid DrawSaveChoice(" "profile_actions.h")
+file(READ "${OUTPUT_DIRECTORY}/profile_helpers.h" helpers)
+file(READ "${OUTPUT_DIRECTORY}/profile_actions.h" actions)
+file(WRITE "${OUTPUT_DIRECTORY}/performance_profile_actions_under_test.h"
+    "namespace MenuUI::PerformancePage { namespace {\n${helpers}\n}\n${actions}\n}\n")
+
+file(READ "${PROJECT_ROOT}/src/Features/ScreenSpaceGI.h" ssgi_header)
+file(READ "${PROJECT_ROOT}/src/Features/ScreenSpaceGI.cpp" ssgi_source)
+extract_between("${ssgi_header}" "\tstruct Settings" "\n\tint activeResourceProfile" "ssgi_preset_fields.h")
+extract_between("${ssgi_source}" "\tvoid DisableGIEffects(" "\tvoid ClampSampleCounts(" "ssgi_preset_functions.h")
+file(READ "${OUTPUT_DIRECTORY}/ssgi_preset_fields.h" fields)
+file(READ "${OUTPUT_DIRECTORY}/ssgi_preset_functions.h" functions)
+file(WRITE "${OUTPUT_DIRECTORY}/ssgi_presets_under_test.h"
+    "namespace SsgiPresetTest { using uint = unsigned int; using float2 = std::array<float, 2>; namespace REL { struct Module { static inline bool vr = false; static bool IsVR() { return vr; } }; } struct ScreenSpaceGI { static constexpr int kResourceProfileAOOnly = 0, kResourceProfileFullGI = 1; ${fields} }; ${functions} }\n")

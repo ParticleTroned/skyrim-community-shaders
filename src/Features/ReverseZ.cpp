@@ -1,4 +1,5 @@
 #include "ReverseZ.h"
+#include "Menu/SettingsPage.h"
 #include "Utils/GraphicsCameraState.h"
 
 #include "Diagnostics/PerformanceCostExperiments.h"
@@ -550,18 +551,20 @@ void ReverseZ::DrawSettings()
 {
 	if (!globals::state)
 		return;
-	ImGui::SeparatorText("Depth precision");
+	MenuUI::SectionHeading("Depth precision");
 	Util::AddTooltip("Depth precision controls the Reverse Z feature.");
 	bool enabled = IsEnabledAtStartup();
-	if (ImGui::Checkbox("Enable Reverse Z (restart required)", &enabled))
+	if (Util::Widgets::Checkbox("Enable Reverse Z (restart required)", &enabled))
 		SetEnabledAtStartup(enabled);
-	Util::AddTooltip("Reduces flickering where distant surfaces overlap. Off uses standard depth precision. Uses extra graphics memory and may cost performance. Save and restart to apply.");
-	if (HasPendingBootChange())
-		Util::Text::WrappedRestartNeeded("Restart required: save settings and restart the game to apply the Reverse Z change.");
+	Util::AddTooltip("Reduces flickering where distant surfaces overlap. Off uses the original depth handling. Uses extra graphics memory and may cost performance. Save and restart to apply.");
+	if (HasPendingBootChange()) {
+		Util::Text::Warning("Restart required");
+		Util::AddTooltip("Save settings and restart the game to apply the Reverse Z change.");
+	}
 	ImGui::TextUnformatted(IsActive() ? "Active: Reverse Z" : "Active: Standard Z");
 	std::scoped_lock lock(failureMutex);
 	if (!failure.empty())
-		ImGui::TextWrapped("%s (phase: %s, target generation: %llu). %s Restart to retry Reverse Z, or disable it and restart.",
+		Util::Text::WrappedError("%s (phase: %s, target generation: %llu). %s Restart to retry Reverse Z, or disable it and restart.",
 			failure.c_str(), failurePhase, static_cast<unsigned long long>(failureGeneration),
 			IsActive() ? "Scene rendering is blocked." : "Standard depth remains active for this session.");
 }

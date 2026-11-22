@@ -1694,8 +1694,8 @@ TextureStreaming& TextureStreaming::Instance()
 }
 std::pair<std::string, std::vector<std::string>> TextureStreaming::GetFeatureSummary()
 {
-	return { "Streams distant textures on memory pressure or continuously.",
-		{ "Conservative static DDS coverage with optional categories", "Stereo and mip-bias aware detail", "Bounded restoration with shared NR and render-scale headroom" } };
+	return { "Balance texture detail and memory use, choose streaming coverage, and monitor activity.",
+		{ "VRAM reserve and distant texture detail", "Optional texture categories", "Current memory use and streaming status" } };
 }
 void TextureStreaming::PostPostLoad()
 {
@@ -1930,6 +1930,18 @@ nlohmann::json TextureStreaming::GetStatus() const
 	result["reductionRequested"] = state->enabled && (state->ReductionRequested() || state->options.maximumSize != 0);
 	return result;
 }
+Feature::SettingsHeaderStatus TextureStreaming::GetSettingsHeaderStatus() const
+{
+	std::scoped_lock lock(state->mutex);
+	if (state->externalStreamingConflict)
+		return { "Conflict", true, streamingConflictWarning };
+	if (!state->inventoryFailure.empty())
+		return { "Suspended", true, state->inventoryFailure };
+	if (!originHookReady.load())
+		return { "Unavailable", true, "Texture source tracking could not start. Restart the game to try again." };
+	return state->requestedEnabled ? SettingsHeaderStatus{} : SettingsHeaderStatus{ "Off", true, "Texture streaming is turned off. Use Enabled to allow texture reductions; full detail returns as textures reload." };
+}
+
 void TextureStreaming::DrawSettingsEnabledControl()
 {
 	bool enabled;
@@ -1947,6 +1959,30 @@ void TextureStreaming::DrawSettingsEnabledControl()
 	if (Util::Widgets::Checkbox("Enabled", &enabled))
 		Configure(enabled, maximum);
 	Util::AddTooltip("On: reduces distant texture detail under the selected conditions to free graphics memory. Off: restores full detail as textures reload.", ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+}
+
+bool TextureStreaming::IsPerformanceCostMeasurementEnabled() const
+{
+	std::scoped_lock lock(state->mutex);
+	return state->requestedEnabled;
+}
+
+void TextureStreaming::SetPerformanceCostMeasurementEnabled(bool value)
+{
+	std::uint32_t maximum;
+	{
+		std::scoped_lock lock(state->mutex);
+		maximum = state->maximumDrop;
+	}
+	Configure(value, maximum);
+}
+
+const char* TextureStreaming::GetPerformanceToggleBlockReason() const
+{
+	std::scoped_lock lock(state->mutex);
+	return state->externalStreamingConflict || !state->inventoryFailure.empty() || !originHookReady.load() ?
+	           "Texture Streaming is unavailable; check its feature page for the conflict or inventory issue." :
+	           nullptr;
 }
 void TextureStreaming::DrawSettings()
 {
@@ -1976,19 +2012,12 @@ void TextureStreaming::DrawSettings()
 			}
 	}
 	const bool available = originHookReady.load() && !conflict && inventoryFailure.empty();
-	if (conflict)
-		Util::Text::WrappedWarning(streamingConflictWarning);
-	else if (!inventoryFailure.empty())
-		Util::Text::WrappedWarning(inventoryFailure.c_str());
-	else if (!available)
-		Util::Text::WrappedWarning("Texture streaming is unavailable because texture source tracking could not start. Restart the game to try again.");
-	const auto settingsAvailabilityGuard = Util::DisableGuard(!available || !enabled);
-	MenuUI::SettingsPage page("TextureStreaming", {
-													  { "quality", "Texture detail", "Set VRAM reserve and texture detail.", "Streaming controls", true, true, nullptr, nullptr, nullptr, available && enabled },
-													  { "categories", "Coverage", "Optional texture types.", "Additional coverage", true, false, nullptr, nullptr, nullptr, available && enabled },
-													  { "status", "Status", "Current streaming activity.", "Activity and capacity", true, true, nullptr },
-												  });
-	if (page.Is("quality")) {
+	MenuUI::SettingsPage page("TextureStreaming", {});
+	if (!page.Is("overview"))
+		return;
+	{
+		const auto settingsAvailabilityGuard = Util::DisableGuard(!available || !enabled);
+		MenuUI::SectionHeading("Texture detail");
 		const auto previousModes = modes;
 		const auto previousOptions = options;
 		const auto previousMaximum = maximum;
@@ -2022,7 +2051,9 @@ void TextureStreaming::DrawSettings()
 		if (modes != previousModes || options != previousOptions || maximum != previousMaximum)
 			Configure(enabled, maximum, std::nullopt, modes, options);
 	}
-	if (page.Is("categories")) {
+	{
+		const auto settingsAvailabilityGuard = Util::DisableGuard(!available || !enabled);
+		MenuUI::SectionHeading("Coverage", "Choose which additional texture types may lose detail. Protected textures remain at full quality.");
 		const auto previous = categories;
 		const std::array choices{
 			MenuUI::ToggleChoice{ "Landscape", &categories.landscapeStatics, "Allows reduced texture detail on static objects using landscape textures. Off keeps those objects at full texture detail." },
@@ -2039,10 +2070,9 @@ void TextureStreaming::DrawSettings()
 		if (categories != previous)
 			Configure(enabled, maximum, categories);
 	}
-	if (page.Is("status")) {
-		MenuUI::DetailNote(detail.c_str());
-		MenuUI::DetailText(std::format("Reduced textures: {}", reduced).c_str());
-		MenuUI::DetailText(std::format("Capacity removed: {:.1f} MiB", static_cast<double>(logicalBytesRemoved) / Policy::MiB).c_str());
-		Util::AddTooltip("Logical texture capacity; physical VRAM relief may differ.");
-	}
+	MenuUI::SectionHeading("Status");
+	MenuUI::DetailNote(detail.c_str());
+	MenuUI::DetailText(std::format("Reduced textures: {}", reduced).c_str());
+	MenuUI::DetailText(std::format("Capacity removed: {:.1f} MiB", static_cast<double>(logicalBytesRemoved) / Policy::MiB).c_str());
+	Util::AddTooltip("Logical texture capacity; physical VRAM relief may differ.");
 }

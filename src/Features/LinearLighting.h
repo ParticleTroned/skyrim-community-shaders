@@ -15,7 +15,7 @@ struct LinearLighting : Feature
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Improves the accuracy of lighting and colour blending.",
+			"Legacy: Use Visuals for visual tuning. Improves the accuracy of lighting and colour blending.",
 			{ "Customizable gamma correction",
 				"Corrects lighting calculations",
 				"Makes PBR really work" }

@@ -718,7 +718,7 @@ void AdaptiveBalanceDepthOfField::DrawSettings()
 	static Util::ConfirmationPopup underwaterLockPopup;
 
 	Util::Widgets::Checkbox("Enable depth-of-field overrides", &settings.enabled);
-	DrawDofTooltip("On: uses your unlocked focus and blur settings throughout the game. Off: follows the game and weather settings. Requires Adaptive Balance.");
+	DrawDofTooltip("On: uses your unlocked focus and blur settings throughout the game. Off: follows the game and weather settings. Requires Visuals.");
 
 	{
 		Util::DisableGuard overridesDisabled(!settings.enabled);
@@ -731,8 +731,6 @@ void AdaptiveBalanceDepthOfField::DrawSettings()
 			true,
 			true,
 			"No live scene image space data is available.");
-
-		ImGui::Separator();
 
 		DrawDepthOfFieldSection(
 			"Underwater",
@@ -747,7 +745,7 @@ void AdaptiveBalanceDepthOfField::DrawSettings()
 
 	ImGui::Separator();
 	Util::Widgets::Checkbox("Underwater fog blur correction", &settings.fixUnderwaterFogDofBlur);
-	DrawDofTooltip("Makes underwater fog follow the scene blur correctly. Off keeps the original fog appearance. Works without manual blur overrides; requires Adaptive Balance.");
+	DrawDofTooltip("Makes underwater fog follow the scene blur correctly. Off keeps the original fog appearance. Works without manual blur overrides; requires Visuals.");
 }
 
 void AdaptiveBalanceDepthOfField::InstallHooks()
@@ -755,7 +753,7 @@ void AdaptiveBalanceDepthOfField::InstallHooks()
 	stl::write_vfunc<0x1, ImageSpaceEffectDepthOfField_Render>(RE::VTABLE_ImageSpaceEffectDepthOfField[0]);
 	stl::write_vfunc<0x6, ImageSpaceEffectDepthOfField_IsActive>(RE::VTABLE_ImageSpaceEffectDepthOfField[0]);
 	stl::write_vfunc<0x7, ImageSpaceEffectDepthOfField_UpdateParams>(RE::VTABLE_ImageSpaceEffectDepthOfField[0]);
-	logger::info("[Adaptive Balance] Installed vanilla depth of field hooks");
+	logger::info("[Visuals] Installed vanilla depth of field hooks");
 }
 
 bool AdaptiveBalanceDepthOfField::IsRuntimeEnabled()

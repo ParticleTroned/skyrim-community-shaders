@@ -31,9 +31,9 @@ struct HorizonFix : Feature
 	/** @brief Returns a summary description for the UI. */
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
-		return { "Extends distant water into the horizon when the HorizonFix plugin is installed.",
-			{ "Active only while the HorizonFix SKSE plugin is installed.",
-				"Without HorizonFix, water keeps exact vanilla far clip behavior." } };
+		return { "Helps distant water reach the horizon when the HorizonFix plugin is installed.",
+			{ "Allows the plugin's extra water tiles to remain visible beyond the game's normal drawing distance, filling the gap between distant water and the sky.",
+				"Requires the HorizonFix SKSE plugin. The effect is easiest to see across open water towards the horizon." } };
 	}
 
 	virtual void DrawSettings() override;

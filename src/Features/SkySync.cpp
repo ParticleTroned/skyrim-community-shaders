@@ -87,7 +87,7 @@ void SkySync::DrawSettings()
 	if (page.Is("worldspaces"))
 		DrawWorldspaceSettings();
 	if (page.Is("timing")) {
-		ImGui::TextWrapped("Moves the visual sun path during sunrise/sunset. Moon lighting follows the climate's night timings.");
+		MenuUI::SectionHeading("Sunrise and sunset", "Moves the visual sun path during sunrise/sunset. Moon lighting follows the climate's night timings.");
 		Util::Widgets::SliderFloat("Sunrise Begin (Hours)", &settings.SunriseBeginOffset, -5.0f, 5.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Offset for when the sun starts rising.");
@@ -109,7 +109,6 @@ void SkySync::DrawSettings()
 
 void SkySync::DrawWorldspaceSettings()
 {
-	ImGui::TextWrapped("Sky Sync leaves lighting and weather lens flares to the game in these worldspaces. Changes take effect on the next sky update.");
 	static std::array<char, MaxWorldspaceEditorIDLength + 1> editorID{};
 	static bool invalidList = false;
 	auto addWorldspace = [&](const char* a_editorID) {
@@ -121,6 +120,7 @@ void SkySync::DrawWorldspaceSettings()
 			editorID.fill('\0');
 	};
 	Util::Widgets::InputText("Worldspace Editor ID", editorID.data(), editorID.size());
+	Util::AddTooltip("Sky Sync leaves lighting and weather lens flares to the game in these worldspaces. Changes take effect on the next sky update.");
 	if (ImGui::Button("Add worldspace"))
 		addWorldspace(editorID.data());
 	if (const auto worldspace = GetCurrentWorldspace()) {

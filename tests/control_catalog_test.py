@@ -34,6 +34,60 @@ void DrawSettings() { Util::Widgets::Checkbox("Skip a light's own flame holder",
         self.assertEqual([(e["section"], e["label"]) for e in entries],
                          [("shadows", "Skip a light's own flame holder")])
 
+    def test_performance_tools_preserve_control_destinations(self):
+        entries = catalog.generate(path.parents[1])
+        overlay = [e for e in entries if e["page"] == "PerformanceOverlay"]
+        self.assertTrue(overlay)
+        self.assertEqual({e["section"] for e in overlay}, {"overlay"})
+        tuning = [e for e in entries if e["page"] == "PerformanceTuning"]
+        self.assertTrue(any(e["choice"] == "Quick scan all features" for e in tuning))
+        self.assertTrue(any(e["choice"] == "Compare" for e in tuning))
+        self.assertEqual({e["section"] for e in tuning}, {"tuning"})
+        presets = [e for e in entries if e["page"] == "PerformancePresets"]
+        self.assertTrue(any(e["label"] == "Performance preset" and not e["choice"] for e in presets))
+        for label in ("Apply MyPerformance", "Base preset"):
+            self.assertEqual({e["choice"] for e in presets if e["label"] == label}, {"MyPerformance"})
+        self.assertEqual({e["section"] for e in presets}, {"presets"})
+
+    def test_production_interface_controls_have_one_home(self):
+        entries = catalog.generate(path.parents[1])
+        expected = {
+            "Menu Scale": ("Settings", "vr_menu"),
+            "Mouse Deadzone": ("Settings", "vr_controls"),
+            "Keep Desktop Game Window Focused for VR Menu": ("Settings", "desktop"),
+            "Screenshot Key:": ("Screenshot", "overview"),
+            "Skip Compilation Key:": ("DevTools", "shaders"),
+            "CSX Editor Toggle Key:": ("DevTools", "shader_debug"),
+        }
+        for label, destination in expected.items():
+            self.assertEqual([(e["page"], e["section"]) for e in entries if e["label"] == label], [destination], label)
+        self.assertFalse(any(e["page"] == "VR" and e["section"] in ("layout", "controls", "diagnostics") for e in entries))
+
+
+    def test_screenshot_binding_has_one_editor(self):
+        source = catalog.Source("src/Features/ScreenshotFeature.cpp", (path.parents[1] / "src/Features/ScreenshotFeature.cpp").read_text())
+        editors = [args for draw in source.functions for _, name, args in source.calls(draw)
+                   if name == "Util::InputComboWidget" and len(args) > 1 and "ScreenshotKey" in args[1]]
+        self.assertEqual(len(editors), 1)
+
+
+    def test_developer_controls_follow_dev_tools_sections(self):
+        sources = [catalog.Source("src/Menu.cpp", '''
+void Menu::DrawAdvancedSettings() { AdvancedSettingsRenderer::RenderAdvancedSettings(); }
+'''), catalog.Source("src/Menu/AdvancedSettingsRenderer.cpp", '''
+void AdvancedSettingsRenderer::RenderAdvancedSettings() {
+ MenuUI::SettingsPage page("DevTools", {});
+ if (page.Is("shaders")) SettingsTabRenderer::RenderShaderSettings();
+ if (page.Is("shader_debug")) ImGui::Checkbox("Shader blocking", &enabled);
+}
+void SettingsTabRenderer::RenderShaderSettings() { ImGui::Checkbox("Enable Disk Cache", &enabled); }
+''')]
+        entries = catalog.collect(sources)
+        self.assertEqual({e["label"]: (e["feature"], e["page"], e["section"]) for e in entries},
+                         {"Enable Disk Cache": ("DevTools", "DevTools", "shaders"),
+                          "Shader blocking": ("DevTools", "DevTools", "shader_debug")})
+
+
     def test_unvisited_tabs_and_helper_labels(self):
         entries = extract('''
 if (page.Is("first")) { Helper("Strength##one"); }

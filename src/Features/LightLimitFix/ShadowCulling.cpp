@@ -2,6 +2,7 @@
 #include "ActorShadowHistory.h"
 #include "EngineFixes/VRShadowBatchPolicy.h"
 #include "Globals.h"
+#include "Menu/SettingsPage.h"
 #include "ShadowCullingDrawScope.h"
 #include "ShadowCullingSnapshot.h"
 #include "State.h"
@@ -420,14 +421,13 @@ namespace LightLimitFixDetail::ShadowCulling
 		const bool unavailable = conflict || !available.load();
 		{
 			const auto disabled = Util::DisableGuard(unavailable);
-			ImGui::SeparatorText("Shadow culling");
+			MenuUI::SectionHeading("Shadow culling", "Native shadow maps; independent of contact shadows.");
 		}
 		if (conflict)
 			Util::Text::WrappedWarning("SPS owns shadow culling. Disable SPS and restart to use CSX native culling.");
 		else if (!failure.empty())
-			ImGui::TextWrapped("Native shadow culling is unavailable: %s", failure.c_str());
+			MenuUI::PageNotice("Native shadow culling is unavailable.", MenuUI::NoticeKind::Error, failure);
 		const auto disabled = Util::DisableGuard(unavailable);
-		ImGui::TextWrapped("Native shadow maps; independent of contact shadows.");
 		Util::Widgets::Checkbox("Sun shadows", &settings.sun);
 		Util::AddTooltip("Skip tiny distant sun-shadow casters. Both VR eyes and long shadows near the horizon remain protected.");
 		Util::Widgets::SliderFloat("Sun shadow distance", &settings.sunDistanceMeters, MinimumDistanceMeters, MaximumDistanceMeters, "%.0f m");

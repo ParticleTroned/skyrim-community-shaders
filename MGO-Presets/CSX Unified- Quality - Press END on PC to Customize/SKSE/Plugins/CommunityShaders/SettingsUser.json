@@ -86,7 +86,7 @@
     },
     "settingsContract": {
       "revision": 35,
-      "sourceTreeSha256": "B68EE599C0A35CC030FF837D15213B23BA31C106AE73CA2E97978EC3BC124AB3"
+      "sourceTreeSha256": "B88CE358023C6123008DCCC796F9047B4A4942B738A1C672728A23E47D24ED8C"
     }
   },
   "Upscaling": {
@@ -194,7 +194,7 @@
       "lightingPreservation": 1.0
     }
   },
-  "CS Editor": null,
+  "CSX Editor": null,
   "Performance Overlay": {
     "BackgroundOpacity": 0.5,
     "FrameHistorySize": 600,
@@ -2221,7 +2221,7 @@
     "ModernWetIndirectSpecularScale": 0.75,
     "PostRainPuddleWaterStrength": 2.5,
     "PostRainWaterClarity": 0.75,
-    "PreserveWetnessHighlights": false,
+    "PreserveWetnessHighlights": true,
     "PuddleDryingHours": 15.0,
     "PuddleLayout": 3.0,
     "PuddleMaxAngle": 0.75,
@@ -2238,7 +2238,7 @@
     "RaindropGridSize": 3.25,
     "RaindropInterval": 0.5799999833106995,
     "RaindropTransitionFalloff": 2.0,
-    "RestrictPuddleSlopes": false,
+    "RestrictPuddleSlopes": true,
     "RippleBreadth": 0.4000000059604645,
     "RippleLifetime": 0.25999999046325684,
     "RippleRadius": 0.6000000238418579,

@@ -2,16 +2,51 @@
 
 #include "Feature.h"
 #include "Globals.h"
+#include "Menu.h"
+#include "Presets/LookSceneRuntime.h"
+#include "Presets/SettingsDomains.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Game.h"
 
+#include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 #include <unordered_set>
 
 namespace
 {
+	void ApplyFeatureSettings(const std::map<std::string, json>& candidate)
+	{
+		std::map<std::string, json> before;
+		std::vector<Feature*> touched;
+		try {
+			for (const auto& [name, values] : candidate) {
+				auto* feature = Feature::FindFeatureByShortName(name);
+				if (!feature || !feature->loaded)
+					continue;
+				feature->SaveSettings(before[name]);
+				if (before[name] == values)
+					continue;
+				touched.push_back(feature);
+				auto settings = values;
+				feature->LoadSettings(settings);
+			}
+		} catch (const std::exception& failure) {
+			std::string error = failure.what();
+			for (auto it = touched.rbegin(); it != touched.rend(); ++it) {
+				try {
+					(*it)->LoadSettings(before.at((*it)->GetShortName()));
+				} catch (const std::exception& rollback) {
+					error += "\nScene rollback failed: " + std::string(rollback.what());
+				}
+			}
+			throw std::runtime_error(error);
+		}
+	}
+
 	bool AreAllEntriesPaused(
 		const std::vector<SceneSettingsManager::SettingEntry>& entries,
 		SceneSettingsManager::EntrySource source)
@@ -29,6 +64,179 @@ namespace
 }
 
 // --- Path Resolution ---
+
+SceneSettingsManager::BaseSettingsScope::BaseSettingsScope()
+{
+	auto* manager = GetSingleton();
+	if (manager->baseSettingsDepth == 0) {
+		Presets::LookSceneRuntime::Suspend();
+		manager->resumeInterior = manager->isCurrentlyApplied;
+		try {
+			if (manager->isCurrentlyApplied)
+				manager->RevertToExteriorSettings();
+		} catch (...) {
+			Presets::LookSceneRuntime::Resume();
+			throw;
+		}
+		manager->isCurrentlyApplied = false;
+	}
+	++manager->baseSettingsDepth;
+}
+
+void SceneSettingsManager::BaseSettingsScope::Finish()
+{
+	if (!active)
+		return;
+	auto* manager = GetSingleton();
+	if (manager->baseSettingsDepth == 1 && manager->resumeInterior) {
+		manager->SaveExteriorSettings(SceneType::InteriorOnly);
+		try {
+			manager->ApplySettings(SceneType::InteriorOnly);
+		} catch (...) {
+			manager->savedExteriorSettings.clear();
+			throw;
+		}
+		manager->isCurrentlyApplied = true;
+	}
+	--manager->baseSettingsDepth;
+	if (!manager->baseSettingsDepth)
+		Presets::LookSceneRuntime::Resume();
+	active = false;
+}
+
+SceneSettingsManager::BaseSettingsScope::~BaseSettingsScope()
+{
+	try {
+		Finish();
+	} catch (const std::exception& error) {
+		auto* manager = GetSingleton();
+		--manager->baseSettingsDepth;
+		if (!manager->baseSettingsDepth)
+			Presets::LookSceneRuntime::Resume();
+		manager->queuedCellTransition = true;
+		logger::error("Could not restore interior settings: {}", error.what());
+	}
+}
+
+SceneSettingsManager::LookState SceneSettingsManager::CaptureLookState() const
+{
+	return { GetEntries(SceneType::InteriorOnly), lookPersistence };
+}
+
+void SceneSettingsManager::RestoreLookState(LookState state)
+{
+	GetEntriesMut(SceneType::InteriorOnly) = std::move(state.interior);
+	lookPersistence = state.persistent;
+	queuedCellTransition = true;
+}
+
+std::array<SceneSettingsManager::EntrySource, 3> SceneSettingsManager::ApplicationOrder() const
+{
+	return lookPersistence ? std::array{ EntrySource::Overwrite, EntrySource::LookPack, EntrySource::User } :
+	                         std::array{ EntrySource::User, EntrySource::Overwrite, EntrySource::LookPack };
+}
+
+void SceneSettingsManager::SetLookLayer(const json& layer, const std::string& packId)
+{
+	BaseSettingsScope scope;
+	auto& values = GetEntriesMut(SceneType::InteriorOnly);
+	std::erase_if(values, [](const SettingEntry& entry) { return entry.source == EntrySource::LookPack; });
+	for (const auto& [feature, settings] : layer.items())
+		for (const auto& [key, value] : settings.items())
+			values.push_back({ feature, key, value, false, EntrySource::LookPack, packId });
+	queuedCellTransition = true;
+}
+
+json SceneSettingsManager::ExportLookLayer() const
+{
+	json result = json::object();
+	for (const auto source : ApplicationOrder()) {
+		for (const auto& entry : GetEntries(SceneType::InteriorOnly)) {
+			if (entry.source != source || !IsEntryActive(entry))
+				continue;
+			json patch = { { entry.settingKey, entry.value } };
+			patch = Presets::SelectDomain(entry.featureShortName, patch, Presets::SettingsDomain::Appearance);
+			if (patch.empty())
+				continue;
+			if (!result.contains(entry.featureShortName))
+				result[entry.featureShortName] = json::object();
+			Presets::Overlay(result[entry.featureShortName], patch);
+		}
+	}
+	return result;
+}
+
+void SceneSettingsManager::UseLookPersistence(bool enabled)
+{
+	if (lookPersistence == enabled)
+		return;
+	lookPersistence = enabled;
+	if (!enabled) {
+		auto& values = GetEntriesMut(SceneType::InteriorOnly);
+		std::erase_if(values, [](const auto& entry) { return entry.source == EntrySource::User; });
+		LoadUserSettings(SceneType::InteriorOnly);
+	}
+}
+
+void SceneSettingsManager::OverlayBaseSettings(const std::string& feature, json& values, const std::set<std::string>& weatherVariables) const
+{
+	if (!isCurrentlyApplied)
+		return;
+	if (const auto base = savedExteriorSettings.find(feature); base != savedExteriorSettings.end())
+		for (const auto& [key, value] : base->second.items())
+			if (!weatherVariables.contains(key))
+				values[key] = value;
+}
+
+json SceneSettingsManager::SerializeLookEdits() const
+{
+	json values = json::array();
+	for (const auto& entry : GetEntries(SceneType::InteriorOnly))
+		if (entry.source == EntrySource::User)
+			values.push_back({ { "feature", entry.featureShortName }, { "setting", entry.settingKey }, { "value", entry.value }, { "paused", entry.paused } });
+	return values;
+}
+
+void SceneSettingsManager::LoadLookEdits(const json& edits, const json& schemas)
+{
+	if (!edits.is_array() || edits.size() > 4096)
+		throw std::runtime_error("Invalid saved interior Look edits");
+	std::vector<SettingEntry> parsed;
+	std::set<std::pair<std::string, std::string>> keys;
+	for (const auto& entry : edits) {
+		if (!entry.is_object() || !entry.contains("feature") || !entry["feature"].is_string() ||
+			!entry.contains("setting") || !entry["setting"].is_string() || !entry.contains("value") ||
+			!entry.contains("paused") || !entry["paused"].is_boolean())
+			throw std::runtime_error("Invalid saved interior Look entry");
+		const auto name = entry["feature"].get<std::string>();
+		const auto key = entry["setting"].get<std::string>();
+		if (name.empty() || key.empty() || !keys.emplace(name, key).second)
+			throw std::runtime_error("Missing or duplicate interior setting");
+		std::string error;
+		if (schemas.contains(name) && !schemas[name].empty() && !Presets::ValidatePatch(json{ { key, entry["value"] } }, schemas[name], error, "/" + name))
+			throw std::runtime_error(error);
+		parsed.push_back({ name, key, entry["value"], entry["paused"].get<bool>(), EntrySource::User, "" });
+	}
+	BaseSettingsScope scope;
+	auto& entriesForInterior = GetEntriesMut(SceneType::InteriorOnly);
+	std::erase_if(entriesForInterior, [](const auto& entry) { return entry.source == EntrySource::User; });
+	entriesForInterior.insert(entriesForInterior.end(), parsed.begin(), parsed.end());
+}
+
+void SceneSettingsManager::ClearLookEditsUnder(const json& layer)
+{
+	auto& values = GetEntriesMut(SceneType::InteriorOnly);
+	std::erase_if(values, [&](const auto& entry) {
+		return entry.source == EntrySource::User && layer.contains(entry.featureShortName) &&
+		       layer[entry.featureShortName].contains(entry.settingKey) && !entry.value.is_object();
+	});
+	for (auto& entry : values) {
+		if (entry.source == EntrySource::User && entry.value.is_object() && layer.contains(entry.featureShortName) &&
+			layer[entry.featureShortName].contains(entry.settingKey))
+			Presets::RemoveCovered(entry.value, layer[entry.featureShortName][entry.settingKey]);
+	}
+	std::erase_if(values, [](const auto& entry) { return entry.source == EntrySource::User && entry.value.is_object() && entry.value.empty(); });
+}
 
 std::string SceneSettingsManager::GetSceneTypeName(SceneType type)
 {
@@ -60,6 +268,7 @@ std::vector<std::string> SceneSettingsManager::GetInteriorRelevantFeatureNames()
 		"ScreenSpaceGI",
 		"ScreenSpaceShadows",
 		"SubsurfaceScattering",
+		"Skin",
 		"LinearLighting",
 		"ImageBasedLighting",
 		"PostProcessing",
@@ -154,6 +363,8 @@ bool SceneSettingsManager::HasEntryFromSource(SceneType type, const std::string&
 
 bool SceneSettingsManager::HasActiveOverwrite(SceneType type, const std::string& featureShortName, const std::string& settingKey) const
 {
+	if (lookPersistence)
+		return false;
 	for (const auto& entry : GetEntries(type)) {
 		if (entry.source == EntrySource::Overwrite && !entry.paused &&
 			entry.featureShortName == featureShortName && entry.settingKey == settingKey)
@@ -182,7 +393,7 @@ void SceneSettingsManager::AddSetting(SceneType type, const std::string& feature
 void SceneSettingsManager::RemoveSetting(SceneType type, size_t index)
 {
 	auto& vec = GetEntriesMut(type);
-	if (index >= vec.size())
+	if (index >= vec.size() || vec[index].source == EntrySource::LookPack)
 		return;
 
 	auto& entry = vec[index];
@@ -207,7 +418,7 @@ void SceneSettingsManager::RemoveSetting(SceneType type, size_t index)
 void SceneSettingsManager::TogglePauseEntry(SceneType type, size_t index)
 {
 	auto& vec = GetEntriesMut(type);
-	if (index < vec.size()) {
+	if (index < vec.size() && vec[index].source != EntrySource::LookPack) {
 		vec[index].paused = !vec[index].paused;
 		if (vec[index].source == EntrySource::User)
 			SaveUserSettings(type);
@@ -282,7 +493,7 @@ void SceneSettingsManager::DeleteAllUserSettings(SceneType type)
 void SceneSettingsManager::UpdateEntryValue(SceneType type, size_t index, const json& newValue, bool deferSave)
 {
 	auto& vec = GetEntriesMut(type);
-	if (index >= vec.size())
+	if (index >= vec.size() || vec[index].source == EntrySource::LookPack)
 		return;
 
 	vec[index].value = newValue;
@@ -290,12 +501,7 @@ void SceneSettingsManager::UpdateEntryValue(SceneType type, size_t index, const 
 	if (!deferSave && vec[index].source == EntrySource::User)
 		SaveUserSettings(type);
 
-	// Only apply if no active overwrite covers this key (overwrites take priority)
-	if (isCurrentlyApplied && !vec[index].paused && !IsFeaturePaused(vec[index].featureShortName)) {
-		if (vec[index].source == EntrySource::Overwrite ||
-			!HasActiveOverwrite(type, vec[index].featureShortName, vec[index].settingKey))
-			ApplySettingToFeature(vec[index]);
-	}
+	ReapplyIfActive();
 }
 
 // --- Event Handler ---
@@ -334,6 +540,12 @@ void SceneSettingsManager::Update()
 
 void SceneSettingsManager::OnCellTransition()
 {
+	if (baseSettingsDepth != 0) {
+		queuedCellTransition = true;
+		return;
+	}
+	if (globals::state->isMainMenuOpen || globals::state->isLoadingMenuOpen)
+		return;
 	// Match Skylighting's interior detection: sky mode != kFull
 	bool interior = true;
 	if (auto sky = globals::game::sky)
@@ -355,13 +567,14 @@ void SceneSettingsManager::ReapplyIfActive()
 		return;
 
 	// Full revert + re-apply so removed/paused entries get exterior values restored
-	RevertToExteriorSettings();
-	SaveExteriorSettings(SceneType::InteriorOnly);
-	ApplySettings(SceneType::InteriorOnly);
+	BaseSettingsScope scope;
+	scope.Finish();
 }
 
 bool SceneSettingsManager::IsSettingControlled(const std::string& featureShortName, const std::string& settingKey) const
 {
+	if (Presets::LookSceneRuntime::Controls(featureShortName, settingKey))
+		return true;
 	if (!isCurrentlyApplied)
 		return false;
 	if (IsFeaturePaused(featureShortName))
@@ -381,6 +594,8 @@ bool SceneSettingsManager::IsSettingControlled(const std::string& featureShortNa
 
 bool SceneSettingsManager::HasActiveSettingsForFeature(const std::string& featureShortName) const
 {
+	if (Presets::LookSceneRuntime::Controls(featureShortName))
+		return true;
 	if (!isCurrentlyApplied)
 		return false;
 
@@ -401,8 +616,9 @@ bool SceneSettingsManager::IsFeaturePaused(const std::string& featureShortName) 
 
 void SceneSettingsManager::SetFeaturePaused(const std::string& featureShortName, bool paused)
 {
+	BaseSettingsScope scope;
 	featurePauseStates[featureShortName] = paused;
-	ReapplyIfActive();
+	scope.Finish();
 }
 
 // --- Apply / Revert ---
@@ -419,11 +635,11 @@ void SceneSettingsManager::SaveExteriorSettings(SceneType type)
 	// Save only the specific keys we'll override, not the entire settings blob
 	for (const auto& [shortName, keys] : keysToSave) {
 		auto* feature = Feature::FindFeatureByShortName(shortName);
-		if (!feature)
+		if (!feature || !feature->loaded)
 			continue;
 
 		json fullSettings;
-		feature->SaveSettings(fullSettings);
+		feature->SaveBaseSettings(fullSettings);
 
 		// Merge into existing saved settings (don't overwrite keys saved by other scene types)
 		json& partial = savedExteriorSettings[shortName];
@@ -439,71 +655,58 @@ void SceneSettingsManager::SaveExteriorSettings(SceneType type)
 
 void SceneSettingsManager::ApplySettings(SceneType type)
 {
-	// Apply user entries first, then overwrites ? overwrites win via last-write-wins
-	for (const auto& entry : GetEntries(type)) {
-		if (entry.source != EntrySource::User || !IsEntryActive(entry))
-			continue;
-		ApplySettingToFeature(entry);
+	std::map<std::string, json> candidate;
+	for (const auto source : ApplicationOrder()) {
+		for (const auto& entry : GetEntries(type)) {
+			if (entry.source != source || !IsEntryActive(entry))
+				continue;
+			auto* feature = Feature::FindFeatureByShortName(entry.featureShortName);
+			if (!feature || !feature->loaded)
+				continue;
+			auto [it, inserted] = candidate.try_emplace(entry.featureShortName);
+			auto& settings = it->second;
+			if (inserted)
+				feature->SaveSettings(settings);
+			if (!settings.contains(entry.settingKey))
+				continue;
+			const json patch{ { entry.settingKey, entry.value } };
+			if (entry.source == EntrySource::LookPack) {
+				auto appearance = Presets::SelectDomain(entry.featureShortName, settings, Presets::SettingsDomain::Appearance);
+				Presets::Overlay(appearance, patch);
+				settings = Presets::ReplaceAppearance(entry.featureShortName, settings, appearance);
+			} else if (lookPersistence && entry.source == EntrySource::User) {
+				Presets::Overlay(settings, patch);
+			} else
+				settings[entry.settingKey] = entry.value;
+		}
 	}
-	for (const auto& entry : GetEntries(type)) {
-		if (entry.source != EntrySource::Overwrite || !IsEntryActive(entry))
-			continue;
-		ApplySettingToFeature(entry);
-	}
+	ApplyFeatureSettings(candidate);
 }
 
 void SceneSettingsManager::RevertToExteriorSettings()
 {
+	std::map<std::string, json> candidate;
 	for (const auto& [shortName, savedKeys] : savedExteriorSettings) {
 		auto* feature = Feature::FindFeatureByShortName(shortName);
-		if (!feature)
+		if (!feature || !feature->loaded)
 			continue;
-
-		json current;
+		auto& current = candidate[shortName];
 		feature->SaveSettings(current);
-
-		for (auto& [key, val] : savedKeys.items())
-			current[key] = val;
-
-		feature->LoadSettings(current);
+		for (const auto& [key, value] : savedKeys.items()) current[key] = value;
 	}
+	ApplyFeatureSettings(candidate);
 	savedExteriorSettings.clear();
-}
-
-void SceneSettingsManager::ApplySettingToFeature(const SettingEntry& entry)
-{
-	auto* feature = Feature::FindFeatureByShortName(entry.featureShortName);
-	if (!feature)
-		return;
-
-	json settings;
-	feature->SaveSettings(settings);
-
-	if (!settings.is_object())
-		return;
-
-	if (!settings.contains(entry.settingKey)) {
-		logger::warn("[SceneSettings] Setting '{}' not found in feature '{}', skipping", entry.settingKey, entry.featureShortName);
-		return;
-	}
-
-	settings[entry.settingKey] = entry.value;
-	feature->LoadSettings(settings);
-
-	// Round-trip verification: check if the feature clamped the value
-	json verify;
-	feature->SaveSettings(verify);
-	if (verify.contains(entry.settingKey) && verify[entry.settingKey] != entry.value) {
-		logger::warn("[SceneSettings] Feature '{}' clamped setting '{}' from {} to {}",
-			entry.featureShortName, entry.settingKey,
-			entry.value.dump(), verify[entry.settingKey].dump());
-	}
 }
 
 // --- Persistence ---
 
 void SceneSettingsManager::SaveUserSettings(SceneType type)
 {
+	if (lookPersistence) {
+		if (globals::menu)
+			globals::menu->RequestSettingsDirtyCheck();
+		return;
+	}
 	auto path = GetSettingsFilePath(type);
 	Util::FileHelpers::EnsureDirectoryExists(path.parent_path());
 
@@ -535,6 +738,8 @@ void SceneSettingsManager::SaveUserSettings(SceneType type)
 
 void SceneSettingsManager::LoadUserSettings(SceneType type)
 {
+	if (lookPersistence)
+		return;
 	auto path = GetSettingsFilePath(type);
 	auto typeName = GetSceneTypeName(type);
 

@@ -141,7 +141,7 @@ void LinearLighting::DrawPerformanceSettings(bool)
 			"Disabling bypasses linear color-space conversions and per-geometry updates.");
 	}
 	if (!availableInCurrentCell)
-		ImGui::TextDisabled("Linear Lighting is disabled for the current location type.");
+		MenuUI::AvailabilityNotice("Linear Lighting is disabled for the current location type.");
 }
 
 json LinearLighting::CapturePerformanceSettingsState() const

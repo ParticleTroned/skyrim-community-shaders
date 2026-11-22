@@ -1,4 +1,5 @@
 #include "FurShells.h"
+#include "Menu/SettingsPage.h"
 
 #include "Features/Wetterness.h"
 #include "FurShells/AssetScan.h"
@@ -321,109 +322,110 @@ void FurShells::SaveSettings(json& o_json)
 
 void FurShells::DrawSettings()
 {
+	MenuUI::SettingsPage page("FurShells", {});
 	int shellCount = static_cast<int>(settings.ShellCount);
-	if (ImGui::SliderInt("Fur layers", &shellCount, 1, static_cast<int>(MaxShells), "%d", ImGuiSliderFlags_AlwaysClamp))
+	if (Util::Widgets::SliderInt("Fur layers", &shellCount, 1, static_cast<int>(MaxShells), "%d", ImGuiSliderFlags_AlwaysClamp))
 		settings.ShellCount = static_cast<uint32_t>(shellCount);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", "More layers make fur look fuller and smoother up close, but cost more performance.");
 
-	ImGui::SliderFloat("Length", &settings.Length, 0.05f, 6.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Length", &settings.Length, 0.05f, 6.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", "How far fur grows from clothing or creatures. Higher values make it longer and fluffier.");
 
-	ImGui::SliderFloat("Body Length", &settings.BodyLength, 0.05f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Body Length", &settings.BodyLength, 0.05f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", "Length of fur on skin, such as Khajiit bodies and heads. Higher values make it longer.");
 
-	ImGui::SliderFloat("Droop", &settings.Droop, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Droop", &settings.Droop, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", "How much fur hangs downward. Higher values make it droop more; 0 removes this sag.");
 
-	ImGui::SliderFloat("Root Cutoff", &settings.RootThreshold, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Root Cutoff", &settings.RootThreshold, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", "Controls thickness near the skin. Lower values fill in more fur; higher values leave more gaps.");
 
-	ImGui::SliderFloat("Tip Cutoff", &settings.TipThreshold, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Tip Cutoff", &settings.TipThreshold, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", "Controls how thin the fur becomes toward its tips. Higher values give finer, sparser tips.");
 
-	ImGui::SliderFloat("Root Brightness", &settings.RootDarkening, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Root Brightness", &settings.RootDarkening, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", "Darkens the base of the fur to give it depth. Lower values darken it more; 1 leaves it as bright as the tips.");
 
-	ImGui::SliderFloat("Fur texture color", &settings.ShellColor, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Fur texture color", &settings.ShellColor, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", "Choose the fur's color source: 0 uses the underlying skin or clothing; 1 uses the fur detail texture.");
 
-	ImGui::SliderFloat("Fade Start", &settings.FadeStart, 0.0f, 8000.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Fade Start", &settings.FadeStart, 0.0f, 8000.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
 	Util::AddTooltip("Distance where fur starts losing detail. Lower values save work sooner; higher values keep nearby fur fuller.");
-	ImGui::SliderFloat("Fade End", &settings.FadeEnd, 0.0f, 8000.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Fade End", &settings.FadeEnd, 0.0f, 8000.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
 	settings.FadeStart = std::min(settings.FadeStart, settings.FadeEnd);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", "Distance where added fur disappears completely. Increase it to keep fur visible farther away, at a higher cost.");
 
-	ImGui::Checkbox("Hide Fur Under Clothing", &settings.HideCoveredFur);
+	Util::Widgets::Checkbox("Hide Fur Under Clothing", &settings.HideCoveredFur);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", "On: hides covered fur to reduce poking through clothing. Off: draws it even under clothing. Adds rendering work; applies outside first-person and menu views.");
 
-	ImGui::Checkbox("Show Overlays On Fur", &settings.OverlayFur);
+	Util::Widgets::Checkbox("Show Overlays On Fur", &settings.OverlayFur);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", "On: RaceMenu tattoos, paint and patterns also color the fur. Off: they stay on the skin beneath it. More visible overlays can reduce performance.");
 
-	ImGui::SliderFloat("Minimum Fur Size", &settings.MinFurPixels, 0.0f, MaxMinFurPixels, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Minimum Fur Size", &settings.MinFurPixels, 0.0f, MaxMinFurPixels, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", "Thins fur that looks very small on screen. Higher values make it sparser; 0 removes this extra thinning.");
 
 	ImGui::Text("%s: %u", "Fur passes last frame", lastPassCount);
 
-	if (ImGui::TreeNode("Optional Fur Effects")) {
-		ImGui::TextWrapped("Optional movement and touch effects can reduce performance. Enable the effects you want.");
-		bool changed = ImGui::Checkbox("Weather Wind", &settings.EnableWind);
+	const bool optionalEffects = ImGui::TreeNode("Optional Fur Effects");
+	Util::AddTooltip("Optional movement and touch effects can reduce performance. Enable the effects you want.");
+	if (optionalEffects) {
+		bool changed = Util::Widgets::Checkbox("Weather Wind", &settings.EnableWind);
 		Util::AddTooltip("On: weather wind sways the fur. Off: wind does not move it.");
 		if (settings.EnableWind) {
-			changed |= ImGui::SliderFloat("Wind Strength", &settings.WindStrength, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			changed |= Util::Widgets::SliderFloat("Wind Strength", &settings.WindStrength, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			Util::AddTooltip("How much weather wind moves the fur. Higher values give stronger swaying; 0 removes wind movement.");
 		}
-		changed |= ImGui::Checkbox("Wet Fur (Wetterness)", &settings.EnableWetFur);
+		changed |= Util::Widgets::Checkbox("Wet Fur (Wetterness)", &settings.EnableWetFur);
 		Util::AddTooltip("On: wet weather flattens and darkens fur on characters and creatures. Off: keeps its dry appearance. Requires Wetterness.");
 		if (settings.EnableWetFur) {
-			changed |= ImGui::SliderFloat("Wet Fur Strength", &settings.WetStrength, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			changed |= Util::Widgets::SliderFloat("Wet Fur Strength", &settings.WetStrength, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			Util::AddTooltip("How strongly wet weather flattens and darkens fur on characters and creatures. 0 keeps its dry appearance.");
 		}
-		changed |= ImGui::Checkbox("Contact Compression", &settings.EnableTouch);
-		Util::AddTooltip("On: hands and nearby bodies press fur down. Off: fur does not react to touch.");
+		changed |= Util::Widgets::Checkbox("Contact Compression", &settings.EnableTouch);
+		Util::AddTooltip("On: hands and nearby bodies press fur down. Off: fur does not react to touch. Hand contact works without HIGGS. More precise contact and lingering dents can reduce performance.");
 		if (settings.EnableTouch) {
-			changed |= ImGui::SliderFloat("Touch Strength", &settings.TouchStrength, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			changed |= Util::Widgets::SliderFloat("Touch Strength", &settings.TouchStrength, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			Util::AddTooltip("How strongly contact flattens fur. Higher values deepen the dents; 0 removes visible touch deformation.");
-			changed |= ImGui::Checkbox("Recovering Dents", &settings.EnableDentRecovery);
+			changed |= Util::Widgets::Checkbox("Recovering Dents", &settings.EnableDentRecovery);
 			Util::AddTooltip("On: touch leaves dents that gradually recover. Off: dents disappear when contact ends.");
 			if (globals::game::isVR) {
-				changed |= ImGui::Checkbox("Match VR hand shape", &settings.FitHandCapsules);
+				changed |= Util::Widgets::Checkbox("Match VR hand shape", &settings.FitHandCapsules);
 				Util::AddTooltip("Matches contact more closely to the visible hand shape. Off uses a simpler estimate. More precise fitting adds processing work.");
 			}
-			changed |= ImGui::Checkbox("Precise touch placement", &settings.PreciseContactSelection);
+			changed |= Util::Widgets::Checkbox("Precise touch placement", &settings.PreciseContactSelection);
 			Util::AddTooltip("Chooses touches using the visible fur surface. Off uses a simpler estimate. Can improve contact placement at a higher processing cost.");
 			if (globals::game::isVR) {
-				changed |= ImGui::Checkbox("HIGGS Held Objects (VR)", &settings.EnableHeldObjects);
+				changed |= Util::Widgets::Checkbox("HIGGS Held Objects (VR)", &settings.EnableHeldObjects);
 				Util::AddTooltip("On: objects held with HIGGS can press fur down. Off: contact comes from bodies and hands only. Requires HIGGS in VR.");
 			}
 			int contacts = static_cast<int>(settings.ContactLimit);
-			if (ImGui::SliderInt("Touches per object", &contacts, 1, 8, "%d", ImGuiSliderFlags_AlwaysClamp)) {
+			if (Util::Widgets::SliderInt("Touches per object", &contacts, 1, 8, "%d", ImGuiSliderFlags_AlwaysClamp)) {
 				settings.ContactLimit = static_cast<uint32_t>(contacts);
 				changed = true;
 			}
 			Util::AddTooltip("Maximum simultaneous touches on one fur-covered object. More touches improve busy interactions but add processing work.");
-			changed |= ImGui::SliderFloat("Touch distance", &settings.ContactRange, 100.0f, 1600.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+			changed |= Util::Widgets::SliderFloat("Touch distance", &settings.ContactRange, 100.0f, 1600.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
 			Util::AddTooltip("How far away bodies are checked for fur contact. Increase it to keep interactions farther away; lower values reduce processing work.");
-			ImGui::TextWrapped("Hand contact works without HIGGS. More precise contact and lingering dents can reduce performance.");
-			changed |= ImGui::Checkbox("Highlight touch areas", &settings.ShowTouchEdges);
+			changed |= Util::Widgets::Checkbox("Highlight touch areas", &settings.ShowTouchEdges);
 			Util::AddTooltip("Highlights where contact presses the fur so you can check placement. Off shows the normal fur appearance.");
 		}
-		changed |= ImGui::Checkbox("Movement sway", &settings.EnableInertia);
+		changed |= Util::Widgets::Checkbox("Movement sway", &settings.EnableInertia);
 		Util::AddTooltip("On: fur trails behind movement and settles after the wearer stops. Off: it follows the wearer without this extra sway.");
 		if (settings.EnableInertia)
 			DrawInertiaSettings();
-		changed |= ImGui::Checkbox("Reduce fur detail with distance", &settings.DistanceShellBudget);
+		changed |= Util::Widgets::Checkbox("Reduce fur detail with distance", &settings.DistanceShellBudget);
 		Util::AddTooltip("On: uses fewer fur layers in the distance to save work. Off: fades density instead. Both use the selected fade distances.");
 		if (changed)
 			ClearDynamics();
@@ -455,47 +457,48 @@ void FurShells::DrawOverrideSettings()
 		if (!selectedShell->overridden)
 			values = GetGlobalValues(selectedShell->skin);
 
-		ImGui::TextDisabled("%s", selectedShell->overridden ? "This texture uses its own values." : "No override yet. This texture follows the settings above.");
+		ImGui::TextDisabled("%s", selectedShell->overridden ? "Texture override" : "Global settings");
+		Util::AddTooltip(selectedShell->overridden ? "This texture uses its own values." : "No override yet. This texture follows the settings above.");
 
-		bool edited = ImGui::Checkbox("Fur on selected texture", &values.Enabled);
+		bool edited = Util::Widgets::Checkbox("Fur on selected texture", &values.Enabled);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextWrapped("%s", "On: adds fur to items using this texture. Off: removes their added fur without disabling fur on other items.");
 
 		int shellCount = static_cast<int>(values.ShellCount);
-		if (ImGui::SliderInt("Fur layers", &shellCount, 1, static_cast<int>(MaxShells), "%d", ImGuiSliderFlags_AlwaysClamp)) {
+		if (Util::Widgets::SliderInt("Fur layers", &shellCount, 1, static_cast<int>(MaxShells), "%d", ImGuiSliderFlags_AlwaysClamp)) {
 			values.ShellCount = static_cast<uint32_t>(shellCount);
 			edited = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextWrapped("%s", "More layers make fur look fuller and smoother up close, but cost more performance.");
 
-		edited |= ImGui::SliderFloat("Length", &values.Length, 0.05f, 6.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		edited |= Util::Widgets::SliderFloat("Length", &values.Length, 0.05f, 6.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextWrapped("%s", "How far fur grows from clothing or creatures. Higher values make it longer and fluffier.");
 
-		edited |= ImGui::SliderFloat("Droop", &values.Droop, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		edited |= Util::Widgets::SliderFloat("Droop", &values.Droop, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextWrapped("%s", "How much fur hangs downward. Higher values make it droop more; 0 removes this sag.");
 
-		edited |= ImGui::SliderFloat("Root Cutoff", &values.RootThreshold, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		edited |= Util::Widgets::SliderFloat("Root Cutoff", &values.RootThreshold, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextWrapped("%s", "Controls thickness near the skin. Lower values fill in more fur; higher values leave more gaps.");
 
-		edited |= ImGui::SliderFloat("Tip Cutoff", &values.TipThreshold, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		edited |= Util::Widgets::SliderFloat("Tip Cutoff", &values.TipThreshold, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextWrapped("%s", "Controls how thin the fur becomes toward its tips. Higher values give finer, sparser tips.");
 
-		edited |= ImGui::SliderFloat("Root Brightness", &values.RootDarkening, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		edited |= Util::Widgets::SliderFloat("Root Brightness", &values.RootDarkening, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextWrapped("%s", "Darkens the base of the fur to give it depth. Lower values darken it more; 1 leaves it as bright as the tips.");
 
-		edited |= ImGui::SliderFloat("Fur texture color", &values.ShellColor, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		edited |= Util::Widgets::SliderFloat("Fur texture color", &values.ShellColor, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextWrapped("%s", "Choose the fur's color source: 0 uses the underlying skin or clothing; 1 uses the fur detail texture.");
 
-		edited |= ImGui::SliderFloat("Fade Start", &values.FadeStart, 0.0f, 8000.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+		edited |= Util::Widgets::SliderFloat("Fade Start", &values.FadeStart, 0.0f, 8000.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
 		Util::AddTooltip("Distance where this fur starts losing detail. Lower values save work sooner; higher values keep nearby fur fuller.");
-		edited |= ImGui::SliderFloat("Fade End", &values.FadeEnd, 0.0f, 8000.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+		edited |= Util::Widgets::SliderFloat("Fade End", &values.FadeEnd, 0.0f, 8000.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::TextWrapped("%s", "Distance where added fur disappears completely. Increase it to keep fur visible farther away, at a higher cost.");
 
@@ -522,10 +525,8 @@ void FurShells::DrawOverrideSettings()
 			ImGui::TextWrapped("%s", "Discards unsaved edits for this texture. Restores its saved settings, or uses the global settings if none were saved.");
 
 		if (!overrideStatus.empty()) {
-			if (overrideStatusFailed)
-				ImGui::TextColored(Util::Colors::GetError(), "%s: %s", "Could not write", overrideStatus.c_str());
-			else
-				ImGui::TextColored(Util::Colors::GetSuccess(), "%s: %s", "Saved", overrideStatus.c_str());
+			MenuUI::PageNotice(std::string(overrideStatusFailed ? "Could not write: " : "Saved: ") + overrideStatus,
+				overrideStatusFailed ? MenuUI::NoticeKind::Error : MenuUI::NoticeKind::Information);
 		}
 	}
 
@@ -955,7 +956,7 @@ void FurShells::DrawInertiaSettings()
 {
 	using FurInertia::Preset;
 
-	ImGui::SliderFloat("Sway strength", &settings.InertiaStrength, 0.0f, FurInertia::MaxStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Sway strength", &settings.InertiaStrength, 0.0f, FurInertia::MaxStrength, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", "How much fur trails behind starts, stops and turns. Higher values give more sway; 0 removes it.");
 
@@ -983,26 +984,26 @@ void FurShells::DrawInertiaSettings()
 	if (settings.InertiaPreset != static_cast<uint32_t>(Preset::Custom))
 		return;
 
-	ImGui::SliderFloat("Spring speed", &settings.InertiaFrequency, FurInertia::MinFrequencyHz, FurInertia::MaxTuningFrequencyHz, "%.1f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic);
+	Util::Widgets::SliderFloat("Spring speed", &settings.InertiaFrequency, FurInertia::MinFrequencyHz, FurInertia::MaxTuningFrequencyHz, "%.1f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", "How quickly fur springs back after movement. Higher values feel stiffer; lower values give slower, softer sway.");
 
 	if (!ImGui::TreeNode("Movement tuning"))
 		return;
 
-	ImGui::SliderFloat("Movement response", &settings.InertiaGain, FurInertia::MinGain, FurInertia::MaxGain, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Movement response", &settings.InertiaGain, FurInertia::MinGain, FurInertia::MaxGain, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", "How strongly starts, stops and turns move the fur. Higher values exaggerate its reaction.");
 
-	ImGui::SliderFloat("Maximum Bend", &settings.InertiaMaxBend, FurInertia::MinBendLimit, FurInertia::MaxBendLimit, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Maximum Bend", &settings.InertiaMaxBend, FurInertia::MinBendLimit, FurInertia::MaxBendLimit, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", "Limits how far movement can bend the fur. Higher values allow larger swings.");
 
-	ImGui::SliderFloat("Length Softening", &settings.InertiaLengthExponent, 0.0f, FurInertia::MaxLengthExponent, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Length Softening", &settings.InertiaLengthExponent, 0.0f, FurInertia::MaxLengthExponent, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", "Makes long fur sway more slowly and farther than short fur. Higher values strengthen the difference; 0 ignores length.");
 
-	ImGui::SliderFloat("Droop Softening", &settings.InertiaDroopExponent, 0.0f, FurInertia::MaxDroopExponent, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	Util::Widgets::SliderFloat("Droop Softening", &settings.InertiaDroopExponent, 0.0f, FurInertia::MaxDroopExponent, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", "Makes drooping fur sway more softly. Higher values strengthen the effect; 0 ignores droop.");
 	ImGui::TreePop();

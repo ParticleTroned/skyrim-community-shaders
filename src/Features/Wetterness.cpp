@@ -733,6 +733,9 @@ namespace
 	struct WetternessUiPresetState
 	{
 		Wetterness::Settings settings{};
+		Wetterness::PuddleMaskMode puddleMaskMode = Wetterness::PuddleMaskMode::Textured;
+		bool restrictPuddleSlopes = true;
+		bool preserveWetnessHighlights = true;
 		bool enableWeatherDrivenDryingModel = true;
 		float puddleDryingHours = DEFAULT_PUDDLE_DRYING_HOURS;
 		float puddleLayout = DEFAULT_PUDDLE_LAYOUT;
@@ -789,15 +792,17 @@ namespace
 		return state;
 	}
 
-	void ApplyWetternessUiPreset(
+	void ApplyWetternessUiPresetState(
 		Wetterness& wetterness,
-		const WetternessUiPresetDefinition& preset)
+		const WetternessUiPresetState& presetState)
 	{
 		// Profiles tune quality only; preserve the independent runtime master switch.
 		const uint enabled = wetterness.settings.EnableWetterness != 0 ? 1u : 0u;
-		const auto presetState = BuildWetternessUiPresetState(preset);
 		wetterness.settings = presetState.settings;
 		wetterness.settings.EnableWetterness = enabled;
+		wetterness.puddleMaskMode = presetState.puddleMaskMode;
+		wetterness.restrictPuddleSlopes = presetState.restrictPuddleSlopes;
+		wetterness.preserveWetnessHighlights = presetState.preserveWetnessHighlights;
 		wetterness.enableWeatherDrivenDryingModel = presetState.enableWeatherDrivenDryingModel;
 		wetterness.puddleDryingHours = presetState.puddleDryingHours;
 		wetterness.puddleLayout = presetState.puddleLayout;
@@ -811,6 +816,11 @@ namespace
 		wetterness.rainGrassDarkening = presetState.rainGrassDarkening;
 		wetterness.modernWetIndirectSpecularScale = presetState.modernWetIndirectSpecularScale;
 		wetterness.legacyWetIndirectSpecularScale = presetState.legacyWetIndirectSpecularScale;
+	}
+
+	void ApplyWetternessUiPreset(Wetterness& wetterness, const WetternessUiPresetDefinition& preset)
+	{
+		ApplyWetternessUiPresetState(wetterness, BuildWetternessUiPresetState(preset));
 	}
 
 	bool IsNearlyEqual(float a, float b)
@@ -864,12 +874,14 @@ namespace
 		       IsNearlyEqual(actual.RainContactWetnessScale, expected.RainContactWetnessScale);
 	}
 
-	bool IsWetternessUiPresetActive(
+	bool MatchesWetternessUiPresetState(
 		const Wetterness& wetterness,
-		const WetternessUiPresetDefinition& preset)
+		const WetternessUiPresetState& expected)
 	{
-		const auto expected = BuildWetternessUiPresetState(preset);
 		return MatchesWetternessSettings(wetterness.settings, expected.settings) &&
+		       wetterness.puddleMaskMode == expected.puddleMaskMode &&
+		       wetterness.restrictPuddleSlopes == expected.restrictPuddleSlopes &&
+		       wetterness.preserveWetnessHighlights == expected.preserveWetnessHighlights &&
 		       wetterness.enableWeatherDrivenDryingModel == expected.enableWeatherDrivenDryingModel &&
 		       IsNearlyEqual(wetterness.puddleDryingHours, expected.puddleDryingHours) &&
 		       IsNearlyEqual(wetterness.puddleLayout, expected.puddleLayout) &&
@@ -885,7 +897,23 @@ namespace
 		       IsNearlyEqual(wetterness.legacyWetIndirectSpecularScale, expected.legacyWetIndirectSpecularScale);
 	}
 
+	bool IsWetternessUiPresetActive(const Wetterness& wetterness, const WetternessUiPresetDefinition& preset)
+	{
+		return MatchesWetternessUiPresetState(wetterness, BuildWetternessUiPresetState(preset));
+	}
+
 	constexpr size_t DEFAULT_WETTERNESS_UI_PRESET_INDEX = 1;  // Balanced
+
+	WetternessUiPresetState BuildClimatePresetState(const Wetterness::ClimateSettings& climate)
+	{
+		auto state = BuildWetternessUiPresetState(WETTERNESS_UI_PRESETS[DEFAULT_WETTERNESS_UI_PRESET_INDEX]);
+		state.settings.MaxPuddleWetness *= climate.puddleMultiplier;
+		state.settings.WeatherTransitionSpeed *= climate.transitionSpeed;
+		state.settings.RaindropChance = climate.raindropChance;
+		state.settings.RaindropGridSize = climate.raindropGridSize;
+		state.settings.RaindropInterval = climate.raindropInterval;
+		return state;
+	}
 
 	void ApplyDefaultWetternessUiPreset(Wetterness& wetterness)
 	{
@@ -1244,8 +1272,52 @@ void Wetterness::DrawPuddleMaskSettings()
 	}
 	if ((puddleMaskMode == PuddleMaskMode::Textured || puddleMaskMode == PuddleMaskMode::TexturedHighQuality) &&
 		!puddleMaskSrv) {
-		ImGui::TextDisabled("Puddle mask texture unavailable; using Simple until resources are recreated.");
+		MenuUI::AvailabilityNotice("Puddle mask texture unavailable; using Simple until resources are recreated.");
 	}
+}
+
+std::vector<std::string> Wetterness::GetPerformancePresetNames() const
+{
+	std::vector<std::string> names;
+	for (const auto& preset : WETTERNESS_UI_PRESETS)
+		names.emplace_back(preset.name);
+	return names;
+}
+
+std::string Wetterness::GetPerformancePresetName() const
+{
+	for (const auto& preset : WETTERNESS_UI_PRESETS) {
+		const auto expected = BuildWetternessUiPresetState(preset);
+		if (IsNearlyEqual(settings.RaindropFxRangeWorldUnits, expected.settings.RaindropFxRangeWorldUnits) &&
+			IsNearlyEqual(settings.RaindropGridSize, expected.settings.RaindropGridSize) &&
+			IsNearlyEqual(settings.RaindropInterval, expected.settings.RaindropInterval) &&
+			IsNearlyEqual(settings.RaindropChance, expected.settings.RaindropChance) &&
+			IsNearlyEqual(settings.SplashesLifetime, expected.settings.SplashesLifetime) &&
+			IsNearlyEqual(settings.RippleLifetime, expected.settings.RippleLifetime) &&
+			IsNearlyEqual(wetnessDistanceFadeRange, expected.wetnessDistanceFadeRange))
+			return preset.name;
+	}
+	return {};
+}
+
+bool Wetterness::ApplyPerformancePreset(std::string_view a_name)
+{
+	for (const auto& preset : WETTERNESS_UI_PRESETS) {
+		if (a_name != preset.name)
+			continue;
+		const auto expected = BuildWetternessUiPresetState(preset);
+		// Performance choices change effect density and reach without replacing the authored look.
+		settings.RaindropFxRangeWorldUnits = expected.settings.RaindropFxRangeWorldUnits;
+		settings.RaindropGridSize = expected.settings.RaindropGridSize;
+		settings.RaindropInterval = expected.settings.RaindropInterval;
+		settings.RaindropChance = expected.settings.RaindropChance;
+		settings.SplashesLifetime = expected.settings.SplashesLifetime;
+		settings.RippleLifetime = expected.settings.RippleLifetime;
+		wetnessDistanceFadeRange = expected.wetnessDistanceFadeRange;
+		DetectCurrentPreset();
+		return true;
+	}
+	return false;
 }
 
 void Wetterness::DrawSettings()
@@ -1253,9 +1325,8 @@ void Wetterness::DrawSettings()
 	MenuUI::SettingsPage page("Wetterness", {
 												{ "presets", "Presets", "Choose the overall wet-weather appearance first.", "Wet-weather baselines", true, true, "Choose appearance and reflections" },
 												{ "reflections", "Reflections", "Choose how wet surfaces reflect their surroundings.", "Reflection source and response", true, true, nullptr },
-												{ "surface", "Surfaces", "Refine rain wetness, darkening and skin.", "Wetness, darkening and skin", true, true, "Shape surfaces and puddles" },
+												{ "surface", "Surfaces", "Refine rain and shore wetness, darkening and skin.", "Wetness, shoreline, darkening and skin", true, true, "Shape surfaces and puddles" },
 												{ "puddles", "Puddles", "Refine puddle coverage and reflections.", "Puddle coverage and reflections", true, true, nullptr },
-												{ "shore", "Shore", "Refine water along the shore.", "Water along the shoreline", true, true, "Refine water interaction" },
 												{ "rain", "Rain", "Choose raindrops, splashes and ripples.", "Drops, splashes and ripples", true, true, nullptr },
 												{ "drying", "Drying", "Choose how quickly surfaces dry after rain.", "Drying after rain", true, true, "Refine recovery" },
 												{ "diagnostics", "Diagnostics", "Inspect wetness diagnostics.", "Diagnostic wetness views", true, false, nullptr },
@@ -1275,14 +1346,10 @@ void Wetterness::DrawSettings()
 			DetectCurrentPreset();
 		}
 	};
-	const auto drawSectionDivider = []() {
-		ImGui::Spacing();
-		ImGui::Separator();
-		ImGui::Spacing();
-	};
 
 	// Climate Preset Selection - Always visible at the top
 	if (page.Is("presets")) {
+		DetectCurrentPreset();
 		MenuUI::SectionHeading("Climate");
 
 		// Extract names for combo box
@@ -1341,7 +1408,7 @@ void Wetterness::DrawSettings()
 			}
 		}
 
-		drawSectionDivider();
+		ImGui::Spacing();
 
 		auto& weatherPicker = globals::features::weatherPicker;
 		if (weatherPicker.loaded) {
@@ -1371,8 +1438,6 @@ void Wetterness::DrawSettings()
 				Util::AddTooltip(preset.description);
 			}
 		}
-
-		drawSectionDivider();
 	}
 	if (page.Is("rain")) {
 		Util::UIntCheckbox("Enable Raindrop Effects", settings.EnableRaindropFx);
@@ -1544,7 +1609,6 @@ void Wetterness::DrawSettings()
 	}
 
 	if (page.Is("drying")) {
-		ImGui::TextWrapped("These drying controls also apply to melted Snow Cover. Wetness stays where snow was; heavier cover leaves more water and dries later. Waiting, sleeping and travel advance drying in game hours.");
 		const auto drawDryingSlider = [](const char* label, float& value, const char* tooltip) {
 			Util::Widgets::SliderFloat(label, &value, DRYING_HOURS_MIN, DRYING_HOURS_MAX, "%.0f h", ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1566,7 +1630,7 @@ void Wetterness::DrawSettings()
 		MenuUI::DetailGrid dryingGrid("WetDrying", 2, ImGui::GetFontSize() * 32);
 		const Util::Widgets::ControlLayout controls(true);
 		dryingGrid.Next();
-		MenuUI::SectionHeading("Material drying times");
+		MenuUI::SectionHeading("Material drying times", "These drying controls also apply to melted Snow Cover. Wetness stays where snow was; heavier cover leaves more water and dries later. Waiting, sleeping and travel advance drying in game hours.");
 
 		ImGui::BeginDisabled(enableWeatherDrivenDryingModel);
 		drawDryingSlider("Stone Drying Time", settings.StoneDryingMultiplier, "Drying time for stone-like surfaces after rain. Higher = dries slower, lower = dries faster.");
@@ -1575,7 +1639,7 @@ void Wetterness::DrawSettings()
 		drawDryingSlider("Puddle Drying Time", puddleDryingHours, "Puddle duration after rain. Higher lasts longer; lower fades sooner.");
 		ImGui::EndDisabled();
 		if (enableWeatherDrivenDryingModel) {
-			ImGui::TextDisabled("Manual drying-time sliders are disabled while weather-driven drying is enabled.");
+			MenuUI::AvailabilityNotice("Manual drying-time sliders are disabled while weather-driven drying is enabled.");
 		}
 
 		dryingGrid.Next();
@@ -1781,7 +1845,8 @@ void Wetterness::DrawSettings()
 			ImGui::TextUnformatted("Post-rain reflection clarity. Higher reduces cubemap sky glare and gives clearer, deeper puddles; 0 is more mirror-like.");
 		}
 	}
-	if (page.Is("shore")) {
+	if (page.Is("surface")) {
+		MenuUI::SectionHeading("Shore wetness");
 		Util::Widgets::SliderFloat("Shore Wetness", &settings.MaxShoreWetness, 0.0f, 1.0f);
 		markPresetDirtyIfEdited();
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1951,27 +2016,10 @@ const Wetterness::ClimateSettings& Wetterness::GetClimateSettings(ClimatePreset 
 
 void Wetterness::ApplyClimatePreset(ClimatePreset preset)
 {
-	const auto& climate = GetClimateSettings(preset);
-
-	// Update the climate preset
+	if (preset == ClimatePreset::Custom)
+		return;
+	ApplyWetternessUiPresetState(*this, BuildClimatePresetState(GetClimateSettings(preset)));
 	climatePreset = preset;
-
-	// Start every concrete climate preset from the branch default wetness profile,
-	// then apply only the climate-specific density and timing differences.
-	ApplyDefaultWetternessUiPreset(*this);
-
-	Settings defaultSettings{};  // Get branch default values
-
-	settings.MaxRainWetness = defaultSettings.MaxRainWetness;
-	settings.MaxPuddleWetness = defaultSettings.MaxPuddleWetness * climate.puddleMultiplier;
-	settings.WeatherTransitionSpeed = defaultSettings.WeatherTransitionSpeed * climate.transitionSpeed;
-
-	// Use the preset's raindrop chance, grid size, and interval as the base values
-	settings.RaindropChance = climate.raindropChance;
-	settings.RaindropGridSize = climate.raindropGridSize;
-	settings.RaindropInterval = climate.raindropInterval;
-
-	// Removed clamping for all settings to allow full preset range
 	InvalidateSanitizedSettingsCache();
 }
 
@@ -2144,10 +2192,10 @@ void Wetterness::DrawPerformanceSettings(bool a_advanced)
 		for (size_t i = 0; i < WETTERNESS_UI_PRESETS.size(); ++i) {
 			ImGui::TableNextColumn();
 			const auto& preset = WETTERNESS_UI_PRESETS[i];
-			const bool presetActive = IsWetternessUiPresetActive(*this, preset);
+			const bool presetActive = GetPerformancePresetName() == preset.name;
 			[[maybe_unused]] auto presetStyle = Util::PresetButtonStyle(presetActive);
 			if (ImGui::Button(preset.name, ImVec2(-1.0f, 0.0f))) {
-				ApplyWetternessUiPreset(*this, preset);
+				ApplyPerformancePreset(preset.name);
 				sanitizePersistentPresetState();
 				DetectCurrentPreset();
 			}
@@ -2162,7 +2210,7 @@ void Wetterness::DrawPerformanceSettings(bool a_advanced)
 		return;
 	}
 
-	ImGui::SeparatorText("Rain Effects");
+	MenuUI::SectionHeading("Rain Effects");
 	Util::UIntCheckbox("Enable Raindrop Effects", settings.EnableRaindropFx);
 	const bool raindropSettingsDisabled = settings.EnableRaindropFx == 0;
 	const bool raindropAdvancedDisabled = raindropSettingsDisabled || settings.EnableWetterness == 0;
@@ -2762,9 +2810,9 @@ void Wetterness::LoadSettings(json& o_json)
 	debugSettings = {};
 	puddleMaskMode = PuddleMaskMode::Textured;
 	restrictPuddleSlopes = isObject && o_json.contains("RestrictPuddleSlopes") ?
-	                           JsonValueToBool(o_json["RestrictPuddleSlopes"], false) :
-	                           false;
-	preserveWetnessHighlights = JsonValueOr<bool>(o_json, "PreserveWetnessHighlights", false);
+	                           JsonValueToBool(o_json["RestrictPuddleSlopes"], true) :
+	                           true;
+	preserveWetnessHighlights = JsonValueOr<bool>(o_json, "PreserveWetnessHighlights", true);
 	if (isObject) {
 		try {
 			settings = o_json.get<Settings>();
@@ -2883,8 +2931,8 @@ void Wetterness::SaveSettings(json& o_json)
 void Wetterness::RestoreDefaultSettings()
 {
 	settings = {};
-	restrictPuddleSlopes = false;
-	preserveWetnessHighlights = false;
+	restrictPuddleSlopes = true;
+	preserveWetnessHighlights = true;
 	puddleMaskMode = PuddleMaskMode::Textured;
 	enableWeatherDrivenDryingModel = true;
 	puddleDryingHours = DEFAULT_PUDDLE_DRYING_HOURS;
@@ -3033,27 +3081,6 @@ void Wetterness::DetectCurrentPreset()
 
 bool Wetterness::DoesCurrentSettingsMatchPreset(ClimatePreset preset) const
 {
-	// Custom preset never matches (it means user has customized settings)
-	if (preset == ClimatePreset::Custom) {
-		return false;
-	}
-
-	const auto& climate = GetClimateSettings(preset);
-	Settings defaultSettings{};  // Get default values
-
-	// Calculate what the settings should be for this preset
-	float expectedMaxRainWetness = defaultSettings.MaxRainWetness;
-	float expectedMaxPuddleWetness = defaultSettings.MaxPuddleWetness * climate.puddleMultiplier;
-	float expectedWeatherTransitionSpeed = defaultSettings.WeatherTransitionSpeed * climate.transitionSpeed;
-	float expectedRaindropChance = climate.raindropChance;
-	float expectedRaindropGridSize = climate.raindropGridSize;
-	float expectedRaindropInterval = climate.raindropInterval;
-
-	const float tolerance = 0.001f;
-	return (std::abs(settings.MaxRainWetness - expectedMaxRainWetness) < tolerance &&
-			std::abs(settings.MaxPuddleWetness - expectedMaxPuddleWetness) < tolerance &&
-			std::abs(settings.WeatherTransitionSpeed - expectedWeatherTransitionSpeed) < tolerance &&
-			std::abs(settings.RaindropChance - expectedRaindropChance) < tolerance &&
-			std::abs(settings.RaindropGridSize - expectedRaindropGridSize) < tolerance &&
-			std::abs(settings.RaindropInterval - expectedRaindropInterval) < tolerance);
+	return preset != ClimatePreset::Custom &&
+	       MatchesWetternessUiPresetState(*this, BuildClimatePresetState(GetClimateSettings(preset)));
 }

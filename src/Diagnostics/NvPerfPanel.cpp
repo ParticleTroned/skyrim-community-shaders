@@ -2,6 +2,7 @@
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Utils/StringUtils.h"
+#	include "Utils/UI.h"
 
 #	include <algorithm>
 #	include <cmath>
@@ -13,9 +14,10 @@ namespace NvPerf
 {
 	void DrawSettings()
 	{
-		if (!ImGui::CollapsingHeader("NVIDIA hardware counters (D3D11)"))
+		const bool expanded = ImGui::CollapsingHeader("NVIDIA hardware counters (D3D11)");
+		Util::AddTooltip("Developer capture of shader and memory bottlenecks. Uses live frames; keep the scene stable. D3D12 NR eye queues are not measured and parallel-eye scheduling is unchanged.");
+		if (!expanded)
 			return;
-		ImGui::TextWrapped("Developer capture of shader and memory bottlenecks. Uses live frames; keep the scene stable. D3D12 NR eye queues are not measured and parallel-eye scheduling is unchanged.");
 		Probe();
 		const auto device = GetDeviceInfo();
 		if (!device.built) {
@@ -44,14 +46,14 @@ namespace NvPerf
 			const SKSE::stl::scope_exit closeTree([] { ImGui::TreePop(); });
 			for (std::size_t index = 0; index < defaults.size(); ++index) {
 				bool checked = selected[index] != 0;
-				if (ImGui::Checkbox(FormatMetric(defaults[index]).c_str(), &checked))
+				if (Util::Widgets::Checkbox(FormatMetric(defaults[index]).c_str(), &checked))
 					selected[index] = checked;
 			}
 		}
 		ImGui::InputTextWithHint("Range filters", "Comma separated; trailing * matches a prefix", &filters);
-		ImGui::SliderInt("Samples", &samples, 1, static_cast<int>(MaxSamples), "%d", ImGuiSliderFlags_AlwaysClamp);
-		ImGui::SliderInt("Nesting levels", &nesting, 1, MaxNestingLevels, "%d", ImGuiSliderFlags_AlwaysClamp);
-		ImGui::SliderInt("Delay (frames)", &delay, 0, MaxDelayFrames, "%d", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderInt("Samples", &samples, 1, static_cast<int>(MaxSamples), "%d", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderInt("Nesting levels", &nesting, 1, MaxNestingLevels, "%d", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderInt("Delay (frames)", &delay, 0, MaxDelayFrames, "%d", ImGuiSliderFlags_AlwaysClamp);
 		const auto status = GetStatus();
 		const bool busy = status.state == CaptureState::Waiting || status.state == CaptureState::Capturing || status.state == CaptureState::Decoding;
 		if (busy) {
@@ -92,6 +94,7 @@ namespace NvPerf
 			return;
 		ImGui::Separator();
 		ImGui::Text("Capture %llu: %s", static_cast<unsigned long long>(result->id), result->success ? "complete" : "incomplete");
+		Util::AddTooltip("Duration counters use nanoseconds; rate units are shown in the column labels.");
 		if (!result->error.empty())
 			ImGui::TextWrapped("%s", result->error.c_str());
 		if (ImGui::BeginTable("##NvPerfSummary", static_cast<int>(result->metrics.size()) + 1,
@@ -114,7 +117,6 @@ namespace NvPerf
 				}
 			}
 		}
-		ImGui::TextWrapped("Duration counters use nanoseconds; rate units are shown in the column labels.");
 		for (const auto& metric : result->unsupportedMetrics) ImGui::Text("Unsupported: %s", FormatMetric(metric).c_str());
 		if (result->csvWritten) {
 			const auto pathText = Util::PathToUtf8(result->csvPath);

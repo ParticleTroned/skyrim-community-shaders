@@ -85,17 +85,42 @@ function(check_runtime_modules)
     include("${PROJECT_ROOT}/cmake/FidelityFX-Runtime.cmake")
     include("${PROJECT_ROOT}/cmake/Streamline-Runtime.cmake")
     list(LENGTH FFX_RUNTIME_PAYLOAD_MISSING _ffx_count)
+    list(LENGTH FFX_RUNTIME_FILES _ffx_local_count)
     list(LENGTH STREAMLINE_RUNTIME_PAYLOAD_MISSING _streamline_count)
+    list(LENGTH STREAMLINE_RUNTIME_FILES _streamline_local_count)
     if(
-        NOT _ffx_count EQUAL 3
+        NOT _ffx_count EQUAL 5
         OR NOT _streamline_count EQUAL 13
-        OR FFX_RUNTIME_FILES
-        OR STREAMLINE_RUNTIME_FILES
+        OR NOT _ffx_local_count EQUAL 3
+        OR NOT _streamline_local_count EQUAL 1
     )
         message(
             FATAL_ERROR
-            "Cold skip mode must retain all 16 expected payload paths"
+            "Cold skip mode must retain runtime and notice paths"
         )
+    endif()
+    foreach(_notice IN ITEMS FidelityFX-Runtime.LICENSE.md FidelityFX-Runtime.NOTICES.md)
+        if(NOT "${FFX_RUNTIME_DIRECTORY}/${_notice}" IN_LIST FFX_RUNTIME_PAYLOAD_MISSING)
+            message(FATAL_ERROR "Missing AMD runtime notices must block packaging")
+        endif()
+    endforeach()
+    foreach(_sdk IN ITEMS FidelityFX-SDK AntiLag2-SDK)
+        file(SHA256 "${PROJECT_ROOT}/extern/${_sdk}/LICENSE.txt" _original_hash)
+        file(SHA256 "${FFX_RUNTIME_DIRECTORY}/${_sdk}.LICENSE.txt" _staged_hash)
+        if(NOT _original_hash STREQUAL _staged_hash)
+            message(FATAL_ERROR "AMD source SDK licences must remain byte-identical")
+        endif()
+    endforeach()
+    file(SHA256 "${PROJECT_ROOT}/extern/FidelityFX-SDK/Third_party_notices.txt" _original_hash)
+    file(SHA256 "${FFX_RUNTIME_DIRECTORY}/FidelityFX-SDK.NOTICES.txt" _staged_hash)
+    if(NOT _original_hash STREQUAL _staged_hash)
+        message(FATAL_ERROR "AMD third-party notices must remain byte-identical")
+    endif()
+
+    file(SHA256 "${PROJECT_ROOT}/extern/nvapi/License.txt" _original_hash)
+    file(SHA256 "${STREAMLINE_RUNTIME_DIRECTORY}/nvapi.license.txt" _staged_hash)
+    if(NOT _original_hash STREQUAL _staged_hash)
+        message(FATAL_ERROR "NVAPI licence must remain byte-identical")
     endif()
 
     # A stale payload and matching stamp cannot make an invalid archive trusted.
@@ -120,12 +145,14 @@ function(check_runtime_modules)
     include("${PROJECT_ROOT}/cmake/FidelityFX-Runtime.cmake")
     include("${PROJECT_ROOT}/cmake/Streamline-Runtime.cmake")
     list(LENGTH FFX_RUNTIME_PAYLOAD_MISSING _ffx_count)
+    list(LENGTH FFX_RUNTIME_FILES _ffx_local_count)
     list(LENGTH STREAMLINE_RUNTIME_PAYLOAD_MISSING _streamline_count)
+    list(LENGTH STREAMLINE_RUNTIME_FILES _streamline_local_count)
     if(
-        NOT _ffx_count EQUAL 3
+        NOT _ffx_count EQUAL 5
         OR NOT _streamline_count EQUAL 13
-        OR FFX_RUNTIME_FILES
-        OR STREAMLINE_RUNTIME_FILES
+        OR NOT _ffx_local_count EQUAL 3
+        OR NOT _streamline_local_count EQUAL 1
     )
         message(FATAL_ERROR "Stale or unverified runtime payload was accepted")
     endif()

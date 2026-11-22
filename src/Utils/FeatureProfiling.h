@@ -59,7 +59,7 @@ namespace Util::FeatureProfiling
 		{ "SubsurfaceScattering", "SubsurfaceScattering" },
 		{ "TerrainBlending", "TerrainBlending" },
 		{ "TerrainShadows", "TerrainShadows" },
-		{ "AdaptiveBrightness", "UnderwaterDepthOfField", {}, true, "DOF correction only. Times underwater fog blur correction; other Adaptive Balance adjustments have no separate timers." },
+		{ "AdaptiveBrightness", "UnderwaterDepthOfField", {}, true, "DOF correction only. Times underwater fog blur correction; other Visuals adjustments have no separate timers." },
 		{ "Upscaling", "Upscaling" },
 		{ "VolumetricLighting", "VolumetricLighting" },
 		{ "VolumetricShadows", "VolumetricShadows" },

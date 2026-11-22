@@ -27,6 +27,7 @@ struct Skin : Feature
 	bool HasShaderDefine(RE::BSShader::Type a_type) override { return a_type == RE::BSShader::Type::Lighting; }
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override;
 	void DrawSettings() override;
+	SettingsHeaderStatus GetSettingsHeaderStatus() const override;
 	void LoadSettings(json& a_json) override;
 	void SaveSettings(json& a_json) override;
 	void RestoreDefaultSettings() override;

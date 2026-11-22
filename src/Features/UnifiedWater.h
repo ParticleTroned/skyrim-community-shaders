@@ -16,10 +16,10 @@ struct UnifiedWater : OverlayFeature
 	{
 		return {
 			"Keeps nearby and distant water consistent in colour, lighting and appearance.",
-			{ "Unifies distant and close water appearance, streamlining all lighting visuals.",
-				"Completely and fundamentally resolves water LOD mismatch issues.",
-				"Provides background systems for water geometry rendering, allowing more advanced water effects.",
-				"Improves vanilla performance by using optimized water meshes for distant water." }
+			{ "Shared water colour and surface appearance",
+				"Shore and shallow-water transitions",
+				"Water depth and surface separation",
+				"Optional optimized distant water meshes" }
 		};
 	}
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
@@ -123,7 +123,13 @@ struct UnifiedWater : OverlayFeature
 	};
 
 	virtual void DrawSettings() override;
+	SettingsHeaderStatus GetSettingsHeaderStatus() const override;
 	void DrawSettingsEnabledControl() override;
+	const char* GetPerformanceProfileReadOnlyReason() const override
+	{
+		return "Unified Water cannot be disabled in-game. To disable it, uncheck Unified Water in Settings > Startup, save settings and restart the game.";
+	}
+	bool IsPerformanceToggleEnabled() const override { return loaded; }
 
 	virtual void DrawOverlay() override;
 	virtual bool IsOverlayVisible() const override;

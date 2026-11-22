@@ -2,6 +2,7 @@
 #include "Features/WetternessLightingPolicy.h"
 #include "commonlib_d3d_bridge_fake.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -219,6 +220,9 @@ namespace
 #include "wetterness_shader_settings.h"
 #include "wetterness_packing.h"
 #include "wetterness_sanitization.h"
+#include "wetterness_preset_definitions.h"
+#include "wetterness_reflection_ui.h"
+#include "wetterness_presets.h"
 	// clang-format on
 }
 #include "wetterness_activity.h"
@@ -432,7 +436,8 @@ namespace
 	void CheckPuddleSlopeToggle()
 	{
 		Fixture f;
-		Require(!f.wetness.restrictPuddleSlopes, "Puddle slope restriction must default off");
+		Require(f.wetness.restrictPuddleSlopes, "Puddle slope restriction must default on");
+		f.wetness.restrictPuddleSlopes = false;
 		f.Rain();
 		f.Step();
 		const auto original = f.Step(8 * 3600);
@@ -453,8 +458,9 @@ namespace
 	void CheckRainFilmControls()
 	{
 		Fixture f;
-		Require(!f.wetness.preserveWetnessHighlights && f.wetness.GetRainFilmPercent() == 70.0f,
+		Require(f.wetness.preserveWetnessHighlights && f.wetness.GetRainFilmPercent() == 70.0f,
 			"Rain-film defaults changed the saved ground-film mapping");
+		f.wetness.preserveWetnessHighlights = false;
 		f.Rain();
 		f.Step();
 		const auto original = f.Step(8 * 3600);
@@ -496,6 +502,37 @@ namespace
 		data = f.Step(24 * 3600);
 		Require(!data.settings.EnableWetterness && !f.wetness.IsRuntimeProcessingActive(), "Expired snowmelt did not restore dry inactivity");
 	}
+
+	void CheckPresetRoundTrips()
+	{
+		Wetterness wetness;
+		for (const auto& preset : WETTERNESS_UI_PRESETS) {
+			wetness.settings.EnableWetterness = false;
+			wetness.puddleMaskMode = Wetterness::PuddleMaskMode::LegacyProcedural;
+			wetness.restrictPuddleSlopes = false;
+			wetness.preserveWetnessHighlights = false;
+			ApplyWetternessUiPreset(wetness, preset);
+			Require(!wetness.settings.EnableWetterness, "Preset enabled a disabled feature");
+			Require(wetness.restrictPuddleSlopes && wetness.preserveWetnessHighlights, "Preset omitted the wetness defaults");
+			Require(IsWetternessUiPresetActive(wetness, preset), "Applied preset does not match itself");
+			wetness.puddleMaskMode = Wetterness::PuddleMaskMode::Simple;
+			Require(!IsWetternessUiPresetActive(wetness, preset), "Changed puddle mask still matches preset");
+			ApplyWetternessUiPreset(wetness, preset);
+			wetness.restrictPuddleSlopes = false;
+			Require(!IsWetternessUiPresetActive(wetness, preset), "Changed slope restriction still matches preset");
+			ApplyWetternessUiPreset(wetness, preset);
+			wetness.preserveWetnessHighlights = false;
+			Require(!IsWetternessUiPresetActive(wetness, preset), "Changed wetness preservation still matches preset");
+		}
+		const auto climate = BuildClimatePresetState({ 1, 1.7f, 1.7f, .8f, 2.5f, .25f });
+		ApplyWetternessUiPresetState(wetness, climate);
+		Require(MatchesWetternessUiPresetState(wetness, climate), "Applied climate does not match itself");
+		wetness.rainGrassDarkening += .1f;
+		Require(!MatchesWetternessUiPresetState(wetness, climate), "Climate ignored modified grass darkening");
+		ApplyWetternessUiPresetState(wetness, climate);
+		wetness.settings.EnableRipples = false;
+		Require(!MatchesWetternessUiPresetState(wetness, climate), "Climate ignored modified ripple settings");
+	}
 }
 
 int main()
@@ -508,6 +545,7 @@ int main()
 		CheckPuddleSlopeToggle();
 		CheckRainFilmControls();
 		CheckSnowMeltLifecycle();
+		CheckPresetRoundTrips();
 		std::cout << "Wetterness runtime lifecycle passed\n";
 		return 0;
 	} catch (const std::exception& error) {

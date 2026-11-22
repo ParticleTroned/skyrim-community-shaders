@@ -99,7 +99,7 @@ void VolumetricLighting::DrawSettings()
 		if (globals::game::isVR) {
 			Util::Widgets::Checkbox("Disable during rain", &settings.DisableWeatherInteractionDuringRain);
 			Util::AddTooltip("On: hides weather-driven sunbeams and lit haze while it rains, then restores them. Off: lets the weather keep these effects.");
-			MenuUI::DetailNote("In VR, changes to interior and exterior coverage require a game restart.");
+			MenuUI::AvailabilityNotice("In VR, changes to interior and exterior coverage require a game restart.");
 		}
 	}
 	if (page.Is("quality")) {

@@ -6,9 +6,44 @@
 #include <ShlObj.h>
 #include <format>
 #include <shellapi.h>
+#include <stdexcept>
+#include <wrl/client.h>
 
 namespace Util
 {
+	std::filesystem::path ChooseExportFolder(const std::filesystem::path& initial)
+	{
+		const HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+		if (FAILED(initialized))
+			throw std::runtime_error("The export folder picker could not initialize.");
+		struct Apartment
+		{
+			~Apartment() { CoUninitialize(); }
+		} apartment;
+		Microsoft::WRL::ComPtr<IFileOpenDialog> dialog;
+		auto check = [](HRESULT result) {
+			if (FAILED(result))
+				throw std::runtime_error(std::format("The export folder picker failed (0x{:08X}).", static_cast<unsigned long>(result)));
+		};
+		check(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog)));
+		check(dialog->SetOptions(FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_NOCHANGEDIR));
+		check(dialog->SetTitle(L"Export CSX performance results"));
+		Microsoft::WRL::ComPtr<IShellItem> start;
+		check(SHCreateItemFromParsingName(initial.c_str(), nullptr, IID_PPV_ARGS(&start)));
+		check(dialog->SetFolder(start.Get()));
+		const HRESULT shown = dialog->Show(nullptr);
+		if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED))
+			return {};
+		check(shown);
+		Microsoft::WRL::ComPtr<IShellItem> selected;
+		check(dialog->GetResult(&selected));
+		PWSTR path = nullptr;
+		check(selected->GetDisplayName(SIGDN_FILESYSPATH, &path));
+		const std::filesystem::path result(path);
+		CoTaskMemFree(path);
+		return result;
+	}
+
 	namespace
 	{
 		std::optional<std::filesystem::path> GetKnownFolderPath(REFKNOWNFOLDERID a_folderId)

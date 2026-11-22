@@ -218,6 +218,8 @@ namespace
 
 	void ApplyAOOnlyPreset(ScreenSpaceGI::Settings& a_settings)
 	{
+		a_settings.EnableAdaptiveSampling = true;
+		a_settings.ExperimentalOCUEffectFoveation = false;
 		a_settings.NumSlices = 3;
 		a_settings.NumSteps = 6;
 		a_settings.ResolutionMode = 0;
@@ -232,12 +234,8 @@ namespace
 
 	void ApplyAOGIPreset(ScreenSpaceGI::Settings& a_settings)
 	{
+		ApplyAOOnlyPreset(a_settings);
 		a_settings.NumSlices = 4;
-		a_settings.NumSteps = 6;
-		a_settings.ResolutionMode = 0;
-		a_settings.CenterFullResMaskScale = 0.0f;
-		a_settings.VRCullDistance = 1500.0f;
-		a_settings.AOPower = 1.8f;
 		a_settings.ResourceProfile = ScreenSpaceGI::kResourceProfileFullGI;
 		a_settings.EnableGI = true;
 		a_settings.EnableExperimentalSpecularGI = false;
@@ -247,22 +245,20 @@ namespace
 
 	void ApplyReferencePreset(ScreenSpaceGI::Settings& a_settings)
 	{
+		ApplyAOGIPreset(a_settings);
 		a_settings.NumSlices = 8;
 		a_settings.NumSteps = 10;
-		a_settings.ResolutionMode = 0;
-		a_settings.CenterFullResMaskScale = 0.0f;
-		a_settings.EnableBlur = true;
-		a_settings.ResourceProfile = ScreenSpaceGI::kResourceProfileFullGI;
-		a_settings.EnableGI = true;
 	}
 
 	bool IsAOOnlyPreset(const ScreenSpaceGI::Settings& a_settings, bool a_isVR)
 	{
-		return a_settings.ResolutionMode == 0 &&
+		return a_settings.EnableAdaptiveSampling && !a_settings.ExperimentalOCUEffectFoveation &&
+		       a_settings.ResolutionMode == 0 &&
 		       a_settings.NumSlices == 3 &&
 		       a_settings.NumSteps == 6 &&
 		       a_settings.ResourceProfile == ScreenSpaceGI::kResourceProfileAOOnly &&
 		       !a_settings.EnableGI &&
+		       !a_settings.EnableExperimentalSpecularGI &&
 		       !a_settings.EnableBlur &&
 		       !a_settings.EnableTemporalDenoiser &&
 		       ApproximatelyEqual(a_settings.AOPower, 1.8f) &&
@@ -271,7 +267,8 @@ namespace
 
 	bool IsAOGIPreset(const ScreenSpaceGI::Settings& a_settings, bool a_isVR)
 	{
-		return a_settings.ResolutionMode == 0 &&
+		return a_settings.EnableAdaptiveSampling && !a_settings.ExperimentalOCUEffectFoveation &&
+		       a_settings.ResolutionMode == 0 &&
 		       a_settings.NumSlices == 4 &&
 		       a_settings.NumSteps == 6 &&
 		       a_settings.ResourceProfile == ScreenSpaceGI::kResourceProfileFullGI &&
@@ -283,14 +280,12 @@ namespace
 		       (!a_isVR || ApproximatelyEqual(a_settings.VRCullDistance, 1500.0f));
 	}
 
-	bool IsReferencePreset(const ScreenSpaceGI::Settings& a_settings)
+	bool IsReferencePreset(const ScreenSpaceGI::Settings& a_settings, bool a_isVR)
 	{
-		return a_settings.ResolutionMode == 0 &&
-		       a_settings.NumSlices == 8 &&
-		       a_settings.NumSteps == 10 &&
-		       a_settings.ResourceProfile == ScreenSpaceGI::kResourceProfileFullGI &&
-		       a_settings.EnableGI &&
-		       a_settings.EnableBlur;
+		auto baseline = a_settings;
+		baseline.NumSlices = 4;
+		baseline.NumSteps = 6;
+		return a_settings.NumSlices == 8 && a_settings.NumSteps == 10 && IsAOGIPreset(baseline, a_isVR);
 	}
 
 	void ClampSampleCounts(ScreenSpaceGI::Settings& a_settings)
@@ -412,8 +407,7 @@ void ScreenSpaceGI::DrawSettings()
 												   { "preset", "Presets", "Choose the shadow and indirect-light baseline.", "AO and indirect-light baselines", true, true, "Choose the rendering foundation" },
 												   { "coverage", "Coverage", "Choose the effects and area to process.", "Effects and processing area", true, true, nullptr },
 												   { "quality", "Quality", "Choose the detail and processing budget.", "Resolution and sample budget", true, true, "Balance detail and appearance" },
-												   { "look", "Look", "Refine shadows and lighting.", "Shadow strength and lighting", true, true, nullptr },
-												   { "indirect", "Indirect light", "Refine bounced-light colour and intensity.", "Bounced-light colour", true, true, "Refine indirect light", nullptr, nullptr, settings.EnableGI },
+												   { "look", "Look", "Refine shadows and bounced-light brightness and colour.", "Shadow strength and lighting", true, true, nullptr },
 												   { "smoothing", "Smoothing", "Reduce noise after choosing the appearance.", "Temporal and spatial smoothing", true, true, nullptr },
 												   { "diagnostics", "Diagnostics", "Inspect diagnostic buffer views.", "Diagnostic buffer views", true, false, nullptr },
 											   });
@@ -422,7 +416,7 @@ void ScreenSpaceGI::DrawSettings()
 		if (!ShadersOK())
 			Util::Text::Error("Compute shaders failed to compile!");
 	}
-	if (page.Is("coverage") || page.Is("quality") || page.Is("look") || page.Is("indirect") || page.Is("smoothing")) {
+	if (page.Is("quality") || page.Is("look") || page.Is("smoothing")) {
 		Util::Widgets::Checkbox("Advanced options", &showAdvanced);
 		Util::AddTooltip("Shows extra tuning controls. Hiding them keeps their current values and does not change image quality.");
 	}
@@ -440,19 +434,13 @@ void ScreenSpaceGI::DrawSettings()
 	if (page.Is("coverage"))
 		DrawOCUEffectFoveationSettings();
 
-	if (page.Is("preset")) {
-		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.45f, 0.45f, 1.0f));
-		ImGui::TextWrapped("These presets keep SSGI baselines close to the regular quality and resource controls.");
-		ImGui::PopStyleColor();
-	}
-
 	{
 		auto presetsAndQualityGuard = Util::DisableGuard(!settings.Enabled);
 
 		if (page.Is("preset")) {
-			const int selected = IsAOOnlyPreset(settings, isVR) ? 0 : IsAOGIPreset(settings, isVR) ? 1 :
-			                                                      IsReferencePreset(settings)      ? 2 :
-			                                                                                         3;
+			const int selected = IsAOOnlyPreset(settings, isVR) ? 0 : IsAOGIPreset(settings, isVR)  ? 1 :
+			                                                      IsReferencePreset(settings, isVR) ? 2 :
+			                                                                                          3;
 			const MenuUI::Choice choices[] = {
 				{ "ao", "AO only", "Full resolution ambient shadows", "Full resolution with GI disabled." },
 				{ "gi", "AO + GI", "Ambient shadows and bounced light", "Full resolution, 4 slices and 6 steps." },
@@ -502,7 +490,7 @@ void ScreenSpaceGI::DrawSettings()
 				Util::AddTooltip("On: bounced light appears indoors only. Off: it also appears outdoors.");
 			}
 
-			if (showAdvanced) {
+			{
 				auto hqSpecGuard = Util::DisableGuard(!settings.Enabled || !settings.EnableGI);
 				recompileFlag |= Util::Widgets::Checkbox("(Experimental) HQ Specular IL", &settings.EnableExperimentalSpecularGI);
 				if (auto _tt = Util::HoverTooltipWrapper())
@@ -644,10 +632,10 @@ void ScreenSpaceGI::DrawSettings()
 
 		///////////////////////////////
 	}
-	if (page.Is("indirect")) {
-		if (!settings.EnableGI && MenuUI::DetailNote("Indirect-light tuning is inactive while GI is off. Enable indirect lighting in Coverage to use it.", "Open Coverage"))
+	if (page.Is("look")) {
+		MenuUI::SectionHeading("Indirect light (GI)", "These controls adjust bounced light. Enable indirect lighting in Coverage to use them.");
+		if (!settings.EnableGI && MenuUI::AvailabilityNotice("GI is off.", "Open Coverage"))
 			MenuUI::SettingsPage::Select("ScreenSpaceGI", "coverage");
-		MenuUI::SectionHeading("Indirect light");
 
 		{
 			auto visualILGuard = Util::DisableGuard(!settings.Enabled || !settings.EnableGI);
@@ -719,25 +707,21 @@ void ScreenSpaceGI::DrawSettings()
 		///////////////////////////////
 	}
 	if (page.Is("diagnostics")) {
-		MenuUI::SectionHeading("Diagnostics");
+		MenuUI::SectionHeading("Buffer Viewer");
 
-		if (ImGui::TreeNode("Buffer Viewer")) {
-			static float debugRescale = .3f;
-			Util::Widgets::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
+		static float debugRescale = .3f;
+		Util::Widgets::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
 
-			BUFFER_VIEWER_NODE(texNoise, debugRescale)
-			BUFFER_VIEWER_NODE(texWorkingDepth, debugRescale)
-			BUFFER_VIEWER_NODE(texPrevGeo, debugRescale)
-			BUFFER_VIEWER_NODE_TITLE(texRadianceTemp, "Radiance", debugRescale)
-			BUFFER_VIEWER_NODE(texAo[0], debugRescale)
-			BUFFER_VIEWER_NODE(texAo[1], debugRescale)
-			BUFFER_VIEWER_NODE(texIlY[0], debugRescale)
-			BUFFER_VIEWER_NODE(texIlY[1], debugRescale)
-			BUFFER_VIEWER_NODE(texIlCoCg[0], debugRescale)
-			BUFFER_VIEWER_NODE(texIlCoCg[1], debugRescale)
-
-			ImGui::TreePop();
-		}
+		BUFFER_VIEWER_NODE(texNoise, debugRescale)
+		BUFFER_VIEWER_NODE(texWorkingDepth, debugRescale)
+		BUFFER_VIEWER_NODE(texPrevGeo, debugRescale)
+		BUFFER_VIEWER_NODE_TITLE(texRadianceTemp, "Radiance", debugRescale)
+		BUFFER_VIEWER_NODE(texAo[0], debugRescale)
+		BUFFER_VIEWER_NODE(texAo[1], debugRescale)
+		BUFFER_VIEWER_NODE(texIlY[0], debugRescale)
+		BUFFER_VIEWER_NODE(texIlY[1], debugRescale)
+		BUFFER_VIEWER_NODE(texIlCoCg[0], debugRescale)
+		BUFFER_VIEWER_NODE(texIlCoCg[1], debugRescale)
 	}
 }
 
@@ -787,7 +771,7 @@ void ScreenSpaceGI::SetFoveationEnabled(bool a_enabled)
 void ScreenSpaceGI::DrawFoveationSettings()
 {
 	if (!REL::Module::IsVR()) {
-		ImGui::TextDisabled("SSGI FOV is available only in VR.");
+		MenuUI::AvailabilityNotice("SSGI FOV is available only in VR.");
 		return;
 	}
 
@@ -816,14 +800,19 @@ void ScreenSpaceGI::DrawFoveationSettings()
 			ImGui::TextUnformatted("Requires active foveated upscaling.");
 	}
 	if (!loaded)
-		ImGui::TextDisabled("SSGI FOV requires Screen Space GI.");
+		MenuUI::AvailabilityNotice("SSGI FOV requires Screen Space GI.");
 	else if (!featureRuntimeActive)
-		ImGui::TextDisabled("Enable Screen Space GI to use SSGI FOV.");
+		MenuUI::AvailabilityNotice("Enable Screen Space GI to use SSGI FOV.");
+	else if (settings.ExperimentalOCUEffectFoveation)
+		MenuUI::AvailabilityNotice("OCU effect foveation controls SSGI coverage. Turn it off to use SSGI FOV.");
+	else if (!foveatedAvailable)
+		MenuUI::AvailabilityNotice("SSGI FOV needs active foveated upscaling. Complete Display > VR > FOV setup.");
 
 	ImGui::Spacing();
 
 	SyncResolvedSharedMaskScale(settings);
-	ImGui::TextDisabled("%s", settings.EnableFoveated && featureRuntimeActive && IsRuntimeFoveatedActive(settings) ? "active" : "inactive");
+	if (settings.EnableFoveated && featureRuntimeActive && IsRuntimeFoveatedActive(settings))
+		ImGui::TextUnformatted("SSGI FOV active");
 	if (settings.EnableGI && !HasGIResources())
 		Util::Text::Warning("Full GI resources are not allocated. Restart required to allocate resources and compile GI shaders.");
 	if (IsResourceProfileRestartPending())
@@ -882,7 +871,7 @@ void ScreenSpaceGI::DrawPerformanceSettings(bool a_advanced)
 	}
 
 	if (a_advanced) {
-		ImGui::SeparatorText("Sampling");
+		MenuUI::SectionHeading("Sampling");
 		int numSlices = static_cast<int>(settings.NumSlices);
 		if (Util::Widgets::SliderInt("Slices", &numSlices, kNumSlicesMin, kNumSlicesMax))
 			settings.NumSlices = static_cast<uint>(std::clamp(numSlices, kNumSlicesMin, kNumSlicesMax));

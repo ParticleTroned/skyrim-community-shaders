@@ -165,6 +165,15 @@ namespace Util
 	namespace Widgets = ImGui;
 }
 
+namespace MenuUI
+{
+	bool AvailabilityNotice(const char* text)
+	{
+		ImGui::TextWrapped("%s", text);
+		return false;
+	}
+}
+
 #include "fov_under_test.h"
 
 void Require(bool condition, const char* message)

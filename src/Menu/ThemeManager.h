@@ -26,7 +26,7 @@ using json = nlohmann::json;
  *   "Theme": {
  *     "FontSize": 27.0,                    // Base font size (16-108px range)
  *     "FontName": "Jost/Jost-Regular.ttf", // Legacy font path (use FontRoles instead)
- *     "GlobalScale": 0.0,                   // UI scale exponent (-2.0 to 2.0, 0.0=100%)
+ *     "GlobalScale": 0.0,                   // Legacy zoom fallback; saved menu zoom takes precedence
  *
  *     // Font Role System (4 roles: Body, Heading, Subheading, Subtitle)
  *     "FontRoles": [
@@ -226,13 +226,6 @@ public:
 		static constexpr float BUTTON_ACTIVE_BRIGHTEN = 0.3f;
 		static constexpr float BUTTON_STATUS_TEXT_HOVER_ALPHA = 0.8f;
 		static constexpr float BUTTON_STATUS_TEXT_ACTIVE_ALPHA = 1.0f;
-
-		static constexpr float FLAT_TOGGLE_ON_BLEND = 0.55f;
-		static constexpr float FLAT_TOGGLE_OFF_BLEND = 0.18f;
-		static constexpr float FLAT_TOGGLE_WIDTH_RATIO = 1.6f;
-		static constexpr float FLAT_TOGGLE_HEIGHT_RATIO = 0.8f;
-		static constexpr float FLAT_TOGGLE_KNOB_PADDING = 2.0f;
-		static constexpr float FLAT_TOGGLE_BORDER_SIZE = 1.5f;
 	};
 
 	static ThemeManager* GetSingleton()

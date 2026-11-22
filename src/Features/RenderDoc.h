@@ -91,7 +91,8 @@ public:
 	bool IsInMenu() const override { return true; }
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
-		return { "Records rendering captures for inspection in RenderDoc.", { "Attach comments to captures that appear in RenderDoc UI", "Open captures folder", "Capture file management" } };
+		return { "Capture rendering frames and manage recorded files for inspection in RenderDoc.",
+			{ "Capture setup and frame count", "Capture comments and file location", "Capture storage usage and recorded-file management" } };
 	}
 	bool SupportsVR() override { return true; }
 	std::string_view GetShaderDefineName() override { return ""; }
@@ -99,6 +100,9 @@ public:
 
 	// Settings & UI
 	void DrawSettingsEnabledControl() override;
+	bool SupportsPerformanceProfileToggle() const override { return true; }
+	bool IsPerformanceCostMeasurementEnabled() const override { return enableRenderDocCapture; }
+	void SetPerformanceCostMeasurementEnabled(bool value) override { SetCaptureEnabled(value); }
 	SettingsHeaderStatus GetSettingsHeaderStatus() const override;
 	void DrawSettings() override;
 	void RestoreDefaultSettings() override;
@@ -180,7 +184,6 @@ public:
 	std::vector<CaptureFileInfo> cachedCaptureFiles;
 	std::chrono::steady_clock::time_point cacheLastUpdate;
 	bool cacheValid = false;
-	bool wasSectionVisible = false;  // Track if RenderDoc section was visible last frame
 
 	// Track files that failed to delete for UI feedback
 	std::unordered_map<std::filesystem::path, std::string> failedDeletions;

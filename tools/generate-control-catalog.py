@@ -20,7 +20,7 @@ IDENTIFIER = re.compile(r"^[A-Za-z_]\w*$")
 CONTROL = re.compile(
     r"^(?:Slider(?:Float[234]?|Int[234]?|Scalar|Angle)(?:OnRelease)?|"
     r"Drag(?:Float[234]?|Int[234]?|Scalar)|Checkbox(?:Flags)?|UIntCheckbox|"
-    r"ColorEdit[34]|Input(?:Text(?:WithHint|Multiline)?|Float|Int|Double)|"
+    r"ColorEdit[34]|Input(?:Text(?:WithHint|Multiline)?|Float|Int|Double|ComboWidget)|"
     r"Combo|ComboBox|BeginCombo|RadioButton|Button|SmallButton|ButtonWithFlash|"
     r"ChoiceSetting|NavigationChoice|ChoiceCards|CollapsingHeader|TreeNode(?:Ex)?|SectionHeading)$"
 )
@@ -209,15 +209,17 @@ class Source:
         """Follow only explicitly UI-only selectors, never feature values."""
         t = self.tokens
         for call, name, args in calls:
-            if name.rsplit("::", 1)[-1] != "NavigationChoice" or len(args) < 3:
+            if name.rsplit("::", 1)[-1] not in ("NavigationChoice", "NavigationRadioButton", "SelectNavigationChoice") or len(args) < 3:
                 continue
             selector = literal(args[0])
             variable = "".join(args[1]).lstrip("&")
             array = "".join(args[2])
             choices = []
             for i in range(function.start, call):
-                if t[i] == array and t[i + 1:i + 5] == ["[", "]", "=", "{"]:
-                    choices = [literal(a) for a in self.arguments(i + 4)]
+                if t[i] == array and t[i + 1:i + 3] == ["[", "]"]:
+                    opening = i + 4 if t[i + 3] == "=" else i + 3
+                    if t[opening] == "{":
+                        choices = [literal(a) for a in self.arguments(opening)]
             for i in range(call, position):
                 if t[i:i + 4] != ["switch", "(", variable, ")"] or t[i + 4] != "{":
                     continue
@@ -363,6 +365,9 @@ def collect(sources: list[Source]):
             return
         if name.startswith(("ImGui::", "std::", "logger::")):
             return
+        if name in ("FeatureListRenderer::RenderPerformancePage", "FeatureListRenderer::GetBuiltInPageMenuEntryId"):
+            # Parent navigation queues another page; only the local callback owns controls.
+            return
         for target in resolve(function, name):
             # Rendering metadata never follows helpers into engine/gameplay implementations.
             if target.source.path.startswith(("src/Features/", "src/Menu/")) or target.owner in ("Menu",):
@@ -372,12 +377,16 @@ def collect(sources: list[Source]):
 
     for f in functions:
         if f.name.endswith("::DrawSettings") and f.owner in features:
-            walk(f, features[f.owner], features[f.owner], "", ("", ""), {})
+            feature = features[f.owner]
+            section = {"PerformanceOverlay": "overlay", "RenderDoc": "renderdoc", "Screenshot": "overview"}.get(feature, "")
+            page = "DevTools" if feature == "RenderDoc" else feature
+            walk(f, feature, page, section, ("", ""), {})
     for name, feature, section in (
-        ("Menu::DrawGeneralSettings", "General", ""),
-        ("Menu::DrawAdvancedSettings", "Advanced", ""),
+        ("Menu::DrawGeneralSettings", "Settings", ""),
+        ("Menu::DrawAdvancedSettings", "DevTools", ""),
         ("HomePageRenderer::RenderHomePage", "Home", ""),
-        ("PerformanceTuningRenderer::Render", "PerformanceTuning", ""),
+        ("PerformanceTuningRenderer::Render", "PerformanceTuning", "tuning"),
+        ("MenuUI::PerformancePage::RenderPresets", "PerformancePresets", "presets"),
         ("ProfilingRenderer::RenderStatistics", "Profiling", "timings"),
     ):
         for f in by_name.get(name, []):

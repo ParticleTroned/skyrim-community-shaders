@@ -1,4 +1,6 @@
 #include "Menu.h"
+#include "FeatureSettingsScope.h"
+#include "Presets/LookProfileState.h"
 
 #ifndef DIRECTINPUT_VERSION
 #	define DIRECTINPUT_VERSION 0x0800
@@ -15,6 +17,7 @@
 #include <imgui_stdlib.h>
 #include <iomanip>
 #include <limits>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -36,6 +39,7 @@
 #include "Menu/MenuHeaderRenderer.h"
 #include "Menu/OverlayRenderer.h"
 #include "Menu/PerformanceTuningRenderer.h"
+#include "Menu/ScreenshotShortcut.h"
 #include "Menu/SettingsSearch.h"
 #include "Menu/SettingsTabRenderer.h"
 #include "Menu/ThemeManager.h"
@@ -185,6 +189,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkipConstraintWarning,
 	RequireShiftToDock,
 	UseResolutionFont,
+	GlobalScale,
 	SelectedThemePreset)
 
 bool IsEnabled = false;
@@ -222,8 +227,11 @@ namespace
 			return false;
 
 		const float padding = MenuUI::Layout::CanvasPadding;
-		const ImVec2 minimum{ viewport->WorkPos.x + padding, viewport->WorkPos.y + padding };
-		const ImVec2 span{ std::max(1.0f, viewport->WorkSize.x - padding * 2), std::max(1.0f, viewport->WorkSize.y - padding * 2) };
+		ImVec2 minimum{ viewport->WorkPos.x + padding, viewport->WorkPos.y + padding };
+		const float bottom = viewport->WorkPos.y + viewport->WorkSize.y - padding;
+		if (a_fallback.constrainedByTopStatusWindow)
+			minimum.y = std::clamp(a_fallback.center.y - a_fallback.size.y * .5f, minimum.y, std::max(minimum.y, bottom - 1));
+		const ImVec2 span{ std::max(1.0f, viewport->WorkSize.x - padding * 2), std::max(1.0f, bottom - minimum.y) };
 		auto minimumSize = MenuUI::Layout::MinimumSize(ImGui::GetFontSize(), span, ImGui::GetStyle().WindowMinSize);
 		if (a_fallback.constrainedByTopStatusWindow)
 			minimumSize.y = std::min(minimumSize.y, a_fallback.size.y);
@@ -303,10 +311,17 @@ namespace
 			};
 		}
 
-		return {
-			.center = Util::GetNativeViewportSizeScaled(0.5f),
-			.size = ImVec2(viewportSize.x * 0.8f, viewportSize.y * 0.8f)
-		};
+		auto center = Util::GetNativeViewportSizeScaled(0.5f);
+		ImVec2 size(viewportSize.x * 0.8f, viewportSize.y * 0.8f);
+		ImVec2 availableMin(viewport->WorkPos.x, viewport->WorkPos.y);
+		const ImVec2 availableMax(viewport->WorkPos.x + viewport->WorkSize.x,
+			viewport->WorkPos.y + viewport->WorkSize.y - MenuUI::Layout::CanvasPadding);
+		float statusLeft = availableMin.x;
+		const bool constrained = OverlayRenderer::ExcludeTopStatusWindowsFromLayout(availableMin, availableMax, statusLeft);
+		const float top = std::max(center.y - size.y * .5f, availableMin.y);
+		size.y = std::max(1.0f, availableMax.y - top);
+		center.y = top + size.y * .5f;
+		return { center, size, constrained };
 	}
 }
 
@@ -544,6 +559,10 @@ void Menu::Load(json& o_json)
 		}
 	}
 
+	// Older configurations keep zoom in the selected or embedded theme.
+	settings.GlobalScale = MenuUI::Layout::SanitizeGlobalScale(
+		o_json.contains("GlobalScale") ? settings.GlobalScale : settings.Theme.GlobalScale);
+
 	if (settings.BackgroundShaderCompilationOnBoot)
 		globals::shaderCache->SetBackgroundCompilation(true);
 }
@@ -634,14 +653,46 @@ void Menu::AcceptCurrentFeatureSettingsAsClean(const std::string& a_featureSetti
 	if (!CaptureCurrentSettingsSnapshot(currentSettings))
 		return;
 
-	if (currentSettings.contains(a_featureSettingsName)) {
-		settingsDirtyBaseline[a_featureSettingsName] = currentSettings[a_featureSettingsName];
-	} else {
-		settingsDirtyBaseline.erase(a_featureSettingsName);
-	}
+	FeatureSettingsScope::Copy(settingsDirtyBaseline, currentSettings, a_featureSettingsName);
+	for (auto* feature : Feature::GetFeatureList())
+		if (feature->GetName() == a_featureSettingsName)
+			Presets::CopyFeatureProfileState(settingsDirtyBaseline, currentSettings, feature->GetShortName());
 	settingsDirty = currentSettings != settingsDirtyBaseline;
 	UpdateDirtySettingsSections(currentSettings);
 	ClearSettingsSaveResult();
+}
+
+bool Menu::CopySavedFeatureSettings(const std::string& a_name, json& a_settings)
+{
+	if (!EnsureSettingsDirtyBaseline())
+		return false;
+	const auto saved = settingsDirtyBaseline.find(a_name);
+	if (saved == settingsDirtyBaseline.end() || !saved->is_object())
+		return false;
+	a_settings = json::object();
+	FeatureSettingsScope::Copy(a_settings, settingsDirtyBaseline, a_name);
+	return true;
+}
+
+void Menu::CaptureFeatureMenuSettings(const std::string& a_name, json& a_settings) const
+{
+	if (a_name == FeatureSettingsScope::kScreenshot)
+		InputCombo::ComboList::to_json(a_settings["Menu"][FeatureSettingsScope::kScreenshotKey], settings.ScreenshotKey);
+}
+
+void Menu::ApplyFeatureMenuSettings(const std::string& a_name, const json* a_settings)
+{
+	if (a_name != FeatureSettingsScope::kScreenshot)
+		return;
+	auto shortcut = Settings{}.ScreenshotKey;
+	if (a_settings) {
+		const auto* value = FeatureSettingsScope::ScreenshotShortcut(*a_settings);
+		if (!value)
+			throw std::runtime_error("The saved Screenshot shortcut is unavailable.");
+		InputCombo::ComboList::from_json(*value, shortcut);
+	}
+	settings.ScreenshotKey = std::move(shortcut);
+	settingScreenshotKey = false;
 }
 
 void Menu::UpdateDirtySettingsSections(const json& currentSettings)
@@ -657,6 +708,8 @@ void Menu::UpdateDirtySettingsSections(const json& currentSettings)
 		if (!currentSettings.contains(name))
 			dirtySettingsSections.insert(name);
 	}
+	if (!FeatureSettingsScope::MenuSettingsEqual(currentSettings, settingsDirtyBaseline, FeatureSettingsScope::kScreenshot))
+		dirtySettingsSections.emplace(FeatureSettingsScope::kScreenshot);
 }
 
 void Menu::UpdateSettingsDirtyState()
@@ -1003,10 +1056,13 @@ void Menu::DrawSettings()
 			// Test the saved position, not the already-displaced window, until it is clear.
 			const ImVec2 originalWindowPos = menuWasOffsetForTopStatusWindow ? preTopStatusWindowPos : windowPos;
 			windowPos = originalWindowPos;
+			if (menuWasOffsetForTopStatusWindow)
+				windowSizeForOverlap = preTopStatusWindowSize;
 			autoOffsetForTopStatusWindow =
 				OverlayRenderer::MoveWindowBelowShaderCompilationStatus(windowPos, windowSizeForOverlap, centeredPivot);
 			if (autoOffsetForTopStatusWindow && !menuWasOffsetForTopStatusWindow) {
 				preTopStatusWindowPos = originalWindowPos;
+				preTopStatusWindowSize = windowSizeForOverlap;
 				menuWasOffsetForTopStatusWindow = true;
 			} else if (!autoOffsetForTopStatusWindow && menuWasOffsetForTopStatusWindow) {
 				windowPos = preTopStatusWindowPos;
@@ -1045,8 +1101,25 @@ void Menu::DrawSettings()
 			ImGui::DockContextProcessUndockWindow(ImGui::GetCurrentContext(), existingWindow);
 		}
 	}
-	const bool repairWindowBounds = !willBeDocked &&
-	                                ClampSettingsWindowToCanvas(windowPos, windowSizeForOverlap, defaultWindowLayout);
+	bool repairWindowBounds = !willBeDocked &&
+	                          ClampSettingsWindowToCanvas(windowPos, windowSizeForOverlap, defaultWindowLayout);
+	uint32_t canvasWidth = 0, canvasHeight = 0;
+	const bool desktopOnly = !REL::Module::IsVR() || !globals::features::vr.GetMenuCanvasSize(canvasWidth, canvasHeight);
+	static bool desktopHeightApplied = false;
+	const auto& nextWindow = ImGui::GetCurrentContext()->NextWindowData;
+	const bool pendingDock = (nextWindow.HasFlags & ImGuiNextWindowDataFlags_HasDock) && nextWindow.DockId != 0;
+	if (!willBeDocked && !pendingDock && desktopOnly && (!desktopHeightApplied || resetLayout)) {
+		const auto extendToBottom = [&](ImVec2& center, ImVec2& size) {
+			const float top = center.y - size.y * .5f;
+			size.y = std::max(1.0f, viewport->WorkPos.y + viewport->WorkSize.y - windowPadding - top);
+			center.y = top + size.y * .5f;
+		};
+		extendToBottom(windowPos, windowSizeForOverlap);
+		if (autoOffsetForTopStatusWindow)
+			extendToBottom(preTopStatusWindowPos, preTopStatusWindowSize);
+		repairWindowBounds = true;
+	}
+	desktopHeightApplied = desktopOnly;
 	const bool headsetPointer = REL::Module::IsVR() && globals::features::vr.IsMenuPointerInHeadset();
 	if (headsetPointer) {
 		auto* context = ImGui::GetCurrentContext();
@@ -1103,12 +1176,8 @@ void Menu::DrawSettings()
 		const bool showSteamVRWindowControls = useSteamVRWindowControls && vrMenuLayoutUnlocked && !isDocked;
 
 		const float uiScale = ImGui::GetStyle().FontScaleMain;
-		// Check if we can show icons - require setting enabled and at least some icons loaded (for undocked)
-		// For docked mode, always show icons if textures are available
-		bool canShowIcons = settings.Theme.ShowActionIcons &&
-		                    (uiIcons.saveSettings.texture ||
-								uiIcons.loadSettings.texture ||
-								uiIcons.clearCache.texture);  // Always show logo if available, regardless of action icons setting
+		// Header action glyphs do not depend on optional icon textures.
+		const bool canShowIcons = settings.Theme.ShowActionIcons;
 		bool showLogo = uiIcons.logo.texture != nullptr;
 
 		// Render header using extracted component
@@ -1177,13 +1246,7 @@ void Menu::DrawSettings()
 	}
 }
 
-/**
- * @brief Renders the General settings tab content
- *
- * Delegates rendering to SettingsTabRenderer for the general configuration panel,
- * which includes Shaders, Keybindings, and Interface sub-tabs. This method provides
- * the callback for key-to-string conversion while maintaining separation of concerns.
- */
+/** Draw interface preferences and startup controls using their existing settings owners. */
 void Menu::DrawGeneralSettings()
 {
 	// Prepare settings state for the renderer
@@ -1191,30 +1254,18 @@ void Menu::DrawGeneralSettings()
 		.settingToggleKey = settingToggleKey,
 		.settingsEffectsToggle = settingsEffectsToggle,
 		.settingNeuralRenderingToggleKey = settingNeuralRenderingToggleKey,
-		.settingSkipCompilationKey = settingSkipCompilationKey,
-		.settingOverlayToggleKey = settingOverlayToggleKey,
-		.settingShaderBlockPrevKey = settingShaderBlockPrevKey,
-		.settingShaderBlockNextKey = settingShaderBlockNextKey,
-		.settingCSEditorToggleKey = settingCSEditorToggleKey,
-		.settingScreenshotKey = settingScreenshotKey
+		.settingOverlayToggleKey = settingOverlayToggleKey
 	};
 
 	// Render settings using extracted component
-	SettingsTabRenderer::RenderGeneralSettings(state);
+	SettingsTabRenderer::RenderGeneralSettings(state, [this]() { DrawDisableAtBootSettings(); });
 }
 
-/**
- * @brief Renders the Advanced settings tab content
- *
- * Delegates rendering to AdvancedSettingsRenderer for developer and advanced user
- * settings. Uses lambda callbacks to access private Menu methods while maintaining
- * encapsulation and proper separation of concerns.
- */
+/** Draw developer tools through their shared native controls. */
 void Menu::DrawAdvancedSettings()
 {
 	// Render advanced settings using extracted component
-	AdvancedSettingsRenderer::RenderAdvancedSettings(
-		[this]() { DrawDisableAtBootSettings(); });
+	AdvancedSettingsRenderer::RenderAdvancedSettings();
 }
 
 void Menu::DrawDisableAtBootSettings()
@@ -1222,44 +1273,40 @@ void Menu::DrawDisableAtBootSettings()
 	auto state = globals::state;
 	auto& disabledFeatures = state->GetDisabledFeatures();
 
-	ImGui::Text(
-		"Checked features are enabled at startup. Clear a checkbox to turn a feature off. Save settings and restart to apply changes.");
+	ImGui::TextUnformatted("Startup changes require saving and restart");
+	Util::AddTooltip(
+		"Checked features load at startup. Unchecked features and their shaders will not load after you save settings and restart the game. "
+		"Every later change here, including re-enabling a feature, requires saving and another restart.\n\n"
+		"For in-game on/off switching, use the Enabled toggle in each feature's own settings.");
 
 	ImGui::Spacing();
 
-	if (ImGui::CollapsingHeader("Features")) {
-		// Prepare a sorted list of feature pointers
-		auto featureList = Feature::GetFeatureList();
-		std::sort(featureList.begin(), featureList.end(), [](Feature* a, Feature* b) {
-			return a->GetShortName() < b->GetShortName();
-		});
+	auto featureList = Feature::GetFeatureList();
+	std::sort(featureList.begin(), featureList.end(), [](Feature* a, Feature* b) {
+		return a->GetShortName() < b->GetShortName();
+	});
 
-		// Display sorted features
-		for (auto* feature : featureList) {
-			if (feature->IsHiddenFromUserView())
-				continue;
+	for (auto* feature : featureList) {
+		if (feature->IsHiddenFromUserView())
+			continue;
 
-			const std::string featureName = feature->GetShortName();
-			const bool isReverseZ = feature == &globals::features::reverseZ;
-			bool enabled = isReverseZ ? globals::features::reverseZ.IsEnabledAtStartup() : !state->IsFeatureDisabled(featureName);
+		const std::string featureName = feature->GetShortName();
+		const bool isReverseZ = feature == &globals::features::reverseZ;
+		bool enabled = isReverseZ ? globals::features::reverseZ.IsEnabledAtStartup() : !state->IsFeatureDisabled(featureName);
 
-			if (Util::Widgets::Checkbox(featureName.c_str(), &enabled)) {
-				if (isReverseZ)
-					globals::features::reverseZ.SetEnabledAtStartup(enabled);
-				else
-					disabledFeatures[featureName] = !enabled;
-			}
+		const auto label = feature->GetDisplayName() + "###" + featureName;
+		if (Util::Widgets::Checkbox(label.c_str(), &enabled)) {
+			if (isReverseZ)
+				globals::features::reverseZ.SetEnabledAtStartup(enabled);
+			else
+				disabledFeatures[featureName] = !enabled;
 		}
+		MenuUI::SettingsSearch::NotifyControl(featureName.c_str());
 	}
 }
 
 void Menu::DrawFooter()
 {
-	ImGui::BulletText(std::format("Game Version: {} {}", magic_enum::enum_name(REL::Module::GetRuntime()), Util::GetFormattedVersion(REL::Module::get().version()).c_str()).c_str());
-	ImGui::SameLine();
-	ImGui::BulletText(std::format("D3D12 Swap Chain: {}", globals::features::upscaling.d3d12SwapChainActive ? "Active" : "Inactive").c_str());
-	ImGui::SameLine();
-
 	const double now = ImGui::GetTime();
 	if (systemCommitLastRefreshTime < 0.0 || now < systemCommitLastRefreshTime || now - systemCommitLastRefreshTime >= 1.0) {
 		const auto sample = Util::QuerySystemMemory();
@@ -1269,26 +1316,35 @@ void Menu::DrawFooter()
 		systemCommitLastRefreshTime = now;
 	}
 
-	const bool belowRecommendedCommit = systemCommitSampleValid && systemCommitTotalBytes < kRecommendedSystemCommitBytes;
-	if (belowRecommendedCommit)
-		ImGui::PushStyleColor(ImGuiCol_Text, settings.Theme.StatusPalette.Error);
-	if (systemCommitSampleValid) {
-		ImGui::BulletText(
-			"Commit: %.1f / %.1f GB",
-			BytesToGiB(systemCommitCurrentBytes),
-			BytesToGiB(systemCommitTotalBytes));
-	} else {
-		ImGui::BulletText("Commit: unavailable");
-	}
-	if (belowRecommendedCommit)
-		ImGui::PopStyleColor();
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextWrapped(
-			"Windows committed memory / total commit capacity. Recommended minimum total: 128 GB on all systems. Red indicates lower total capacity.");
-	}
+	const std::string items[]{
+		std::format("Game Version: {} {}", magic_enum::enum_name(REL::Module::GetRuntime()), Util::GetFormattedVersion(REL::Module::get().version())),
+		std::format("D3D12 Swap Chain: {}", globals::features::upscaling.d3d12SwapChainActive ? "Active" : "Inactive"),
+		systemCommitSampleValid ? std::format("Commit: {:.1f} / {:.1f} GB", BytesToGiB(systemCommitCurrentBytes), BytesToGiB(systemCommitTotalBytes)) : "Commit: unavailable",
+		std::format("GPU: {}", globals::state->adapterDescription)
+	};
+	const auto& style = ImGui::GetStyle();
+	const float bulletWidth = ImGui::GetFontSize() + style.FramePadding.x * 2;
+	float rowWidth = style.ItemSpacing.x * static_cast<float>(std::size(items) - 1);
+	for (const auto& item : items)
+		rowWidth += bulletWidth + ImGui::CalcTextSize(item.c_str(), nullptr, false).x;
+	ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, (ImGui::GetContentRegionAvail().x - rowWidth) * .5f));
 
-	ImGui::SameLine();
-	ImGui::BulletText(std::format("GPU: {}", globals::state->adapterDescription.c_str()).c_str());
+	constexpr size_t commitIndex = 2;
+	for (size_t index = 0; index < std::size(items); ++index) {
+		if (index > 0)
+			ImGui::SameLine();
+		{
+			const bool warn = index == commitIndex && systemCommitSampleValid && systemCommitTotalBytes < kRecommendedSystemCommitBytes;
+			if (warn)
+				ImGui::PushStyleColor(ImGuiCol_Text, settings.Theme.StatusPalette.Error);
+			const SKSE::stl::scope_exit restoreColor([warn] { if (warn) ImGui::PopStyleColor(); });
+			ImGui::BulletText("%s", items[index].c_str());
+		}
+		if (index == commitIndex) {
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::TextWrapped("Windows committed memory / total commit capacity. Recommended minimum total: 128 GB on all systems. Red indicates lower total capacity.");
+		}
+	}
 }
 
 void Menu::ApplyPendingLayoutReset()
@@ -1299,7 +1355,7 @@ void Menu::ApplyPendingLayoutReset()
 
 	EnsureSettingsDirtyBaseline();
 	const ThemeSettings defaults{};
-	settings.Theme.GlobalScale = ThemeManager::Constants::DEFAULT_GLOBAL_SCALE;
+	settings.GlobalScale = ThemeManager::Constants::DEFAULT_GLOBAL_SCALE;
 	settings.Theme.FontSize = defaults.FontSize;
 	settings.Theme.Style = defaults.Style;
 	settings.UseResolutionFont = true;
@@ -1587,6 +1643,7 @@ void Menu::ProcessInputEventQueue()
 					std::vector<InputCombo>& settingKey;
 					std::function<void()> action;
 					bool active = true;
+					bool (*matches)(const std::vector<InputCombo>&, uint32_t) = InputCombo::MatchesKeyboardCombo;
 				};
 
 				KeyAction keyActions[] = {
@@ -1622,7 +1679,7 @@ void Menu::ProcessInputEventQueue()
 							 CSEditor::ToggleEditorWindow();
 						 }
 					 } },
-					{ settings.ScreenshotKey, []() { globals::features::screenshotFeature.RequestUiCapture(); }, screenshotHotkeyActive },
+					{ settings.ScreenshotKey, []() { globals::features::screenshotFeature.RequestUiCapture(); }, screenshotHotkeyActive, ScreenshotShortcut::Matches },
 				};
 
 				// RenderDoc's capture key is a single, unmodified key; only consider it on key-up.
@@ -1633,7 +1690,7 @@ void Menu::ProcessInputEventQueue()
 					const bool isCombo = ka.settingKey.size() > 1;
 					if (ka.active &&
 						isCombo == combosOnly &&
-						InputCombo::MatchesKeyboardCombo(ka.settingKey, key)) {
+						ka.matches(ka.settingKey, key)) {
 						ka.action();
 						return true;
 					}
@@ -1758,7 +1815,7 @@ void Menu::ProcessInputEventQueue()
 			};
 			const bool isHotkey = ShouldSwallowInput() &&
 			                      ((screenshotHotkeyActive &&
-									   InputCombo::MatchesKeyboardCombo(settings.ScreenshotKey, key)) ||
+									   ScreenshotShortcut::Matches(settings.ScreenshotKey, key)) ||
 									  std::any_of(std::begin(hotkeys), std::end(hotkeys),
 										  [key](const auto* combo) { return InputCombo::MatchesKeyboardCombo(*combo, key); }));
 

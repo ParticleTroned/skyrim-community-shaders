@@ -46,11 +46,8 @@ if(NOT _nr_header_hash STREQUAL NEURAL_RENDERING_SDK_HEADER_SHA256)
 endif()
 
 # NR object code is user-supplied; only the original license is a staging input.
-set(_nr_license "${STREAMLINE_RUNTIME_DIRECTORY}/nvngx_dlssnr.license.txt")
-file(COPY_FILE "${CMAKE_SOURCE_DIR}/extern/NeuralRenderingSDK/LICENSE.txt"
-    "${_nr_license}" ONLY_IF_DIFFERENT)
-list(APPEND STREAMLINE_RUNTIME_PAYLOAD_FILES "${_nr_license}")
-list(APPEND STREAMLINE_RUNTIME_FILES "${_nr_license}")
+csx_stage_runtime_notice(STREAMLINE "${STREAMLINE_RUNTIME_DIRECTORY}"
+    "${CMAKE_SOURCE_DIR}/extern/NeuralRenderingSDK/LICENSE.txt" nvngx_dlssnr.license.txt)
 
 # Reject stale payloads before any build can copy them into AIO or deployment inputs.
 block()

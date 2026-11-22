@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import unittest
 
-from extract_adaptive_balance_toggle import function
+from extract_adaptive_balance_toggle import between, function
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -32,6 +32,11 @@ class DepthOfFieldMigrationTests(unittest.TestCase):
         prelude += function(bloom, "Bloom::Profile Bloom::GetPresetProfile(")
         filesystem = (ROOT / "src/Utils/FileSystem.cpp").read_text(encoding="utf-8-sig")
         prelude += "namespace Util::FileHelpers {\n" + function(filesystem, "JsonFileReadResult ReadJsonFile(") + "}\n"
+        pack = (ROOT / "src/Presets/LookPack.cpp").read_text(encoding="utf-8-sig")
+        prelude += ("namespace Presets {\nusing Json = json;\n"
+                    + between(pack, "\t\tconstexpr std::uintmax_t kMaxDocumentBytes", "\t\tconstexpr size_t kMaxPackFiles")
+                    + function(pack, "\t\tJson ReadObject(")
+                    + function(pack, "\tJson ReadProfileDocument(") + "}\n")
         driver = (ROOT / "tests/depth_of_field_migration_test.cpp").read_text(encoding="utf-8-sig")
         adaptive = (ROOT / "src/Features/AdaptiveBrightness.cpp").read_text(encoding="utf-8-sig")
         preset_reader = function(adaptive, "\tbool ReadJsonPresetFile(")
@@ -59,6 +64,9 @@ class DepthOfFieldMigrationTests(unittest.TestCase):
 
     def test_godray_context_migration_and_precedence(self):
         self.check_case("godray-context-migration")
+
+    def test_feature_save_preserves_other_global_user_overrides(self):
+        self.check_case("feature-scoped-global-save")
 
     def test_godray_context_provider_routing(self):
         self.check_case("godray-context-providers")

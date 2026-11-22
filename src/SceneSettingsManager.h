@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <filesystem>
 #include <map>
 #include <nlohmann/json.hpp>
@@ -24,6 +25,32 @@ public:
 		static SceneSettingsManager singleton;
 		return &singleton;
 	}
+
+	/** Suspends scene application while mutating base settings. */
+	class BaseSettingsScope
+	{
+	public:
+		BaseSettingsScope();
+		~BaseSettingsScope();
+		/** Resumes scene settings explicitly so callers can roll back on failure. */
+		void Finish();
+		BaseSettingsScope(const BaseSettingsScope&) = delete;
+		BaseSettingsScope& operator=(const BaseSettingsScope&) = delete;
+
+	private:
+		bool active = true;
+	};
+	/** Replaces the selected Look's interior layer without writing scene/user files. */
+	void SetLookLayer(const json& layer, const std::string& packId);
+	/** Captures effective authored interior values, excluding paused entries. */
+	json ExportLookLayer() const;
+	/** Substitutes cached exterior values in a serialized snapshot, leaving active weather ownership to its serializer. */
+	void OverlayBaseSettings(const std::string& feature, json& values, const std::set<std::string>& weatherVariables) const;
+	/** Moves personal interior persistence into SettingsUser while a Look owns settings. */
+	void UseLookPersistence(bool enabled);
+	json SerializeLookEdits() const;
+	void LoadLookEdits(const json& edits, const json& schemas);
+	void ClearLookEditsUnder(const json& layer);
 
 	// --- Scene Types ---
 
@@ -65,8 +92,9 @@ public:
 
 	enum class EntrySource
 	{
-		User,      // User-added via UI
-		Overwrite  // Loaded from overwrite file
+		User,       // User-added via UI
+		Overwrite,  // Loaded from overwrite file
+		LookPack
 	};
 
 	struct SettingEntry
@@ -78,6 +106,15 @@ public:
 		EntrySource source = EntrySource::User;
 		std::string sourceFilename;  // For overwrites: the filename it came from
 	};
+	struct LookState
+	{
+		std::vector<SettingEntry> interior;
+		bool persistent;
+	};
+	/** Captures scene ownership for a profile transaction. */
+	LookState CaptureLookState() const;
+	/** Restores scene ownership while base settings are suspended. */
+	void RestoreLookState(LookState state);
 
 	// --- Generic Entry Management (scene-type agnostic) ---
 
@@ -168,6 +205,9 @@ private:
 	// --- Interior state tracking ---
 	bool isCurrentlyApplied = false;
 	bool queuedCellTransition = false;
+	unsigned baseSettingsDepth = 0;
+	bool resumeInterior = false;
+	bool lookPersistence = false;
 
 	// Stored exterior settings per-feature (only the overridden keys)
 	std::map<std::string, json> savedExteriorSettings;
@@ -185,5 +225,5 @@ private:
 	void ApplySettings(SceneType type);
 	void RevertToExteriorSettings();
 	void SaveExteriorSettings(SceneType type);
-	static void ApplySettingToFeature(const SettingEntry& entry);
+	std::array<EntrySource, 3> ApplicationOrder() const;
 };

@@ -134,13 +134,17 @@ void WeatherPicker::DrawSettings()
 		if (auto* sky = globals::game::sky; sky && sky->mode.get() == RE::Sky::Mode::kFull)
 			RenderWeatherControls(sky);
 		else
-			MenuUI::DetailNote("Weather selection is available after loading an exterior scene.");
+			MenuUI::AvailabilityNotice("Weather selection is available after loading an exterior scene.");
 	}
 	if (page.Is("analysis")) {
 		RenderCoreWeatherDetails(true, false);
 		RenderFeatureWeatherAnalysis();
-		MenuUI::DetailNote("Enabled shows/hides the weather-details overlay without changing weather or time.");
 	}
+}
+
+Feature::SettingsHeaderStatus WeatherPicker::GetSettingsHeaderStatus() const
+{
+	return WeatherDetailsWindow.ShowInOverlay ? SettingsHeaderStatus{} : SettingsHeaderStatus{ "Off", true, "The weather-details overlay is hidden. Use Enabled to show it; weather and time controls remain available." };
 }
 
 void WeatherPicker::DrawSettingsEnabledControl()
@@ -160,14 +164,14 @@ void WeatherPicker::SetOverlayVisible(bool a_enabled)
 
 void WeatherPicker::DrawTimeControls()
 {
-	ImGui::SeparatorText(T(TKEY("time_control"), "Time Control"));
+	MenuUI::SectionHeading(T(TKEY("time_control"), "Time Control"));
 	EditorWindow::GetSingleton()->DrawTimeControls();
 	ImGui::Spacing();
 }
 
 void WeatherPicker::DrawWeatherStatusPanel()
 {
-	ImGui::SeparatorText(T(TKEY("weather_transition"), "Weather Transition"));
+	MenuUI::SectionHeading(T(TKEY("weather_transition"), "Weather Transition"));
 
 	auto* weatherManager = WeatherManager::GetSingleton();
 	auto currentWeathers = weatherManager->GetCurrentWeathers();
@@ -488,22 +492,22 @@ void WeatherPicker::DisplayWindInfo(RE::TESWeather* weather)
 // --- Main function: now just delegates to helpers ---
 void WeatherPicker::DisplayWeatherInfo(RE::TESWeather* weather, float weatherPct, bool showInteractiveElements)
 {
-	ImGui::SeparatorText(T(TKEY("overview"), "Overview"));
+	MenuUI::SectionHeading(T(TKEY("overview"), "Overview"));
 	WeatherPicker::DisplayWeatherBasicInfo(weather, weatherPct);
 	if (!weather)
 		return;
 
-	ImGui::SeparatorText(T(TKEY("precipitation"), "Precipitation"));
+	MenuUI::SectionHeading(T(TKEY("precipitation"), "Precipitation"));
 	WeatherPicker::DisplayPrecipitationInfo(weather);
 
 	if ((uint8_t)weather->data.thunderLightningFrequency != 0) {
-		ImGui::SeparatorText(T(TKEY("lightning"), "Lightning"));
+		MenuUI::SectionHeading(T(TKEY("lightning"), "Lightning"));
 		WeatherPicker::DisplayLightningInfo(weather, showInteractiveElements);
 	}
 
 	auto sky = globals::game::sky;
 	if (weather->data.windSpeed > 0 || (sky && sky->windSpeed > 0.0f)) {
-		ImGui::SeparatorText(T(TKEY("wind"), "Wind"));
+		MenuUI::SectionHeading(T(TKEY("wind"), "Wind"));
 		WeatherPicker::DisplayWindInfo(weather);
 	}
 }
@@ -511,7 +515,7 @@ void WeatherPicker::DisplayWeatherInfo(RE::TESWeather* weather, float weatherPct
 void WeatherPicker::RenderWeatherControls(RE::Sky* sky)
 {
 	auto* editorWindow = EditorWindow::GetSingleton();
-	ImGui::SeparatorText(T(TKEY("weather_selection"), "Weather Selection"));
+	MenuUI::SectionHeading(T(TKEY("weather_selection"), "Weather Selection"));
 
 	ImGui::Text("%s", T(TKEY("filter_by_weather_type"), "Filter by Weather Type:"));
 	if (ImGui::Button(T(TKEY("select_all"), "Select All"))) {
@@ -720,9 +724,7 @@ void WeatherPicker::RenderWeatherInformationDisplay(RE::Sky* sky, bool showInter
 void WeatherPicker::RenderCoreWeatherDetails(bool showInteractiveElements, bool showSelectionControls)
 {
 	const auto showError = [](const char* msg) {
-		auto menu = Menu::GetSingleton();
-		const auto& theme = menu->GetTheme();
-		ImGui::TextColored(theme.StatusPalette.Error, "%s", msg);
+		Util::Text::WrappedError("%s", msg);
 	};
 
 	if (auto sky = globals::game::sky) {
@@ -732,7 +734,7 @@ void WeatherPicker::RenderCoreWeatherDetails(bool showInteractiveElements, bool 
 			}
 			DrawWeatherStatusPanel();
 			ImGui::Spacing();
-			ImGui::SeparatorText(T(TKEY("analysis"), "Analysis"));
+			MenuUI::SectionHeading(T(TKEY("analysis"), "Analysis"));
 			RenderWeatherInformationDisplay(sky, showInteractiveElements);
 			ImGui::Spacing();
 		} else {

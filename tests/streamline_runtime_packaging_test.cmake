@@ -68,6 +68,13 @@ endforeach()
 if(EXISTS "${_prefix}/Shaders/Upscaling/Streamline/nvngx_dlssnr.dll")
     message(FATAL_ERROR "NR runtime must remain user-supplied in every package")
 endif()
+set(_nvapi_notice "${_prefix}/Shaders/Upscaling/Streamline/nvapi.license.txt")
+list(APPEND _expected "${_nvapi_notice}")
+file(SHA256 "${CMAKE_CURRENT_LIST_DIR}/../extern/nvapi/License.txt" _original_hash)
+file(SHA256 "${_nvapi_notice}" _installed_hash)
+if(NOT _original_hash STREQUAL _installed_hash)
+    message(FATAL_ERROR "Installed NVAPI licence differs from the original")
+endif()
 list(SORT _installed)
 list(SORT _expected)
 if(NOT _installed STREQUAL _expected)
@@ -90,5 +97,5 @@ if(NOT _actual STREQUAL _relative_expected)
 endif()
 message(
     STATUS
-    "StreamlineRuntime installs the exact configured DLLs and eight original notices"
+    "StreamlineRuntime installs the exact configured DLLs and nine original notices"
 )

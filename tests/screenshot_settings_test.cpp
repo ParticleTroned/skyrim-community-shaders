@@ -4,6 +4,7 @@
 #	include "Utils/CaptureRetention.h"
 #endif
 #include "Utils/StringUtils.h"
+#include <Windows.h>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -16,6 +17,12 @@
 #include <string>
 #include <string_view>
 #include <unordered_set>
+
+static std::array<SHORT, 256> shortcutKeyStates{};
+static SHORT ScreenshotTestKeyState(int key) { return shortcutKeyStates.at(static_cast<size_t>(key)); }
+#define GetAsyncKeyState ScreenshotTestKeyState
+#include "Menu/ScreenshotShortcut.h"
+#undef GetAsyncKeyState
 
 using json = nlohmann::json;
 namespace vr
@@ -106,6 +113,24 @@ int main()
 	};
 	ScreenshotApi api;
 	ScreenshotFeature feature;
+	const std::vector<InputCombo> defaultShortcut{ InputCombo::Keyboard(VK_SNAPSHOT) };
+	const std::vector<InputCombo> customShortcut{ InputCombo::Keyboard(VK_CONTROL), InputCombo::Keyboard(VK_F12) };
+	check(std::string_view(ScreenshotShortcut::DisplayName(defaultShortcut)) == "F12/Print Screen", "default screenshot label must name both keys");
+	check(ScreenshotShortcut::DisplayName(customShortcut) == nullptr && ScreenshotShortcut::DisplayName({}) == nullptr,
+		"custom and cleared shortcuts must retain their own display labels");
+	for (unsigned modifiers = 0; modifiers < 8; ++modifiers) {
+		shortcutKeyStates[VK_CONTROL] = (modifiers & 1) ? static_cast<SHORT>(0x8000) : 0;
+		shortcutKeyStates[VK_SHIFT] = (modifiers & 2) ? static_cast<SHORT>(0x8000) : 0;
+		shortcutKeyStates[VK_MENU] = (modifiers & 4) ? static_cast<SHORT>(0x8000) : 0;
+		for (const auto key : { VK_F12, VK_SNAPSHOT })
+			check(ScreenshotShortcut::Matches(defaultShortcut, key) == (modifiers == 0), "default capture keys must reject modifiers");
+		check(!ScreenshotShortcut::Matches(defaultShortcut, VK_F11), "unrelated keys must not capture");
+		check(ScreenshotShortcut::Matches(customShortcut, VK_F12) == (modifiers == 1), "custom chords must match exactly");
+		check(!ScreenshotShortcut::Matches(customShortcut, VK_SNAPSHOT), "custom shortcuts must not inherit the default alias");
+		check(!ScreenshotShortcut::Matches({}, VK_F12), "cleared shortcuts must not capture through an alias");
+		check(!ScreenshotShortcut::Matches({ InputCombo::Primary(VK_SNAPSHOT) }, VK_F12), "controller bindings must not gain keyboard aliases");
+	}
+	shortcutKeyStates.fill(0);
 	for (const bool vr : { false, true }) {
 		globals::game::isVR = vr;
 		const auto capabilities = api.BuildCapabilities(feature);

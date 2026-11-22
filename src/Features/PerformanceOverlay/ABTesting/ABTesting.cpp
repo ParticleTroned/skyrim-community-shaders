@@ -2,6 +2,7 @@
 #include "Features/PerformanceOverlay.h"
 #include "Menu.h"
 #include "Menu/PerformanceTuningRenderer.h"
+#include "Menu/SettingsPage.h"
 #include "Menu/ThemeManager.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
@@ -153,8 +154,7 @@ void ABTestingManager::DrawSettingsUI()
 {
 	auto& performanceOverlay = globals::features::performanceOverlay;
 
-	ImGui::SeparatorText("A/B Testing");
-	ImGui::TextWrapped("Compares the saved USER configuration against the current TEST configuration by switching variants at a fixed interval.");
+	MenuUI::SectionHeading("A/B Testing", "Compares the saved USER configuration against the current TEST configuration by switching variants at a fixed interval.");
 	ImGui::Spacing();
 
 	if (abTestingEnabled) {

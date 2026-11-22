@@ -14,6 +14,7 @@
 #include <array>
 #include <cmath>
 #include <filesystem>
+#include <format>
 #include <imgui.h>
 #include <stdexcept>
 #include <string_view>
@@ -812,39 +813,66 @@ Feature::SettingsHeaderStatus NeuralRenderingFeature::GetSettingsHeaderStatus() 
 {
 	const auto& upscaling = globals::features::upscaling;
 	if (!NeuralRendering::Runtime::IsInstalled())
-		return { "Missing DLL", true };
+		return { "Missing DLL", true, "Install the bundled NR component (Shaders/Upscaling/Streamline/nvngx_dlssnr.dll), then restart the game." };
 	if (!upscaling.IsNeuralRenderingHardwareSupported())
-		return { "Unavailable", true };
-	if (!upscaling.settings.neuralRenderingEnabled)
-		return { "Off", false };
+		return { "Unavailable", true, "Neural Rendering is not supported by the current graphics hardware." };
 	if (NeuralRendering::Runtime::GetDriverSupport().RequiresUpdate())
-		return { "Update driver", true };
+		return { "Update driver", true, "Neural Rendering requires a newer NVIDIA graphics driver. Update the driver and restart the game." };
 	const auto status = NeuralRendering::Renderer::Instance().GetSnapshot();
 	if (status.runtimeNeedsUpdatedDriver == true)
-		return { "Update driver", true };
+		return { "Update driver", true, "Neural Rendering requires a newer NVIDIA graphics driver. Update the driver and restart the game." };
 	if (status.runtimeStatus == NeuralRendering::RuntimeStatus::VersionRejected)
-		return { "Unsupported DLL", true };
+		return { "Unsupported DLL", true, "The installed Neural Rendering runtime version is unsupported. Install the compatible bundled DLL and restart." };
 	const bool failed = status.failureLatched || status.quarantined;
-	if (failed)
-		return { "Paused", true };
+	if (failed) {
+		const char* recovery = status.quarantined           ? "Restart the game; NR cannot recover safely in this session." :
+		                       status.stallRecovery.pending ? "Wait for GPU recovery; NR retries automatically." :
+		                                                      "Open Mode and use Reset Neural Rendering Runtime to retry.";
+		return { "Paused", true, std::format("{} {}", status.detail.empty() ? "NR stopped after a runtime failure." : status.detail, recovery) };
+	}
+	if (!upscaling.IsNeuralRenderingUpscalingAvailable())
+		return { "Waiting", true, upscaling.GetNeuralRenderingUpscalingWaitMessage() };
+	if (!upscaling.settings.neuralRenderingEnabled)
+		return { "Off", true, "Neural Rendering is turned off. Use Enabled to turn it on; your settings are preserved." };
+	if (upscaling.settings.neuralRenderingPauseInCombat) {
+		const auto pause = upscaling.GetNeuralCombatPauseSnapshot();
+		if (pause.IsPaused()) {
+			if (pause.phase == NeuralRendering::CombatPausePhase::Combat)
+				return { "Paused", true, "NR is paused during combat. Normal upscaling continues." };
+			if (pause.phase == NeuralRendering::CombatPausePhase::Cooldown)
+				return { "Paused", true, std::format("NR resumes in {:.1f} seconds of active gameplay.", static_cast<double>(pause.remainingMs) / 1000.0) };
+			return { "Paused", true, "NR combat pause is waiting for active gameplay." };
+		}
+	}
 	const bool recovering = upscaling.IsNeuralRenderingRequested() && status.memoryRecovery.phase != NeuralRendering::MemoryRecoveryPhase::Ready &&
 	                        status.memoryRecovery.phase != NeuralRendering::MemoryRecoveryPhase::Probation;
 	const bool needsFov = NeuralRendering::RequiresFoveatedMask(upscaling.GetNeuralRenderingMode(), upscaling.settings.neuralRenderingFovOnly,
 		globals::game::isVR, upscaling.settings.neuralRenderingRenderscaleFov);
-	const bool waiting = !upscaling.IsNeuralRenderingUpscalingAvailable() || (needsFov && !upscaling.IsNeuralRenderingFovConfigurationAvailable());
-	if (recovering)
-		return { "Recovering", true };
+	const bool waiting = needsFov && !upscaling.IsNeuralRenderingFovConfigurationAvailable();
+	if (recovering) {
+		const char* stage = status.memoryRecovery.phase == NeuralRendering::MemoryRecoveryPhase::Retiring ? "releasing graphics resources" :
+		                    status.memoryRecovery.phase == NeuralRendering::MemoryRecoveryPhase::Waiting  ? "waiting for GPU memory" :
+		                                                                                                    "rebuilding graphics resources";
+		return { "Recovering", true, std::format("NR is {} and will resume automatically. Normal rendering continues; settings are kept.", stage) };
+	}
 	if (waiting)
-		return { "Waiting", true };
+		return { "Waiting", true, "This NR mode requires a configured FOV mask. Complete Display > VR > FOV setup." };
+	std::string runtimeInfo;
+	if (status.memoryRecovery.phase == NeuralRendering::MemoryRecoveryPhase::Probation)
+		runtimeInfo = "NR is active while memory stability is checked.";
+	else if (status.memoryConservation.active)
+		runtimeInfo = "NR is releasing unused buffers to save GPU memory without changing image quality.";
+	if (status.pressureResolutionEnabled && status.effectiveModelResolutionPercent < upscaling.settings.neuralRenderingModelResolutionPercent)
+		runtimeInfo += std::format(" NR resolution is {}% (requested {}%) while GPU memory is under pressure.", status.effectiveModelResolutionPercent, upscaling.settings.neuralRenderingModelResolutionPercent);
 	switch (status.runtimeStatus) {
 	case NeuralRendering::RuntimeStatus::NotProbed:
-		return { "Not checked", false };
+		return { "Not started", true, "Resume gameplay with game menus closed.", true };
 	case NeuralRendering::RuntimeStatus::Ready:
-		return { "DLL checked", false };
+		return { "DLL checked", false, runtimeInfo };
 	case NeuralRendering::RuntimeStatus::Initialized:
-		return { status.outputCommitted ? "Evaluated" : "Initialized", false };
+		return { status.outputCommitted ? "Evaluated" : "Initialized", false, runtimeInfo };
 	default:
-		return { "Unavailable", true };
+		return { "Unavailable", true, status.detail.empty() ? "Neural Rendering could not initialize or evaluate. Check CSX.log for the failure reason." : status.detail };
 	}
 }
 
@@ -904,14 +932,17 @@ void NeuralRenderingFeature::DrawColourSettings(bool a_diagnosticsOnly)
 		}
 
 		if (config.settings.mode == Mode::Managed) {
-			ImGui::TextWrapped("Managed is experimental colour/exposure reconstruction with no validated production calibration. Preservation sliders do not apply.");
+			ImGui::TextDisabled("Managed calibration active");
+			if (auto tooltip = Util::HoverTooltipWrapper()) {
+				ImGui::TextWrapped("Managed is experimental colour/exposure reconstruction with no validated production calibration. Preservation sliders do not apply.");
 #ifdef DEVBENCH_BRIDGE_ENABLED
-			ImGui::TextWrapped(showDiagnostics ?
-								   "Adjust its session-only calibration under Colour experiments and diagnostics. Identity calibration can look like Original." :
-								   "Your saved mode is retained. Choose Original or Preserve source, or set Log Level to Debug to inspect its calibration.");
+				ImGui::TextWrapped(showDiagnostics ?
+									   "Adjust its session-only calibration under Colour experiments and diagnostics. Identity calibration can look like Original." :
+									   "Your saved mode is retained. Choose Original or Preserve source, or set Log Level to Debug to inspect its calibration.");
 #else
-			ImGui::TextWrapped("Your saved mode is retained. Choose Original or Preserve source.");
+				ImGui::TextWrapped("Your saved mode is retained. Choose Original or Preserve source.");
 #endif
+			}
 		}
 		const bool usesSourceColourReconstruction =
 			config.settings.mode == Mode::PreserveSource || config.settings.mode == Mode::NeuralLighting;
@@ -952,7 +983,6 @@ void NeuralRenderingFeature::DrawColourSettings(bool a_diagnosticsOnly)
 			if (auto tooltip = Util::HoverTooltipWrapper())
 				ImGui::TextUnformatted("Limits added brightness changes. 1 stop allows up to twice or half the original brightness. Neural appearance mix is applied separately.");
 		}
-		MenuUI::DetailNote("Preserve the game's lighting while keeping NR detail. These choices apply to the shared result.");
 	}
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	if (a_diagnosticsOnly && showDiagnostics && ImGui::TreeNode("Colour experiments and diagnostics")) {
@@ -967,19 +997,18 @@ void NeuralRenderingFeature::DrawColourSettings(bool a_diagnosticsOnly)
 			if (auto tooltip = Util::HoverTooltipWrapper())
 				ImGui::TextUnformatted("Stops manual captures and samples without changing the image. Exposure experiments may still require capture.");
 		}
-		ImGui::TextWrapped("Save Settings stores colour mode and sliders. Experiments are session-only. Defaults: Apply neural edit on; capture, samples and bypass off; Identity input transform.");
 		changed |= Util::Widgets::Checkbox("Apply neural edit (A/B; inference stays running)", &config.experiments.applyModelEdit);
-		if (auto tooltip = Util::HoverTooltipWrapper())
+		if (auto tooltip = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted("Show/hide the edit while inference runs for matched-scene comparisons. Use the main NR switch to measure NR-off cost.");
-		ImGui::TextWrapped("Uncheck to show the original image with inference running. Use the main NR switch for NR-off measurements.");
-		ImGui::SeparatorText("Exposure and assessment");
+			ImGui::TextWrapped("Save Settings stores colour mode and sliders. Experiments are session-only. Defaults: Apply neural edit on; capture, samples and bypass off; Identity input transform.");
+		}
+		MenuUI::SectionHeading("Exposure and assessment", "Capture HDR AvgTex.y/x and frame gamma from the matching source frame. If capture arrives after early NR, evidence is unavailable; no previous-frame substitution. This does not establish NR's expected colour space.");
 		changed |= Util::Widgets::Checkbox("Capture engine HDR exposure", &config.experiments.captureEngineExposure);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Record HDR exposure for diagnostics and experiments. Recording alone does not change NR colour or select exposure correction.");
 		changed |= Util::Widgets::Checkbox("Capture HMD frame provenance", &config.experiments.captureFrameEvidence);
 		if (auto tooltip = Util::HoverTooltipWrapper())
 			ImGui::TextUnformatted("Attach source-frame and NR settings evidence to HMD captures without changing the image. Identifies the exact comparison settings.");
-		ImGui::TextWrapped("Capture HDR AvgTex.y/x and frame gamma from the matching source frame. If capture arrives after early NR, evidence is unavailable; no previous-frame substitution. This does not establish NR's expected colour space.");
 		for (std::size_t i = 0; i < config.experiments.profiles.size(); ++i) {
 			ImGui::PushID(static_cast<int>(i));
 			ImGui::Separator();

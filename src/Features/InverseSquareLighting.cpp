@@ -62,7 +62,12 @@ void InverseSquareLighting::DrawSettings()
 	if (!page.Is("appearance"))
 		return;
 
-	MenuUI::DetailText("Nearby lights use physically based distance falloff. Use Enabled in the header to compare with the original lighting; there are no additional tuning controls.");
+	MenuUI::SectionHeading("Nearby light falloff");
+	MenuUI::DetailText("Compatible lights are brightest near their source and dim rapidly with distance. Their reach follows their intensity, with a smooth fade at the outer edge.");
+	MenuUI::SectionHeading("Which lights change");
+	MenuUI::DetailText("Applies to lights configured for inverse-square falloff by compatible lighting mods or the CSX Editor. The visible result depends on those lights being present in the scene.");
+	MenuUI::SectionHeading("Controls");
+	MenuUI::DetailText("Use Enabled in the header to compare the effect. Individual lights can be adjusted in CSX Editor > Light Editor.");
 }
 
 void InverseSquareLighting::LoadSettings(json& o_json)

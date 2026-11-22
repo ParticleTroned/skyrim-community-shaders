@@ -2,6 +2,7 @@
 #include "../EditorWindow.h"
 #include "../WeatherUtils.h"
 #include "Globals.h"
+#include "Menu/SettingsPage.h"
 #include "RE/B/BSShaderManager.h"
 #include "RE/N/NiSourceTexture.h"
 #include "Utils/Game.h"
@@ -174,7 +175,7 @@ void PrecipitationWidget::DrawWidget()
 			if (ImGui::BeginTabItem(PrecipitationTab::kParticle, nullptr, particleFlags)) {
 				BeginScrollableContent("##ParticleScroll");
 				DrawIfMatchesSearch(PrecipitationSetting::kType, [&](const char* label) {
-					ImGui::SeparatorText("Particle Type");
+					MenuUI::SectionHeading("Particle Type");
 					const char* types[] = { "Rain", "Snow" };
 					int currentType = static_cast<int>(settings.particleType);
 					bool comboChanged = DrawWithHighlight(label, [&]() {
@@ -188,12 +189,12 @@ void PrecipitationWidget::DrawWidget()
 					return false;
 				});
 				if (MatchesAnySearch({ PrecipitationSetting::kSizeX, PrecipitationSetting::kSizeY })) {
-					ImGui::SeparatorText("Particle Size");
+					MenuUI::SectionHeading("Particle Size");
 					WeatherUtils::DrawSliderFloat(PrecipitationSetting::kSizeX, settings.particleSizeX, 0.0f, 200.0f);
 					WeatherUtils::DrawSliderFloat(PrecipitationSetting::kSizeY, settings.particleSizeY, 0.0f, 200.0f);
 				}
 				if (MatchesAnySearch({ PrecipitationSetting::kGravityVelocity, PrecipitationSetting::kRotationVelocity })) {
-					ImGui::SeparatorText("Velocity");
+					MenuUI::SectionHeading("Velocity");
 					WeatherUtils::DrawSliderFloat(PrecipitationSetting::kGravityVelocity, settings.gravityVelocity, 0.0f, 10000.0f);
 					WeatherUtils::DrawSliderFloat(PrecipitationSetting::kRotationVelocity, settings.rotationVelocity, 0.0f, 10000.0f);
 				}
@@ -204,13 +205,13 @@ void PrecipitationWidget::DrawWidget()
 			if (ImGui::BeginTabItem(PrecipitationTab::kPosition, nullptr, positionFlags)) {
 				BeginScrollableContent("##PositionScroll");
 				if (MatchesAnySearch({ PrecipitationSetting::kCenterOffsetMin, PrecipitationSetting::kCenterOffsetMax, PrecipitationSetting::kStartRotationRange })) {
-					ImGui::SeparatorText("Offset");
+					MenuUI::SectionHeading("Offset");
 					WeatherUtils::DrawSliderFloat(PrecipitationSetting::kCenterOffsetMin, settings.centerOffsetMin, 0.0f, 200.0f);
 					WeatherUtils::DrawSliderFloat(PrecipitationSetting::kCenterOffsetMax, settings.centerOffsetMax, 0.0f, 200.0f);
 					WeatherUtils::DrawSliderFloat(PrecipitationSetting::kStartRotationRange, settings.startRotationRange, 0.0f, 360.0f);
 				}
 				if (MatchesAnySearch({ PrecipitationSetting::kBoxSize, PrecipitationSetting::kParticleDensity })) {
-					ImGui::SeparatorText("Volume");
+					MenuUI::SectionHeading("Volume");
 					WeatherUtils::DrawSliderUint32(PrecipitationSetting::kBoxSize, settings.boxSize, 0, 1000);
 					WeatherUtils::DrawSliderFloat(PrecipitationSetting::kParticleDensity, settings.particleDensity, 0.0f, 1000.0f);
 				}
@@ -221,7 +222,7 @@ void PrecipitationWidget::DrawWidget()
 			if (ImGui::BeginTabItem(PrecipitationTab::kTexture, nullptr, textureFlags)) {
 				BeginScrollableContent("##TextureScroll");
 				if (MatchesAnySearch({ PrecipitationSetting::kNumSubtexturesX, PrecipitationSetting::kNumSubtexturesY })) {
-					ImGui::SeparatorText("Subtextures");
+					MenuUI::SectionHeading("Subtextures");
 					int numX = static_cast<int>(std::min(
 						settings.numSubtexturesX,
 						static_cast<uint32_t>(std::numeric_limits<int>::max())));
@@ -257,7 +258,7 @@ void PrecipitationWidget::DrawWidget()
 						settings.numSubtexturesY = std::max(1, numY);
 				}
 				DrawSearchSectionIfMatches(PrecipitationSetting::kParticleTexture, [&](const char* label) {
-					ImGui::SeparatorText("Texture Path");
+					MenuUI::SectionHeading("Texture Path");
 					const bool inputChanged = DrawWithHighlight(label, [&]() {
 						return ImGui::InputText(label, textureBuffer, sizeof(textureBuffer));
 					});

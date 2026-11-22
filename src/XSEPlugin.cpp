@@ -28,6 +28,7 @@
 #include "Globals.h"
 #include "Hooks.h"
 #include "Menu.h"
+#include "Menu/PerformanceResultsUI.h"
 #include "Menu/ThemeManager.h"
 #include "MenuDevBenchBridge.h"
 #include "PerformanceTuningDevBenchBridge.h"
@@ -158,6 +159,7 @@ SKSE_PLUGIN_LOAD(const SKSE::LoadInterface* a_skse)
 	while (!REX::W32::IsDebuggerPresent()) {};
 #endif
 	InitializeLog();
+	MenuUI::PerformanceResultsPage::GetStore();
 	logger::info("Loaded {} {}", Plugin::NAME, Plugin::BUILD_LABEL);
 	BuildProvenance::LogRuntimeIdentity();
 	Util::LogSystemMemory("startup");

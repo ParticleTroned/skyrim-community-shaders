@@ -51,12 +51,12 @@ public:
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Allows more lights to illuminate the scene at the same time.",
-			{ "Removes 4-light limit",
-				"Unlimited dynamic lights",
-				"Improved lighting quality",
-				"Enhanced visual realism",
-				"Support for particle lights" }
+			"Adds particle and placed lights, with controls for shadows, light updates, and heat distortion.",
+			{ "Supported particle effects and placed light sources",
+				"Contact shadows and native shadow-map culling",
+				"Configurable light update frequency",
+				"Heat distortion around lights",
+				"Light counts and diagnostic views" }
 		};
 	}
 

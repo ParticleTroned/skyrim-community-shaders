@@ -27,6 +27,10 @@ namespace RE
 	class TESWorldSpace;
 }
 
+// The aligned point-light upload payload requires padding in its owning feature.
+#pragma warning(push)
+#pragma warning(disable: 4324)
+
 struct AdaptiveBrightness : Feature
 {
 	static constexpr std::string_view kFeatureName = "Visuals";
@@ -258,6 +262,8 @@ struct AdaptiveBrightness : Feature
 	static constexpr uint32_t kWaterPointLightCBRegister = 7;
 
 	ConstantBuffer* vanillaPointLightCB = nullptr;
+	VanillaPointLightData lastUploadedVanillaPointLightData{};
+	bool vanillaPointLightUploadValid = false;
 
 	struct EffectiveLinearLightingSettings
 	{
@@ -472,3 +478,5 @@ struct AdaptiveBrightness : Feature
 
 	struct Hooks;
 };
+
+#pragma warning(pop)

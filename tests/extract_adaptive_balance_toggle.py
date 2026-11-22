@@ -98,6 +98,7 @@ def extract(root, output):
     (output / "adaptive_balance_under_test.h").write_text("\n".join(bodies), encoding="utf-8")
     (output / "adaptive_balance_point_lights_under_test.h").write_text(
         between(source, "\tconstexpr uint32_t kMaxVanillaPointLights", "\tconstexpr float kBrightnessMin")
+        + function(source, "void AdaptiveBrightness::SetupResources()")
         + function(source, "void AdaptiveBrightness::UpdateVanillaPointLightData("), encoding="utf-8")
     (output / "adaptive_balance_point_light_members.h").write_text(
         between(header, "\tstruct alignas(16) VanillaPointLightData", "\tstruct EffectiveLinearLightingSettings"), encoding="utf-8")

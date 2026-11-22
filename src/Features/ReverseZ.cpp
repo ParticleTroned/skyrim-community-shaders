@@ -178,8 +178,10 @@ namespace
 				return std::nullopt;
 			maximumBias = std::max(maximumBias, layerBias);
 		}
-		// Common near-plane headroom preserves layer order without a fixed far-depth offset.
-		return NativeViewportCorrection{ range.y, maximumBias - bias, standardScene };
+		// D24 needs more near-relative separation; a shared far endpoint keeps distant decals occluded.
+		constexpr float standardHeadroomScale = 8.0f;
+		const float scale = standardScene && maximumBias * standardHeadroomScale <= (range.y - range.x) * 0.5f ? standardHeadroomScale : 1.0f;
+		return NativeViewportCorrection{ range.y, (maximumBias - bias) * scale, standardScene };
 	}
 
 	bool HasNativeViewportCorrection(bool a_flip)

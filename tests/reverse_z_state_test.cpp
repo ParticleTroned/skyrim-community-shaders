@@ -1023,7 +1023,7 @@ namespace
 					auto expected = requested;
 					if (vr && target < RE::RENDER_TARGETS_DEPTHSTENCIL::kSHADOWMAPS) {
 						expected.MaxDepth = scene.MaxDepth;
-						expected.MinDepth += .000030f - nativeViewportBiases[mode];
+						expected.MinDepth += (.000030f - nativeViewportBiases[mode]) * 8.0f;
 					}
 					D3D11_VIEWPORT actual{};
 					UINT count = 1;
@@ -1040,6 +1040,26 @@ namespace
 			}
 		}
 		publishedDepthStencilTarget = RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN;
+		for (const auto range : { std::array{ 0.0f, .0004f }, std::array{ .9999f, 1.0f } }) {
+			for (auto& eye : shadow.eyes)
+				eye.viewDepthRange = { range[0], range[1] };
+			for (uint32_t mode = 0; mode < nativeViewportBiases.size(); ++mode) {
+				auto requested = scene;
+				requested.MinDepth = range[0];
+				requested.MaxDepth = range[1] - nativeViewportBiases[mode];
+				shadow.data.viewPort = requested;
+				shadow.data.rasterStateDepthBiasMode = mode;
+				ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &requested);
+				D3D11_VIEWPORT actual{};
+				UINT count = 1;
+				context->RSGetViewports(&count, &actual);
+				Require(actual.MinDepth == range[0] + (.000030f - nativeViewportBiases[mode]) && actual.MaxDepth == range[1],
+					"Constrained depth range did not retain bounded native layer spacing");
+				Require(actual.MinDepth < actual.MaxDepth, "Constrained depth range collapsed after layer correction");
+			}
+		}
+		for (auto& eye : shadow.eyes)
+			eye.viewDepthRange = { scene.MinDepth, scene.MaxDepth };
 		shadow.data.viewPort = scene;
 		shadow.data.rasterStateDepthBiasMode = 0;
 		ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &scene);
@@ -1174,7 +1194,7 @@ namespace
 			UINT count = 1;
 			if (corrected) {
 				expected.MaxDepth = scene.MaxDepth;
-				expected.MinDepth = .000030f - nativeViewportBiases[6];
+				expected.MinDepth = (.000030f - nativeViewportBiases[6]) * 8.0f;
 			}
 			context->RSGetViewports(&count, &actual);
 			Require(count == 1 && std::memcmp(&actual, &expected, sizeof(actual)) == 0, "Bound depth target lost its viewport domain");
@@ -1364,6 +1384,65 @@ namespace
 				}
 			}
 		}
+		globals::game::shadowState = &shadow;
+		// Independent projection and interpolation can put a coplanar decal one D24 step behind its road.
+		context->ClearDepthStencilView(view, D3D11_CLEAR_DEPTH, 1, 0);
+		setMode(6);
+		setDepth((.9717363715171814f - .000004f) / (scene.MaxDepth - .000004f));
+		context->OMSetDepthStencilState(write.get(), 0);
+		Require(visibleSamples() == 4, "Blended-road depth control failed");
+		setMode(10);
+		setDepth(.9717364311218262f / scene.MaxDepth);
+		context->OMSetDepthStencilState(read.get(), 0);
+		Require(visibleSamples() == 4, "Blood decal lost depth separation from the blended road");
+
+		for (float depth : { .9999f, .99999f }) {
+			float hiddenDepth = depth;
+			for (unsigned step = 0; step < 8; ++step)
+				hiddenDepth = std::nextafter(hiddenDepth, 1.0f);
+			for (uint32_t baseMode = 0; baseMode < nativeViewportBiases.size(); ++baseMode) {
+				context->ClearDepthStencilView(view, D3D11_CLEAR_DEPTH, 1, 0);
+				setMode(baseMode);
+				setDepth(depth);
+				context->OMSetDepthStencilState(write.get(), 0);
+				Require(visibleSamples() == 4, "Distant opaque surface control failed");
+				context->OMSetDepthStencilState(read.get(), 0);
+				for (uint32_t layerMode = 0; layerMode < nativeViewportBiases.size(); ++layerMode) {
+					setMode(layerMode);
+					setDepth(hiddenDepth);
+					Require(visibleSamples() == 0, "Precision margin pulled a distant hidden decal through its wall");
+					if (nativeViewportBiases[layerMode] >= nativeViewportBiases[baseMode]) {
+						setDepth(depth);
+						Require(visibleSamples() == 4, "Precision margin lost a distant coplanar decal");
+					}
+				}
+			}
+		}
+
+		for (float depth : { .1f, .96f, .972f, .98f }) {
+			float roundedBehind = depth;
+			for (unsigned step = 0; step < 3; ++step)
+				roundedBehind = std::nextafter(roundedBehind, 1.0f);
+			for (uint32_t baseMode = 0; baseMode < nativeViewportBiases.size(); ++baseMode) {
+				context->ClearDepthStencilView(view, D3D11_CLEAR_DEPTH, 1, 0);
+				setMode(baseMode);
+				setDepth(depth);
+				context->OMSetDepthStencilState(write.get(), 0);
+				Require(visibleSamples() == 4, "Standard layer depth prepass failed");
+				context->OMSetDepthStencilState(equal.get(), 0);
+				Require(visibleSamples() == 4, "Quantization margin broke equal-depth shading");
+				context->OMSetDepthStencilState(read.get(), 0);
+				for (uint32_t layerMode = 0; layerMode < nativeViewportBiases.size(); ++layerMode) {
+					if (nativeViewportBiases[layerMode] == nativeViewportBiases[baseMode])
+						continue;
+					setMode(layerMode);
+					setDepth(roundedBehind, 0, true);
+					Require(visibleSamples(12) == (nativeViewportBiases[layerMode] > nativeViewportBiases[baseMode] ? 4 : 0),
+						"D24 layer order changed across independently rounded surfaces");
+				}
+			}
+		}
+
 		globals::game::shadowState = nullptr;
 		globals::game::isVR = previousVR;
 		globals::features::reverseZ.activeThisBoot = previousActive;

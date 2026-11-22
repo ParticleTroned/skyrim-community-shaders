@@ -159,8 +159,8 @@ namespace NeuralRendering
 		bool Prepare(std::span<const RendererApplyArgs>, Batch&, HRESULT&, std::span<const Targets> = {});
 		/** Reconstruct retained targets only for the prepared source transaction and selection. */
 		bool Reconstruct(std::span<const RendererApplyArgs>, const Batch&, HRESULT&);
-		/** Commit only the original owned rectangles after successful reconstruction. */
-		void Commit(std::span<const RendererApplyArgs>, const Batch&) const;
+		/** Commit the owned rectangles and report feature slots whose external backing was fully written. */
+		std::uint32_t Commit(std::span<const RendererApplyArgs>, const Batch&) const;
 		/** Retain textures, constants and outstanding batches while rearming shader compilation. */
 		void InvalidateShaders() noexcept;
 		/** Release caches; outstanding batch ownership remains valid. */

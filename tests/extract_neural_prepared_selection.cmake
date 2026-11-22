@@ -60,3 +60,5 @@ extract("\t\tlateStage = LateStage::Evaluation;\n\t\tlateEye = 2u;\n\t\tfinalize
     "\t\tlateStage = LateStage::InputConversion;" neural_final_ldr_preparation_under_test.h)
 extract("\t\tlateSucceeded = (a_result.committedEyeMask | a_result.bypassedEyeMask)"
     "\t\treturn lateSucceeded;" neural_final_ldr_publication_under_test.h)
+extract("\t\tbool promoteStagedOutputs =" "\n\t\t}"
+    neural_final_ldr_promotion_under_test.h)

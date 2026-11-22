@@ -12,6 +12,7 @@
 #include <d3d11sdklayers.h>
 #include <d3dcompiler.h>
 #include <filesystem>
+#include <memory>
 #include <source_location>
 #include <stdexcept>
 #include <vector>
@@ -99,6 +100,14 @@ static bool PublishMainPair(ID3D11DeviceContext* context, Transaction* a_mainTra
 	bool lateSucceeded = false;
 	ID3D11ShaderResourceView* nullSRV = nullptr;
 	ID3D11UnorderedAccessView* nullUAV = nullptr;
+	const bool promoteStagedOutputs = false;
+	const uint32_t eyeCount = globals::game::isVR ? 2u : 1u;
+	struct EyeResult
+	{
+		bool bypassed = false;
+	};
+	std::array<EyeResult, 2> neuralResults{};
+	std::array<std::unique_ptr<int>, 2> submitNeuralFloatColorOut, submitNeuralFloatStagedOut;
 #include "neural_final_ldr_publication_under_test.h"
 }
 

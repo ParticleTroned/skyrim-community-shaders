@@ -34,6 +34,12 @@ namespace NeuralRendering
 			           0;
 		}
 
+		/** True only when this produced region covers the complete texture backing. */
+		[[nodiscard]] constexpr bool Covers(std::uint32_t a_width, std::uint32_t a_height) const noexcept
+		{
+			return IsValid() && baseX == 0 && baseY == 0 && width == a_width && height == a_height;
+		}
+
 		bool operator==(const ComputeSubrect&) const = default;
 	};
 

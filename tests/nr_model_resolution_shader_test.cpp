@@ -814,7 +814,7 @@ namespace
 		context->CopyResource(batch.arguments[0].colorInput, proxy.texture.Get());
 		context->CopyResource(batch.arguments[0].colorOutput, outputNeural.texture.Get());
 		Require(adapter.Reconstruct(request, batch, status), "Kernel adapter reconstruction failed");
-		adapter.Commit(request, batch);
+		Require(adapter.Commit(request, batch) == 0, "Partial reconstruction claimed a complete output backing");
 		Dispatch(context, shader, constants, sourceRegion.size, inputs, outputs);
 		const auto direct = result.Read<Pixel>(device, context), adapted = reconstructed.Read<Pixel>(device, context);
 		Require(direct == adapted, "Production adapter differs from direct bilinear reconstruction");
@@ -970,7 +970,7 @@ namespace
 			context->UpdateSubresource(batch.targets[0].color.resource.Get(), 0, nullptr, reference.data(), model[0] * sizeof(Pixel), 0);
 			context->UpdateSubresource(batch.targets[0].output.resource.Get(), 0, nullptr, neural.data(), model[0] * sizeof(Pixel), 0);
 			Require(adapter.Reconstruct(request, batch, status), "Live confidence tuning reconstruction failed");
-			adapter.Commit(request, batch);
+			Require(adapter.Commit(request, batch) == 1u, "Full reconstruction did not report its complete output backing");
 			float fade = 1.0f;
 			if (percent != 0u && !matched) {
 				const float threshold = float(percent) * 0.01f;

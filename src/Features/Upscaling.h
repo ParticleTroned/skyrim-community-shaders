@@ -4388,6 +4388,7 @@ public:
 		bool applied = false;
 		bool bypassed = false;
 		bool dlssEvaluated = false;
+		bool fullOutputCommitted = false;
 	};
 	/** Preserves lifecycle deferral without publishing incomplete vendor output. */
 	[[nodiscard]] FidelityFX::UpscaleResult DispatchSubmitStageFoveatedVendorEye(UpscaleMethod a_upscaleMethod, uint32_t eyeIndex, uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight, bool protectPostProcessInput, ID3D11Resource* outputResource = nullptr, ID3D11UnorderedAccessView* outputUAV = nullptr, UINT submitSourceSubresource = 0, const D3D11_BOX* submitSourceBox = nullptr, NeuralCenterPhase neuralCenterPhase = NeuralCenterPhase::Disabled, bool neuralEyeApplied = false, NeuralCenterDispatchResult* neuralResult = nullptr, bool neuralDirectCommit = false, bool neuralDirectOutputMayNeedRestore = false, NeuralRendering::RendererApplyArgs* neuralBatchArgs = nullptr, uint32_t neuralSourceFrame = std::numeric_limits<uint32_t>::max(), uint64_t neuralGeneration = 0);

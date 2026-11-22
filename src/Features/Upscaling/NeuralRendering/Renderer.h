@@ -353,6 +353,8 @@ namespace NeuralRendering
 		std::uint32_t evaluationAttemptedFeatureSlotMask = 0;
 		std::uint32_t evaluationSucceededFeatureSlotMask = 0;
 		std::uint32_t selectedOutputFeatureSlotMask = 0;
+		/** Complete external backings written by this call; valid only when Apply succeeds. */
+		std::uint32_t fullOutputFeatureSlotMask = 0;
 		bool memoryPressureBypass = false;
 		bool startupDeferred = false;
 

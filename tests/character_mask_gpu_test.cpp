@@ -539,10 +539,27 @@ namespace
 			std::uint32_t width, std::uint32_t height,
 			const std::vector<Color>& neuralPixels, const std::vector<Color>& baselinePixels,
 			const std::vector<std::uint8_t>& maskPixels, const std::vector<Color>& initialPixels,
-			bool unormOutput = false)
+			bool unormOutput = false, bool copyNeuralOutput = false, bool packedNeuralInput = false)
 		{
 			auto nr = MakeTexture(width, height, DXGI_FORMAT_R32G32B32A32_FLOAT,
 				D3D11_BIND_SHADER_RESOURCE, neuralPixels);
+			if (packedNeuralInput) {
+				std::vector<std::uint32_t> packed(width * height);
+				for (std::uint32_t i = 0; i < packed.size(); ++i)
+					packed[i] = (0x300u + i % 128u) | ((0x380u + i % 64u) << 11u) | ((0x1C0u + i % 32u) << 22u);
+				nr = MakeTexture(width, height, DXGI_FORMAT_R11G11B10_FLOAT, D3D11_BIND_SHADER_RESOURCE, packed);
+			}
+			Texture canonical;
+			if (copyNeuralOutput) {
+				D3D11_TEXTURE2D_DESC desc{};
+				nr.resource->GetDesc(&desc);
+				Check(device_->CreateTexture2D(&desc, nullptr, &canonical.resource), "Create canonical NR output");
+				Util::SetResourceName(canonical.resource.Get(), "CharacterMaskTest::CanonicalOutput");
+				Check(device_->CreateShaderResourceView(canonical.resource.Get(), nullptr, &canonical.srv), "Create canonical NR view");
+				Util::SetResourceName(canonical.srv.Get(), "CharacterMaskTest::CanonicalOutput SRV");
+				const D3D11_BOX full{ 0, 0, 0, width, height, 1 };
+				context_->CopySubresourceRegion(canonical.resource.Get(), 0, 0, 0, 0, nr.resource.Get(), 0, &full);
+			}
 			auto base = MakeTexture(width, height, DXGI_FORMAT_R32G32B32A32_FLOAT,
 				D3D11_BIND_SHADER_RESOURCE, baselinePixels);
 			auto mask = MakeTexture(width, height, DXGI_FORMAT_R8_UNORM,
@@ -569,7 +586,7 @@ namespace
 			ComPtr<ID3D11SamplerState> sampler;
 			Check(device_->CreateSamplerState(&samplerDesc, &sampler), "Create blend sampler");
 			Util::SetResourceName(sampler.Get(), "CharacterMaskTest::BlendSampler");
-			std::array<ID3D11ShaderResourceView*, 3> srvs{ nr.srv.Get(), base.srv.Get(), mask.srv.Get() };
+			std::array<ID3D11ShaderResourceView*, 3> srvs{ copyNeuralOutput ? canonical.srv.Get() : nr.srv.Get(), base.srv.Get(), mask.srv.Get() };
 			if (infoQueue_)
 				infoQueue_->ClearStoredMessages();
 			context_->CSSetShader(unormOutput ? blendUnormShader_.Get() : blendShader_.Get(), nullptr, 0);
@@ -1087,6 +1104,12 @@ namespace
 							constants.dispatchDim[0] = constants.dispatchDim[1] = cropped ? 4.0f : 8.0f;
 							const auto actual = gpu.Blend(constants, width, height, neural,
 								baseline, mask, original, unorm);
+							if (mode) {
+								const auto staged = gpu.Blend(constants, width, height, neural, baseline, mask, original, unorm, false, true);
+								const auto copied = gpu.Blend(constants, width, height, neural, baseline, mask, original, unorm, true, true);
+								Require(std::memcmp(staged.data(), copied.data(), staged.size() * sizeof(Color)) == 0,
+									"Full R11G11B10 staged composition differs from canonical copy, including alpha");
+							}
 							for (std::uint32_t y = 0; y < height; ++y) {
 								for (std::uint32_t x = 0; x < width * 2; ++x) {
 									const auto index = y * width * 2 + x;

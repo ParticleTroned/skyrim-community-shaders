@@ -3650,6 +3650,8 @@ namespace NeuralRendering
 			rightOutcome.evaluationAttemptedFeatureSlotMask;
 		a_outcome.evaluationSucceededFeatureSlotMask |=
 			rightOutcome.evaluationSucceededFeatureSlotMask;
+		if (rightSucceeded)
+			a_outcome.fullOutputFeatureSlotMask = leftOutcome.fullOutputFeatureSlotMask | rightOutcome.fullOutputFeatureSlotMask;
 		return rightSucceeded;
 	}
 
@@ -3838,7 +3840,8 @@ namespace NeuralRendering
 		if (!modelResolution_.Reconstruct(args, batch, result))
 			return FailLocked(RendererStage::OutputCommit, result,
 				"NR model-resolution reconstruction failed before pair commit", first.featureSlot, true);
-		modelResolution_.Commit(args, batch);
+		// Model-sized native output is not proof that reconstruction filled the external backing.
+		outcome.fullOutputFeatureSlotMask = modelResolution_.Commit(args, batch);
 		if (const auto removed = first.device->GetDeviceRemovedReason(); FAILED(removed)) {
 			d3d11Capabilities_.Invalidate();
 			return FailLocked(RendererStage::OutputCommit, removed,
@@ -4804,6 +4807,15 @@ namespace NeuralRendering
 		for (std::size_t index = 0; index < a_args.size(); ++index) {
 			SetActiveFeatureSlotLocked(a_args[index].featureSlot);
 			slots[index]->historyKey = resources[index].historyKey;
+			auto produced = colorConfiguration_.Enabled() ? slots[index]->colorWork.observation.rect : resources[index].roi.ownedOutput;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			if (!colorConfiguration_.Enabled() && resources[index].roi.compactSource) {
+				produced.baseX += resources[index].roi.compactSource->baseX;
+				produced.baseY += resources[index].roi.compactSource->baseY;
+			}
+#endif
+			if (produced.Covers(resources[index].output.desc.Width, resources[index].output.desc.Height))
+				a_outcome.fullOutputFeatureSlotMask |= 1u << a_args[index].featureSlot;
 			a_outcome.spatialHistoryReset |= slots[index]->nativeUnpublished;
 			slots[index]->nativeUnpublished = false;
 			slots[index]->lastUsedMs = GetTickCount64();

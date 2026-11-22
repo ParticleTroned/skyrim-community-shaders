@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <type_traits>
@@ -44,6 +45,7 @@ namespace winrt
 			return *this;
 		}
 		void copy_from(T* value) { pointer = value; }
+		T* get() const { return pointer; }
 		explicit operator bool() const { return pointer != nullptr; }
 	};
 }
@@ -127,6 +129,7 @@ namespace NeuralRendering
 		bool reconstructionHistoryReset = false, spatialHistoryReset = false;
 		bool startupDeferred = false;
 		uint32_t evaluationAttemptedFeatureSlotMask = 0, successful = 0, selectedOutputFeatureSlotMask = 0;
+		uint32_t fullOutputFeatureSlotMask = 0;
 		bool WasEvaluationAttempted(uint32_t slot) const { return (evaluationAttemptedFeatureSlotMask & (1u << slot)) != 0; }
 		bool WasEvaluationSuccessful(uint32_t slot) const { return (successful & (1u << slot)) != 0; }
 		bool WasOutputSelected(uint32_t slot) const { return (selectedOutputFeatureSlotMask & (1u << slot)) != 0; }
@@ -158,6 +161,7 @@ namespace NeuralRendering
 				return false;
 			if (succeeds) {
 				outcome->successful |= 1u << args.featureSlot;
+				outcome->fullOutputFeatureSlotMask |= 1u << args.featureSlot;
 				if (args.modelOutputSelection && (selectionCompletion & (1u << args.featureSlot)))
 					outcome->selectedOutputFeatureSlotMask |= 1u << args.featureSlot;
 			}
@@ -204,7 +208,7 @@ struct Upscaling
 	};
 	struct NeuralCenterDispatchResult
 	{
-		bool prepared = false, bypassed = false, applied = false, attempted = false;
+		bool prepared = false, bypassed = false, applied = false, attempted = false, fullOutputCommitted = false;
 	};
 	NeuralRendering::PipelineArrangement arrangement = NeuralRendering::PipelineArrangement::NeuralThenDlss;
 	struct Settings
@@ -484,7 +488,24 @@ namespace
 		auto* context = globals::d3d::context;
 		ID3D11ShaderResourceView* nullSRV = nullptr;
 		ID3D11UnorderedAccessView* nullUAV = nullptr;
+		const bool promoteStagedOutputs = a_mainTransaction != nullptr;
+		const uint32_t eyeCount = globals::game::isVR ? 2u : 1u;
+		std::array<Upscaling::NeuralCenterDispatchResult, 2> neuralResults{};
+		std::array<std::unique_ptr<uint32_t>, 2> submitNeuralFloatColorOut, submitNeuralFloatStagedOut;
+		for (uint32_t eye = 0; eye < 2; ++eye) {
+			neuralResults[eye].bypassed = (bypassed & (1u << eye)) != 0;
+			submitNeuralFloatColorOut[eye] = std::make_unique<uint32_t>(eye);
+			submitNeuralFloatStagedOut[eye] = std::make_unique<uint32_t>(eye + 2);
+		}
+		const bool published = [&] {
 #include "neural_final_ldr_publication_under_test.h"
+		}();
+		for (uint32_t eye = 0; eye < 2; ++eye) {
+			const bool promoted = published && promoteStagedOutputs && eye < eyeCount && !neuralResults[eye].bypassed;
+			Require(*submitNeuralFloatColorOut[eye] == eye + (promoted ? 2u : 0u));
+			Require(*submitNeuralFloatStagedOut[eye] == eye + (promoted ? 0u : 2u));
+		}
+		return published;
 	}
 
 	void CheckMainPublication()
@@ -508,6 +529,74 @@ namespace
 			}
 		}
 	}
+
+	void CheckPromotionEligibility()
+	{
+		struct Output
+		{
+			winrt::com_ptr<ID3D11Resource> resource;
+			winrt::com_ptr<ID3D11ShaderResourceView> srv;
+			struct
+			{
+				uint32_t Width = 16, Height = 8, Format = 26;
+			} desc;
+		};
+		using NeuralStereoRouteRole = Upscaling::NeuralStereoRouteRole;
+		for (uint32_t eyeCount : { 1u, 2u }) {
+			for (uint32_t bypass = 0; bypass < (1u << eyeCount); ++bypass) {
+				for (uint32_t defect = 0; defect < 10; ++defect) {
+					for (uint32_t changedEye = 0; changedEye < eyeCount; ++changedEye) {
+						std::array<std::unique_ptr<Output>, 2> submitNeuralFloatColorOut, submitNeuralFloatStagedOut;
+						std::array<ID3D11Resource, 4> textures;
+						ID3D11ShaderResourceView view;
+						std::array<Upscaling::NeuralCenterDispatchResult, 2> neuralResults{};
+						std::array<NeuralRendering::RendererApplyArgs, 2> finalizedArgs{};
+						for (uint32_t eye = 0; eye < eyeCount; ++eye) {
+							auto& published = submitNeuralFloatColorOut[eye] = std::make_unique<Output>();
+							auto& staged = submitNeuralFloatStagedOut[eye] = std::make_unique<Output>();
+							published->resource.copy_from(&textures[eye]);
+							staged->resource.copy_from(&textures[eye + 2]);
+							published->srv.copy_from(&view);
+							staged->srv.copy_from(&view);
+							neuralResults[eye].bypassed = (bypass & (1u << eye)) != 0;
+							neuralResults[eye].fullOutputCommitted = true;
+							finalizedArgs[eye].colorOutput = staged->resource.get();
+						}
+						const auto a_role = defect == 1 ? NeuralStereoRouteRole::Submit : NeuralStereoRouteRole::Main;
+						const bool directCommit = defect == 2;
+						NeuralRendering::FramebufferTransaction transaction;
+						auto* a_mainTransaction = defect == 3 ? nullptr : &transaction;
+						auto& defectiveOutput = submitNeuralFloatStagedOut[changedEye];
+						switch (defect) {
+						case 4:
+							neuralResults[changedEye].fullOutputCommitted = false;
+							break;
+						case 5:
+							defectiveOutput->srv = {};
+							break;
+						case 6:
+							defectiveOutput->resource.copy_from(submitNeuralFloatColorOut[changedEye]->resource.get());
+							break;
+						case 7:
+							finalizedArgs[changedEye].colorOutput = nullptr;
+							break;
+						case 8:
+							++defectiveOutput->desc.Width;
+							break;
+						case 9:
+							++defectiveOutput->desc.Format;
+							break;
+						}
+#include "neural_final_ldr_promotion_under_test.h"
+						Require(promoteStagedOutputs == (defect == 0 || (defect >= 4 && (bypass & (1u << changedEye)))));
+					}
+				}
+			}
+		}
+		Require(NeuralRendering::ComputeSubrect{ 0, 0, 16, 8 }.Covers(16, 8));
+		Require(!NeuralRendering::ComputeSubrect{ 1, 0, 15, 8 }.Covers(16, 8));
+		Require(!NeuralRendering::ComputeSubrect{ 0, 0, 16, 7 }.Covers(16, 8));
+	}
 }
 
 int main()
@@ -515,6 +604,7 @@ int main()
 	CheckFinalizedFinalLdrPlans();
 	CheckMainPreparation();
 	CheckMainPublication();
+	CheckPromotionEligibility();
 	for (bool vr : { false, true })
 		for (bool batched : { false, true })
 			for (bool deferred : { false, true }) {

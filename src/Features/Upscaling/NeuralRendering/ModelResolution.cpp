@@ -1917,10 +1917,11 @@ namespace NeuralRendering
 		return SUCCEEDED(result);
 	}
 
-	void ModelResolution::Commit(std::span<const RendererApplyArgs> args, const Batch& batch) const
+	std::uint32_t ModelResolution::Commit(std::span<const RendererApplyArgs> args, const Batch& batch) const
 	{
 		if (std::ranges::all_of(std::span(batch.selectedOutputs.data(), batch.count), [](const auto& output) { return output != nullptr; }))
-			return;
+			return 0;
+		std::uint32_t fullOutputFeatureSlotMask = 0;
 		CS_GPU_PASS("NeuralRendering::ModelResolutionCommit");
 		ComputeStateGuard<3> guard(args.front().context);
 		for (std::size_t index = 0; index < args.size(); ++index) {
@@ -1931,7 +1932,12 @@ namespace NeuralRendering
 			const D3D11_BOX box{ c.sourceOffset[0], c.sourceOffset[1], 0,
 				c.sourceOffset[0] + c.sourceRegion[0], c.sourceOffset[1] + c.sourceRegion[1], 1 };
 			args[index].context->CopySubresourceRegion(args[index].colorOutput, 0, box.left, box.top, 0, work.reconstructed.resource.Get(), 0, &box);
+			const ComputeSubrect produced{ c.sourceOffset[0], c.sourceOffset[1], c.sourceRegion[0], c.sourceRegion[1] };
+			const auto& output = batch.sources[index].output.desc;
+			if (produced.Covers(output.Width, output.Height))
+				fullOutputFeatureSlotMask |= 1u << args[index].featureSlot;
 		}
+		return fullOutputFeatureSlotMask;
 	}
 
 	void ModelResolution::InvalidateShaders() noexcept

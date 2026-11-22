@@ -43934,7 +43934,7 @@ bool Upscaling::PrepareSubmitNeuralFloatResources(
 				neuralFormat) ||
 			(!directCommit && !EnsureFoveatedTexture(
 								  submitNeuralFloatStagedOut[eyeIndex], source, width, height,
-								  false, false, false, false,
+								  false, true, false, false,
 								  ("NeuralRendering::SubmitFloatStagedOut" + suffix).c_str(),
 								  neuralFormat))) {
 			return false;
@@ -43954,7 +43954,7 @@ bool Upscaling::PrepareSubmitNeuralFloatResources(
 	return matches(submitNeuralFloatColorIn[eyeIndex], true, true) &&
 	       matches(submitNeuralFloatColorOut[eyeIndex], true, false) &&
 	       (directCommit ||
-			   matches(submitNeuralFloatStagedOut[eyeIndex], false, false));
+			   matches(submitNeuralFloatStagedOut[eyeIndex], true, false));
 }
 
 ID3D11Resource* Upscaling::GetSubmitNeuralFloatEvaluationOutput(
@@ -46741,6 +46741,7 @@ namespace
 					if ((evaluationEyeMask & (1u << eye)) == 0)
 						continue;
 					a_results[eye].applied = true;
+					a_results[eye].fullOutputCommitted = (outcome.fullOutputFeatureSlotMask & (1u << a_batchArgs[eye].featureSlot)) != 0;
 					a_results[eye].bypassed = false;
 					evaluatedEyes[eye] = true;
 					successfulEyes[eye] = true;
@@ -47494,12 +47495,27 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			return false;
 
 		lateStage = LateStage::OutputCommit;
+		bool promoteStagedOutputs = a_role == NeuralStereoRouteRole::Main && a_mainTransaction && !directCommit;
+		for (uint32_t eye = 0; eye < eyeCount && promoteStagedOutputs; ++eye) {
+			if (neuralResults[eye].bypassed)
+				continue;
+			const auto& published = submitNeuralFloatColorOut[eye];
+			const auto& staged = submitNeuralFloatStagedOut[eye];
+			promoteStagedOutputs = neuralResults[eye].fullOutputCommitted &&
+			                       published && published->resource && published->srv &&
+			                       staged && staged->resource && staged->srv &&
+			                       published->resource.get() != staged->resource.get() &&
+			                       finalizedArgs[eye].colorOutput == staged->resource.get() &&
+			                       published->desc.Width == staged->desc.Width &&
+			                       published->desc.Height == staged->desc.Height &&
+			                       published->desc.Format == staged->desc.Format;
+		}
 		for (uint32_t eye = 0; eye < eyeCount; ++eye) {
 			lateEye = eye;
 			if (neuralResults[eye].bypassed)
 				continue;
-			if (!CommitSubmitNeuralFloatOutput(
-					eye, directCommit, finalizedArgs[eye].computeSubrect)) {
+			if (!promoteStagedOutputs && !CommitSubmitNeuralFloatOutput(
+											 eye, directCommit, finalizedArgs[eye].computeSubrect)) {
 				return false;
 			}
 		}
@@ -47560,7 +47576,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			const bool blended = [&]() {
 				CS_GPU_DETAIL_PASS("NeuralRendering::CapturedComposite", capture);
 				return DispatchFoveatedBlendPass(
-					submitNeuralFloatColorOut[eye]->srv.get(),
+					(promoteStagedOutputs ? submitNeuralFloatStagedOut[eye] : submitNeuralFloatColorOut[eye])->srv.get(),
 					a_targets[eye].uav,
 					a_outputWidthPerEye, a_outputHeight, rect,
 					blendVisibleOutput,
@@ -47597,6 +47613,12 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			context->CSSetShaderResources(0, 1, &nullSRV);
 			context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
 			lateSucceeded = a_mainTransaction->Commit(true);
+		}
+		if (lateSucceeded && promoteStagedOutputs) {
+			// Keep published previews separate from the next evaluation's writable backing.
+			for (uint32_t eye = 0; eye < eyeCount; ++eye)
+				if (!neuralResults[eye].bypassed)
+					submitNeuralFloatColorOut[eye].swap(submitNeuralFloatStagedOut[eye]);
 		}
 		return lateSucceeded;
 	} catch (const std::exception& e) {

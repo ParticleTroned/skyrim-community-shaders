@@ -353,7 +353,8 @@ PS_OUTPUT main(PS_INPUT input)
 			{
 				uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + i];
 				LightLimitFix::Light light = LightLimitFix::lights[clusteredLightIndex];
-				if (LightLimitFix::IsLightIgnored(light) || light.lightFlags & LightLimitFix::LightFlags::Shadow) {
+				float lightVisibility = LightLimitFix::GetEffectLightVisibility(light, positionWS.xyz, eyeIndex);
+				if (lightVisibility <= 0.0) {
 					continue;
 				}
 				float3 lightDirection = light.positionWS[eyeIndex].xyz - positionWS.xyz;
@@ -367,7 +368,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		endif
 
 				const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
-				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * light.fade * 0.5;
+				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * lightVisibility * light.fade * 0.5;
 				if (Color::IsSceneColorDraw() && SharedData::adaptiveBalanceSettings.appearance.particlePointInfluence != 1.0)
 					lightColor *= SharedData::adaptiveBalanceSettings.appearance.particlePointInfluence;
 				propertyColor += lightColor;

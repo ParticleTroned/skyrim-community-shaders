@@ -266,7 +266,13 @@ private:
 		const void* shape;
 		uint32_t actorID, frame;
 	};
-	std::unordered_map<const RE::bhkNiCollisionObject*, ColliderHistory> colliderHistory;
+	struct RetainedColliderHistory
+	{
+		// Retain identity without reference counting temporary capsule samples.
+		RE::NiPointer<RE::bhkNiCollisionObject> object;
+		ColliderHistory capsule;
+	};
+	std::unordered_map<const RE::bhkNiCollisionObject*, RetainedColliderHistory> colliderHistory;
 	RE::NiPoint3 queuedCamera{};
 	GrassCollisionMode::Mode queuedMode = GrassCollisionMode::Mode::Disabled;
 	std::atomic<GrassCollisionMode::Mode> resourceMode{ GrassCollisionMode::Mode::Disabled };

@@ -1726,6 +1726,18 @@ if(BUILD_CONTROLLER_TESTS)
         NvidiaPipelineContract
         PROPERTIES LABELS "ControllerTests"
     )
+    add_test(
+        NAME StreamlineCompatibleHeaders
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/Testing/StreamlineCompatibleHeaders"
+            "-DTEST_GENERATOR=${CMAKE_GENERATOR}" -P
+            "${PROJECT_SOURCE_DIR}/tests/streamline_compatible_headers_test.cmake"
+    )
+    set_tests_properties(
+        StreamlineCompatibleHeaders
+        PROPERTIES LABELS "ControllerTests"
+    )
 
     add_test(
         NAME BuildProvenance
@@ -2456,6 +2468,7 @@ if(BUILD_CONTROLLER_TESTS)
     )
     include("${PROJECT_SOURCE_DIR}/tests/hang_guards.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/actor_shape_bounds.cmake")
+    include("${PROJECT_SOURCE_DIR}/tests/actor_collision_traversal.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/terrain_variation_mesh.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/fov_settings.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_blur.cmake")
@@ -3181,6 +3194,10 @@ if(BUILD_CONTROLLER_TESTS)
     target_link_libraries(sharpener_bindings_test PRIVATE d3d11.lib)
     include("${PROJECT_SOURCE_DIR}/tests/d3d11_shader_test.cmake")
 
+    add_controller_test(skin_wetness_test SkinWetness tests/skin_wetness_test.cpp)
+    add_d3d_shader_test(skin_shader_test SkinShader tests/skin_shader_test.cpp)
+    set_tests_properties(SkinShader PROPERTIES TIMEOUT 0)
+
     add_d3d_shader_test(commonlib_d3d_bridge_test CommonLibD3DBridge tests/commonlib_d3d_bridge_test.cpp)
     target_link_libraries(
         commonlib_d3d_bridge_test
@@ -3240,6 +3257,41 @@ if(BUILD_CONTROLLER_TESTS)
         water_history_shader_test
         PRIVATE spdlog::spdlog windowsapp.lib
     )
+    add_d3d_shader_test(downsample_stereo_shader_test DownsampleStereoShader tests/downsample_stereo_shader_test.cpp)
+    target_sources(
+        downsample_stereo_shader_test
+        PRIVATE src/Utils/ShaderInclude.cpp
+    )
+    target_link_libraries(
+        downsample_stereo_shader_test
+        PRIVATE spdlog::spdlog windowsapp.lib
+    )
+    set_tests_properties(DownsampleStereoShader PROPERTIES TIMEOUT 0)
+    add_d3d_shader_test(paraboloid_shadow_test ParaboloidShadow tests/paraboloid_shadow_test.cpp)
+    target_sources(paraboloid_shadow_test PRIVATE src/Utils/ShaderInclude.cpp)
+    target_link_libraries(
+        paraboloid_shadow_test
+        PRIVATE spdlog::spdlog windowsapp.lib
+    )
+    set_tests_properties(ParaboloidShadow PROPERTIES TIMEOUT 0)
+    add_d3d_shader_test(carried_light_shadow_test CarriedLightShadow tests/carried_light_shadow_test.cpp)
+    target_sources(
+        carried_light_shadow_test
+        PRIVATE src/Utils/ShaderInclude.cpp
+    )
+    target_link_libraries(
+        carried_light_shadow_test
+        PRIVATE spdlog::spdlog windowsapp.lib
+    )
+    set_tests_properties(CarriedLightShadow PROPERTIES TIMEOUT 0)
+    add_d3d_shader_test(paraboloid_sampling_test ParaboloidSampling tests/paraboloid_sampling_test.cpp)
+    target_sources(paraboloid_sampling_test PRIVATE src/Utils/ShaderInclude.cpp)
+    target_link_libraries(
+        paraboloid_sampling_test
+        PRIVATE spdlog::spdlog windowsapp.lib
+    )
+    set_tests_properties(ParaboloidSampling PROPERTIES TIMEOUT 0)
+
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_depth.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/vanilla_ssao.cmake")
     add_d3d_shader_test(
@@ -4524,6 +4576,11 @@ if(BUILD_CONTROLLER_TESTS)
         LightLimitFixVRHookPolicy
         tests/light_limit_fix_vr_hook_policy_test.cpp
     )
+    add_controller_test(
+        light_limit_fix_effect_spotlight_test
+        LightLimitFixEffectSpotlight
+        tests/light_limit_fix_effect_spotlight_test.cpp
+    )
     set(_fsr_selection_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/fsr-sdk-selection"
     )
@@ -4990,6 +5047,11 @@ if(BUILD_CONTROLLER_TESTS)
         shader_compilation_scheduling_policy_test
         ShaderCompilationSchedulingPolicy
         tests/shader_compilation_scheduling_policy_test.cpp
+    )
+    add_controller_test(
+        shader_compilation_estimate_test
+        ShaderCompilationEstimate
+        tests/shader_compilation_estimate_test.cpp
     )
     add_controller_test(
         vr_depth_culling_cache_refresh_policy_test

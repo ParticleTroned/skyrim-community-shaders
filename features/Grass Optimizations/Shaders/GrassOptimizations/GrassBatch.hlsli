@@ -5,7 +5,7 @@
 
 cbuffer GrassBatch : register(b9)
 {
-	uint GrassBatchEnabled;  // Bit 0 selects batch records; bit 1 selects far-billboard lighting.
+	uint GrassBatchEnabled;  // Bits select batching, far-billboard lighting and compact source records.
 	uint GrassBatchEye;
 	uint GrassBatchBase;
 	float GrassBatchCollisionDistance;
@@ -27,13 +27,9 @@ void LoadGrassBatchInstance(inout float4 data1, inout float4 data2, inout float4
 {
 	[branch] if (GrassBatchEnabled)
 	{
-		uint address = uint(data1.x) * 32;
-		uint4 a = GrassSourceRecords.Load4(address);
-		uint4 b = GrassSourceRecords.Load4(address + 16);
-		data1 = float4(UnpackGrassInstance(a.x), UnpackGrassInstance(a.y));
-		data2 = float4(UnpackGrassInstance(a.z), UnpackGrassInstance(a.w));
-		data3 = float4(UnpackGrassInstance(b.x), UnpackGrassInstance(b.y));
-		data4 = float4(UnpackGrassInstance(b.z), UnpackGrassInstance(b.w));
+		uint address = uint(data1.x) * 16;
+		uint seed;
+		LoadGrassInstance(GrassSourceRecords, address, (GrassBatchEnabled & 4u) != 0, data1, data2, data3, data4, seed);
 	}
 }
 

@@ -7,6 +7,7 @@
 #include "Utils/LazyShader.h"
 #include "Utils/PointLightFlags.h"
 
+#include "Features/LightLimitFix/EffectSpotlight.h"
 #include "Features/LightLimitFix/LightAttach.h"
 #include "Features/LightLimitFix/ParticleLights.h"
 #include "Features/LightLimitFix/SceneLightSnapshot.h"
@@ -44,6 +45,7 @@ public:
 	virtual inline std::string GetShortName() override { return "LightLimitFix"; }
 	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
 	virtual inline std::string_view GetShaderDefineName() override { return "LIGHT_LIMIT_FIX"; }
+	std::string_view GetShaderCacheAbiVersion() override { return "effect-spotlights-v2"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
@@ -80,11 +82,13 @@ public:
 		uint128_t roomFlags = uint32_t(0);
 		stl::enumeration<LightFlags> lightFlags;
 		uint32_t shadowMaskIndex = 0;
-		uint pad0;
-		uint pad1;
+		uint32_t effectSpotlightIndex = 0;
+		float effectSpotlightHalfFalloff = 0.0f;
 	};
 	STATIC_ASSERT_ALIGNAS_16(LightData);
 	static_assert(sizeof(LightData) == 96);
+	static_assert(offsetof(LightData, effectSpotlightIndex) == 88);
+	static_assert(offsetof(LightData, effectSpotlightHalfFalloff) == 92);
 
 	eastl::vector<LightData> lightScratch;
 
@@ -128,10 +132,12 @@ public:
 		uint LightsVisualisationMode;
 		uint ContactShadowFlags;
 		uint ContactShadowParams;
-		uint ClusterSize[4];
+		uint ClusterSize[3];
+		uint HasClusteredLights;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 	static_assert(sizeof(PerFrame) == 32);
+	static_assert(offsetof(PerFrame, HasClusteredLights) == 28);
 
 	PerFrame GetCommonBufferData();
 
@@ -175,6 +181,7 @@ public:
 	eastl::unique_ptr<Buffer> contactShadowGrid = nullptr;
 
 	std::uint32_t lightCount = 0;
+	bool clusteredLightsAvailable = false;
 	float lightsNear = 1;
 	float lightsFar = 16384;
 
@@ -313,6 +320,8 @@ public:
 		settings.ShadowCulling.torch = a_enabled && defaults.ShadowCulling.torch;
 		settings.ShadowCulling.actors = a_enabled && defaults.ShadowCulling.actors;
 		settings.ShadowCulling.smallActorParts = a_enabled && defaults.ShadowCulling.smallActorParts;
+		settings.ShadowCulling.skipFlameEnclosure = a_enabled && defaults.ShadowCulling.skipFlameEnclosure;
+		settings.ShadowCulling.carriedLightNearCutoff = a_enabled && defaults.ShadowCulling.carriedLightNearCutoff;
 		settings.SkipRedundantLightAttach = a_enabled && defaults.SkipRedundantLightAttach;
 		LightLimitFixDetail::LightAttach::Invalidate();
 	}
@@ -342,13 +351,15 @@ public:
 			settings.ShadowCulling.torch = defaults.ShadowCulling.torch;
 			settings.ShadowCulling.actors = defaults.ShadowCulling.actors;
 			settings.ShadowCulling.smallActorParts = defaults.ShadowCulling.smallActorParts;
+			settings.ShadowCulling.skipFlameEnclosure = defaults.ShadowCulling.skipFlameEnclosure;
+			settings.ShadowCulling.carriedLightNearCutoff = defaults.ShadowCulling.carriedLightNearCutoff;
 			return;
 		}
 
 		settings.EnableParticleLights = false;
 		SetContactShadowsEnabled(false);
 		settings.EnableParticleContactShadows = false;
-		settings.ShadowCulling.sun = settings.ShadowCulling.torch = settings.ShadowCulling.actors = settings.ShadowCulling.smallActorParts = false;
+		settings.ShadowCulling.sun = settings.ShadowCulling.torch = settings.ShadowCulling.actors = settings.ShadowCulling.smallActorParts = settings.ShadowCulling.skipFlameEnclosure = settings.ShadowCulling.carriedLightNearCutoff = false;
 	}
 	virtual json CapturePerformanceCostMeasurementState() const override
 	{
@@ -510,6 +521,12 @@ public:
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		struct BSParticleShader_SetupGeometry
+		{
+			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
 		struct AIProcess_CalculateLightValue_GetLuminance
 		{
 			static float thunk(RE::ShadowSceneNode* shadowSceneNode,
@@ -555,6 +572,7 @@ public:
 			stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 			stl::write_vfunc<0x6, BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
 			stl::write_vfunc<0x6, BSWaterShader_SetupGeometry>(RE::VTABLE_BSWaterShader[0]);
+			stl::write_vfunc<0x6, BSParticleShader_SetupGeometry>(RE::VTABLE_BSParticleShader[0]);
 			stl::write_thunk_call<ValidLight1>(REL::RelocationID(100994, 107781).address() + 0x92);
 			stl::write_thunk_call<ValidLight2>(REL::RelocationID(100997, 107784).address() + REL::Relocate(0x139, 0x12A, 0x133));
 			stl::write_thunk_call<ValidLight3>(REL::RelocationID(101296, 108283).address() + REL::Relocate(0xB7, 0x7E));
@@ -575,6 +593,15 @@ public:
 	virtual bool IsCore() const override { return true; }
 
 private:
+	eastl::unique_ptr<Buffer> effectSpotlights;
+	eastl::vector<LightLimitFixDetail::EffectSpotlight> effectSpotlightScratch;
+	bool effectSpotlightsAvailable = false;
+	bool effectSpotlightUploadFailed = false;
+	/** Stage a retained native shadow light's cone without changing its opaque shadow-mask ownership. */
+	void AddEffectSpotlight(RE::BSShadowLight* a_shadowLight, LightData& a_light);
+	/** Upload this frame's cones; failed uploads leave affected spotlights excluded from effects. */
+	void UploadEffectSpotlights();
+
 	/** Resolves an eligible effect pass after its caller invalidates material admission. */
 	ParticleLightReference GetParticleLightConfigs(RE::BSRenderPass* a_pass, RE::BSEffectShaderProperty* a_shaderProperty);
 };

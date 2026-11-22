@@ -10,7 +10,7 @@ namespace GrassPolicy
 {
 	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Settings, Enabled, CrossCellBatching, FrustumCulling,
 		DensityReduction, MinPixelSize, FullDetailPixelSize, MinDensity, EnableMeshLOD, EnableMidLOD, EnableFarLOD,
-		MidLODPixelSize, FarLODPixelSize, MeshLODBandPixels, EnableOcclusionCulling, RefineHiZ, OcclusionBias,
+		MidLODPixelSize, FarLODPixelSize, MeshLODBandPixels, EnableOcclusionCulling, RefineHiZ, OcclusionTightness, OcclusionBias,
 		MeshCostBias, CostBiasStartDistance, InvisibleFadeCull, RenderDistanceOverride, EdgeFadeStart, SimpleShadingPixelSize, CollisionDistance,
 		FarLODOptimization, FarLODMinPixelSize, FarLODMinDensity, FarLODMaxDensity, FarLODCoverageBias, ProportionalDensityFade)
 }
@@ -30,7 +30,7 @@ bool GrassOptimizations::IsHookInstalled() const { return renderer->IsHookInstal
 bool GrassOptimizations::SetSettings(const GrassPolicy::Settings& requested, std::string& error)
 {
 	if (!requested.Valid()) {
-		error = "Invalid grass settings: finite ordered pixel thresholds and bounded density, bias and distances are required";
+		error = "Invalid grass settings: finite ordered pixel thresholds and bounded density, occlusion tightness, bias and distances are required";
 		return false;
 	}
 	{
@@ -247,6 +247,8 @@ void GrassOptimizations::DrawControls(bool advanced, std::string_view section)
 				Util::AddTooltip("Check smaller gaps around terrain and objects before drawing hidden grass. This can save performance in obstructed views, but the extra checks can cost performance in open areas. Requires Grass Hi-Z culling.", tooltipFlags);
 			}
 			if (advanced && next.EnableOcclusionCulling) {
+				changed |= Util::Widgets::SliderFloat("Occlusion tightness", &next.OcclusionTightness, GrassPolicy::kMinOcclusionTightness, GrassPolicy::kMaxOcclusionTightness, "%.2f");
+				Util::AddTooltip("Scale the grass bounds used to check whether an object hides it. 1.0 checks the full bounds; lower values can skip more grass but may hide exposed tips or cause popping. Default: 0.9. Occlusion tolerance adds a separate depth margin and cannot restore the missing coverage.", tooltipFlags);
 				changed |= Util::Widgets::SliderFloat("Grass occlusion tolerance", &next.OcclusionBias, 0.0f, 0.05f, "%.4f");
 				Util::AddTooltip("Relative distance margin for hidden-grass skipping: 0.001 means 0.1% of the nearest grass distance. Increase this if grass disappears incorrectly; higher values keep more grass and can cost performance.", tooltipFlags);
 			}

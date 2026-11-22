@@ -28,6 +28,7 @@ set(_menu_frame_test_headers
     "${_menu_frame_test_dir}/menu_canvas_size_under_test.h"
     "${_menu_frame_test_dir}/menu_overlay_display_under_test.h"
     "${_menu_frame_test_dir}/menu_frame_initialization_under_test.h"
+    "${_menu_frame_test_dir}/menu_gamepad_filter_under_test.h"
     "${_menu_frame_test_dir}/menu_shader_failures_under_test.h"
     "${_menu_frame_test_dir}/menu_shader_status_under_test.h"
     "${_menu_frame_test_dir}/menu_renderdoc_warning_under_test.h"

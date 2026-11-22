@@ -253,28 +253,14 @@ VS_OUTPUT main(VS_INPUT input)
 	float3x4 previousWorldMatrix =
 		Skinned::GetBoneTransformMatrix(PreviousBones, actualIndices, PreviousBonesPivot[eyeIndex], input.BoneWeights);
 	precise float4 previousWorldPosition =
-		float4(mul(
-#		if defined(FUR_SHELLS)
-				   previousInputPosition,
-#		else
-				   inputPosition,
-#		endif
-				   transpose(previousWorldMatrix)),
-			1);
+		float4(mul(previousInputPosition, transpose(previousWorldMatrix)), 1);
 
 	float3x4 worldMatrix = Skinned::GetBoneTransformMatrix(Bones, actualIndices, BonesPivot[eyeIndex], input.BoneWeights);
 	precise float4 worldPosition = float4(mul(inputPosition, transpose(worldMatrix)), 1);
 
 	float4 viewPos = mul(ViewProj[eyeIndex], worldPosition);
-#	else  // !SKINNED
-	precise float4 previousWorldPosition = float4(mul(PreviousWorld[eyeIndex],
-#		if defined(FUR_SHELLS)
-													  previousInputPosition
-#		else
-													  inputPosition
-#		endif
-													  ),
-		1);
+#	else   // !SKINNED
+	precise float4 previousWorldPosition = float4(mul(PreviousWorld[eyeIndex], previousInputPosition), 1);
 	precise float4 worldPosition = float4(mul(World[eyeIndex], inputPosition), 1);
 	precise float4x4 world4x4 = float4x4(World[eyeIndex][0], World[eyeIndex][1], World[eyeIndex][2], float4(0, 0, 0, 1));
 	precise float4x4 modelView = mul(ViewProj[eyeIndex], world4x4);
@@ -1072,6 +1058,10 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 
 #	if defined(VR)
 #		include "Common/FoveatedShaderDetail.hlsli"
+#	endif
+
+#	if defined(CS_SKIN)
+#		include "Skin/Skin.hlsli"
 #	endif
 
 #	if defined(CS_HAIR_SHADING)
@@ -2004,6 +1994,9 @@ struct WetnessDirectLightState
 WetnessDirectLightState CreateWetnessDirectLightState(
 	float3 wetnessNormal,
 	float3 worldNormal,
+#		if defined(TRUE_PBR)
+	float3 coatWorldNormal,
+#		endif
 	float3 directViewDirection,
 	float waterRoughnessSpecular,
 	float wetnessStrength,
@@ -2046,6 +2039,9 @@ WetnessDirectLightState CreateWetnessDirectLightState(
 	// Match the direct-lighting context normalization so the prepared wet params remain
 	// identical when shared across the directional light and both point-light loops.
 	float3 directViewDirFallback = SafeNormalizeLighting(worldNormal, float3(0.0, 0.0, 1.0));
+#		if defined(TRUE_PBR)
+	directViewDirFallback = SafeNormalizeLighting(coatWorldNormal, directViewDirFallback);
+#		endif
 	float3 directViewDir = SafeNormalizeLighting(directViewDirection, directViewDirFallback);
 	state.params = CreateWetnessDirectLightingParams(wetnessNormal, directViewDir, wetnessStrength, wetReflectionParamsDirect);
 	state.params.highlightReduction = filmHighlightReduction;
@@ -2113,6 +2109,9 @@ WetnessLightingState CreateWetnessLightingState(
 	bool wetLightingVisible,
 	float3 wetnessNormal,
 	float3 worldNormal,
+#		if defined(TRUE_PBR)
+	float3 coatWorldNormal,
+#		endif
 	float3 directViewDirection,
 	float waterRoughnessSpecular,
 	float wetnessStrength,
@@ -2161,6 +2160,9 @@ WetnessLightingState CreateWetnessLightingState(
 		state.directLightState = CreateWetnessDirectLightState(
 			wetnessNormal,
 			worldNormal,
+#		if defined(TRUE_PBR)
+			coatWorldNormal,
+#		endif
 			directViewDirection,
 			waterRoughnessSpecular,
 			wetnessStrength,
@@ -2968,6 +2970,44 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif  // FACEGEN
 
+#	if defined(CS_SKIN_SHADING)
+	const bool skinEnabled = Skin::IsEnabled();
+	SharedData::SkinData skinData = SharedData::skinData;
+	float4 skinExtra = 1;
+	float4 skinWetnessNormal = float4(0.5, 0.5, 1, 1);
+	float skinWetMask = 1;
+	float skinThickness = 1;
+	const bool hasSkinExtra = Skin::skinMaterialFlags.x > 0.5;
+	const bool hasSkinWetness = Skin::skinMaterialFlags.y > 0.5;
+	const float skinBodyTiling = Skin::skinMaterialFlags.z >= 2.0 ? 1.0 : skinData.skinDetailParams.y;
+#		if defined(WETTERNESS) || defined(WETNESS_EFFECTS)
+	const bool skinNeedsWetness = skinData.physicalParams.w > 0 && skinData.wetResponse > 0 &&
+	                              (Skin::skinPerGeometry.x > 0 || Skin::skinPerGeometry.y > 0 || skinData.skinParams2.y > 0);
+#		else
+	const bool skinNeedsWetness = false;
+#		endif
+	[branch] if (skinEnabled)
+	{
+		baseColor.xyz *= skinData.skinParams2.w;
+		if (hasSkinExtra)
+			skinExtra = Skin::TexSkinExtra.Sample(SampColorSampler, uv);
+		if (Skin::skinMaterialFlags.w > 0.5 && skinData.sssParams.w > 0 && skinData.sssParams.x > 0)
+			skinThickness = 1 - saturate(Skin::TexSkinThickness.Sample(SampColorSampler, uv).x);
+#		if defined(WETTERNESS) || defined(WETNESS_EFFECTS)
+		if (hasSkinWetness && skinData.physicalParams.w > 0 && skinData.wetResponse > 0 && (skinNeedsWetness || CS_WETNESS_SETTINGS.EnableWetnessEffects != 0)) {
+			skinWetnessNormal = Skin::TexSkinWetness.Sample(SampColorSampler, uv);
+			// Opaque grayscale/red masks store wetness in red; packed normals use alpha.
+			bool grayscale = Skin::skinMaterialFlags.y > 1.5 || (skinWetnessNormal.a >= 0.99 &&
+																	(all(abs(skinWetnessNormal.rgb - skinWetnessNormal.rrr) < 1.0 / 255.0) || all(skinWetnessNormal.yz < 1.0 / 255.0)));
+			skinWetMask = saturate(grayscale ? skinWetnessNormal.r : skinWetnessNormal.a);
+			if (grayscale)
+				skinWetnessNormal.xyz = float3(0.5, 0.5, 1);
+		}
+		skinWetMask *= skinData.wetResponse;
+#		endif
+	}
+#	endif
+
 #	if defined(CS_HAIR_SHADING)
 	float3 hairTint = 0;
 
@@ -3070,6 +3110,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	else
 	float3 worldNormal = SafeNormalize3(mul(tbn, normal.xyz), float3(0.0, 0.0, 1.0));
 #		if defined(TREE_ANIM) && !defined(VR)
+#			if defined(SNOW_COVER)
+#				define TREE_SNOW_COVERAGE_NORMAL
+	// Snow coverage must not inherit the camera-facing lighting adjustment.
+	float3 treeSnowCoverageNormal = worldNormal;
+#			endif
 	float3 viewNormal = SafeNormalize3(FrameBuffer::WorldToView(worldNormal, false, eyeIndex), float3(0.0, 0.0, 1.0));
 	viewNormal = float3(viewNormal.xy, -abs(viewNormal.z));
 	worldNormal = SafeNormalize3(FrameBuffer::ViewToWorld(viewNormal, false, eyeIndex), worldNormal);
@@ -3132,6 +3177,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(LODOBJECTSHD)
 	projWeight += (-0.5 + input.Color.w) * 2.5;
 #		endif  // LODOBJECTSHD
+#		if defined(TREE_SNOW_COVERAGE_NORMAL)
+	float treeSnowProjWeight = -ProjectedUVParams.x * projNoise + (dot(treeSnowCoverageNormal, texProj) * vertexAlpha - ProjectedUVParams.w);
+#			if defined(LODOBJECTSHD)
+	treeSnowProjWeight += (-0.5 + input.Color.w) * 2.5;
+#			endif
+#		endif
 #		if defined(SPARKLE)
 	if (projWeight < 0)
 		discard;
@@ -3139,6 +3190,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	rawBaseColor = Triplanar::SampleStochasticBias(TexColorSampler, SampColorSampler, projWorldPos, triWeights, ProjectedUVParams2.y, SharedData::MipBias, triNoise, projGradientPosition);
 	baseColor = float4(Color::Diffuse(rawBaseColor.rgb), rawBaseColor.a);
 	worldNormal.xyz = projectedNormal;
+#			if defined(TREE_SNOW_COVERAGE_NORMAL)
+	treeSnowCoverageNormal = worldNormal;
+#			endif
 #		elif !defined(FACEGEN) && !defined(MULTI_LAYER_PARALLAX) && !defined(PARALLAX) && !defined(SPARKLE)
 	if (ProjectedUVParams3.w > 0.5) {
 		float diffuseNormalScale = ProjectedUVParams3.x * ProjectedUVParams.z;
@@ -3148,6 +3202,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float3 finalProjNormal = SafeNormalize3(projDetailNormal * float3(1, 1, projNormal.z) + float3(projNormal.xy, 0), float3(0, 0, 1));
 		float3 projBaseColor = Color::ColorToLinear(Triplanar::SampleStochastic(TexProjDiffuseSampler, SampProjDiffuseSampler, projWorldPos, triWeights, diffuseNormalScale, triNoise, projGradientPosition).xyz) * Color::ColorToLinear(ProjectedUVParams2.xyz);
 		projectedMaterialWeight = smoothstep(0, 1, 5 * (0.1 + projWeight));
+#			if defined(TREE_SNOW_COVERAGE_NORMAL)
+		const float treeSnowMaterialWeight = smoothstep(0, 1, 5 * (0.1 + treeSnowProjWeight));
+#			endif
 #			if defined(TRUE_PBR)
 		projBaseColor = max(0, projBaseColor.xyz * MaterialObjectRGBScale);
 		rawRMAOS.xyw = lerp(rawRMAOS.xyw, float3(ParallaxOccData.x, 0, ParallaxOccData.y), projectedMaterialWeight);
@@ -3163,9 +3220,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (SharedData::IsLODBlendingEnabled())
 			projBaseColor.xyz = Color::CategoryGamma(projBaseColor.xyz, SharedData::lodBlendingSettings.LODObjectSnowGamma) * SharedData::lodBlendingSettings.LODObjectSnowBrightness;
 #			endif  // LOD_BLENDING
-		if (projectedMaterialWeight > 0) {
+		if (projectedMaterialWeight > 0
+#			if defined(TREE_SNOW_COVERAGE_NORMAL)
+			|| treeSnowMaterialWeight > 0
+#			endif
+		) {
 			float3 projectedWorldNormal = SafeNormalize3(Triplanar::TransformStochasticNormal(finalProjNormal, tbnTr[2], triWeights, triNoise), tbnTr[2]);
-			worldNormal = SafeNormalize3(lerp(worldNormal, projectedWorldNormal, projectedMaterialWeight), worldNormal);
+#			if defined(TREE_SNOW_COVERAGE_NORMAL)
+			if (treeSnowMaterialWeight > 0)
+				treeSnowCoverageNormal = SafeNormalize3(lerp(treeSnowCoverageNormal, projectedWorldNormal, treeSnowMaterialWeight), treeSnowCoverageNormal);
+			if (projectedMaterialWeight > 0)
+#			endif
+				worldNormal = SafeNormalize3(lerp(worldNormal, projectedWorldNormal, projectedMaterialWeight), worldNormal);
 		}
 		baseColor.xyz = lerp(baseColor.xyz, projBaseColor, projectedMaterialWeight);
 
@@ -3197,8 +3263,64 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(MODELSPACENORMALS)
+#		if defined(CS_SKIN_SHADING) && !defined(SKINNED)
+	if (skinEnabled)
+		worldNormal = SafeNormalize3(worldNormal, float3(0, 0, 1));
+#		endif
 	float3 vertexNormal = worldNormal;
 #	endif
+
+#	if defined(CS_SKIN_SHADING)
+#		if (defined(WETTERNESS) || defined(WETNESS_EFFECTS))
+	float3 skinWetNormal = worldNormal.xyz;
+	float skinWetness = 0.0f;
+#		endif
+	[branch] if (skinEnabled && (skinData.skinDetailParams.w > 0 || skinNeedsWetness))
+	{
+#		if (defined(WETTERNESS) || defined(WETNESS_EFFECTS))
+		float2 wetUV = uv * skinBodyTiling;
+		float2 dynamicWet = Skin::GetWetness(input.WorldPosition.z + FrameBuffer::CameraPosAdjust[eyeIndex].z, worldNormal.xyz);
+		skinWetness = skinNeedsWetness ? Skin::PerlinNoise(wetUV, skinData.wetParams.x, skinData.wetParams.y, skinData.wetParams.z, clamp(dynamicWet.x + dynamicWet.y + skinData.skinParams2.y, 0.f, 2.f)) * skinWetMask : 0;
+		float3 heightWetNormal = Skin::NormalFromHeight(skinWetness, skinData.wetParams.w * 0.0005, uv);
+#		endif
+		float2 detailUV = uv * skinData.skinDetailParams.x * skinBodyTiling;
+#		if defined(MODELSPACENORMALS)
+		const float3x3 tbnTr = Skin::SurfaceBasis(input.WorldPosition.xyz, worldNormal, uv);
+		const float3x3 tbn = transpose(tbnTr);
+		const float3 tangentNormal = float3(0, 0, 1);
+#		else
+		const float3 tangentNormal = SafeNormalize3(normal.xyz, float3(0, 0, 1));
+#		endif  // MODELSPACENORMALS
+		float3 combinedTangentNormal = tangentNormal;
+		if (skinData.skinDetailParams.w > 0.0f) {
+			float3 detailNormal = Skin::TexSkinDetailNormal.SampleBias(Skin::DetailSampler, detailUV, SharedData::MipBias).rgb * 2.0f - 1.0f;
+			bool normalOnly = (uint(Skin::skinMaterialFlags.z) & 1u) != 0;
+			if (normalOnly)
+				detailNormal.z = sqrt(saturate(1.0f - dot(detailNormal.xy, detailNormal.xy)));
+			float detailMask = normalOnly ? 1.0f : saturate(Skin::TexSkinDetailNormal.SampleBias(Skin::DetailSampler, uv, SharedData::MipBias).a);
+			float detailWeight = skinData.skinDetailParams.z * detailMask;
+			if (detailWeight != 0.0f) {
+				detailNormal = normalize(float3(detailNormal.xy * detailWeight, max(detailNormal.z, 1e-4f)));
+				combinedTangentNormal = SafeNormalize3(NormalBlending::Reorient(tangentNormal, detailNormal), tangentNormal);
+				worldNormal.xyz = SafeNormalize3(mul(tbn, combinedTangentNormal), worldNormal.xyz);
+			}
+		}
+#		if (defined(WETTERNESS) || defined(WETNESS_EFFECTS))
+		if (skinWetness > 0.0f) {
+			float3 wetNormal = heightWetNormal;
+			if (hasSkinWetness) {
+				float3 wetMaskNormal = SafeNormalize3(skinWetnessNormal.xyz * 2.0 - 1.0, float3(0, 0, 1));
+				wetNormal = NormalBlending::Reorient(wetMaskNormal, wetNormal);
+			}
+			if (skinData.skinParams2.y > 1.0f) {
+				wetNormal = lerp(wetNormal, tangentNormal, saturate(skinData.skinParams2.y - 1.0f));
+			}
+			float3 combinedWetNormal = SafeNormalize3(NormalBlending::Reorient(combinedTangentNormal, wetNormal), combinedTangentNormal);
+			skinWetNormal = SafeNormalize3(lerp(worldNormal.xyz, mul(tbn, combinedWetNormal), saturate(skinWetness)), worldNormal.xyz);
+		}
+#		endif
+	}
+#	endif  // CS_SKIN
 
 	float3 screenSpaceNormal = SafeNormalize3(FrameBuffer::WorldToView(worldNormal, false, eyeIndex), float3(0.0, 0.0, 1.0));
 
@@ -3305,7 +3427,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			material.CoatRoughness *= sampledCoatProperties.w;
 			[branch] if ((PBRFlags & PBR::Flags::CoatNormal) != 0)
 			{
-				coatWorldNormal = normalize(mul(tbn, TransformNormal(sampledCoatProperties.xyz)));
+#			if defined(MODELSPACENORMALS) && !defined(SKINNED)
+				const float3x3 coatTBN = transpose(ReconstructTBN(input.WorldPosition.xyz, worldNormal, coatUv));
+#			else
+				const float3x3 coatTBN = tbn;
+#			endif
+				coatWorldNormal = normalize(mul(coatTBN, TransformNormal(sampledCoatProperties.xyz)));
 			}
 		}
 		material.CoatStrength = lerp(material.CoatStrength, 0, projectedMaterialWeight);
@@ -3434,6 +3561,28 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	endif  // defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) || defined(EYE)
 
+#	if defined(CS_SKIN_SHADING)
+	if (skinEnabled) {
+		const float extraRoughness = BRDF::F_Schlick(0.04f, saturate(dot(worldNormal.xyz, viewDirection))).x * skinData.fuzzParams.w;
+		material.Roughness = saturate(skinData.skinParams.x - skinData.skinParams.z * material.Glossiness);
+		material.RoughnessSecondary = skinData.skinParams.y;
+		if (hasSkinExtra) {
+			material.Roughness = skinExtra.x * skinData.physicalParams.x;
+			material.RoughnessSecondary = skinExtra.x * skinData.physicalParams.y;
+		}
+		material.Roughness = clamp(material.Roughness + extraRoughness, 0.02f, 1.0f);
+		material.RoughnessSecondary = clamp(material.RoughnessSecondary + extraRoughness, 0.02f, 1.0f);
+		material.SecondarySpecIntensity = skinData.skinParams2.x;
+		material.Thickness = skinThickness;
+		material.F0 = hasSkinExtra ? 0.08f * skinExtra.w * skinData.physicalParams.z : skinData.skinParams2.zzz;
+		material.AO = saturate(skinExtra.z);
+		material.FuzzWeight = skinData.fuzzParams.x * skinExtra.y;
+		material.FuzzRoughness = skinData.fuzzParams.y;
+		material.FuzzColor = skinData.fuzzParams.zzz;
+		material.DirectSpecularEnergyCompensation = Skin::GGXEnergyCompensation(lerp(material.Roughness, material.RoughnessSecondary, material.SecondarySpecIntensity), saturate(abs(dot(worldNormal, viewDirection)) + 1e-5), material.F0);
+	}
+#	endif  // CS_SKIN
+
 	float porosity = 1.0;
 
 #	if defined(SKYLIGHTING)
@@ -3534,6 +3683,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(TREE_ANIM)
 			snowNormal = normalize(snowNormal + float3(0, 0, SnowCover::FoliageNormalBias));
 			float3 treeSnowNormal = snowNormal;
+#			if defined(TREE_SNOW_COVERAGE_NORMAL)
+			snowNormal = SafeNormalize3(treeSnowCoverageNormal + float3(0, 0, SnowCover::FoliageNormalBias), treeSnowCoverageNormal);
+#			endif
 			if (SharedData::snowCoverSettings.AffectTreeTint && !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::NoFoliageTint))
 				SnowCover::ApplyFoliageColor(material.BaseColor, snowEnvironment);
 #		elif defined(DO_ALPHA_TEST)
@@ -3611,6 +3763,21 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif  // SNOW_COVER
 	float waterRoughnessSpecular = 1;
+#	if defined(CS_SKIN) && (defined(WETTERNESS) || defined(WETNESS_EFFECTS))
+	float actorWetness = 0;
+	[branch] if (SharedData::skinData.skinParams.w > 0 && SharedData::skinData.physicalParams.w > 0)
+	{
+		float2 dynamicWet = Skin::GetWetness(input.WorldPosition.z + FrameBuffer::CameraPosAdjust[eyeIndex].z, worldNormal);
+		actorWetness = saturate(dynamicWet.x + dynamicWet.y);
+#		if defined(CS_SKIN_SHADING)
+		actorWetness = skinEnabled ? saturate(skinWetness) : 0;
+#		elif defined(HAIR)
+		actorWetness = saturate(dynamicWet.x + dynamicWet.y + SharedData::skinData.skinParams2.y);
+#		elif defined(TRUE_PBR)
+		actorWetness *= 1 - material.Metallic;
+#		endif
+	}
+#	endif
 
 #	if defined(WETTERNESS)
 #		if !defined(SKIN) && !defined(HAIR)
@@ -3646,6 +3813,25 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		,
 		snowMeltWetness);
 
+#		if defined(CS_SKIN_SHADING)
+	if (skinEnabled) {
+		wetnessSurface.lightingStrength *= skinWetMask;
+		wetnessSurface.glossinessSpecular *= skinWetMask;
+		wetnessSurface.roughnessSpecular = lerp(1.0, wetnessSurface.roughnessSpecular, skinWetMask);
+		wetnessSurface.normal = SafeNormalize3(lerp(worldNormal.xyz, wetnessSurface.normal, skinWetMask), worldNormal.xyz);
+	}
+#		endif
+#		if defined(CS_SKIN)
+	if (actorWetness > 0) {
+		wetnessSurface.enabled = 1;
+		wetnessSurface.lightingStrength = max(wetnessSurface.lightingStrength, actorWetness);
+		wetnessSurface.glossinessSpecular = max(wetnessSurface.glossinessSpecular, actorWetness);
+		wetnessSurface.roughnessSpecular = min(wetnessSurface.roughnessSpecular, max(0.05, 1 - actorWetness));
+#			if defined(CS_SKIN_SHADING)
+		wetnessSurface.normal = SafeNormalize3(NormalBlending::Reorient(wetnessSurface.normal, skinWetNormal, worldNormal.xyz), skinWetNormal);
+#			endif
+	}
+#		endif
 	float3 wetnessNormal = wetnessSurface.normal;
 	float wetnessGlossinessSpecular = wetnessSurface.glossinessSpecular;
 	float wetHighlightReflectanceScale = wetnessSurface.highlightReflectanceScale;
@@ -3716,7 +3902,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float puddleWetness = SharedData::wetnessEffectsSettings.PuddleWetness * minWetnessAngle;
 	float puddle = wetness;
 
-#		if !defined(SKINNED)
+#		if !defined(SKINNED) && !defined(SKIN)
 	if (wetness > 0.0 || puddleWetness > 0.0) {
 		float3 puddleCoords = ((input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust[eyeIndex].xyz) * 0.5 + 0.5) * 0.01 / SharedData::wetnessEffectsSettings.PuddleRadius;
 		puddle = Random::perlinNoise(puddleCoords) * 0.5 + 0.5;
@@ -3741,15 +3927,32 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// Update flatness and normal calculations
 	flatnessAmount *= smoothstep(SharedData::wetnessEffectsSettings.PuddleMinWetness, 1.0, wetnessGlossinessSpecular);
 
-	// Apply ripple normal effects
-	float3 rippleNormal = normalize(lerp(float3(0, 0, 1), raindropInfo.xyz, lerp(flatnessAmount, 1.0, 0.5)));
-	wetnessNormal = CS_REORIENT_NORMAL(rippleNormal, wetnessNormal);
+	// Ripple normals can remain active even when the splotch channel is zero.
+	[branch] if (any(raindropInfo.xyz != float3(0, 0, 1)))
+	{
+		float3 rippleNormal = normalize(lerp(float3(0, 0, 1), raindropInfo.xyz, lerp(flatnessAmount, 1.0, 0.5)));
+		wetnessNormal = CS_REORIENT_NORMAL(rippleNormal, wetnessNormal);
+	}
 
 	// Minimum roughness prevents an extreme retroreflective peak (NdotH→1) for near-zero
 	// roughness puddles. Real water has ripples and surface tension that keep it from being
 	// optically perfect; the ripple normal map adds micro-variation but GGX still peaks
 	// sharply without this floor.
 	static const float wetnessMinPuddleRoughness = 0.05;
+#		if defined(CS_SKIN_SHADING)
+	if (skinEnabled) {
+		wetnessGlossinessAlbedo *= skinWetMask;
+		wetnessGlossinessSpecular *= skinWetMask;
+		wetnessNormal = SafeNormalize3(lerp(worldNormal.xyz, wetnessNormal, skinWetMask), worldNormal.xyz);
+	}
+#		endif
+#		if defined(CS_SKIN)
+	wetnessGlossinessSpecular = max(wetnessGlossinessSpecular, actorWetness);
+#			if defined(CS_SKIN_SHADING)
+	if (actorWetness > 0)
+		wetnessNormal = SafeNormalize3(NormalBlending::Reorient(wetnessNormal, skinWetNormal, worldNormal.xyz), skinWetNormal);
+#			endif
+#		endif
 	waterRoughnessSpecular = max(saturate(1.0 - wetnessGlossinessSpecular), wetnessMinPuddleRoughness);
 #	endif
 
@@ -3908,10 +4111,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #			endif
 #		endif
-	float3 wetnessDirectViewDirection = viewDirection;
-#		if defined(TRUE_PBR)
-	wetnessDirectViewDirection = refractedViewDirection;
-#		endif
 	// Directional luminance is already available here and cleanly distinguishes
 	// bright exterior rain from dark scenes dominated by local light sources.
 	float wetDirectionalLuminance = Color::RGBToLuminance(max(0.0.xxx, SanitizeFloat3(dirLightColor)));
@@ -3921,7 +4120,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		wetLightingVisible,
 		wetnessNormal,
 		worldNormal.xyz,
-		wetnessDirectViewDirection,
+#		if defined(TRUE_PBR)
+		coatWorldNormal,
+#		endif
+		viewDirection,
 		waterRoughnessSpecular,
 		wetnessSurface.lightingStrength,
 		wetnessSurface.filmHighlightReduction,
@@ -4093,10 +4295,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	bool hasContactShadowNoise = false;
 	float2 contactShadowScreenDim = 0.0;
 #			endif
-	if (inWorld && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
-		numClusteredLights = LightLimitFix::lightGrid[clusterIndex].lightCount;
+	[branch] if (inWorld && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex))
+	{
+		LightLimitFix::LightGrid clusterGrid = LightLimitFix::lightGrid[clusterIndex];
+		numClusteredLights = clusterGrid.lightCount;
 		totalLightCount += numClusteredLights;
-		lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
+		lightOffset = clusterGrid.offset;
 	}
 
 	[loop] for (uint lightIndex = 0; lightIndex < totalLightCount; lightIndex++)
@@ -4268,7 +4472,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if !defined(LANDSCAPE)
 	if (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::CharacterLight) {
 		float charLightMul = saturate(dot(viewDirection, worldNormal.xyz)) * CharacterLightParams.x + CharacterLightParams.y * saturate(dot(float2(0.164398998, -0.986393988), worldNormal.yz));
-		float charLightColor = min(CharacterLightParams.w, max(0, CharacterLightParams.z * TexCharacterLightProjNoiseSampler.Sample(SampCharacterLightProjNoiseSampler, baseShadowUV).x));
+		float charLightColor = min(CharacterLightParams.w, max(0, CharacterLightParams.z));
 		diffuseColor += (charLightMul * charLightColor).xxx;
 	}
 #	endif
@@ -4282,7 +4486,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 	bool hasEmissive = (0x3F & (Permutation::PixelShaderDescriptor >> 24)) == Permutation::LightingTechnique::Glowmap;
 #		if defined(TRUE_PBR)
-	hasEmissive = hasEmissive || (PBRFlags & PBR::Flags::HasEmissive != 0);
+	hasEmissive = hasEmissive || ((PBRFlags & PBR::Flags::HasEmissive) != 0);
 #		endif
 	[branch] if (hasEmissive)
 	{
@@ -4290,29 +4494,21 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float4 glowSample;
 		MESH_TV_COLOR(glowSample, TexGlowSampler, SampGlowSampler, uv);
 		float3 glowColor = Color::Glowmap(glowSample.xyz);
+		emitColor *= glowColor;
 
 #		if defined(TRUE_PBR)
 		float3 emitVertexColor = Color::SrgbToLinear(input.Color.xyz);
 		float emitVertexAO = max(max(emitVertexColor.r, emitVertexColor.g), emitVertexColor.b);
 		emitVertexColor = emitVertexAO == 0.0f ? 1.0f : emitVertexColor * lerp(1 / max(emitVertexAO, 1e-4), 1, SharedData::truePBRSettings.VertexAOStrength);
 
-		if (!Color::UseLinearLightingColorAdjustments()) {
-			emitColor = Color::SrgbToLinear(emitColor);
-			glowColor = Color::SrgbToLinear(glowColor);
-			emitColor *= glowColor;
+		if (Color::UseLinearLightingColorAdjustments())
 			emitColor *= emitVertexColor;
-			emitColor = Color::LinearToSrgb(emitColor);
-		} else {
-			emitColor *= glowColor;
-			emitColor *= emitVertexColor;
-		}
-#		else
-		if (!Color::UseLinearLightingColorAdjustments()) {
-			emitColor = Color::LinearToSrgb(Color::SrgbToLinear(emitColor) * Color::SrgbToLinear(glowColor));
-		} else {
-			emitColor *= glowColor;
-		}
+		else
+			emitColor *= Color::LinearToSrgb(emitVertexColor);
 #		endif  // TRUE_PBR
+		// Gamma-space emission discards sign; linear scene emission retains signed intensity.
+		if (!Color::UseLinearLightingColorAdjustments())
+			emitColor = abs(emitColor);
 	}
 #	endif
 
@@ -4469,7 +4665,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	porosity = lerp(porosity, 0.0, saturate(sqrt(envMask)));
 #			endif
 	float wetnessDarkeningAmount = porosity * wetnessGlossinessAlbedo;
-	material.BaseColor = lerp(material.BaseColor, pow(abs(material.BaseColor), 1.0 + wetnessDarkeningAmount), 0.5);
+	[branch] if (wetnessDarkeningAmount != 0.0 || any(material.BaseColor < 0.0))
+		material.BaseColor = lerp(material.BaseColor, pow(abs(material.BaseColor), 1.0 + wetnessDarkeningAmount), 0.5);
 #		endif
 #	endif
 
@@ -4496,7 +4693,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 #	elif defined(WETNESS_EFFECTS)
 #		if defined(DYNAMIC_CUBEMAPS)
-	float3 wetnessReflectance = CS_GET_WETNESS_INDIRECT(indirectLobeWeights, wetnessNormal, waterRoughnessSpecular, indirectContext);
+	float3 wetnessReflectance = 0.0;
+	[branch] if (waterRoughnessSpecular < 1.0)
+		wetnessReflectance = CS_GET_WETNESS_INDIRECT(indirectLobeWeights, wetnessNormal, waterRoughnessSpecular, indirectContext);
 #		else
 	float3 wetnessReflectance = 0.0;
 #		endif
@@ -4830,6 +5029,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float sssMask = 0.0;
 #			if defined(SKIN)
 	sssMask = saturate(baseColor.a);
+#				if defined(CS_SKIN_SHADING)
+	if (skinEnabled)
+		sssMask *= skinData.sssParams.z;
+#				endif
 #			elif defined(HAIR)
 	float a = saturate(baseColor.a);
 	// Fixed, low-cost transition mask for brow/hairline blending in Burley SSS.

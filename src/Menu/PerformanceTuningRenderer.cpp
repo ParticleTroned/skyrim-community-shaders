@@ -60,7 +60,7 @@ namespace
 		kFeatureCostMeasurementBlockCount == 6 &&
 		kFeatureCostMeasurementBlockCount * kFeatureCostIntervalMilliseconds == kFeatureCostMeasurementMilliseconds);
 
-	constexpr std::array<std::string_view, 22> kPerformanceFeatureOrder = {
+	constexpr std::array<std::string_view, 23> kPerformanceFeatureOrder = {
 		"Upscaling",
 		"VR",
 		"AdaptiveBrightness",
@@ -76,6 +76,7 @@ namespace
 		"VolumetricShadows",
 		"Wetterness",
 		"SubsurfaceScattering",
+		"Skin",
 		"TruePBR",
 		"ExtendedMaterials",
 		"DetailMaps",
@@ -2129,6 +2130,8 @@ namespace
 			return "directional shadow-map copying, downsampling, and blurring are switched off.";
 		if (shortName == "Wetterness")
 			return "Wetterness is switched off.";
+		if (shortName == "Skin")
+			return "skin lighting, detail normals and actor wetness are switched off. Male/female Subsurface Scattering controls retain their current settings; no shader compilation is requested.";
 		if (shortName == "SubsurfaceScattering")
 			return "Subsurface Scattering is switched off.";
 		if (shortName == "TruePBR")

@@ -8,6 +8,10 @@
 #include "Common/Skinned.hlsli"
 #include "Common/VR.hlsli"
 
+#if defined(RENDER_SHADOWMAP_PB)
+#	include "Utility/CarriedLightShadow.hlsli"
+#endif
+
 #if defined(RENDER_SHADOWMASK) || defined(RENDER_SHADOWMASKSPOT) || defined(RENDER_SHADOWMASKPB) || defined(RENDER_SHADOWMASKDPB)
 #	define RENDER_SHADOWMASK_ANY
 #endif
@@ -52,7 +56,8 @@ struct VS_OUTPUT
 #	endif
 
 #	if defined(RENDER_SHADOWMAP_PB)
-	float3 TexCoord1: TEXCOORD2;
+	float4 TexCoord1: TEXCOORD2;
+	float3 ParaboloidViewPos: TEXCOORD6;
 #	elif defined(ALPHA_TEST) && (defined(RENDER_DEPTH) || defined(RENDER_SHADOWMAP))
 	float4 TexCoord1: TEXCOORD2;
 #	elif defined(ADDITIONAL_ALPHA_MASK)
@@ -84,7 +89,7 @@ struct VS_OUTPUT
 #endif  // VR
 };
 
-#ifdef VSHADER
+#if defined(VSHADER) || defined(GEOMETRYSHADER)
 cbuffer PerTechnique : register(b0)
 {
 #	if !defined(VR)
@@ -95,7 +100,9 @@ cbuffer PerTechnique : register(b0)
 	float2 ParabolaParam : packoffset(c2);       // inverse radius in x, y is 1 for forward hemisphere or -1 for backward hemisphere
 #	endif  // VR
 };
+#endif
 
+#ifdef VSHADER
 cbuffer PerMaterial : register(b1)
 {
 	float4 TexcoordOffset : packoffset(c0);
@@ -188,6 +195,7 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.PositionCS.xy = shadowDirection.xy / shadowDirection.z;
 	vsout.PositionCS.z = ParabolaParam.x * length(positionCSPerspective);
 	vsout.PositionCS.w = positionCS.w;
+	vsout.ParaboloidViewPos = positionCSPerspective;
 #		else
 	vsout.PositionCS = positionCS;
 #		endif
@@ -240,6 +248,8 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.TexCoord1.y = positionCS.w;
 	precise float parabolaParam = ParabolaParam.y * positionCS.z;
 	vsout.TexCoord1.z = parabolaParam * 0.5 + 0.5;
+	// Keep the distance available without changing shader variants when the runtime toggle changes.
+	vsout.TexCoord1.w = CarriedLightShadow::NormalizedNearDistance(ParabolaParam.x);
 #		elif defined(ALPHA_TEST) && (defined(RENDER_DEPTH) || defined(RENDER_SHADOWMAP))
 	float4 texCoord1 = float4(0, 0, 0, 0);
 	texCoord1.xy = positionCS.zw;
@@ -380,18 +390,9 @@ float SampleShadowPCF(Texture2DArray<float4> tex, SamplerComparisonState samp, f
 	return visibility / 8.0;
 }
 
-float SampleDualParaboloidShadowPCF(Texture2DArray<float4> tex, SamplerComparisonState samp, float2 baseUV, float layerIndex, float compareValue, float2x2 rotationMatrix, float radius, bool lowerHalf)
-{
-	float visibility = 0.0;
-	[unroll] for (int i = 0; i < 8; i++)
-	{
-		float2 offset = mul(Random::SpiralSampleOffsets8[i], rotationMatrix) * radius;
-		float2 uv = baseUV + offset;
-		uv.y = lowerHalf ? max(uv.y, 0.5) : min(uv.y, 0.5);
-		visibility += tex.SampleCmpLevelZero(samp, float3(uv, layerIndex), compareValue).x;
-	}
-	return visibility / 8.0;
-}
+#	if defined(RENDER_SHADOWMASKPB) || defined(RENDER_SHADOWMASKDPB)
+#		include "Utility/ParaboloidSampling.hlsli"
+#	endif
 
 PS_OUTPUT main(PS_INPUT input)
 {
@@ -441,7 +442,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 baseColor = TexBaseSampler.SampleBias(SampBaseSampler, baseTexCoord, SharedData::MipBias);
 
 #	if defined(RENDER_SHADOWMAP_PB)
-	if (input.TexCoord1.z < 0) {
+	if (input.TexCoord1.z < 0 || CarriedLightShadow::RejectNearCaster(input.TexCoord1.x, input.TexCoord1.w)) {
 		discard;
 	}
 #	endif
@@ -627,21 +628,13 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float shadowVisibility = 0;
 
-	if (unadjustedPositionLS.z * 0.5 + 0.5 >= 0) {
+	if (unadjustedPositionLS.z >= 0) {
 		float3 positionLS = unadjustedPositionLS.xyz / unadjustedPositionLS.w;
 		float3 lightDirection = normalize(normalize(positionLS) + float3(0, 0, 1));
 		float2 shadowMapUv = lightDirection.xy / lightDirection.z * 0.5 + 0.5;
 		float shadowMapCompareValue = saturate(length(positionLS) / ShadowLightParam.x) - AlphaTestRef.y;
-#			if SHADOWFILTER == 0
-		float shadowMapValue = TexShadowMapSampler.Sample(SampShadowMapSampler, float3(shadowMapUv, EndSplitDistances.x)).x;
-		if (shadowMapValue >= shadowMapCompareValue) {
-			shadowVisibility = 1;
-		}
-#			elif SHADOWFILTER == 1
-		shadowVisibility = TexShadowMapSamplerComp.SampleCmpLevelZero(SampShadowMapSamplerComp, float3(shadowMapUv, EndSplitDistances.x), shadowMapCompareValue).x;
-#			elif SHADOWFILTER == 3
-		shadowVisibility = SampleDualParaboloidShadowPCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, shadowMapUv, EndSplitDistances.x, shadowMapCompareValue, rotationMatrix, ShadowSampleParam.z, false);
-#			endif
+		shadowVisibility = SampleParaboloidShadow(shadowMapUv, EndSplitDistances.x, shadowMapCompareValue,
+			rotationMatrix, ShadowSampleParam.z, false, false);
 	} else {
 		shadowVisibility = 1;
 	}
@@ -650,7 +643,8 @@ PS_OUTPUT main(PS_INPUT input)
 #		elif defined(RENDER_SHADOWMASKDPB)
 	float3 positionLS = mul(transpose(ShadowMapProj[eyeIndex][0]), float4(positionMS.xyz, 1)).xyz;
 
-	bool lowerHalf = positionLS.z * 0.5 + 0.5 < 0;
+	// Receiver selection must use the same hemisphere plane as caster clipping.
+	bool lowerHalf = positionLS.z < 0;
 	float3 normalizedPositionLS = normalize(positionLS);
 
 	float shadowMapCompareValue = saturate(length(positionLS) / ShadowLightParam.x) - AlphaTestRef.y;
@@ -660,17 +654,8 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 shadowMapUv = lightDirection.xy / lightDirection.z * 0.5 + 0.5;
 	shadowMapUv.y = lowerHalf ? 1.0 - 0.5 * shadowMapUv.y : 0.5 * shadowMapUv.y;
 
-	float shadowVisibility = 0;
-#			if SHADOWFILTER == 0
-	float shadowMapValue = TexShadowMapSampler.Sample(SampShadowMapSampler, float3(shadowMapUv, EndSplitDistances.x)).x;
-	if (shadowMapValue >= shadowMapCompareValue) {
-		shadowVisibility = 1;
-	}
-#			elif SHADOWFILTER == 1
-	shadowVisibility = TexShadowMapSamplerComp.SampleCmpLevelZero(SampShadowMapSamplerComp, float3(shadowMapUv, EndSplitDistances.x), shadowMapCompareValue).x;
-#			elif SHADOWFILTER == 3
-	shadowVisibility = SampleDualParaboloidShadowPCF(TexShadowMapSamplerComp, SampShadowMapSamplerComp, shadowMapUv, EndSplitDistances.x, shadowMapCompareValue, rotationMatrix, ShadowSampleParam.z, lowerHalf);
-#			endif
+	float shadowVisibility = SampleParaboloidShadow(shadowMapUv, EndSplitDistances.x, shadowMapCompareValue,
+		rotationMatrix, ShadowSampleParam.z, true, lowerHalf);
 
 	shadowColor.xyzw = fadeFactor * shadowVisibility;
 #		endif
@@ -759,3 +744,5 @@ PS_OUTPUT main(PS_INPUT input)
 }
 
 #endif
+
+#include "Utility/ParaboloidClip.hlsli"

@@ -143,7 +143,9 @@ RWStructuredBuffer<float4> Results : register(u0);
 	Results[id.x * 3 + 2] = float4(Wetterness::GetGeometricPuddleMask(-cross(positionDx, positionDy)), 0, 0, 0);
 }
 
-[numthreads(64, 1, 1)] void main(uint3 id : SV_DispatchThreadID)
+// Surface-channel baselines may use older direct-lighting interfaces.
+#if !defined(SKYLIGHTING)
+	[numthreads(64, 1, 1)] void main(uint3 id : SV_DispatchThreadID)
 {
 	const float roughnesses[8] = { 0.005, 0.03, 0.05, 0.10, 0.18, 0.35, 0.70, 1.0 };
 	const float roughness = roughnesses[id.x % 8];
@@ -156,33 +158,39 @@ RWStructuredBuffer<float4> Results : register(u0);
 	const float darkness = 1.0 - smoothstep(0.06, 0.22, directionalLuminance);
 	WetReflectionParams reflection = CreateWetReflectionParams(0.8);
 	WetnessDirectLightState state = CreateWetnessDirectLightState(
-		normal, normal, view, roughness, saturate(1.0 - roughness), 0.0, reflection, 0.55, rippleMask, darkness, 1.0, true);
+		normal, normal,
+#	if defined(TRUE_PBR)
+		normal,
+#	endif
+		view, roughness, saturate(1.0 - roughness), 0.0, reflection, 0.55, rippleMask, darkness, 1.0, true);
 	const float3 color = float3(1, 0.25, 0.0625) * lightScale;
-#if defined(TRUE_PBR)
+#	if defined(TRUE_PBR)
 	DirectContext context = CreateDirectLightingContext(normal, normal, normal, view, view, light, light, color, 0.5, 0.5);
-#else
+#	else
 	DirectContext context = CreateDirectLightingContext(normal, normal, view, light, color, 0.5, 0.5);
-#endif
+#	endif
 	DirectLightingOutput actual = (DirectLightingOutput)0;
 	actual.diffuse = float3(0.4, 0.3, 0.2);
 	DirectLightingOutput reference = actual;
-#if !defined(WETTERNESS_REFERENCE)
+#	if !defined(WETTERNESS_REFERENCE)
 	ApplyWetnessDirectLightingOutput(actual, context, state, isPointLight);
-#endif
+#	endif
 	const float referenceRoughness = isPointLight ?
 	                                     lerp(roughness, max(roughness, 0.18), saturate(rippleMask * darkness)) :
 	                                     roughness;
 	if (state.enabled > 0.0)
 		EvaluateWetnessLighting(normal, context, referenceRoughness, state.params, reference);
-#if defined(WETTERNESS_REFERENCE)
+#	if defined(WETTERNESS_REFERENCE)
 	actual = reference;
-#endif
+#	endif
 	Results[id.x * 3] = float4(actual.specular, isPointLight ? state.pointLightRoughness : state.roughness);
 	Results[id.x * 3 + 1] = float4(reference.specular, referenceRoughness);
 	Results[id.x * 3 + 2] = float4(
 		max(abs(actual.diffuse.x - reference.diffuse.x), max(abs(actual.diffuse.y - reference.diffuse.y), abs(actual.diffuse.z - reference.diffuse.z))),
 		state.pointLightHighlightReduction, state.params.lightColorScale, isPointLight ? 1.0 : 0.0);
 }
+
+#endif
 
 [numthreads(64, 1, 1)] void CheckDistribution(uint3 id : SV_DispatchThreadID) {
 	const float roughness = lerp(0.005, 1.0, float(id.x % 32) / 31.0);
@@ -194,3 +202,44 @@ RWStructuredBuffer<float4> Results : register(u0);
 	Results[id.x * 3 + 1] = float4(Wetterness::GetWetHighlightScale(response, night), response, night, 0);
 	Results[id.x * 3 + 2] = 0;
 }
+
+#if defined(TRUE_PBR) && !defined(SKYLIGHTING)
+	[numthreads(64, 1, 1)] void CheckWetSurfaceDirections(uint3 id : SV_DispatchThreadID)
+{
+	const float3 normal = float3(0, 0, 1);
+	float3 worldNormal = normalize(float3(0.2, 0.3, 1));
+	float3 coatNormal = normalize(float3(-0.5, 0.1, 1));
+	const float viewZ = lerp(0.1, 1.0, float(id.x % 32) / 31.0);
+	float3 view = float3(sqrt(1.0 - viewZ * viewZ), 0, viewZ);
+	const float3 light = float3(-view.x, 0, view.z);
+	// Degenerate input exercises the same normal fallback as the lighting context.
+	if (id.x % 4 != 0)
+		view = 0;
+	if (id.x % 4 >= 2)
+		coatNormal = 0;
+	if (id.x % 4 == 3)
+		worldNormal = 0;
+	const float roughness = lerp(0.2, 0.8, float(id.x / 32) / 31.0);
+	WetReflectionParams reflection = CreateWetReflectionParams(0.8);
+	WetnessDirectLightState state = CreateWetnessDirectLightState(
+		normal, worldNormal, coatNormal, view, roughness, 0.8, 0.0, reflection, 0.55, 0.0, 0.0, 1.0, true);
+	DirectContext context = CreateDirectLightingContext(worldNormal, coatNormal, normal,
+		normalize(float3(0.1, 0.2, 1)), view, normalize(float3(0.2, 0.3, 1)), light,
+		float3(1, 0.5, 0.25) * lightScale, 0.5, 0.5);
+	DirectContext externalContext = context;
+	externalContext.viewDir = context.coatViewDir;
+	externalContext.lightDir = context.coatLightDir;
+	externalContext.halfVector = context.coatHalfVector;
+	reflection.effectiveScale *= 0.55;
+	WetnessDirectLightingParams expectedParams = CreateWetnessDirectLightingParams(normal, context.coatViewDir, 0.8, reflection);
+	DirectLightingOutput actual = (DirectLightingOutput)0;
+	actual.diffuse = float3(0.4, 0.3, 0.2);
+	actual.specular = float3(0.02, 0.01, 0.005);
+	DirectLightingOutput expected = actual;
+	ApplyWetnessDirectLightingOutput(actual, context, state, id.x >= 512);
+	EvaluateWetnessLighting(normal, externalContext, roughness, expectedParams, expected);
+	Results[id.x * 3] = float4(actual.specular, state.params.NdotV);
+	Results[id.x * 3 + 1] = float4(expected.specular, expectedParams.NdotV);
+	Results[id.x * 3 + 2] = float4(abs(actual.diffuse - expected.diffuse), state.enabled);
+}
+#endif

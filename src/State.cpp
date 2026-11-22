@@ -2,6 +2,7 @@
 #include "Diagnostics/PerformanceCostExperiments.h"
 #include "Features/GrassPlacement.h"
 #include "Features/ReverseZ.h"
+#include "Features/Skin.h"
 #include "Features/UnifiedWater.h"
 #if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
 #	include "Diagnostics/NvPerf.h"
@@ -504,6 +505,7 @@ void State::Draw(bool isCompute)
 	auto& csEditor = globals::features::csEditor;
 	auto& weatherPicker = globals::features::weatherPicker;
 	auto& truePBR = globals::features::truePBR;
+	auto& skin = globals::features::skin;
 	auto& volumetricShadows = globals::features::volumetricShadows;
 	auto context = globals::d3d::context;
 
@@ -529,6 +531,7 @@ void State::Draw(bool isCompute)
 			globals::features::wetterness.ResetRuntimeStateAfterGameLoad();
 			globals::features::snowCover.ResetRuntimeStateAfterGameLoad();
 			globals::features::grassCollision.ResetRuntimeStateAfterGameLoad();
+			globals::features::skin.ResetRuntimeStateAfterGameLoad();
 			pendingPostLoadRuntimeReset = false;
 			logger::info("Applied deferred post-load runtime reset");
 		}
@@ -562,6 +565,9 @@ void State::Draw(bool isCompute)
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::TruePBRResources, stateDrawDiagFrame, stateDrawDiagActive);
 			truePBR.SetShaderResouces(context);
 		}
+
+		if (skin.loaded && selectedCustomPixelShaderType == RE::BSShader::Type::Lighting)
+			skin.SetShaderResources(context);
 
 		if (volumetricShadows.loaded) {
 			CS_DRAW_ZONE(volumetricShadowsZone, "VolumetricShadows::SetShaderResources", emitTracyDrawZones);

@@ -1,3 +1,5 @@
+#define NOMINMAX
+#include "Features/GrassOptimizations/GrassInstancePacking.h"
 #include "Utils/ShaderInclude.h"
 #include "adaptive_balance_test_settings.h"
 #include "d3d11_shader_test.h"

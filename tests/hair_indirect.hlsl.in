@@ -3,7 +3,6 @@
 #include "Common/LightingFlags.hlsli"
 SamplerState SampColorSampler : register(s0);
 #include "Hair/Hair.hlsli"
-@SAFE_NORMALIZE@
 @INDIRECT_FACTORY@
 @INDIRECT_LOBES@
 

@@ -175,9 +175,9 @@ void CheckLifetime(bool vr, bool smallActorParts)
 	C::Settings enabled;
 	enabled.smallActorParts = smallActorParts;
 	C::Settings disabled;
-	disabled.sun = disabled.torch = disabled.actors = disabled.smallActorParts = false;
+	disabled.sun = disabled.torch = disabled.actors = disabled.smallActorParts = disabled.skipFlameEnclosure = false;
 	auto zeroSliders = enabled;
-	zeroSliders.sun = zeroSliders.torch = zeroSliders.actors = false;
+	zeroSliders.sun = zeroSliders.torch = zeroSliders.actors = zeroSliders.skipFlameEnclosure = false;
 	zeroSliders.actorPartRadiusCentimeters = 0;
 	const auto verifyRetired = [&] {
 		Require(!C::active && !C::snapshot.Read());

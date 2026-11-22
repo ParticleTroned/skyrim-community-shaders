@@ -22,6 +22,15 @@ namespace
 	constexpr uint kAllOcclusionCornersMask = (1u << kOcclusionCornerCount) - 1u;
 	constexpr float kOcclusionBelowGridMargin = 512.0f;
 
+	std::unique_ptr<Texture2D> CreateOcclusionTexture(const D3D11_TEXTURE2D_DESC& a_textureDesc,
+		const D3D11_SHADER_RESOURCE_VIEW_DESC& a_srvDesc, const D3D11_DEPTH_STENCIL_VIEW_DESC& a_dsvDesc, const char* a_name)
+	{
+		auto texture = std::make_unique<Texture2D>(a_textureDesc, a_name);
+		texture->CreateSRV(a_srvDesc);
+		texture->CreateDSV(a_dsvDesc);
+		return texture;
+	}
+
 	struct ProbeGridPreset
 	{
 		uint Width;
@@ -545,28 +554,35 @@ void Skylighting::ResetSkylighting()
 	// Consume before clearing so a loading event during the reset remains queued.
 	queuedResetSkylighting.exchange(false, std::memory_order_acq_rel);
 	needsOcclusionRefresh = true;
+	zenithValid = false;
+	zenithEyePending = false;
+	zenithFrame = false;
 
 	auto context = globals::d3d::context;
 	if (!context ||
 		!texProbeArray || !texProbeArray->srv.get() || !texProbeArray->uav.get() ||
-		!texAccumFramesArray || !texAccumFramesArray->uav.get() ||
+		!texAccumFramesArray || !texAccumFramesArray->srv.get() || !texAccumFramesArray->uav.get() ||
 		!texShadowBitmask || !texShadowBitmask->srv.get() || !texShadowBitmask->uav.get() ||
 		!texShadowVisibility || !texShadowVisibility->srv.get() || !texShadowVisibility->uav.get()) {
 		QueueResetSkylighting();
 		return;
 	}
 
-	winrt::com_ptr<ID3D11ShaderResourceView> previousProbes, previousVisibility;
+	winrt::com_ptr<ID3D11ShaderResourceView> previousProbes, previousCoverage, previousVisibility;
 	context->PSGetShaderResources(50, 1, previousProbes.put());
+	context->PSGetShaderResources(51, 1, previousCoverage.put());
 	context->PSGetShaderResources(53, 1, previousVisibility.put());
 	const SKSE::stl::scope_exit restoreBindings([&]() noexcept {
 		auto* probes = previousProbes.get();
+		auto* coverage = previousCoverage.get();
 		auto* visibility = previousVisibility.get();
 		context->PSSetShaderResources(50, 1, &probes);
+		context->PSSetShaderResources(51, 1, &coverage);
 		context->PSSetShaderResources(53, 1, &visibility);
 	});
 	std::array<ID3D11ShaderResourceView*, 2> nullPixelSRVs{};
 	context->PSSetShaderResources(50, 1, nullPixelSRVs.data());
+	context->PSSetShaderResources(51, 1, nullPixelSRVs.data());
 	context->PSSetShaderResources(53, 1, nullPixelSRVs.data() + 1);
 
 	// D3D11 does not initialize newly allocated textures. A neutral SH clear keeps
@@ -574,9 +590,10 @@ void Skylighting::ResetSkylighting()
 	constexpr float unitSH[4] = { 3.5449077f, 0.0f, 0.0f, 0.0f };
 	context->ClearUnorderedAccessViewFloat(texProbeArray->uav.get(), unitSH);
 
-	UINT clearZero[4] = { 0, 0, 0, 0 };
-	// Resetting the packed state restarts both SH confidence and shadow jitter.
-	context->ClearUnorderedAccessViewUint(texAccumFramesArray->uav.get(), clearZero);
+	constexpr UINT unknownState = kCoverageUnknown << kProbeCoverageShift;
+	constexpr UINT clearState[4] = { unknownState, unknownState, unknownState, unknownState };
+	// Reset confidence and jitter while roof coverage remains unknown until captured.
+	context->ClearUnorderedAccessViewUint(texAccumFramesArray->uav.get(), clearState);
 
 	ClearShadowHistory();
 
@@ -772,9 +789,10 @@ void Skylighting::DrawSettings()
 		ImGui::EndDisabled();
 		usesIncrementalProbeSlices = UsesIncrementalProbeSlices(settings, probeArrayDims[2]);
 		const uint stableSliceBatches = (probeArrayDims[2] + settings.StableSliceCount - 1) / settings.StableSliceCount;
-		const uint stableRefreshFrames = usesIncrementalProbeSlices ?
-		                                     stableSliceBatches * kOcclusionCornerCount * GetOcclusionUpdateInterval(settings) :
-		                                     GetProbeUpdateInterval(settings);
+		const uint skyRefreshFrames = usesIncrementalProbeSlices ?
+		                                  stableSliceBatches * kOcclusionCornerCount * GetOcclusionUpdateInterval(settings) :
+		                                  GetProbeUpdateInterval(settings);
+		const uint stableRefreshFrames = (skyRefreshFrames * kZenithCaptureInterval + kZenithCaptureInterval - 2) / (kZenithCaptureInterval - 1);
 		ImGui::Text("Stable probe field full refresh: ~%u frame(s)", stableRefreshFrames);
 	}
 	if (page.Is("coverage")) {
@@ -866,7 +884,7 @@ void Skylighting::SetupResources()
 	queuedRebuildSkylighting.exchange(false, std::memory_order_acq_rel);
 	try {
 		const auto& preset = GetProbeGridPreset(settings.ProbeGridQuality);
-		std::unique_ptr<Texture2D> occlusion;
+		std::unique_ptr<Texture2D> occlusion, zenithOcclusion;
 		std::unique_ptr<Texture3D> probes, accumulation, shadowBitmask, shadowVisibility;
 		winrt::com_ptr<ID3D11SamplerState> sampler;
 
@@ -879,9 +897,8 @@ void Skylighting::SetupResources()
 			REX::W32::AsReal(precipitationOcclusion.depthSRV)->GetDesc(&srvDesc);
 			REX::W32::AsReal(precipitationOcclusion.views[0])->GetDesc(&dsvDesc);
 
-			occlusion = std::make_unique<Texture2D>(texDesc, "Skylighting::Occlusion");
-			occlusion->CreateSRV(srvDesc);
-			occlusion->CreateDSV(dsvDesc);
+			occlusion = CreateOcclusionTexture(texDesc, srvDesc, dsvDesc, "Skylighting::Occlusion");
+			zenithOcclusion = CreateOcclusionTexture(texDesc, srvDesc, dsvDesc, "Skylighting::ZenithOcclusion");
 		}
 
 		{
@@ -916,7 +933,7 @@ void Skylighting::SetupResources()
 			probes->CreateSRV(srvDesc);
 			probes->CreateUAV(uavDesc);
 
-			// Preserve the eight-bit SH count alongside a five-bit shadow sample cursor.
+			// Pack eight confidence bits, five shadow-jitter bits and two roof-coverage bits.
 			texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R16_UINT;
 
 			accumulation = std::make_unique<Texture3D>(texDesc, "Skylighting::AccumFramesArray");
@@ -951,6 +968,7 @@ void Skylighting::SetupResources()
 
 		// Publish only complete replacements; failed allocations retain the active grid.
 		delete std::exchange(texOcclusion, occlusion.release());
+		delete std::exchange(texZenithOcclusion, zenithOcclusion.release());
 		delete std::exchange(texProbeArray, probes.release());
 		delete std::exchange(texAccumFramesArray, accumulation.release());
 		delete std::exchange(texShadowBitmask, shadowBitmask.release());
@@ -977,31 +995,21 @@ void Skylighting::SetupRenderTargetResources()
 	occlusionCullBelowZ.reset();
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
-	if (resourceDevice != device) {
-		delete texProbeArray;
-		texProbeArray = nullptr;
-		delete texAccumFramesArray;
-		texAccumFramesArray = nullptr;
-		delete texShadowBitmask;
-		texShadowBitmask = nullptr;
-		delete texShadowVisibility;
-		texShadowVisibility = nullptr;
-		comparisonSampler = nullptr;
-		probeUpdateCompute = nullptr;
-		resourceDevice = device;
-	}
-
-	if (!texProbeArray || !texAccumFramesArray || !texShadowBitmask || !texShadowVisibility) {
+	if (resourceDevice != device || !texProbeArray || !texAccumFramesArray ||
+		!texShadowBitmask || !texShadowVisibility || !comparisonSampler) {
 		SetupResources();
 		return;
 	}
-
-	delete texOcclusion;
-	texOcclusion = nullptr;
-
-	{
-		auto& precipitationOcclusion = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
-
+	if (!renderer || !device || !globals::d3d::context) {
+		QueueResetSkylighting(true);
+		return;
+	}
+	auto& precipitationOcclusion = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP];
+	if (!precipitationOcclusion.texture || !precipitationOcclusion.depthSRV || !precipitationOcclusion.views[0]) {
+		QueueResetSkylighting(true);
+		return;
+	}
+	try {
 		D3D11_TEXTURE2D_DESC texDesc{};
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
 		D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
@@ -1010,26 +1018,20 @@ void Skylighting::SetupRenderTargetResources()
 		REX::W32::AsReal(precipitationOcclusion.depthSRV)->GetDesc(&srvDesc);
 		REX::W32::AsReal(precipitationOcclusion.views[0])->GetDesc(&dsvDesc);
 
-		texOcclusion = new Texture2D(texDesc, "Skylighting::Occlusion");
-		texOcclusion->CreateSRV(srvDesc);
-		texOcclusion->CreateDSV(dsvDesc);
+		auto occlusion = CreateOcclusionTexture(texDesc, srvDesc, dsvDesc, "Skylighting::Occlusion");
+		auto zenithOcclusion = CreateOcclusionTexture(texDesc, srvDesc, dsvDesc, "Skylighting::ZenithOcclusion");
+		delete std::exchange(texOcclusion, occlusion.release());
+		delete std::exchange(texZenithOcclusion, zenithOcclusion.release());
+		zenithValid = false;
+		zenithEyePending = false;
+		needsOcclusionRefresh = true;
+		resourceRebuildFailed.store(false, std::memory_order_release);
+		if (!probeUpdateCompute)
+			CompileComputeShaders();
+	} catch (const std::exception&) {
+		resourceRebuildFailed.store(true, std::memory_order_release);
+		queuedResetSkylighting.store(true, std::memory_order_release);
 	}
-
-	if (!comparisonSampler) {
-		D3D11_SAMPLER_DESC samplerDesc = {};
-		samplerDesc.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR;
-		samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
-		samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-		samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-		samplerDesc.ComparisonFunc = D3D11_COMPARISON_LESS_EQUAL;
-		samplerDesc.MinLOD = 0;
-		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
-		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, comparisonSampler.put()));
-		Util::SetResourceName(comparisonSampler.get(), "Skylighting::ComparisonSampler");
-	}
-
-	if (!probeUpdateCompute)
-		CompileComputeShaders();
 }
 
 bool Skylighting::HasCurrentShadowData() const
@@ -1134,6 +1136,8 @@ bool Skylighting::PrepareOcclusionCapture()
 
 	occlusionCaptureCorner = nextOcclusionCorner;
 	++frameCount;
+	// A reset needs a sky capture before its occlusion transform can be consumed.
+	zenithFrame = !needsOcclusionRefresh && frameCount % kZenithCaptureInterval == 0;
 	return true;
 }
 
@@ -1143,8 +1147,9 @@ bool Skylighting::HasProbeUpdateResources() const
 	return sky && sky->mode.get() == RE::Sky::Mode::kFull && globals::d3d::context &&
 	       probeUpdateCompute.get() && comparisonSampler.get() &&
 	       texOcclusion && texOcclusion->srv.get() &&
+	       texZenithOcclusion && texZenithOcclusion->srv.get() && texZenithOcclusion->dsv.get() &&
 	       texProbeArray && texProbeArray->srv.get() && texProbeArray->uav.get() &&
-	       texAccumFramesArray && texAccumFramesArray->uav.get() &&
+	       texAccumFramesArray && texAccumFramesArray->srv.get() && texAccumFramesArray->uav.get() &&
 	       texShadowBitmask && texShadowBitmask->uav.get() &&
 	       texShadowVisibility && texShadowVisibility->srv.get() && texShadowVisibility->uav.get();
 }
@@ -1173,6 +1178,12 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 
 	auto eyePosNI = Util::GetEyePosition(0);
 	auto eyePos = float3{ eyePosNI.x, eyePosNI.y, eyePosNI.z };
+	// Capture projection uses the world camera published after precipitation rendering.
+	if (zenithEyePending) {
+		zenithEyePosition = eyePos;
+		zenithValid = zenithCaptureFrame == globals::state->frameCount;
+		zenithEyePending = false;
+	}
 	const float probeFieldSize = ClampProbeFieldSize(settings.ProbeFieldSize);
 
 	const auto cellSize = GetProbeCellSize();
@@ -1224,7 +1235,11 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 		.MinSpecularVisibility = settings.MinSpecularVisibility,
 		.ProbeUpdateSliceStart = probeUpdateSliceStart,
 		.ProbeUpdateSliceCount = probeUpdateSliceCount,
-		.ShadowDataAvailable = shadowDataAvailable ? 1u : 0u
+		.ShadowDataAvailable = shadowDataAvailable ? 1u : 0u,
+		.AccumulateOcclusion = zenithFrame ? 0u : 1u,
+		.ZenithViewProj = zenithTransform,
+		.ZenithOffset = eyePos - zenithEyePosition,
+		.ZenithValid = zenithValid ? 1u : 0u
 	};
 }
 
@@ -1246,16 +1261,19 @@ void Skylighting::Prepass()
 		if (context) {
 			ID3D11ShaderResourceView* srv = nullptr;
 			context->PSSetShaderResources(50, 1, &srv);
+			context->PSSetShaderResources(51, 1, &srv);
+			context->PSSetShaderResources(52, 1, &srv);
 			context->PSSetShaderResources(53, 1, &srv);
 		}
 		return;
 	}
 
 	{
-		// Both probe volumes were exposed to pixel shaders by the previous frame.
+		// Probe volumes were exposed to pixel shaders by the previous frame.
 		// Unbind them before writing the same resources through compute UAVs.
 		std::array<ID3D11ShaderResourceView*, 2> nullPixelSRVs{};
 		context->PSSetShaderResources(50, 1, nullPixelSRVs.data());
+		context->PSSetShaderResources(51, 1, nullPixelSRVs.data());
 		context->PSSetShaderResources(53, 1, nullPixelSRVs.data() + 1);
 
 		// Recovery must clear every slice even when the probe dispatch is skipped.
@@ -1270,11 +1288,12 @@ void Skylighting::Prepass()
 			cascadeDepthSRV = REX::W32::AsReal(cascadeDepthStencil.depthSRV);
 		}
 
-		std::array<ID3D11ShaderResourceView*, 4> srvs = {
+		std::array<ID3D11ShaderResourceView*, 5> srvs = {
 			texOcclusion->srv.get(),
 			nullptr,
 			directionalShadowLightsSRV,
-			cascadeDepthSRV
+			cascadeDepthSRV,
+			texZenithOcclusion->srv.get()
 		};
 		std::array<ID3D11UnorderedAccessView*, 4> uavs = {
 			texProbeArray->uav.get(),
@@ -1315,8 +1334,9 @@ void Skylighting::Prepass()
 				prevCellID = probeUpdateCellID;
 				lastProbeUpdateCapture = frameCount;
 				lastProbeUpdateFrame = globals::state->frameCount;
-				nextOcclusionCorner = (occlusionCaptureCorner + 1u) % kOcclusionCornerCount;
-				if (forcedFullUpdateFrames > 0 || updatingIncrementalSlices) {
+				if (!zenithFrame)
+					nextOcclusionCorner = (occlusionCaptureCorner + 1u) % kOcclusionCornerCount;
+				if (!zenithFrame && (forcedFullUpdateFrames > 0 || updatingIncrementalSlices)) {
 					probeUpdateCornerMask |= occlusionCornerBit;
 
 					// Recovery and slice progress require all four consumed quadrants.
@@ -1330,7 +1350,7 @@ void Skylighting::Prepass()
 						}
 						probeUpdateCornerMask = 0;
 					}
-				} else {
+				} else if (!zenithFrame) {
 					ResetProbeUpdateWindow(*this);
 				}
 			}
@@ -1353,6 +1373,9 @@ void Skylighting::Prepass()
 	{
 		ID3D11ShaderResourceView* srv = texProbeArray->srv.get();
 		context->PSSetShaderResources(50, 1, &srv);
+
+		std::array<ID3D11ShaderResourceView*, 2> coverageSRVs = { texAccumFramesArray->srv.get(), texZenithOcclusion->srv.get() };
+		context->PSSetShaderResources(51, (uint)coverageSRVs.size(), coverageSRVs.data());
 
 		srv = texShadowVisibility->srv.get();
 		context->PSSetShaderResources(53, 1, &srv);
@@ -1567,7 +1590,7 @@ void Skylighting::SetViewFrustum::thunk(RE::NiCamera* a_camera, RE::NiFrustum* a
 {
 	auto& skylighting = globals::features::skylighting;
 
-	if (skylighting.IsRuntimeActive() && skylighting.inOcclusion) {
+	if (skylighting.IsRuntimeActive() && skylighting.inOcclusion && !skylighting.zenithFrame) {
 		ApplyOcclusionCornerFrustum(skylighting.occlusionCaptureCorner, *a_frustum);
 	}
 
@@ -1578,7 +1601,7 @@ void Skylighting::SetViewFrustumVR::thunk(RE::NiCamera* a_camera, RE::NiFrustum*
 {
 	auto& skylighting = globals::features::skylighting;
 
-	if (skylighting.IsRuntimeActive() && skylighting.inOcclusion) {
+	if (skylighting.IsRuntimeActive() && skylighting.inOcclusion && !skylighting.zenithFrame) {
 		ApplyOcclusionCornerFrustum(skylighting.occlusionCaptureCorner, *a_frustum);
 	}
 
@@ -1627,6 +1650,7 @@ void Skylighting::RenderOcclusion()
 
 	auto occlusionCamera = precip->occlusionData.camera;
 	if (!occlusionCamera || !renderer ||
+		!texZenithOcclusion || !texZenithOcclusion->resource.get() || !texZenithOcclusion->srv.get() || !texZenithOcclusion->dsv.get() ||
 		!texOcclusion || !texOcclusion->resource.get() || !texOcclusion->srv.get() || !texOcclusion->dsv.get())
 		return;
 
@@ -1668,17 +1692,23 @@ void Skylighting::RenderOcclusion()
 			}
 		});
 
-		precipitation.depthSRV = REX::W32::AsW32(texOcclusion->srv.get());
-		precipitation.texture = REX::W32::AsW32(texOcclusion->resource.get());
-		precipitation.views[0] = REX::W32::AsW32(texOcclusion->dsv.get());
+		auto* captureTarget = zenithFrame ? texZenithOcclusion : texOcclusion;
+		if (zenithFrame) {
+			ID3D11ShaderResourceView* nullSRV = nullptr;
+			globals::d3d::context->PSSetShaderResources(52, 1, &nullSRV);
+		}
+		precipitation.depthSRV = REX::W32::AsW32(captureTarget->srv.get());
+		precipitation.texture = REX::W32::AsW32(captureTarget->resource.get());
+		precipitation.views[0] = REX::W32::AsW32(captureTarget->dsv.get());
 
 		inOcclusion = true;
 		occlusionCullBelowZ = worldProbeGrid ? cullBelowZ : std::nullopt;
-		PrecipitationShaderCubeSize = ClampProbeFieldSize(settings.ProbeFieldSize);
+		PrecipitationShaderCubeSize = zenithFrame ? kZenithOcclusionExtent : ClampProbeFieldSize(settings.ProbeFieldSize);
 		precip->lastCubeSize = PrecipitationShaderCubeSize;
 
-		float2 vPoint;
-		{
+		float3 PrecipitationShaderDirectionF{ 0.0f, 0.0f, -1.0f };
+		if (!zenithFrame) {
+			float2 vPoint;
 			constexpr float rcpRandMax = 1.f / RAND_MAX;
 			static int randSeed = std::rand();
 			static uint randFrameCount = 0;
@@ -1699,10 +1729,9 @@ void Skylighting::RenderOcclusion()
 			vPoint.y *= 6.28318530718f;
 
 			vPoint = { vPoint.x * cos(vPoint.y), vPoint.x * sin(vPoint.y) };
+			PrecipitationShaderDirectionF = -float3{ vPoint.x, vPoint.y, sqrt(std::max(0.0f, 1.0f - vPoint.LengthSquared())) };
+			PrecipitationShaderDirectionF.Normalize();
 		}
-
-		float3 PrecipitationShaderDirectionF = -float3{ vPoint.x, vPoint.y, sqrt(std::max(0.0f, 1.0f - vPoint.LengthSquared())) };
-		PrecipitationShaderDirectionF.Normalize();
 
 		PrecipitationShaderDirection = { PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z };
 
@@ -1718,10 +1747,18 @@ void Skylighting::RenderOcclusion()
 			CS_GPU_PASS("Skylighting::OcclusionMask");
 			precip->RenderMask(reinterpret_cast<RE::BSParticleShaderRainEmitter*>(&rainCapture));
 		}
-		OcclusionDir = -float4{ PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z, 0 };
-		occlusionSHBasis4Pi = EvaluateDirectionalSHBasis4Pi(float3{ OcclusionDir.x, OcclusionDir.y, OcclusionDir.z });
-		needsOcclusionRefresh = false;
-		OcclusionTransform = reinterpret_cast<RE::BSParticleShaderRainEmitter*>(&rainCapture)->occlusionProjection;
+		const auto& projection = reinterpret_cast<RE::BSParticleShaderRainEmitter*>(&rainCapture)->occlusionProjection;
+		if (zenithFrame) {
+			zenithTransform = projection;
+			zenithCaptureFrame = globals::state->frameCount;
+			zenithValid = false;
+			zenithEyePending = true;
+		} else {
+			OcclusionDir = -float4{ PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z, 0 };
+			occlusionSHBasis4Pi = EvaluateDirectionalSHBasis4Pi(float3{ OcclusionDir.x, OcclusionDir.y, OcclusionDir.z });
+			needsOcclusionRefresh = false;
+			OcclusionTransform = projection;
+		}
 		lastOcclusionRenderFrame = globals::state->frameCount;
 	}
 }

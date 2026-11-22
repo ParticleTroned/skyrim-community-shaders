@@ -224,7 +224,7 @@ namespace Util::BodyCapsules
 			const RE::bhkNiCollisionObject* source;
 		};
 		std::vector<Shape> shapes;
-		RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
+		Util::TraverseCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
 			Util::ShapeCollisionCapsule capsule;
 			if (Util::GetShapeCollisionCapsule(a_object, capsule) && capsule.radius >= MinActorCapsuleRadius &&
 				capsule.radius >= distance * MinRadiusPerDistance) {

@@ -1,5 +1,6 @@
 #include "Hooks.h"
 #include "Features/ReverseZ.h"
+#include "Features/Skin.h"
 #if defined(DEVBENCH_BRIDGE_ENABLED) && defined(NVPERF_ENABLED)
 #	include "Diagnostics/NvPerf.h"
 #endif
@@ -11,6 +12,7 @@
 #include "Features/TerrainSeams.h"
 
 #include "Utils/CharacterCategoryAuthoring.h"
+#include "Utils/ParaboloidShadow.h"
 
 #include "ShaderTools/BSShaderHooks.h"
 #include "Utils/D3DContextProtection.h"
@@ -44,6 +46,7 @@
 #include "TruePBR.h"
 #include "Util.h"
 #include "Utils/ShaderDescriptor.h"
+#include <utility>
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Diagnostics/D3DTextureLifetimeTracker.h"
@@ -57,6 +60,7 @@
 #include "Features/DynamicCubemaps.h"
 #include "Features/GrassOptimizations.h"
 #include "Features/GrassOptimizations/GrassBucketRenderer.h"
+#include "Features/GrassOptimizations/GrassDrawState.h"
 #include "Features/GrassPlacement.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
@@ -962,6 +966,20 @@ namespace
 		}
 	}
 
+	/** A raw wheel delta is current only when the batch includes a wheel event. */
+	bool HasMouseWheelEvent(const RE::InputEvent* a_event)
+	{
+		for (; a_event; a_event = a_event->next) {
+			const auto* button = a_event->AsButtonEvent();
+			if (button && button->GetDevice() == RE::INPUT_DEVICES::INPUT_DEVICE::kMouse) {
+				const auto code = button->GetIDCode();
+				if (code == RE::BSWin32MouseDevice::Key::kWheelUp || code == RE::BSWin32MouseDevice::Key::kWheelDown)
+					return true;
+			}
+		}
+		return false;
+	}
+
 	MenuInputBlockDecision GetMenuInputBlockDecision(RE::InputEvent* const* a_events, bool a_blockAllDevices)
 	{
 		if (a_blockAllDevices) {
@@ -1321,7 +1339,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 			}
 		} else {
 			state->settingCustomShader = true;
-			globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
+			ParaboloidShadow::BindVertexShader(globals::d3d::context, reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader));
 			*globals::game::currentVertexShader = vertexShader;
 			globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
 			*globals::game::currentPixelShader = pixelShader;
@@ -1559,6 +1577,9 @@ namespace LightingExtensions
 
 			state->permutationData.ExtraShaderDescriptor &= ~static_cast<uint32_t>(State::ExtraShaderDescriptors::IsTree);
 
+			if (globals::features::skin.loaded)
+				globals::features::skin.BeginPass(pass);
+
 			if (globals::features::detailMaps.IsEnabled())
 				globals::features::detailMaps.BeginPass(shader, pass);
 
@@ -1579,6 +1600,7 @@ struct AcceptedDrawRestoreGeometry
 	static void thunk(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_flags)
 	{
 		if constexpr (ShaderKind == 1) {
+			globals::features::skin.EndPass();
 			if (globals::features::detailMaps.HasActivePass())
 				globals::features::detailMaps.EndPass();
 			TerrainSeams::GetInstance().Restore();
@@ -1702,7 +1724,7 @@ namespace GrassExtensions
 				return false;
 			if (vertex && pixel) {
 				// Native setup must address the reflected constants of the bound grass pair.
-				globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertex->shader), nullptr, 0);
+				ParaboloidShadow::BindVertexShader(globals::d3d::context, reinterpret_cast<ID3D11VertexShader*>(vertex->shader));
 				globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixel->shader), nullptr, 0);
 				state->selectedCustomPixelShaderType = RE::BSShader::Type::Grass;
 				*globals::game::currentVertexShader = vertex;
@@ -1716,7 +1738,7 @@ namespace GrassExtensions
 				}
 				auto* nativeVertex = *globals::game::currentVertexShader;
 				auto* nativePixel = *globals::game::currentPixelShader;
-				globals::d3d::context->VSSetShader(nativeVertex ? reinterpret_cast<ID3D11VertexShader*>(nativeVertex->shader) : nullptr, nullptr, 0);
+				ParaboloidShadow::BindVertexShader(globals::d3d::context, nativeVertex ? reinterpret_cast<ID3D11VertexShader*>(nativeVertex->shader) : nullptr);
 				globals::d3d::context->PSSetShader(nativePixel ? reinterpret_cast<ID3D11PixelShader*>(nativePixel->shader) : nullptr, nullptr, 0);
 				state->selectedCustomPixelShaderType = RE::BSShader::Type::None;
 			}
@@ -1936,16 +1958,69 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 	return validationResult;
 }
 
+namespace
+{
+	thread_local bool grassCommitRequested = false;
+	thread_local GrassDrawState::Cache grassCommitCache;
+
+	void CommitNativeGraphicsState(bool isCompute)
+	{
+		const bool grass = std::exchange(grassCommitRequested, false);
+		if (!grass || isCompute || !globals::game::shadowState || !globals::d3d::context ||
+			!globals::state->currentShader || globals::state->currentShader->shaderType != RE::BSShader::Type::Grass) {
+			grassCommitCache.ready = false;
+			Hooks::BSGraphics_SetDirtyStates::func(isCompute);
+			return;
+		}
+		const auto commit = [&](auto& state) {
+			uint32_t otherDirty = state.PSSamplerModifiedBits | state.CSResourceModifiedBits |
+			                      state.CSSamplerModifiedBits | state.CSUAVModifiedBits;
+			if constexpr (requires { state.OMUAVModifiedBits; state.SRVModifiedBits; })
+				otherDirty |= state.OMUAVModifiedBits | state.SRVModifiedBits;
+			const GrassDrawState::Identity identity{ globals::d3d::context, state.currentVertexShader,
+				state.currentPixelShader, globals::state->frameCount };
+			const auto bindTextures = [&](uint32_t first, uint32_t count) {
+				globals::d3d::context->PSSetShaderResources(first, count,
+					reinterpret_cast<ID3D11ShaderResourceView* const*>(&state.PSTexture[first]));
+			};
+			GrassDrawState::Commit(grassCommitCache, identity, state.stateUpdateFlags, RE::BSGraphics::ShaderFlags::DIRTY_ALPHA_TEST_REF, state.PSResourceModifiedBits, otherDirty, state.alphaTestRef, [] { Hooks::BSGraphics_SetDirtyStates::func(false); }, bindTextures);
+		};
+		if (globals::game::isVR)
+			commit(globals::game::shadowState->GetVRRuntimeData());
+		else
+			commit(globals::game::shadowState->GetRuntimeData());
+	}
+}
+
+void Hooks::ResetGrassDrawState() noexcept
+{
+	grassCommitCache.ready = false;
+}
+
+void Hooks::CommitGrassDrawState()
+{
+	const bool previous = std::exchange(grassCommitRequested, true);
+	const SKSE::stl::scope_exit restore([&]() noexcept { grassCommitRequested = previous; });
+	static REL::Relocation<void (*)(uint32_t)> setDirtyStates{ REL::RelocationID(75580, 77386) };
+	try {
+		setDirtyStates(0);
+	} catch (...) {
+		ResetGrassDrawState();
+		throw;
+	}
+}
+
 void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 {
 	// Release owned bindings before native state updates can replace their saved values.
 	globals::state->RestoreSunGlareBindings();
 	const auto callerRva = static_cast<uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - REL::Module::get().base());
 	if (!ShouldRecordCSFramePhaseDiag()) {
-		func(isCompute);
+		CommitNativeGraphicsState(isCompute);
 		globals::features::terrainBlending.OnSetDirtyStates(isCompute, callerRva);
 		globals::state->Draw(isCompute);
 		GrassPlacement::ApplyNativeBinding(isCompute);
+		ParaboloidShadow::Scope::SyncConstants(isCompute);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (globals::features::upscaling.IsNeuralRenderingEnabled())
 			NeuralRendering::Color::ExposureCapture::Instance().ObserveGraphicsStateFlush(globals::d3d::context, isCompute);
@@ -1958,7 +2033,7 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 
 	const uint64_t totalStartTicks = ReadFrameDiagCounterTicks();
 	uint64_t phaseStartTicks = totalStartTicks;
-	func(isCompute);
+	CommitNativeGraphicsState(isCompute);
 	uint64_t phaseEndTicks = ReadFrameDiagCounterTicks();
 	RecordCSFrameHookPhase(CSFrameHookPhase::SetDirtyStatesOriginal, frame, phaseEndTicks - phaseStartTicks);
 
@@ -1970,6 +2045,7 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 	phaseStartTicks = phaseEndTicks;
 	globals::state->Draw(isCompute);
 	GrassPlacement::ApplyNativeBinding(isCompute);
+	ParaboloidShadow::Scope::SyncConstants(isCompute);
 	phaseEndTicks = ReadFrameDiagCounterTicks();
 	RecordCSFrameHookPhase(CSFrameHookPhase::StateDraw, frame, phaseEndTicks - phaseStartTicks);
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -2236,8 +2312,11 @@ struct BSInputDeviceManager_PollInputDevices
 		if (a_events) {
 			__try {
 				if (auto* inputManager = RE::BSInputDeviceManager::GetSingleton()) {
-					if (const auto* mouse = inputManager->GetMouse())
-						menu->RecordDirectInputWheelDelta(mouse->GetRuntimeData().dInputNextState.z);
+					if (const auto* mouse = inputManager->GetMouse()) {
+						const auto wheelDelta = mouse->GetRuntimeData().dInputNextState.z;
+						if (wheelDelta != 0 && HasMouseWheelEvent(*a_events))
+							menu->RecordDirectInputWheelDelta(wheelDelta);
+					}
 				}
 			} __except (EXCEPTION_EXECUTE_HANDLER) {
 				LogInputHookSafeguardOnce(InputHookSafeguardReason::kMouseWheelReadException, a_dispatcher, TryGetInputEventHead(a_events), false);
@@ -2260,19 +2339,16 @@ struct BSInputDeviceManager_PollInputDevices
 		}
 		const bool blockedDevice = blockDecision != MenuInputBlockDecision::kAllow;
 
-		if (blockedDevice && shouldSwallowInput) {  //the menu is open, eat all keypresses
-			// During active flying preview, let input reach the game for movement/camera.
-			if (menu->IsPreviewFlying()) {
-				func(a_dispatcher, a_events);
-				return;
-			}
+		// Flying preview needs native input for movement and camera control.
+		if (blockedDevice && shouldSwallowInput && !menu->IsPreviewFlying()) {
 			LogInputHookSafeguardOnce(InputHookSafeguardReason::kSwallow, a_dispatcher, TryGetInputEventHead(a_events), true);
 			constexpr RE::InputEvent* const dummy[] = { nullptr };
 			func(a_dispatcher, dummy);
-			return;
+		} else {
+			func(a_dispatcher, a_events);
 		}
 
-		func(a_dispatcher, a_events);
+		globals::features::screenshotFeature.SuppressVanillaMultiScreenshot();
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };
@@ -2566,7 +2642,7 @@ namespace Hooks
 							CaptureStageSelection(vertexShader, CSX::RenderMap::ShaderStage::kVertex,
 								CSX::RenderMap::ShaderSelectionRoute::kCSXCache);
 #endif
-							globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
+							ParaboloidShadow::BindVertexShader(globals::d3d::context, reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader));
 							state->techniqueShaderSelection.vertex = vertexShader;
 							state->techniqueShaderSelection.vertexDescriptor = state->modifiedVertexDescriptor;
 							*globals::game::currentVertexShader = a_vertexShader;
@@ -2585,7 +2661,7 @@ namespace Hooks
 								 CSX::RenderMap::ShaderSelectionRoute::kMissing);
 #endif
 			*globals::game::currentVertexShader = a_vertexShader;
-			globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(a_vertexShader->shader), NULL, NULL);
+			ParaboloidShadow::BindVertexShader(globals::d3d::context, reinterpret_cast<ID3D11VertexShader*>(a_vertexShader->shader));
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -2606,7 +2682,14 @@ namespace Hooks
 					auto type = currentShader->shaderType.get();
 					if (state->ShaderEnabled(type) && !UseNativeWaterShaders(*currentShader)) {
 						RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*currentShader, state->modifiedPixelDescriptor, SIE::ShaderCache::PixelShaderLookup::Draw);
-						if (pixelShader) {
+						using UtilityFlags = SIE::ShaderCache::UtilityShaderFlags;
+						constexpr auto paraboloidFlags = static_cast<uint32_t>(UtilityFlags::RenderShadowmap) | static_cast<uint32_t>(UtilityFlags::RenderShadowmapPb);
+						const bool paraboloidCaster = type == RE::BSShader::Type::Utility &&
+						                              (state->modifiedPixelDescriptor & (paraboloidFlags | static_cast<uint32_t>(UtilityFlags::OpaqueEffect))) == paraboloidFlags;
+						// The cutoff interpolant must come from the selected custom vertex stage, even while disabled.
+						const auto& selected = state->techniqueShaderSelection;
+						const bool compatibleVertex = !paraboloidCaster || (selected.vertex && selected.vertexDescriptor == state->modifiedVertexDescriptor);
+						if (pixelShader && compatibleVertex) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 							CaptureStageSelection(pixelShader, CSX::RenderMap::ShaderStage::kPixel,
 								CSX::RenderMap::ShaderSelectionRoute::kCSXCache);

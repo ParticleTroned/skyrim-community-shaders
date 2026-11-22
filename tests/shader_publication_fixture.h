@@ -71,6 +71,7 @@ namespace winrt
 				value->Release();
 		}
 		T* get() const { return value; }
+		explicit operator bool() const { return value != nullptr; }
 		T** put()
 		{
 			assert(!value);
@@ -84,6 +85,7 @@ namespace winrt
 }
 using ID3D11VertexShader = Resource;
 using ID3D11PixelShader = Resource;
+using ID3D11GeometryShader = Resource;
 constexpr bool FAILED(int result) { return result < 0; }
 namespace RE
 {
@@ -124,6 +126,27 @@ namespace logger
 	template <class... T>
 	void info(const char*, T&&...)
 	{}
+	template <class... T>
+	void warn(const char*, T&&...)
+	{}
+}
+winrt::com_ptr<ID3D11GeometryShader> PrepareParaboloidClip(const RE::BSShader&, uint32_t)
+{
+	assert(false && "Draw publication must not prepare auxiliary shaders");
+	return {};
+}
+namespace ParaboloidShadow
+{
+	int Attach(ID3D11VertexShader&, ID3D11GeometryShader*)
+	{
+		assert(false && "Water publication must not attach a clipping shader");
+		return -1;
+	}
+	winrt::com_ptr<ID3D11GeometryShader> Retain(ID3D11VertexShader*)
+	{
+		assert(false && "Water publication must not retain a clipping shader");
+		return {};
+	}
 }
 namespace magic_enum
 {
@@ -263,7 +286,7 @@ struct ShaderCache
 	bool IsDiskCacheActive() const { return false; }
 	bool IsTaskStale(std::optional<uint64_t> a_taskGeneration) const;
 	bool IsTaskStale(std::optional<uint64_t> a_taskGeneration, RE::BSShader::Type a_type) const;
-	RE::BSGraphics::VertexShader* MakeAndAddVertexShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = {});
+	RE::BSGraphics::VertexShader* MakeAndAddVertexShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = {}, bool = false);
 	RE::BSGraphics::PixelShader* MakeAndAddPixelShader(const RE::BSShader&, uint32_t, std::optional<uint64_t> = {});
 };
 

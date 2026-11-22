@@ -8,6 +8,7 @@
 #include <limits>
 #include <memory>
 #include <utility>
+#include <vector>
 
 /// Resolve shader includes from the installed Shaders root, as Util::CompileShader does.
 class PackageIncludes : public ID3DInclude
@@ -15,6 +16,15 @@ class PackageIncludes : public ID3DInclude
 public:
 	explicit PackageIncludes(std::filesystem::path root, std::filesystem::path featureRoot = {}, std::filesystem::path secondFeatureRoot = {}, std::filesystem::path testRoot = {}) :
 		roots_{ std::move(root), std::move(featureRoot), std::move(secondFeatureRoot), std::move(testRoot) } {}
+	/** Resolve full lighting permutations against every packaged feature. */
+	static PackageIncludes AllFeatures(const std::filesystem::path& sourceRoot)
+	{
+		PackageIncludes includes(sourceRoot / "package/Shaders");
+		for (const auto& entry : std::filesystem::directory_iterator(sourceRoot / "features"))
+			if (std::filesystem::is_directory(entry.path() / "Shaders"))
+				includes.roots_.push_back(entry.path() / "Shaders");
+		return includes;
+	}
 	HRESULT __stdcall Open(D3D_INCLUDE_TYPE, LPCSTR name, LPCVOID,
 		LPCVOID* data, UINT* bytes) override
 	{
@@ -52,5 +62,5 @@ public:
 	}
 
 private:
-	std::array<std::filesystem::path, 4> roots_;
+	std::vector<std::filesystem::path> roots_;
 };

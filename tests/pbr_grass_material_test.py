@@ -169,6 +169,11 @@ struct Context {
     void VSSetShader(ID3D11VertexShader* value, void*, unsigned) { vertex = value; }
     void PSSetShader(ID3D11PixelShader* value, void*, unsigned) { pixel = value; }
 };
+namespace ParaboloidShadow {
+    void BindVertexShader(Context* context, ID3D11VertexShader* shader) {
+        context->VSSetShader(shader, nullptr, 0);
+    }
+}
 struct Flags { bool dirty = false; void set(int) { dirty = true; } };
 namespace globals {
 State stateValue; State* state = &stateValue;

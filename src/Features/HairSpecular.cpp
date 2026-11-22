@@ -1,5 +1,6 @@
 #include "HairSpecular.h"
 #include "Menu/SettingsPage.h"
+#include "Utils/Finite.h"
 #include "Utils/UI.h"
 
 #include "Utils/D3D.h"
@@ -45,7 +46,7 @@ void HairSpecular::DrawSettings()
 		ImGui::Spacing();
 	}
 	if (page.Is("look")) {
-		Util::Widgets::SliderFloat("Glossiness", &settings.HairGlossiness, 0.0f, settings.HairMode == 0 ? 256.0f : 100.0f, "%.0f");
+		Util::Widgets::SliderFloat("Glossiness", &settings.HairGlossiness, 0.0f, settings.HairMode == 0 ? 256.0f : 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text(
 				"Higher values give tighter, sharper hair highlights. Lower values spread them into a softer shine.");
@@ -89,9 +90,9 @@ void HairSpecular::DrawSettings()
 		const auto shadowsDisabled = Util::DisableGuard(settings.EnableSelfShadow == 0);
 		Util::Widgets::SliderFloat("Self Shadow Strength", &settings.SelfShadowStrength, 0.0f, 1.0f, "%.2f");
 		Util::AddTooltip("How dark overlapping hair becomes. 0 removes this darkening; 1 applies it fully.");
-		Util::Widgets::SliderFloat("Self Shadow Exponent", &settings.SelfShadowExponent, 0.0f, 10.0f, "%.2f");
+		Util::Widgets::SliderFloat("Self Shadow Exponent", &settings.SelfShadowExponent, 0.0f, 10.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		Util::AddTooltip("Higher values lighten partially shaded hair while keeping fully covered areas dark.");
-		Util::Widgets::SliderFloat("Self Shadow Scale", &settings.SelfShadowScale, 0.0f, 10.0f, "%.2f");
+		Util::Widgets::SliderFloat("Self Shadow Scale", &settings.SelfShadowScale, 0.0f, 10.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		Util::AddTooltip("How far nearby hair and surfaces can cast these small shadows. Higher values extend their reach.");
 	}
 }
@@ -99,6 +100,11 @@ void HairSpecular::DrawSettings()
 void HairSpecular::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	const Settings defaults{};
+	settings.HairMode = std::min(settings.HairMode, 1u);
+	settings.HairGlossiness = Util::ClampFinite(settings.HairGlossiness, 0.0f, 256.0f, defaults.HairGlossiness);
+	settings.SelfShadowExponent = Util::ClampFinite(settings.SelfShadowExponent, 0.0f, 10.0f, defaults.SelfShadowExponent);
+	settings.SelfShadowScale = Util::ClampFinite(settings.SelfShadowScale, 0.0f, 10.0f, defaults.SelfShadowScale);
 }
 
 void HairSpecular::SaveSettings(json& o_json)

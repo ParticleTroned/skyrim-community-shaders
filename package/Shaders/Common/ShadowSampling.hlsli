@@ -210,6 +210,7 @@ namespace ShadowSampling
 		ShadowData sD = SharedShadowData[0];
 
 		float shadowMapDepth = GetShadowDepth(positionWS, eyeIndex);
+		float shadow = 1.0;
 
 		if (sD.EndSplitDistances.z >= shadowMapDepth) {
 			float fadeFactor = 1 - pow(saturate(dot(positionWS.xyz, positionWS.xyz) / sD.ShadowLightParam.z), 8);
@@ -235,10 +236,10 @@ namespace ShadowSampling
 				shadowVisibility = lerp(shadowVisibility, cascade1ShadowVisibility, cascade1BlendFactor);
 			}
 
-			return lerp(1.0, shadowVisibility, fadeFactor);
+			shadow = lerp(1.0, shadowVisibility, fadeFactor);
 		}
 
-		return 1.0;
+		return shadow;
 	}
 #endif
 

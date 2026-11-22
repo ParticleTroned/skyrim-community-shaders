@@ -84,6 +84,7 @@ namespace
 		ReflectionComposition,
 		Appearance,
 		Emissive,
+		MappedEmission,
 		Fire
 	};
 
@@ -116,7 +117,8 @@ namespace
 			const auto referenceValue = std::to_string(referenceFlags);
 			if (referenceFlags)
 				defines.push_back({ "CSX_PERF_REFERENCE_FLAGS", referenceValue.c_str() });
-			auto code = Compile(mode == ShaderMode::ReflectionComposition ? FORWARD_COMPOSITION_TEST_SHADER :
+			auto code = Compile(mode == ShaderMode::MappedEmission        ? MAPPED_EMISSION_TEST_SHADER :
+								mode == ShaderMode::ReflectionComposition ? FORWARD_COMPOSITION_TEST_SHADER :
 																			L"tests/adaptive_balance_color.hlsl",
 				defines, "cs_5_0");
 			Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
@@ -130,9 +132,9 @@ namespace
 			feature->SetMember("SharedData::adaptiveBalanceSettings", "pointLightCurve", 1.0f);
 			for (const auto* name : { "fireIntensity", "fireSaturation", "fireCurve" })
 				feature->SetMember("SharedData::adaptiveBalanceSettings", name, 1.0f);
-			if (mode == ShaderMode::Fire || mode == ShaderMode::Appearance || mode == ShaderMode::Emissive || mode == ShaderMode::PointLights || mode == ShaderMode::ReflectionComposition)
+			if (mode == ShaderMode::Fire || mode == ShaderMode::Appearance || mode == ShaderMode::Emissive || mode == ShaderMode::MappedEmission || mode == ShaderMode::PointLights || mode == ShaderMode::ReflectionComposition)
 				permutation = std::make_unique<ConstantBuffer>(device, reflection.Get(), "Permutation::PerShader");
-			if (mode == ShaderMode::Emissive) {
+			if (mode == ShaderMode::Emissive || mode == ShaderMode::MappedEmission) {
 				geometry = std::make_unique<ConstantBuffer>(device, reflection.Get(), "LLPerGeometry");
 				Require(geometry->slot == 8 && geometry->bytes.size() == 16, "Emissive geometry buffer layout changed");
 			}
@@ -292,6 +294,64 @@ namespace
 			return result;
 		}
 	};
+
+	unsigned VerifyMappedEmission(ID3D11Device* device, ID3D11DeviceContext* context, bool vr)
+	{
+		unsigned checked = 0;
+		for (bool pbr : { false, true }) {
+			Fixture fixture(device, vr, ShaderMode::MappedEmission, pbr ? std::vector<const char*>{ "TRUE_PBR" } : std::vector<const char*>{});
+			auto glowColors = samples;
+			auto vertexColors = samples;
+			for (size_t i = 0; i < samples.size(); ++i) {
+				glowColors[i] = samples[(i + 3) % samples.size()];
+				vertexColors[i] = samples[(i + 1) % samples.size()];
+			}
+			fixture.inputs->SetVariable("glowColors", glowColors);
+			fixture.inputs->SetVariable("vertexColors", vertexColors);
+			fixture.feature->SetMember("SharedData::linearLightingSettings", "emitColorMult", 1.3f);
+			fixture.feature->SetMember("SharedData::linearLightingSettings", "glowmapMult", 0.66f);
+			for (bool linear : { false, true }) {
+				fixture.feature->SetMember("SharedData::linearLightingSettings", "enableLinearLighting", uint32_t(linear));
+				for (uint32_t scene : { 0u, 1u, 2u }) {
+					fixture.permutation->SetVariable("Permutation::ExtraShaderDescriptor", scene);
+					for (bool grade : { false, true }) {
+						auto appearance = AdaptiveBalanceTest::NeutralAppearance();
+						appearance[70] = grade ? 0.5f : 1.0f;
+						appearance[71] = grade ? -0.5f : 0.0f;
+						appearance[72] = grade ? 1.5f : 1.0f;
+						appearance[73] = grade ? 0.25f : 0.0f;
+						fixture.feature->SetMember("SharedData::adaptiveBalanceSettings", "appearance", appearance);
+						for (const char* gamma : { "emitColorGamma", "glowmapGamma" })
+							fixture.feature->SetMember("SharedData::linearLightingSettings", gamma, grade ? 1.8f : 1.0f);
+						for (float vertexAO : { 0.0f, 1.0f }) {
+							if (pbr)
+								fixture.feature->SetMember("SharedData::truePBRSettings", "VertexAOStrength", vertexAO);
+							for (uint32_t route : { 0u, 1u, 2u, 3u }) {
+								fixture.permutation->SetVariable("Permutation::PixelShaderDescriptor", route == 1 ? 2u << 24 : 0u);
+								fixture.inputs->SetVariable("mappedParameters", std::array<uint32_t, 4>{ route == 2 ? 1u : route == 3 ? 2u :
+																																		0u,
+																					0, 0, 0 });
+								for (float gain : { 0.0f, -0.25f, 4.0f }) {
+									auto colors = samples;
+									for (auto& color : colors)
+										for (unsigned channel = 0; channel < 3; ++channel)
+											color[channel] *= gain;
+									fixture.inputs->SetVariable("colors", colors);
+									fixture.geometry->SetVariable("emissiveMult", gain);
+									for (const auto& pixel : fixture.Dispatch(context)) {
+										Require(std::all_of(pixel.begin(), pixel.end(), [](float value) { return std::isfinite(value); }), "Mapped emission became non-finite");
+										Require(pixel[3] <= 5e-5f, "Mapped emission changed gamma, signed intensity, preview bypass or vertex-AO behavior");
+										++checked;
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		return checked;
+	}
 
 	unsigned VerifyEmissive(ID3D11Device* device, ID3D11DeviceContext* context, bool vr)
 	{
@@ -1500,7 +1560,15 @@ int main(int argc, char** argv)
 			D3D11_SDK_VERSION, device.GetAddressOf(), nullptr, context.GetAddressOf()));
 		const bool reflectionsOnly = argc == 2 && std::string_view(argv[1]) == "--reflections";
 		const bool fogOnly = argc == 2 && std::string_view(argv[1]) == "--fog";
-		Require(argc == 1 || reflectionsOnly || fogOnly, "Unknown shader test arguments");
+		const bool mappedEmissionOnly = argc == 2 && std::string_view(argv[1]) == "--mapped-emission";
+		Require(argc == 1 || reflectionsOnly || fogOnly || mappedEmissionOnly, "Unknown shader test arguments");
+		if (mappedEmissionOnly) {
+			unsigned checked = 0;
+			for (bool vr : { false, true })
+				checked += VerifyMappedEmission(device.Get(), context.Get(), vr);
+			std::cout << checked << " production mapped-emission samples passed on WARP (SE/AE and VR).\n";
+			return 0;
+		}
 		if (reflectionsOnly || fogOnly) {
 			unsigned checked = 0;
 			for (bool vr : { false, true })

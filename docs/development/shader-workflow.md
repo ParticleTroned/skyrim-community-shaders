@@ -30,6 +30,37 @@ prerequisites, exact local and CI commands, version/update rules, validation
 gates, recovery procedures, scope boundary, and AI-agent instructions are in
 the [Prebuilt Shader Cache Runbook](./prebuilt-shader-cache.md).
 
+## Startup compilation estimates
+
+During initial startup, the compilation overlay shows elapsed time and an
+approximate total-time range. It displays `estimating...` during initial
+calibration. The range is a heuristic, not a guaranteed completion window.
+
+ETA uses separate shader family, stage and major Lighting technique costs,
+observed worker capacity, and remaining work in active jobs. Successful source
+compiles refine their own category; disk hits and shared bytecode have separate
+costs. Scheduling priority and compiler options are unchanged.
+
+Startup timing priors are stored in
+`Data/SKSE/Plugins/CommunityShaders/CompileTimeHistory.json`. This optional file
+is independent of shader caches. Its compatibility key covers runtime,
+compiler identity, shader ABI/global defines, compiler options, worker count
+and startup priority mode. Invalid or incompatible history falls back to
+initial estimates. History is saved once at DataLoaded before the game is
+released, then the model and loaded priors are released. This also applies
+when background compilation allows remaining startup tasks to continue.
+There is no in-game timing learning, history I/O or ETA calculation;
+gameplay keeps basic progress and
+elapsed-time reporting. Different CPU load and changed shader sources can
+still affect startup ETA.
+
+DevBench's `communityshaders.shader_api` snapshot includes
+`snapshot.compilation.estimate`: elapsed and remaining milliseconds, heuristic
+bounds, enabled/calibration status, learned fraction, source sample count and
+observed worker capacity. Remaining values are null when disabled or while
+active calibration is pending, and zero when enabled but idle. Observing an
+estimate never schedules compilation.
+
 ## Verifying refactors
 
 `tools/verify-shader-refactor.ps1` (bash wrapper: `tools/verify-shader-refactor.sh`)

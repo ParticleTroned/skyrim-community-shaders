@@ -1,5 +1,5 @@
 // Included after the shader compiler helpers in grass_batch_shader_test.cpp.
-void RunGrassSourceIndices()
+void RunGrassSourceIndices(bool compact = false)
 {
 	ComPtr<ID3D11Device> device;
 	ComPtr<ID3D11DeviceContext> context;
@@ -37,18 +37,40 @@ void RunGrassSourceIndices()
 	const std::array<UINT, 14> indices{ 0, 1, 31, 63, 64, 65, 127, 128, 129, 255, 256, 65535, 65536, GrassPolicy::kMaxBatchInstances - 1 };
 	std::array<float, indices.size()> encoded{};
 	std::array<Record, indices.size()> native{};
+	std::vector<GrassInstancePacking::Record> packed(compact ? records.size() : 0);
 	for (size_t i = 0; i < indices.size(); ++i) {
-		encoded[i] = float(indices[i]);
+		if (compact) {
+			auto& record = records[indices[i]];
+			DirectX::XMFLOAT3X3 rotation;
+			DirectX::XMStoreFloat3x3(&rotation, DirectX::XMMatrixRotationRollPitchYaw(float(i) * .17f, float(i) * .31f, float(i) * .23f));
+			constexpr std::array<size_t, 9> components{ 4, 5, 6, 8, 9, 10, 12, 7, 11 };
+			for (size_t axis = 0; axis < components.size(); ++axis)
+				record[components[axis]] = DirectX::PackedVector::XMConvertFloatToHalf(rotation.m[axis / 3][axis % 3]);
+			record[13] = DirectX::PackedVector::XMConvertFloatToHalf(.2f);
+			record[14] = record[15] = 0;
+			Require(GrassInstancePacking::Pack(record.data(), packed[indices[i]]), "Native rotation could not be compacted");
+			auto invalid = record;
+			invalid[4] = DirectX::PackedVector::XMConvertFloatToHalf(4.f);
+			GrassInstancePacking::Record rejected;
+			Require(!GrassInstancePacking::Pack(invalid.data(), rejected), "Scaled basis lost the raw path");
+			invalid = record;
+			invalid[14] = 1;
+			Require(!GrassInstancePacking::Pack(invalid.data(), rejected), "Nonzero native payload was discarded");
+			invalid[0] = 0x7c00;
+			Require(!GrassInstancePacking::Pack(invalid.data(), rejected), "Nonfinite record was compacted");
+		}
+		encoded[i] = float(indices[i] * (compact ? 1u : 2u));
 		native[i] = records[indices[i]];
 	}
-	auto source = makeBuffer(UINT(records.size() * sizeof(Record)), D3D11_BIND_SHADER_RESOURCE, records.data(), true, "GrassTest::ExactSource");
+	const auto sourceBytes = UINT(records.size() * (compact ? GrassInstancePacking::kStride : sizeof(Record)));
+	auto source = makeBuffer(sourceBytes, D3D11_BIND_SHADER_RESOURCE, compact ? static_cast<const void*>(packed.data()) : records.data(), true, "GrassTest::ExactSource");
 	auto compacted = makeBuffer(sizeof(encoded), D3D11_BIND_VERTEX_BUFFER, encoded.data(), false, "GrassTest::SourceIndices");
 	auto fallback = makeBuffer(sizeof(native), D3D11_BIND_VERTEX_BUFFER, native.data(), false, "GrassTest::NativeRecords");
 	auto output = makeBuffer(UINT(indices.size() * outputStride), D3D11_BIND_STREAM_OUTPUT, nullptr, false, "GrassTest::DecodedRecords");
 	D3D11_SHADER_RESOURCE_VIEW_DESC view{};
 	view.Format = DXGI_FORMAT_R32_TYPELESS;
 	view.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
-	view.BufferEx.NumElements = UINT(records.size() * sizeof(Record) / 4);
+	view.BufferEx.NumElements = sourceBytes / 4;
 	view.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
 	ComPtr<ID3D11ShaderResourceView> srv;
 	Check(device->CreateShaderResourceView(source.Get(), &view, srv.GetAddressOf()));
@@ -68,7 +90,7 @@ void RunGrassSourceIndices()
 	context->GSSetShader(stream.Get(), nullptr, 0);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
 	for (bool indexed : { false, true }) {
-		params.SetVariable("GrassBatchEnabled", UINT(indexed));
+		params.SetVariable("GrassBatchEnabled", indexed ? (compact ? 5u : 1u) : 0u);
 		context->UpdateSubresource(params.buffer.Get(), 0, nullptr, params.bytes.data(), 0, 0);
 		auto* constants = params.buffer.Get();
 		context->VSSetConstantBuffers(params.slot, 1, &constants);
@@ -97,7 +119,10 @@ void RunGrassSourceIndices()
 		bool matches = true;
 		for (size_t i = 0; i < indices.size(); ++i)
 			for (size_t component = 0; component < 16; ++component)
-				matches &= actual[i * 16 + component] == std::bit_cast<uint32_t>(DirectX::PackedVector::XMConvertHalfToFloat(native[i][component]));
+				if (compact && indexed && component >= 4 && component <= 12)
+					matches &= std::abs(std::bit_cast<float>(actual[i * 16 + component]) - DirectX::PackedVector::XMConvertHalfToFloat(native[i][component])) < .00051f;
+				else
+					matches &= actual[i * 16 + component] == std::bit_cast<uint32_t>(DirectX::PackedVector::XMConvertHalfToFloat(native[i][component]));
 		context->Unmap(staging.Get(), 0);
 		Require(matches, indexed ? "Source-index IA/VS path changed native half values" : "Native IA fallback changed half values");
 	}

@@ -1,5 +1,6 @@
 #include "ExtendedTranslucency.h"
 #include "Menu/SettingsPage.h"
+#include "Utils/Finite.h"
 #include "Utils/UI.h"
 
 #include "../ShaderCache.h"
@@ -120,21 +121,21 @@ void ExtendedTranslucency::DrawSettings()
 			ImGui::Text("On: limits the effect to animated bodies and clothing. Off: also affects other compatible objects. Enable if unrelated objects look wrong.");
 		}
 
-		if (Util::Widgets::SliderFloat("Transparency Increase", &settings.AlphaReduction, 0, 1.f)) {
+		if (Util::Widgets::SliderFloat("Transparency Increase", &settings.AlphaReduction, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
 			changed = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Makes the material easier to see through. Increase this if the chosen material style looks too opaque.");
 		}
 
-		if (Util::Widgets::SliderFloat("Softness", &settings.AlphaSoftness, 0.0f, 1.0f)) {
+		if (Util::Widgets::SliderFloat("Softness", &settings.AlphaSoftness, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
 			changed = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("Softens the added opacity from the selected material style. Higher values keep the material more transparent.");
 		}
 
-		if (Util::Widgets::SliderFloat("Blend Weight", &settings.AlphaStrength, 0.0f, 1.0f)) {
+		if (Util::Widgets::SliderFloat("Blend Weight", &settings.AlphaStrength, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
 			changed = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -152,6 +153,10 @@ void ExtendedTranslucency::DrawSettings()
 void ExtendedTranslucency::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	const Settings defaults{};
+	settings.AlphaReduction = Util::ClampFinite(settings.AlphaReduction, 0.0f, 1.0f, defaults.AlphaReduction);
+	settings.AlphaSoftness = Util::ClampFinite(settings.AlphaSoftness, 0.0f, 1.0f, defaults.AlphaSoftness);
+	settings.AlphaStrength = Util::ClampFinite(settings.AlphaStrength, 0.0f, 1.0f, defaults.AlphaStrength);
 }
 
 void ExtendedTranslucency::SaveSettings(json& o_json)

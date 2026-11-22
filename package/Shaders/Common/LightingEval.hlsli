@@ -9,12 +9,6 @@
 #	include "Common/PBR.hlsli"
 #endif
 
-float3 SafeNormalizeLighting(float3 v, float3 fallback)
-{
-	float lenSq = dot(v, v);
-	return (lenSq > EPSILON_DIVISION && lenSq == lenSq && lenSq < 1.0e16) ? v * rsqrt(lenSq) : fallback;
-}
-
 #if defined(TRUE_PBR)
 DirectContext CreateDirectLightingContext(float3 worldNormal, float3 coatWorldNormal, float3 vertexNormal, float3 viewDir, float3 coatViewDir, float3 lightDir, float3 coatLightDir, float3 lightColor, float detailedShadow, float softShadow)
 #else
@@ -101,12 +95,41 @@ float3 VanillaSpecular(DirectContext context, float shininess, float2 uv, float2
 	return lightColorMultiplier;
 }
 
+#if !defined(TRUE_PBR)
+void AddSoftLighting(DirectContext context, MaterialProperties material, float normalization, inout DirectLightingOutput lightingOutput)
+{
+	const uint shadingFlags = Lighting::GetShadingFlags(Permutation::PixelShaderDescriptor);
+	[branch] if ((shadingFlags & (Permutation::LightingFlags::SoftLighting | Permutation::LightingFlags::RimLighting | Permutation::LightingFlags::BackLighting)) != 0)
+	{
+		const float NdotL = dot(context.worldNormal, context.lightDir);
+		float3 softLightColor = context.lightColor * context.softShadow;
+		if (Lighting::HasSoftLighting())
+			lightingOutput.diffuse += softLightColor * GetSoftLightMultiplier(NdotL) * material.rimSoftLightColor * normalization;
+		if (Lighting::HasRimLighting())
+			lightingOutput.diffuse += softLightColor * GetRimLightMultiplier(context.lightDir, context.viewDir, context.worldNormal) * material.rimSoftLightColor * normalization;
+		if (Lighting::HasBackLighting())
+			lightingOutput.diffuse += softLightColor * saturate(-NdotL) * material.backLightColor * normalization;
+	}
+}
+#endif
+
 void EvaluateLighting(DirectContext context, MaterialProperties material, float3x3 tbnTr, float2 uv, float2 uv_ddx, float2 uv_ddy, out DirectLightingOutput lightingOutput)
 {
 	lightingOutput = (DirectLightingOutput)0;
 #if defined(TRUE_PBR)
 	PBR::GetDirectLightInput(lightingOutput, context, material, tbnTr, uv);
 #else
+#	if defined(CS_SKIN_SHADING)
+	[branch] if (Skin::IsEnabled())
+	{
+		Skin::SkinDirectLightInput(lightingOutput, context, material);
+#		if !defined(DEFERRED)
+		// Forward draws do not receive the deferred screen-space diffusion pass.
+		AddSoftLighting(context, material, 1.0, lightingOutput);
+#		endif
+		return;
+	}
+#	endif
 #	if defined(CS_HAIR_SHADING)
 	if (SharedData::hairSpecularSettings.Enabled) {
 		Hair::GetHairDirectLight(lightingOutput, context, material, tbnTr, uv);
@@ -115,7 +138,6 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
 #	endif
 	const float NdotL = dot(context.worldNormal, context.lightDir);
 	float3 diffuseLightColor = context.lightColor * context.detailedShadow;
-	float3 softLightColor = context.lightColor * context.softShadow;
 	lightingOutput.diffuse = saturate(NdotL) * diffuseLightColor * Color::VanillaNormalization();
 #	if defined(TREE_ANIM)
 	[branch] if (SharedData::foliageLightingSettings.EnableFoliageScattering != 0)
@@ -123,14 +145,7 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
 		lightingOutput.transmission += material.BaseColor * GetFoliageTransmission(NdotL, dot(context.viewDir, context.lightDir)) * diffuseLightColor * Color::VanillaNormalization();
 	}
 #	endif
-	if (Lighting::HasSoftLighting())
-		lightingOutput.diffuse += softLightColor * GetSoftLightMultiplier(NdotL) * material.rimSoftLightColor * Color::VanillaNormalization();
-
-	if (Lighting::HasRimLighting())
-		lightingOutput.diffuse += softLightColor * GetRimLightMultiplier(context.lightDir, context.viewDir, context.worldNormal) * material.rimSoftLightColor * Color::VanillaNormalization();
-
-	if (Lighting::HasBackLighting())
-		lightingOutput.diffuse += softLightColor * saturate(-NdotL) * material.backLightColor * Color::VanillaNormalization();
+	AddSoftLighting(context, material, Color::VanillaNormalization(), lightingOutput);
 	lightingOutput.specular = VanillaSpecular(context, material.Shininess, uv, uv_ddx, uv_ddy) * material.SpecularColor * material.Glossiness * diffuseLightColor * Color::VanillaNormalization();
 #endif
 }
@@ -141,6 +156,13 @@ void GetIndirectLobeWeights(out IndirectLobeWeights lobeWeights, IndirectContext
 #if defined(TRUE_PBR)
 	PBR::GetIndirectLobeWeights(lobeWeights, context, material);
 #else
+#	if defined(CS_SKIN_SHADING)
+	[branch] if (Skin::IsEnabled())
+	{
+		Skin::SkinIndirectLobeWeights(lobeWeights, material, context);
+		return;
+	}
+#	endif
 #	if defined(CS_HAIR_SHADING)
 	if (SharedData::hairSpecularSettings.Enabled) {
 		Hair::GetHairIndirectLobeWeights(lobeWeights, context, material, uv);
@@ -274,19 +296,24 @@ WetnessDirectLightingParams CreateWetnessDirectLightingParams(float3 wetnessNorm
 void EvaluateWetnessLighting(float3 wetnessNormal, DirectContext context, float roughness, WetnessDirectLightingParams params, inout DirectLightingOutput lightingOutput)
 {
 #	if defined(TRUE_PBR)
+	// The wet film lies above the refracting substrate.
+	const float3 V = context.coatViewDir;
+	const float3 L = context.coatLightDir;
+	const float3 H = context.coatHalfVector;
 	float3 lightColor = context.coatLightColor;
 #	else
+	const float3 V = context.viewDir;
+	const float3 L = context.lightDir;
+	const float3 H = context.halfVector;
 	float3 lightColor = context.lightColor * context.detailedShadow;
 #	endif
 	lightColor *= params.lightColorScale;
 
 	const float3 N = wetnessNormal;
-	const float3 L = context.lightDir;
-	const float3 H = context.halfVector;
 
 	float NdotL = clamp(dot(N, L), EPSILON_DOT_CLAMP, 1);
 	float NdotH = saturate(dot(N, H));
-	float VdotH = saturate(dot(context.viewDir, H));
+	float VdotH = saturate(dot(V, H));
 
 	float G = BRDF::Vis_SmithJointApprox(roughness, params.NdotV, NdotL);
 	float3 F = BRDF::F_Schlick(params.wetnessF0, VdotH);
@@ -351,17 +378,20 @@ void EvaluateWetnessLighting(float3 wetnessNormal, DirectContext context, float 
 {
 	const float wetnessStrength = saturate(1 - roughness);
 #	if defined(TRUE_PBR)
+	const float3 V = context.coatViewDir;
+	const float3 L = context.coatLightDir;
+	const float3 H = context.coatHalfVector;
 	const float3 lightColor = context.coatLightColor;
 #	else
+	const float3 V = context.viewDir;
+	const float3 L = context.lightDir;
+	const float3 H = context.halfVector;
 	const float3 lightColor = context.lightColor * context.detailedShadow;
 #	endif
 
 	const float wetnessF0 = 0.02;
 
 	const float3 N = wetnessNormal;
-	const float3 V = context.viewDir;
-	const float3 L = context.lightDir;
-	const float3 H = context.halfVector;
 
 	float NdotL = clamp(dot(N, L), EPSILON_DOT_CLAMP, 1);
 	float NdotV = saturate(abs(dot(N, V)) + EPSILON_DOT_CLAMP);

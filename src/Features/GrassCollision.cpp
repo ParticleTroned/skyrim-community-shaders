@@ -15,6 +15,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <unordered_set>
+#include <utility>
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Api/AcceptedDrawService.h"
@@ -182,6 +183,7 @@ void GrassCollision::QueueCollisions()
 	if (historyResetRequested.exchange(false) || queuedMode != GrassCollisionMode::Mode::Advanced)
 		colliderHistory.clear();
 	if (!loaded || (resourceFailed && failedMode.load(std::memory_order_relaxed) == queuedMode) || !settings.EnableGrassCollision) {
+		colliderHistory.clear();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		const auto frame = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
 		if (DiagnosticsActive(frame)) {
@@ -227,7 +229,7 @@ void GrassCollision::QueueCollisions()
 #endif
 	struct Shape
 	{
-		const RE::bhkNiCollisionObject* object;
+		RE::NiPointer<RE::bhkNiCollisionObject> object;
 		ColliderHistory history;
 		float radius;
 	};
@@ -262,7 +264,7 @@ void GrassCollision::QueueCollisions()
 		std::array<Shape, MAX_COLLISIONS_PER_BOUNDING_BOX> shapes{};
 		size_t shapeCount = 0;
 		const float minimumRadius = std::sqrt(candidate.sqDistance) * MIN_COLLISION_RADIUS_DISTANCE_SCALE;
-		RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* object) {
+		Util::TraverseCollision(root, [&](RE::bhkNiCollisionObject* object) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			++diagnostic.shapeVisits;
 #endif
@@ -288,16 +290,16 @@ void GrassCollision::QueueCollisions()
 			}
 			auto* body = object->body.get()->AsBhkRigidBody();
 			auto* rigid = skyrim_cast<RE::hkpRigidBody*>(body->referencedObject.get());
-			Shape shape{ object, { capsule.pointA, capsule.pointB, root, body, rigid->collidable.GetShape(), actor->GetFormID(), frame }, capsule.radius };
-			if (shapeCount == shapes.size() && shape.radius <= shapes.back().radius)
+			if (shapeCount == shapes.size() && capsule.radius <= shapes.back().radius)
 				return RE::BSVisit::BSVisitControl::kContinue;
+			Shape shape{ RE::NiPointer<RE::bhkNiCollisionObject>(object), { capsule.pointA, capsule.pointB, root, body, rigid->collidable.GetShape(), actor->GetFormID(), frame }, capsule.radius };
 			size_t index = std::min(shapeCount, shapes.size() - 1);
 			shapeCount = std::min(shapeCount + 1, shapes.size());
 			while (index > 0 && shapes[index - 1].radius < shape.radius) {
-				shapes[index] = shapes[index - 1];
+				shapes[index] = std::move(shapes[index - 1]);
 				--index;
 			}
-			shapes[index] = shape;
+			shapes[index] = std::move(shape);
 			return RE::BSVisit::BSVisitControl::kContinue;
 		});
 		BoundingBoxPacked box{};
@@ -306,15 +308,19 @@ void GrassCollision::QueueCollisions()
 			const auto& shape = shapes[index];
 			const auto& current = shape.history;
 			auto previous = current;
-			if (const auto found = colliderHistory.find(shape.object); found != colliderHistory.end()) {
-				const auto& old = found->second;
+			auto [historyIt, inserted] = colliderHistory.try_emplace(shape.object.get());
+			auto& history = historyIt->second;
+			if (inserted) {
+				history.object = shape.object;
+			} else {
+				const auto& old = history.capsule;
 				// Never sweep across a replaced skeleton, a missing frame, or an actor teleport.
 				if (old.actorID == current.actorID && old.root == current.root && old.body == current.body && old.shape == current.shape &&
 					uint32_t(frame - old.frame) == 1 && old.pointA.GetSquaredDistance(current.pointA) <= 512.0f * 512.0f &&
 					old.pointB.GetSquaredDistance(current.pointB) <= 512.0f * 512.0f)
 					previous = old;
 			}
-			colliderHistory.insert_or_assign(shape.object, current);
+			history.capsule = current;
 			auto pack = [&](const RE::NiPoint3& point, float radius = 0.0f) {
 				const auto relative = point - queuedCamera;
 				return float4{ relative.x, relative.y, relative.z, radius };
@@ -342,7 +348,7 @@ void GrassCollision::QueueCollisions()
 			break;
 	}
 	if (queuedMode == GrassCollisionMode::Mode::Advanced)
-		std::erase_if(colliderHistory, [frame](const auto& entry) { return entry.second.frame != frame; });
+		std::erase_if(colliderHistory, [frame](const auto& entry) { return entry.second.capsule.frame != frame; });
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	if (observe) {
 		try {
@@ -373,7 +379,7 @@ void GrassCollision::QueueBasicActor(RE::NiAVObject* root, float minimumRadius, 
 {
 	std::array<float4, MAX_BASIC_COLLISIONS_PER_ACTOR> shapes{};
 	size_t count = 0;
-	RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* object) {
+	Util::TraverseCollision(root, [&](RE::bhkNiCollisionObject* object) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (diagnostic)
 			++diagnostic->shapeVisits;

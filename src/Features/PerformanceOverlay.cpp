@@ -32,6 +32,7 @@
 #include "RE/B/BSShaderRenderTargets.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
+#include "Utils/Finite.h"
 #include "Utils/Format.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
@@ -270,7 +271,8 @@ void PerformanceOverlay::DrawSettings()
 			Util::Widgets::SliderFloat("Background Opacity", &this->settings.BackgroundOpacity, 0.0f, 1.0f, "%.2f");
 			Util::Widgets::Checkbox("Show Border", &this->settings.ShowBorder);
 			Util::AddTooltip("Adds an outline around the overlay to separate it from the game view.");
-			Util::Widgets::SliderFloat("Update Interval", &this->settings.UpdateInterval, 0.001f, PerformanceOverlay::Settings::kMaxUpdateInterval, "%.2f seconds");
+			Util::Widgets::SliderFloat("Update Interval", &this->settings.UpdateInterval,
+				Settings::kMinUpdateInterval, Settings::kMaxUpdateInterval, "%.3f seconds", ImGuiSliderFlags_AlwaysClamp);
 			Util::AddTooltip("How often the displayed numbers refresh. Longer intervals make them steadier; shorter intervals reveal changes sooner.");
 			Util::Widgets::SliderInt("Frame History Size", &this->settings.FrameHistorySize,
 				this->settings.kMinFrameHistorySize, this->settings.kMaxFrameHistorySize, "%d", ImGuiSliderFlags_AlwaysClamp);
@@ -299,7 +301,9 @@ void PerformanceOverlay::LoadSettings(json& j)
 		// Fallback to defaults if JSON is invalid
 		this->settings = PerformanceOverlay::Settings{};
 	}
-	// Ensure history buffers match loaded size
+	// Bound loaded values before either history buffer can allocate storage.
+	this->settings.FrameHistorySize = std::clamp(this->settings.FrameHistorySize, Settings::kMinFrameHistorySize, Settings::kMaxFrameHistorySize);
+	this->settings.UpdateInterval = Util::ClampFinite(this->settings.UpdateInterval, Settings::kMinUpdateInterval, Settings::kMaxUpdateInterval, Settings{}.UpdateInterval);
 	this->state.frameTimeHistory.Resize(this->settings.FrameHistorySize);
 	this->state.postFGFrameTimeHistory.Resize(this->settings.FrameHistorySize);
 }

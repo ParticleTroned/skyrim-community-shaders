@@ -35,6 +35,13 @@ Keep local deployment configuration in the ignored `CMakeUserPresets.json`.
 Use `CMakeUserPresets.json.template` as a starting point. `CMakePresets.json`
 lists the tracked presets; local presets can add deployment destinations.
 
+Configuration prepares a build-local copy of Streamline's public headers
+with the C++23 enum-conversion correction. The pinned SDK checkout and its
+notices remain intact. Each build directory regenerates its own headers;
+do not copy these generated files between machines. An unexpected PCL
+header revision stops configuration until the compatibility patch is
+reviewed in `cmake/Streamline/CompatibleHeaders.cmake`.
+
 ## Shader compilation and validation
 
 -   [Shader workflow](shader-workflow.md): targeted compilation, deployment, and bytecode comparisons.

@@ -1,4 +1,5 @@
 #include "FeatureBuffer.h"
+#include "Features/Skin.h"
 
 #include "Features/AdaptiveBrightness.h"
 #include "Features/Bloom.h"
@@ -82,6 +83,7 @@ namespace
 		UnifiedWaterSettingsCB unifiedWaterSettings;
 		WaterAppearanceSettingsCB waterAppearanceSettings;
 		BloomSettingsCB bloomSettings;
+		Skin::SkinData skinData;
 		SnowCoverSettingsCB snowCoverSettings;
 		WetternessSnowMelt::ShaderData snowMeltSettings;
 	};
@@ -109,6 +111,7 @@ namespace
 		UnifiedWaterSettingsCB,
 		WaterAppearanceSettingsCB,
 		BloomSettingsCB,
+		Skin::SkinData,
 		SnowCoverSettingsCB,
 		WetternessSnowMelt::ShaderData>;
 
@@ -125,7 +128,7 @@ namespace
 	static_assert(sizeof(LightLimitFixSettingsCB) == 32);
 	static_assert(sizeof(WetnessEffectsSettingsCB) == 192);
 	static_assert(sizeof(WetternessSettingsCB) == 272);
-	static_assert(sizeof(SkylightingSettingsCB) == 176);
+	static_assert(sizeof(SkylightingSettingsCB) == 256);
 	static_assert(sizeof(CloudShadowsSettingsCB) == 16);
 	static_assert(offsetof(CloudShadowsSettingsCB, Enabled) == 4);
 	static_assert(sizeof(LODBlendingSettingsCB) == 32);
@@ -215,7 +218,8 @@ namespace
 	static_assert(offsetof(FeatureDataLayout, unifiedWaterSettings) == offsetof(FeatureDataLayout, foliageLightingSettings) + sizeof(FoliageLightingSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, waterAppearanceSettings) == offsetof(FeatureDataLayout, unifiedWaterSettings) + sizeof(UnifiedWaterSettingsCB));
 	static_assert(offsetof(FeatureDataLayout, bloomSettings) == offsetof(FeatureDataLayout, waterAppearanceSettings) + sizeof(WaterAppearanceSettingsCB));
-	static_assert(offsetof(FeatureDataLayout, snowCoverSettings) == offsetof(FeatureDataLayout, bloomSettings) + sizeof(BloomSettingsCB));
+	static_assert(offsetof(FeatureDataLayout, skinData) == offsetof(FeatureDataLayout, bloomSettings) + sizeof(BloomSettingsCB));
+	static_assert(offsetof(FeatureDataLayout, snowCoverSettings) == offsetof(FeatureDataLayout, skinData) + sizeof(Skin::SkinData));
 	static_assert(offsetof(FeatureDataLayout, snowMeltSettings) == offsetof(FeatureDataLayout, snowCoverSettings) + sizeof(SnowCoverSettingsCB));
 	static_assert(sizeof(FeatureDataLayout) == offsetof(FeatureDataLayout, snowMeltSettings) + sizeof(WetternessSnowMelt::ShaderData));
 	static_assert(sizeof(FeatureDataLayout) <= 65536);
@@ -286,6 +290,7 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::unifiedWater.GetCommonBufferData(),
 		globals::features::adaptiveBrightness.GetEffectiveWaterAppearanceSettings(),
 		globals::features::adaptiveBrightness.GetEffectiveBloomSettings(),
+		globals::features::skin.GetCommonBufferData(),
 		snowCoverSettings,
 		snowMeltSettings);
 }

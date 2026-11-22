@@ -91,7 +91,12 @@ namespace ShadowSnapshotFixture
 		captured.cameras[0].pass = Pass::Point;
 		captured.interior = true;
 		captured.settings.interiorTorches = false;
+		Require(HasEligibleCamera(captured), "Flame-holder policy must be independent of interior distance culling");
+		captured.settings.skipFlameEnclosure = false;
 		Require(!HasEligibleCamera(captured), "Disabled interior point demand activated culling");
+		captured.settings.carriedLightNearCutoff = true;
+		Require(HasEligibleCamera(captured), "Carried cutoff must be independent of interior distance culling");
+		captured.settings.carriedLightNearCutoff = false;
 		captured.settings.interiorTorches = true;
 		Require(HasEligibleCamera(captured), "Interior torch opt-in did not reactivate culling");
 		captured.settings.sun = captured.settings.torch = false;
@@ -129,6 +134,7 @@ namespace ShadowSnapshotFixture
 		Require(!HasEligibleCamera(captured), "Protected nearest cascade activated object-only culling");
 		captured.cameras[0].cascade = 1;
 		Require(HasEligibleCamera(captured), "An eligible outer cascade did not reactivate culling");
+		captured.settings.skipFlameEnclosure = false;
 		for (unsigned flags = 0; flags < 32; ++flags)
 			for (const auto pass : { Pass::Unknown, Pass::Sun, Pass::Point })
 				for (const unsigned cascade : { 0u, 1u })
@@ -245,20 +251,22 @@ void CheckPerformanceControls()
 		controls.settings.LightAttachRefreshFrames = 17;
 		auto& parts = controls.settings.ShadowCulling;
 		parts.smallActorParts = enabled;
+		parts.skipFlameEnclosure = enabled;
+		parts.carriedLightNearCutoff = enabled;
 		parts.actorPartDistanceMeters = 20;
 		parts.actorPartReturnDistanceMeters = 10;
 		parts.actorPartRadiusCentimeters = 25;
 		const auto original = controls.CapturePerformanceCostMeasurementState();
 		controls.SetPerformanceToggleEnabled(false);
-		Require(!parts.smallActorParts && !controls.IsPerformanceToggleEnabled(), "Master off left tiny-part culling enabled");
+		Require(!parts.smallActorParts && !parts.carriedLightNearCutoff && !controls.IsPerformanceToggleEnabled(), "Master off left tiny-part culling enabled");
 		controls.SetPerformanceToggleEnabled(true);
 		Require(controls.settings.SkipRedundantLightAttach, "Master on must restore the light-update default");
-		Require(parts.smallActorParts && controls.IsPerformanceToggleEnabled(), "Master on did not restore the tiny-part default");
+		Require(parts.smallActorParts && parts.skipFlameEnclosure && !parts.carriedLightNearCutoff && controls.IsPerformanceToggleEnabled(), "Master on did not restore the tiny-part default");
 		controls.SetPerformanceCostMeasurementEnabled(false);
-		Require(!parts.smallActorParts && !controls.IsPerformanceCostMeasurementEnabled(), "Measurement off left tiny-part culling enabled");
+		Require(!parts.smallActorParts && !parts.carriedLightNearCutoff && !controls.IsPerformanceCostMeasurementEnabled(), "Measurement off left tiny-part culling enabled");
 		controls.SetPerformanceCostMeasurementEnabled(true);
 		Require(controls.settings.SkipRedundantLightAttach, "Default cost measurement must restore the light-update default");
-		Require(parts.smallActorParts && controls.IsPerformanceCostMeasurementEnabled(), "Measurement on omitted tiny-part culling");
+		Require(parts.smallActorParts && parts.skipFlameEnclosure && !parts.carriedLightNearCutoff && controls.IsPerformanceCostMeasurementEnabled(), "Measurement on omitted tiny-part culling");
 		Require(parts.actorPartDistanceMeters == 20 && parts.actorPartReturnDistanceMeters == 10 && parts.actorPartRadiusCentimeters == 25,
 			"Performance switches changed the tuned tiny-part sliders");
 		controls.RestorePerformanceCostMeasurementState(original);
@@ -297,9 +305,9 @@ void CheckZeroSliders()
 	for (auto member : members)
 		settings.*member = 0;
 	Require(settings.Active(), "Zero part sliders disabled unrelated policies");
-	settings.sun = settings.torch = settings.actors = false;
+	settings.sun = settings.torch = settings.actors = settings.skipFlameEnclosure = false;
 	Require(!settings.Active(), "Zero part sliders retained snapshot work with other policies off");
-	settings = C::Parse({ { "smallActorParts", true }, { "sun", false }, { "torch", false }, { "actors", false } });
+	settings = C::Parse({ { "smallActorParts", true }, { "sun", false }, { "torch", false }, { "actors", false }, { "skipFlameEnclosure", false } });
 	const auto disabled = C::Parse({ { "actorPartDistanceMeters", 0 } }, settings);
 	Require(!disabled.Active() && disabled.actorPartReturnDistanceMeters == settings.actorPartReturnDistanceMeters, "Zero cutoff lost the return setting or left the policy active");
 	Require(C::Parse({ { "actorPartDistanceMeters", settings.actorPartDistanceMeters } }, disabled) == settings, "Re-enabling cutoff did not restore the original policy");
@@ -319,6 +327,26 @@ int main()
 		Require(!std::isfinite(C::SurfaceDistance({ std::numeric_limits<double>::infinity(), 0, 0 }, 16, view, &actorRoot)), "An actor root hid invalid geometry bounds");
 		C::Settings settings;
 		Require(settings.smallActorParts, "Actor-part policy must default on");
+		Require(settings.skipFlameEnclosure, "Flame-holder policy must default on");
+		Require(!settings.carriedLightNearCutoff && !C::Parse(nlohmann::json::object()).carriedLightNearCutoff, "Carried cutoff must default off for new and existing settings");
+		const auto cutoffOn = C::Parse({ { "carriedLightNearCutoff", true } });
+		Require(cutoffOn.carriedLightNearCutoff && nlohmann::json(cutoffOn).get<C::Settings>() == cutoffOn, "Cutoff preference did not round trip");
+		bool invalidCutoff = false;
+		try {
+			C::ValidateOverride({ { "carriedLightNearCutoff", 1 } });
+		} catch (const std::invalid_argument&) {
+			invalidCutoff = true;
+		}
+		Require(invalidCutoff, "Non-boolean carried cutoff was accepted");
+		const auto flameOff = C::Parse({ { "skipFlameEnclosure", false } }, settings);
+		Require(!flameOff.skipFlameEnclosure && nlohmann::json(flameOff).get<C::Settings>() == flameOff, "Flame-holder preference did not round trip");
+		bool invalidFlame = false;
+		try {
+			C::ValidateOverride({ { "skipFlameEnclosure", 1 } });
+		} catch (const std::invalid_argument&) {
+			invalidFlame = true;
+		}
+		Require(invalidFlame, "Non-boolean flame-holder preference was accepted");
 		const auto prototype = C::Parse({ { "smallActorParts", false } }, settings);
 		Require(!prototype.smallActorParts && nlohmann::json(prototype).get<C::Settings>() == prototype, "Saved actor-part off choice did not round trip");
 		bool prototypeRejected = false;

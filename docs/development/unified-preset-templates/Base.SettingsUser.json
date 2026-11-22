@@ -2416,6 +2416,7 @@
     "MinDensity": 0.029999999329447746,
     "MinPixelSize": 2.0,
     "OcclusionBias": 0.0010000000474974513,
+    "OcclusionTightness": 0.9,
     "ProportionalDensityFade": false,
     "RenderDistanceOverride": 0.0,
     "SimpleShadingPixelSize": 0.0

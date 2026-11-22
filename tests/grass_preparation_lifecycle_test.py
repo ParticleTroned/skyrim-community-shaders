@@ -100,6 +100,7 @@ struct Bucket {
     std::vector<Source> sources;
     std::vector<GrassPreparation::Run> runs;
     uint32_t instances = 0, recordsCapacity = 0;
+    uint32_t RecordStride() const { return GrassPolicy::kRecordBytes; }
     std::unique_ptr<int> records;
     struct { std::unique_ptr<int> output; uint32_t capacity = 0, slots = 0; } result;
 };

@@ -4,6 +4,7 @@
 
 Texture2D<unorm float> srcOcclusionDepth : register(t0);
 Texture2DArray<float4> ESRAMShadow : register(t3);
+Texture2D<float> srcZenithDepth : register(t4);
 
 struct DirectionalShadowLightData
 {
@@ -87,7 +88,7 @@ static const float3 noise3D[32] = {
 	cellCentreOS.y = -cellCentreOS.y;
 	float2 occlusionUV = cellCentreOS.xy * 0.5 + 0.5;
 
-	if (all(occlusionUV > 0) && all(occlusionUV < 1)) {
+	if (settings.AccumulateOcclusion != 0 && all(occlusionUV > 0) && all(occlusionUV < 1)) {
 		uint accumFrames = storedAccumFrames + 1;
 		float visibility = srcOcclusionDepth.SampleCmpLevelZero(comparisonSampler, occlusionUV, cellCentreOS.z);
 
@@ -172,5 +173,6 @@ static const float3 noise3D[32] = {
 		outShadowBitmask[probeTexID] = 0xFFFFFFFFu;
 		outShadowVisibility[probeTexID] = 1.0;
 	}
-	outAccumFramesArray[probeTexID] = storedAccumFrames | (shadowSampleIndex << 8);
+	uint roofCoverage = Skylighting::RoofCoverage::Classify(srcZenithDepth, cellCentreMS);
+	outAccumFramesArray[probeTexID] = storedAccumFrames | (shadowSampleIndex << 8) | (roofCoverage << Skylighting::RoofCoverage::STATE_SHIFT);
 }

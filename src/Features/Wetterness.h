@@ -319,6 +319,7 @@ private:
 	void DecayRainHistory(float deltaSeconds) const;
 	float UpdateRuntimeClock(bool gamePaused) const;
 	PerFrame MakeDryPerFrameData() const;
+	void ApplyReflectionSettings(ShaderSettings& a_settings) const;
 	void InvalidateSanitizedSettingsCache();
 	const Settings& GetSanitizedSettings() const;
 

@@ -103,7 +103,8 @@ namespace SharedData
 		uint LightsVisualisationMode;
 		uint ContactShadowFlags;
 		uint ContactShadowParams;
-		uint4 ClusterSize;
+		uint3 ClusterSize;
+		uint HasClusteredLights;
 	};
 
 	struct WetnessEffectsSettings
@@ -237,7 +238,11 @@ namespace SharedData
 		uint ProbeUpdateSliceStart;
 		uint ProbeUpdateSliceCount;
 		uint ShadowDataAvailable;
-		uint3 ShadowDataPadding;
+		uint AccumulateOcclusion;
+		uint2 ShadowDataPadding;
+		row_major float4x4 ZenithViewProj;
+		float3 ZenithOffset;
+		uint ZenithValid;
 	};
 
 	struct CloudShadowsSettings
@@ -606,6 +611,19 @@ namespace SharedData
 #		endif
 #	endif
 
+	struct SkinData
+	{
+		float4 skinParams;
+		float4 skinParams2;
+		float4 skinDetailParams;
+		float4 sssParams;
+		float4 fuzzParams;
+		float4 physicalParams;
+		float4 wetParams;
+		float wetResponse;
+		float3 padding;
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -630,6 +648,7 @@ namespace SharedData
 		UnifiedWaterSettings unifiedWaterSettings;
 		WaterAppearanceSettings waterAppearanceSettings;
 		BloomSettings bloomSettings;
+		SkinData skinData;
 #	if defined(SNOW_COVER) && defined(PSHADER)
 		SnowCoverSettings snowCoverSettings;
 #		if defined(WETTERNESS)

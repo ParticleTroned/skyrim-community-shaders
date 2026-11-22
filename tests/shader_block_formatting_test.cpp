@@ -8,6 +8,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <source_location>
 #include <stdexcept>
 #include <string>
@@ -92,7 +93,7 @@ namespace SIE
 		Pixel,
 		Compute
 	};
-	unsigned formats{}, tracks{}, resolutions{}, compiles{}, queued{};
+	unsigned formats{}, tracks{}, resolutions{}, compiles{}, auxiliaryCompiles{}, queued{};
 	ShaderClass expectedStage;
 	std::uint32_t expectedDescriptor{};
 	bool descriptorValid = true;
@@ -149,8 +150,9 @@ namespace SIE
 			Require(stage == expectedStage && descriptor == expectedDescriptor && resolutions == 1);
 			++tracks;
 		}
-		RE::BSGraphics::VertexShader* MakeAndAddVertexShader(const RE::BSShader&, std::uint32_t)
+		RE::BSGraphics::VertexShader* MakeAndAddVertexShader(const RE::BSShader&, std::uint32_t, std::optional<uint64_t>, bool prepareAuxiliary)
 		{
+			auxiliaryCompiles += unsigned(prepareAuxiliary);
 			++compiles;
 			return nullptr;
 		}
@@ -209,7 +211,7 @@ namespace
 		}
 		const void* Get(Stage stage, Lookup lookup)
 		{
-			SIE::formats = SIE::tracks = SIE::resolutions = SIE::compiles = SIE::queued = logger::messages = 0;
+			SIE::formats = SIE::tracks = SIE::resolutions = SIE::compiles = SIE::auxiliaryCompiles = SIE::queued = logger::messages = 0;
 			SIE::expectedStage = stage;
 			const auto requested = descriptor - SIE::descriptorOffset;
 			switch (stage) {
@@ -258,6 +260,7 @@ namespace
 							const bool queue = async && (!reversed || lookup == Lookup::Compile);
 							Require(SIE::queued == unsigned(!safeMode && queue));
 							Require(SIE::compiles == unsigned(!safeMode && !queue));
+							Require(SIE::auxiliaryCompiles == unsigned(stage == Stage::Vertex && lookup == Lookup::Compile && !safeMode && !queue));
 							if (stage == Stage::Pixel) {
 								Require(!f.Get(stage, Lookup::Cached));
 								Require(SIE::queued == 0 && SIE::compiles == 0);

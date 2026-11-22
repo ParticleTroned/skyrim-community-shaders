@@ -16,6 +16,8 @@
 #include "State.h"
 #include "Util.h"
 #include "Utils/D3D.h"
+#include "Utils/ParaboloidShadow.h"
+#include "Utils/ScopedFlag.h"
 
 #pragma comment(lib, "dxguid.lib")
 
@@ -248,6 +250,9 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
+			const ParaboloidShadow::Scope clipScope{ globals::d3d::context, false };
+			const Util::ScopedFlag carriedScope{ globals::state->permutationData.ExtraShaderDescriptor,
+				static_cast<uint32_t>(State::ExtraShaderDescriptors::CarriedShadowLight), false };
 			const LightLimitFixDetail::ShadowCulling::DrawScope shadowScope{
 				LightLimitFixDetail::ShadowCulling::NeedsSunDrawScope() ? light : nullptr
 			};
@@ -269,6 +274,9 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
+			const ParaboloidShadow::Scope clipScope{ globals::d3d::context, false };
+			const Util::ScopedFlag carriedScope{ globals::state->permutationData.ExtraShaderDescriptor,
+				static_cast<uint32_t>(State::ExtraShaderDescriptors::CarriedShadowLight), false };
 			const LightLimitFixDetail::ShadowCulling::DrawScope shadowScope{ light };
 			const bool annotate = globals::state->frameAnnotations;
 			if (annotate)
@@ -287,6 +295,10 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
+			const ParaboloidShadow::Scope clipScope{ globals::d3d::context, true };
+			const Util::ScopedFlag carriedScope{ globals::state->permutationData.ExtraShaderDescriptor,
+				static_cast<uint32_t>(State::ExtraShaderDescriptors::CarriedShadowLight),
+				LightLimitFixDetail::ShadowCulling::UseCarriedLightNearCutoff(light) };
 			const LightLimitFixDetail::ShadowCulling::DrawScope shadowScope{ light };
 			const bool annotate = globals::state->frameAnnotations;
 			if (annotate)

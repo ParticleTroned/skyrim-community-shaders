@@ -8,3 +8,5 @@ extract_between("${source}" "\tbool NeedsSunDrawScope()" "\tvoid Install()" "sha
 extract_between("${source}" "\t\tstd::shared_ptr<ActorShadowHistory> ActorPartHistoryFor" "\t\tbool BeyondActorPartDistance" "shadow_culling_history.h")
 extract_between("${source}" "\t\tbool HasEligibleCamera" "\n\t}\n\tbool NeedsSunDrawScope()" "shadow_culling_capture.h")
 extract_between("${source}" "\tvoid Update(" "\tvoid DrawSettings(" "shadow_culling_update.h")
+file(READ "${PROJECT_ROOT}/src/Features/LightLimitFix/FlameHolderShadow.cpp" flame_source)
+extract_between("${flame_source}\nEND_FLAME_SOURCE" "namespace LightLimitFixDetail::ShadowCulling" "END_FLAME_SOURCE" "flame_holder_under_test.h")

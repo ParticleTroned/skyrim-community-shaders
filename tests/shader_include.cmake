@@ -37,6 +37,25 @@ add_d3d_shader_test(
 target_link_libraries(adaptive_balance_color_shader_test PRIVATE nlohmann_json::nlohmann_json)
 set_tests_properties(AdaptiveBalanceColorShader PROPERTIES TIMEOUT 180)
 
+set(_mapped_emission_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/mapped-emission")
+set(_mapped_emission_shader "${_mapped_emission_dir}/mapped_emission.hlsl")
+add_custom_command(
+    OUTPUT "${_mapped_emission_shader}"
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_mapped_emission_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_mapped_emission.cmake"
+    DEPENDS package/Shaders/Lighting.hlsl tests/extract_source_region.cmake
+        tests/extract_mapped_emission.cmake tests/mapped_emission.hlsl.in
+    VERBATIM
+)
+set_source_files_properties("${_mapped_emission_shader}" PROPERTIES HEADER_FILE_ONLY TRUE)
+target_sources(adaptive_balance_color_shader_test PRIVATE "${_mapped_emission_shader}")
+target_compile_definitions(adaptive_balance_color_shader_test
+    PRIVATE MAPPED_EMISSION_TEST_SHADER=L"${_mapped_emission_shader}")
+add_test(NAME MappedEmissionComposition COMMAND adaptive_balance_color_shader_test --mapped-emission)
+set_tests_properties(MappedEmissionComposition PROPERTIES
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS ControllerTests)
+
 set(_forward_composition_dir
     "${CMAKE_CURRENT_BINARY_DIR}/generated/forward-reflection-composition"
 )

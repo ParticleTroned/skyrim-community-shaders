@@ -44,6 +44,20 @@ namespace
 	constexpr ImGuiWindowFlags SKIP_WINDOW_FLAGS = ImGuiWindowFlags_Tooltip | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove;
 	constexpr const char* MAIN_WINDOW_ID = "###CommunityShaders";
 
+	/** Filter new Win32 stick events once; ImGui can retain older events across frames. */
+	void FilterWin32GamepadStickEvents(int a_firstEvent)
+	{
+		// The Win32 backend queues analog magnitudes below its key-down threshold too.
+		constexpr float stickPressThreshold = 0.10f;
+		auto& events = ImGui::GetCurrentContext()->InputEventsQueue;
+		for (int index = a_firstEvent; index < events.Size; ++index) {
+			auto& event = events[index];
+			if (event.Type != ImGuiInputEventType_Key || event.Key.Key < ImGuiKey_GamepadLStickLeft || event.Key.Key > ImGuiKey_GamepadRStickDown)
+				continue;
+			event.Key.AnalogValue = event.Key.Down ? std::clamp((event.Key.AnalogValue - stickPressThreshold) / (1.0f - stickPressThreshold), 0.0f, 1.0f) : 0.0f;
+		}
+	}
+
 	bool IsMainWindow(ImGuiWindow* win) { return win->Name && strstr(win->Name, MAIN_WINDOW_ID); }
 
 	float GetVRSettingsWindowAspect()
@@ -732,7 +746,9 @@ void OverlayRenderer::InitializeImGuiFrame(Menu& menu, bool acceptsInput)
 	// Wand canvas coordinates must never reposition the physical desktop mouse.
 	if (globals::features::vr.IsOpenVRCompatible())
 		ImGui::GetIO().WantSetMousePos = false;
+	const int firstWin32Event = ImGui::GetCurrentContext()->InputEventsQueue.Size;
 	ImGui_ImplWin32_NewFrame();
+	FilterWin32GamepadStickEvents(firstWin32Event);
 
 	// ImGui_ImplWin32_NewFrame() restores DisplaySize from the desktop window.
 	// Re-apply the active VR overlay canvas so input and rendering stay 1:1 with the menu texture.

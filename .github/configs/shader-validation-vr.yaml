@@ -103,6 +103,7 @@ file_common_defines:
         PSHADER:
             - CLOUD_SHADOWS
             - CS_HAIR
+            - CS_SKIN
             - ADAPTIVE_BALANCE
             - DYNAMIC_CUBEMAPS
             - EXTENDED_MATERIALS
@@ -126,6 +127,7 @@ file_common_defines:
         VSHADER:
             - CLOUD_SHADOWS
             - CS_HAIR
+            - CS_SKIN
             - ADAPTIVE_BALANCE
             - DYNAMIC_CUBEMAPS
             - EXTENDED_MATERIALS

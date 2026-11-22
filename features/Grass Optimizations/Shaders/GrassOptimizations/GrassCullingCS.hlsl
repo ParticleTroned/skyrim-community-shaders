@@ -198,12 +198,10 @@ uint CullInstance(uint index, uint commonSlice, out uint sourceRecord, out uint 
 		return 0;
 	Slice slice = Slices[GrassParameter(SliceOffset) + left];
 	sourceRecord = slice.first + index - (slice.end - slice.count);
-	uint4 a = Records.Load4((GrassRecordBase + sourceRecord) * 32);
-	uint4 b = Records.Load4((GrassRecordBase + sourceRecord) * 32 + 16);
-	float4 instance1 = float4(UnpackGrassInstance(a.x), UnpackGrassInstance(a.y));
-	float4 instance2 = float4(UnpackGrassInstance(a.z), UnpackGrassInstance(a.w));
-	float4 instance3 = float4(UnpackGrassInstance(b.x), UnpackGrassInstance(b.y));
-	float4 instance4 = float4(UnpackGrassInstance(b.z), UnpackGrassInstance(b.w));
+	float4 instance1, instance2, instance3, instance4;
+	uint nativeSeed;
+	LoadGrassInstance(Records, (GrassRecordBase + sourceRecord * GrassRecordStep) * 16,
+		GrassRecordStep == 1, instance1, instance2, instance3, instance4, nativeSeed);
 	float3 scale = instance4.y * GrassGeometry(ScaleMask) + 1;
 	float3x3 rotation = float3x3(instance2.xyz, instance3.xyz, float3(instance4.x, instance2.w, instance3.w));
 	float3 center = instance1.xyz + mul(rotation, GrassParameter(ModelBound).xyz * scale) + slice.originFade.xyz - GrassParameter(RepresentativeOrigin).xyz;
@@ -226,11 +224,14 @@ uint CullInstance(uint index, uint commonSlice, out uint sourceRecord, out uint 
 		{
 			float eyeDistance = length(mul(GrassGeometry(World)[Eye(eye)], float4(root, 1)).xyz);
 			distance = eye == 0 ? eyeDistance : min(distance, eyeDistance);
+			float4 projectionW = GrassGeometry(WorldViewProj)[Eye(eye)][3];
+			float clipW = dot(projectionW, float4(root, 1));
 			float focal = length(GrassGeometry(WorldViewProj)[Eye(eye)][1].xyz) * GrassParameter(ViewHeight) * .5;
-			pixels = max(pixels, GrassParameter(QualityRadius) * max(1, 1 + instance4.y) * focal / max(eyeDistance, 1e-4));
+			float eyePixels = GrassParameter(QualityRadius) * max(1, 1 + instance4.y) * focal / max(clipW, 1e-4);
+			pixels = max(pixels, isfinite(clipW) && clipW > 1e-4 && isfinite(eyePixels) ? eyePixels : 1e20);
 		}
 	}
-	uint seed = Hash(asuint(instance1.x + slice.originFade.x) ^ Hash(asuint(instance1.y + slice.originFade.y)) ^ a.y);
+	uint seed = Hash(asuint(instance1.x + slice.originFade.x) ^ Hash(asuint(instance1.y + slice.originFade.y)) ^ nativeSeed);
 	float densityHash = (seed & 0xffffff) / 16777216.0;
 	float lodHash = (Hash(seed ^ 0x9e3779b9) & 0xffffff) / 16777216.0;
 	if (valid && GrassParameter(MidEnabled) && pixels < GrassParameter(MidPixels) + (lodHash - .5) * GrassParameter(BandPixels))
@@ -317,7 +318,7 @@ uint CullInstance(uint index, uint commonSlice, out uint sourceRecord, out uint 
 			if (GrassParameter(DepthMips)) {
 				float2 lo, hi;
 				float nearest;
-				if (ProjectBounds(center, radius, eye, lo, hi, nearest)) {
+				if (ProjectBounds(center, radius * GrassParameter(OcclusionTightness), eye, lo, hi, nearest)) {
 					uint reason, cells;
 					bool hidden = Hidden(lo, hi, nearest, eye, reason, cells);
 					CountN(18, cells);
@@ -371,7 +372,7 @@ groupshared uint BinOffsets[3 * EYES];
 		else
 			lastBucket = middle - 1;
 	}
-	Bucket = CullBuckets[firstBucket];
+	LoadGrassBucket(firstBucket);
 	uint3 id = uint3((dispatchGroup - Bucket.DispatchStart) * 64 + lane, 0, 0);
 #else
 	uint3 id = uint3(group.x * 64 + lane, 0, 0);
@@ -406,7 +407,7 @@ groupshared uint BinOffsets[3 * EYES];
 		uint bin = tier * GrassParameter(EyeCount) + eye;
 		uint output = GrassOutputBase + bin * GrassParameter(Capacity) + BinOffsets[bin] + localSlots[eye];
 		// Source indices fit exactly in the float input-assembler stream.
-		Compacted.Store(output * 4, asuint(float(GrassRecordBase + sourceRecord)));
+		Compacted.Store(output * 4, asuint(float(GrassRecordBase + sourceRecord * GrassRecordStep)));
 		Extras[output] = extras[eye];
 	}
 }

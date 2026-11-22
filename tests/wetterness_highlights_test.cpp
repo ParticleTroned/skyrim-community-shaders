@@ -89,6 +89,7 @@ namespace
 			const std::filesystem::path& sourceRoot = ".")
 		{
 			const bool surfaceChannels = std::strcmp(entry, "CheckSurfaceChannels") == 0;
+			const bool surfaceDirections = std::strcmp(entry, "CheckWetSurfaceDirections") == 0;
 			PackageIncludes includes(sourceRoot / "package/Shaders", sourceRoot / "features/Wetterness/Shaders", sourceRoot / "features/Skylighting/Shaders");
 			std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "WETTERNESS", "1" } };
 			if (surfaceChannels)
@@ -115,9 +116,9 @@ namespace
 			Check(device->CreateComputeShader(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), nullptr, shader.GetAddressOf()));
 			Util::SetResourceName(shader.Get(), "WetternessTest::CS");
 			Check(D3DReflect(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
-			if (std::strcmp(entry, "main") == 0 || std::strcmp(entry, "CheckRainFilmSurface") == 0 || surfaceChannels) {
+			if (std::strcmp(entry, "main") == 0 || std::strcmp(entry, "CheckRainFilmSurface") == 0 || surfaceChannels || surfaceDirections) {
 				feature = std::make_unique<ConstantBuffer>(device, reflection.Get(), "SharedData::FeatureData");
-				if (std::strcmp(entry, "main") == 0 || surfaceChannels)
+				if (std::strcmp(entry, "main") == 0 || surfaceChannels || surfaceDirections)
 					inputs = std::make_unique<ConstantBuffer>(device, reflection.Get(), "TestInputs");
 				auto* wetnessType = reflection->GetConstantBufferByName("SharedData::FeatureData")->GetVariableByName("SharedData::wetternessSettings")->GetType();
 				D3D11_SHADER_TYPE_DESC night{};
@@ -365,6 +366,23 @@ namespace
 			for (const char* material : { "SKIN", "HAIR" })
 				CheckSurfaceChannels(device, context, vr, false, material, baselineRoot);
 		}
+	}
+
+	void CheckWetSurfaceDirections(ID3D11Device* device, ID3D11DeviceContext* context, bool vr)
+	{
+		Fixture fixture(device, vr, true, "CheckWetSurfaceDirections");
+		for (unsigned mode : { 0u, 1u, 2u }) {
+			const auto samples = fixture.Run(context, 0, 1, 1, mode);
+			for (size_t i = 0; i < 1024; ++i) {
+				Require(samples[i * 3 + 2][3] == 1, "Wet surface direction fixture was inactive");
+				for (size_t c = 0; c < 4; ++c)
+					Require(std::isfinite(samples[i * 3][c]) && Close(samples[i * 3][c], samples[i * 3 + 1][c]),
+						"Substrate refraction changed the outer wet highlight or prepared view angle");
+				for (size_t c = 0; c < 3; ++c)
+					Require(Close(samples[i * 3 + 2][c], 0), "Substrate refraction changed wet diffuse attenuation");
+			}
+		}
+		std::cout << "PASS: PBR wet surface directions and normal fallbacks VR=" << vr << '\n';
 	}
 
 	void CheckDistribution(ID3D11Device* device, ID3D11DeviceContext* context)
@@ -666,6 +684,7 @@ int main(int argc, char** argv)
 		CheckPuddleSlopes(device.Get(), context.Get());
 		for (bool vr : { false, true }) {
 			CheckCharacterScope(device.Get(), context.Get(), vr);
+			CheckWetSurfaceDirections(device.Get(), context.Get(), vr);
 			for (bool pbr : { false, true }) {
 				CheckRainFilmSurface(device.Get(), context.Get(), vr, pbr);
 				CheckRainFilmHighlights(device.Get(), context.Get(), vr, pbr);

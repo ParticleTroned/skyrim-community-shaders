@@ -876,7 +876,7 @@ RWBuffer<float4> Output : register(u0);
 		}
 		std::cout << "SSR: 224 ray checks across depth orders, both eyes and water modes passed\n";
 	}
-	void TestDepthHelper(const std::string& source, uint32_t standardExpected, uint32_t reversedExpected)
+	void TestDepthHelper(const std::string& source, uint32_t standardExpected, uint32_t reversedExpected, UINT compileFlags = D3DCOMPILE_IEEE_STRICTNESS)
 	{
 		winrt::com_ptr<ID3D11Device> device;
 		winrt::com_ptr<ID3D11DeviceContext> context;
@@ -887,7 +887,7 @@ RWBuffer<float4> Output : register(u0);
 			D3D_SHADER_MACRO defines[]{ { reversed ? "REVERSE_Z" : "STANDARD_Z", "1" }, { nullptr, nullptr } };
 			winrt::com_ptr<ID3DBlob> code, errors;
 			const auto compiled = D3DCompile(source.data(), source.size(), nullptr, defines, nullptr, "main", "cs_5_0",
-				D3DCOMPILE_IEEE_STRICTNESS, 0, code.put(), errors.put());
+				compileFlags, 0, code.put(), errors.put());
 			if (errors)
 				std::cerr << static_cast<const char*>(errors->GetBufferPointer());
 			Require(SUCCEEDED(compiled), "Depth helper shader failed to compile");
@@ -925,6 +925,47 @@ RWBuffer<float4> Output : register(u0);
 			if (result != (reversed ? reversedExpected : standardExpected))
 				throw std::runtime_error("Depth helper returned " + std::to_string(result) + (reversed ? " for reverse depth" : " for standard depth"));
 		}
+	}
+	void TestLegacyShadowCascade()
+	{
+		std::ifstream input("package/Shaders/Common/ShadowSampling.hlsli");
+		Require(input.good(), "Production shadow sampling unavailable");
+		const std::string shadow{ std::istreambuf_iterator<char>(input), {} };
+		const std::string source = R"(
+struct ShadowData {
+    float4 EndSplitDistances, StartSplitDistances, ShadowLightParam, ShadowSampleParam;
+    float4x3 ShadowMapProj[2][3];
+};
+static ShadowData SharedShadowData[1];
+float GetShadowDepth(float3 position, uint eye) { return position.z; }
+// Deterministic cascade samples isolate selection, blending and distance fade.
+float Get2DFilteredShadowCascade(float noise, float2x2 rotation, float scale,
+    float2 uv, float cascade, float compare, uint eye) { return 0.25 + 0.5 * cascade + 0.1 * eye; }
+)" + WaterFunction(shadow, "float Get2DFilteredShadow(") +
+		                           R"(
+RWBuffer<uint> Output : register(u0);
+[numthreads(1, 1, 1)] void main(uint3 id : SV_DispatchThreadID) {
+    SharedShadowData[0] = (ShadowData)0;
+    SharedShadowData[0].EndSplitDistances = float4(8, 0, 10, 0);
+    SharedShadowData[0].StartSplitDistances.y = 6;
+    SharedShadowData[0].ShadowLightParam.z = 400;
+    float distances[6] = { 4, 6, 7, 8, 9, 12 };
+    float visibility[6] = { 0.25, 0.25, 0.5, 0.75, 0.75, 1 };
+    uint passed = 0;
+    for (uint eye = 0; eye < 2; ++eye)
+        for (uint i = 0; i < 6; ++i) {
+            float depth = distances[i] + id.x;
+            float actual = Get2DFilteredShadow(0, float2x2(1, 0, 0, 1), float3(0, 0, depth), eye);
+            float expected = i == 5 ? 1 : visibility[i] + 0.1 * eye;
+            if (i != 5)
+                expected += (1 - expected) * pow(distances[i] * distances[i] / 400, 8);
+            if (abs(actual - expected) < 0.00001)
+                passed |= 1u << (eye * 6 + i);
+        }
+    Output[0] = passed;
+})";
+		TestDepthHelper(source, 4095, 4095,
+			D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3);
 	}
 	void TestInteriorDepth()
 	{
@@ -979,6 +1020,7 @@ int main()
 		TestMatrices();
 		TestWaterProjection();
 		TestWaterProjection(true);
+		TestLegacyShadowCascade();
 		TestWaterDepthValidity();
 		TestWaterShaders();
 		TestShaderRegistry();

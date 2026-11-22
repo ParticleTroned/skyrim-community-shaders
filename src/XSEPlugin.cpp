@@ -318,6 +318,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 				// drains. Mark DataLoaded separately and let the last completion perform
 				// the priority transition in that path.
 				shaderCache->menuLoaded = true;
+				shaderCache->FinishStartupCompilationEstimate();
 				shaderCache->TryCompleteStartupCompilationPhase();
 
 				if (globals::game::quitGame.load(std::memory_order_relaxed)) {

@@ -1,6 +1,7 @@
 #ifndef WETTERNESS_LIGHTING_HLSLI
 #define WETTERNESS_LIGHTING_HLSLI
 
+#include "Common/NormalBlending.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 
@@ -26,25 +27,8 @@ namespace Wetterness
 		return val * val;
 	}
 
-	// https://blog.selfshadow.com/publications/blending-in-detail/
-	// geometric normal s, a base normal t and a secondary (or detail) normal u
-	float3 ReorientNormal(float3 u, float3 t, float3 s)
-	{
-		// Build the shortest-arc quaternion
-		float4 q = float4(cross(s, t), dot(s, t) + 1) / sqrt(2 * (dot(s, t) + 1));
-
-		// Rotate the normal
-		return u * (q.w * q.w - dot(q.xyz, q.xyz)) + 2 * q.xyz * dot(q.xyz, u) + 2 * q.w * cross(q.xyz, u);
-	}
-
-	// for when s = (0,0,1)
-	float3 ReorientNormal(float3 n1, float3 n2)
-	{
-		n1 += float3(0, 0, 1);
-		n2 *= float3(-1, -1, 1);
-
-		return n1 * dot(n1, n2) / n1.z - n2;
-	}
+	float3 ReorientNormal(float3 u, float3 t, float3 s) { return NormalBlending::Reorient(u, t, s); }
+	float3 ReorientNormal(float3 n1, float3 n2) { return NormalBlending::Reorient(n1, n2); }
 
 	struct RainDropCellContext
 	{
@@ -80,8 +64,8 @@ namespace Wetterness
 			float distSqr = dot(vec2Centre, vec2Centre);
 			if (distSqr < splashMaxRadiusSqr) {
 				float dropRadius = lerp(SharedData::wetternessSettings.SplashesMinRadius,
-				                      SharedData::wetternessSettings.SplashesMaxRadius,
-				                      float(Random::iqint3(hash.yz)) * cell.uintToFloat);
+					SharedData::wetternessSettings.SplashesMaxRadius,
+					float(Random::iqint3(hash.yz)) * cell.uintToFloat);
 				if (distSqr < dropRadius * dropRadius) {
 					wetness = max(wetness, RainFade(residual));
 				}

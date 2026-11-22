@@ -323,6 +323,8 @@ namespace Util
 			macros.push_back({ "PSHADER", "" });
 		else if (!_stricmp(ProgramType, "vs_5_0"))
 			macros.push_back({ "VSHADER", "" });
+		else if (!_stricmp(ProgramType, "gs_5_0"))
+			macros.push_back({ "GEOMETRYSHADER", "" });
 		else if (!_stricmp(ProgramType, "hs_5_0"))
 			macros.push_back({ "HULLSHADER", "" });
 		else if (!_stricmp(ProgramType, "ds_5_0"))
@@ -440,6 +442,11 @@ namespace Util
 			} else if (!_stricmp(ProgramType, "vs_5_0")) {
 				winrt::com_ptr<ID3D11VertexShader> shader;
 				hr = device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, shader.put());
+				if (SUCCEEDED(hr))
+					regShader.attach(shader.detach());
+			} else if (!_stricmp(ProgramType, "gs_5_0")) {
+				winrt::com_ptr<ID3D11GeometryShader> shader;
+				hr = device->CreateGeometryShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, shader.put());
 				if (SUCCEEDED(hr))
 					regShader.attach(shader.detach());
 			} else if (!_stricmp(ProgramType, "hs_5_0")) {

@@ -1,4 +1,5 @@
 #include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
+#include "ShaderCompilationEstimate.h"
 #include "Utils/ShaderTrackingKeyCache.h"
 #include <Windows.h>
 #include <ankerl/unordered_dense.h>
@@ -151,7 +152,9 @@ namespace SIE
 		std::mutex compilationMutex;
 		std::condition_variable conditionVariable;
 		std::set<ShaderCompilationTask, TaskPriorityLess> availableTasks, tasksInProgress, processedTasks;
-		std::atomic<uint64_t> generation{ 9 }, totalTasks{ 0 }, totalPriorityWeight{ 0 };
+		std::atomic<uint64_t> generation{ 9 }, totalTasks{ 0 };
+		std::unique_ptr<ShaderCompilationEstimate::Estimator> estimate = std::make_unique<ShaderCompilationEstimate::Estimator>();
+		int64_t estimateBatchStartQpc = 0, estimateBatchEndQpc = 0;
 		std::array<std::atomic<uint64_t>, RE::BSShader::Total> typeEpochs{};
 		std::atomic<uint32_t> dispatchedTasksInFlight{ 0 }, heavyTasksInFlight{ 0 };
 #include "shader_queue_generation.h"
@@ -247,6 +250,7 @@ namespace SIE
 #include "shader_capture_tracking_under_test.h"
 #include "shader_capture_under_test.h"
 #include "shader_category_prewarm.h"
+#include "shader_estimate_category.h"
 #include "shader_eviction_under_test.h"
 #include "shader_queue_add_under_test.h"
 #include "shader_queue_clear_type.h"
@@ -401,7 +405,7 @@ namespace
 		queue.Add(first);
 		queue.Add(second);
 		Require(queue.availableTasks.size() == 2 && queue.totalTasks == 2);
-		Require(queue.totalPriorityWeight == first.GetPriority() + second.GetPriority() + 2 && cache.bytecodeQueries == 0);
+		Require(queue.estimate->PendingTasks() == 2 && cache.bytecodeQueries == 0);
 		for (const auto& task : queue.availableTasks) {
 			Require(task.GetGeneration() == 9 && task.GetEnqueuedQpc() > 0);
 		}
@@ -413,6 +417,44 @@ namespace
 		queue.Add(second);
 		Require(queue.availableTasks.empty() && queue.totalTasks == 2);
 		Require(queue.lastResetQpc == sessionStart);
+		globals::shaderCache = nullptr;
+	}
+
+	void TestEstimateCategories()
+	{
+		RE::BSShader shader;
+		const auto land = static_cast<uint32_t>(ShaderCache::LightingShaderTechniques::MTLand) << 24;
+		const auto pbr = static_cast<uint32_t>(ShaderCache::LightingShaderFlags::TruePbr);
+		const auto ordinary = ShaderCompilationTask(ShaderClass::Pixel, shader, 0).GetEstimateCategory();
+		const auto landscape = ShaderCompilationTask(ShaderClass::Pixel, shader, land | pbr).GetEstimateCategory();
+		const auto vertex = ShaderCompilationTask(ShaderClass::Vertex, shader, land | pbr).GetEstimateCategory();
+		Require(ordinary.index != landscape.index && vertex.index != landscape.index);
+		Require(landscape.fallbackMs > ordinary.fallbackMs && vertex.fallbackMs < landscape.fallbackMs);
+		for (uint32_t technique = 0; technique < 64; ++technique) {
+			for (auto stage : { ShaderClass::Vertex, ShaderClass::Pixel, ShaderClass::Compute }) {
+				const auto category = ShaderCompilationTask(stage, shader, (technique << 24) | 0xFFFFFFu).GetEstimateCategory();
+				Require(category.index < ShaderCompilationEstimate::kCategoryCount && category.fallbackMs > 0);
+			}
+		}
+	}
+
+	void TestGameplayQueueDoesNotRestartEstimate()
+	{
+		ShaderCache cache;
+		globals::shaderCache = &cache;
+		auto& queue = cache.compilationSet;
+		queue.estimate.reset();
+		RE::BSShader shader;
+		queue.Add(ShaderCompilationTask(ShaderClass::Pixel, shader, 10));
+		queue.Add(ShaderCompilationTask(ShaderClass::Pixel, shader, 11, true));
+		Require(!queue.estimate && queue.availableTasks.size() == 2 && queue.totalTasks == 2);
+		Require(queue.estimateBatchStartQpc == 0 && queue.estimateBatchEndQpc == 0);
+		queue.DropPrecompilesLocked();
+		Require(queue.availableTasks.size() == 1 && queue.totalTasks == 1);
+		queue.ClearTypeLocked(RE::BSShader::Lighting);
+		Require(!queue.estimate && queue.availableTasks.empty() && queue.totalTasks == 0);
+		queue.Add(ShaderCompilationTask(ShaderClass::Pixel, shader, 10));
+		Require(!queue.estimate && queue.availableTasks.size() == 1);
 		globals::shaderCache = nullptr;
 	}
 
@@ -439,7 +481,7 @@ namespace
 		queue.DropPrecompilesLocked();
 		Require(queue.availableTasks.size() == 1 && queue.availableTasks.contains(demanded));
 		Require(queue.tasksInProgress.contains(running) && queue.totalTasks == 2);
-		Require(queue.totalPriorityWeight == 2 * (demanded.GetPriority() + 1));
+		Require(queue.estimate->PendingTasks() == 2);
 		queue.Add(unused);
 		Require(queue.totalTasks == 2);
 		queue.Add({ ShaderClass::Pixel, shader, 10 });
@@ -559,6 +601,7 @@ namespace
 			auto entry = queue.availableTasks.extract(task);
 			auto dispatched = entry.value();
 			queue.tasksInProgress.insert(std::move(entry));
+			queue.estimate->Start(dispatched.GetId(), dispatched.GetEstimateCategory(), 0);
 			++queue.dispatchedTasksInFlight;
 			if (dispatched.GetPriority() >= SIE::kHeavyPriorityThreshold)
 				++queue.heavyTasksInFlight;
@@ -567,6 +610,8 @@ namespace
 		const auto lightingRunning = dispatch(lightingRequest);
 		const auto imageRunning = dispatch(imageRequest);
 		queue.processedTasks.insert(queue.availableTasks.extract(imageFinished));
+		queue.estimate->Start(imageFinished.GetId(), imageFinished.GetEstimateCategory(), 0);
+		queue.estimate->Complete(imageFinished.GetId(), 1, ShaderCompilationEstimate::Outcome::Disk, true);
 		const auto standaloneGeneration = queue.generation.load();
 		{
 			std::lock_guard lock(queue.compilationMutex);
@@ -576,7 +621,7 @@ namespace
 		Require(queue.tasksInProgress.size() == 1 && queue.tasksInProgress.contains(lightingRunning));
 		Require(queue.processedTasks.empty());
 		// Finished work stays in cumulative progress; only canceled unfinished work is removed.
-		Require(queue.totalTasks == 3 && queue.totalPriorityWeight == 2 * (lightingRunning.GetPriority() + 1) + imageFinished.GetPriority() + 1);
+		Require(queue.totalTasks == 3 && queue.estimate->PendingTasks() == 2);
 		Require(queue.dispatchedTasksInFlight == 2 && queue.heavyTasksInFlight == 1);
 		Require(queue.generation == standaloneGeneration);
 		Require(queue.IsCurrentGeneration(lightingRunning) && !queue.IsCurrentGeneration(imageRunning));
@@ -606,7 +651,7 @@ namespace
 		}
 		Require(queue.LiveGeneration(RE::BSShader::ImageSpace) == previous + 1);
 		Require(queue.LiveGeneration(RE::BSShader::Lighting) == other);
-		Require(queue.totalTasks == 0 && queue.totalPriorityWeight == 0);
+		Require(queue.totalTasks == 0 && queue.estimate->PendingTasks() == 0);
 	}
 
 	void TestCategoryVariantIdentity()
@@ -713,7 +758,7 @@ namespace
 					Require(!cache.SetBackgroundCompilation(true));
 					Require(queue.availableTasks.size() == 1 && queue.availableTasks.contains(demanded));
 					Require(queue.tasksInProgress.size() == 1 && queue.tasksInProgress.contains(running));
-					Require(queue.totalTasks == 2 && queue.totalPriorityWeight == running.GetPriority() + demanded.GetPriority() + 2);
+					Require(queue.totalTasks == 2 && queue.estimate->PendingTasks() == 2);
 					pbr.GenerateShaderPermutations(&shader);
 					Require(queue.availableTasks.size() == 1 && queue.totalTasks == 2);
 					queue.Add({ ShaderClass::Pixel, shader, 0xDEADBEEFu, true });
@@ -760,6 +805,8 @@ int main()
 		TestTrackingKeyRetention();
 		TestTrackingKeyIntegration();
 		TestQueueWithSharedBytecode();
+		TestEstimateCategories();
+		TestGameplayQueueDoesNotRestartEstimate();
 		TestDemandPreservesQueuedWork();
 		TestCaptureAndClearVariants(false);
 		TestCaptureAndClearVariants(true);

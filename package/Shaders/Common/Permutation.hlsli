@@ -74,6 +74,7 @@ namespace Permutation
 		static const uint CharacterFocusFadeShift = 15;
 		static const uint CharacterFocusFadeMask = (255 << CharacterFocusFadeShift);
 		static const uint IsAurora = (1 << 23);
+		static const uint CarriedShadowLight = (1u << 31);
 #if defined(SNOW_COVER) && defined(PSHADER)
 		static const uint NoSnow = (1u << 24);
 		static const uint NoFoliageTint = (1u << 25);

@@ -22,12 +22,15 @@
 
 #include "RE/B/BSMultiBoundRoom.h"
 #include "RE/B/BSShadowDirectionalLight.h"
+#include "RE/B/BSShadowFrustumLight.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <functional>
 #include <limits>
 #include <new>
@@ -1415,11 +1418,16 @@ LightLimitFix::PerFrame LightLimitFix::GetCommonBufferData()
 	perFrame.ContactShadowFlags = PackContactShadowFlags(settings);
 	perFrame.ContactShadowParams = PackContactShadowParams(settings);
 	std::copy(clusterSize, clusterSize + 3, perFrame.ClusterSize);
+	perFrame.HasClusteredLights = clusteredLightsAvailable;
 	return perFrame;
 }
 
 void LightLimitFix::SetupResources()
 {
+	clusteredLightsAvailable = false;
+	effectSpotlightsAvailable = false;
+	effectSpotlightUploadFailed = false;
+	effectSpotlights.reset();
 	auto screenSize = globals::state->screenSize;
 	if (REL::Module::IsVR())
 		screenSize.x *= .5;
@@ -1533,12 +1541,24 @@ void LightLimitFix::SetupResources()
 		sbDesc.ByteWidth = sizeof(LightData) * MAX_LIGHTS;
 		lights = eastl::make_unique<Buffer>(sbDesc, nullptr, "LLF::Lights");
 
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
 		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
 		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
 		srvDesc.Buffer.FirstElement = 0;
 		srvDesc.Buffer.NumElements = MAX_LIGHTS;
 		lights->CreateSRV(srvDesc);
+
+		try {
+			sbDesc.StructureByteStride = sizeof(LightLimitFixDetail::EffectSpotlight);
+			sbDesc.ByteWidth = sbDesc.StructureByteStride * MAX_LIGHTS;
+			auto buffer = eastl::make_unique<Buffer>(sbDesc, nullptr, "LightLimitFix::EffectSpotlights");
+			buffer->CreateSRV(srvDesc);
+			effectSpotlights = std::move(buffer);
+			effectSpotlightScratch.reserve(MAX_LIGHTS);
+		} catch (const std::exception& error) {
+			effectSpotlights.reset();
+			logger::error("[LLF] Effect spotlight buffer unavailable; spotlight effects remain excluded: {}", error.what());
+		}
 	}
 
 	{
@@ -1997,23 +2017,35 @@ void LightLimitFix::Prepass()
 {
 	auto context = globals::d3d::context;
 	auto state = globals::state;
-	if (!context || !state || !lights || !lightIndexList || !lightGrid ||
-		!contactShadowIndexList || !contactShadowGrid ||
-		!lights->srv || !lightIndexList->srv || !lightGrid->srv ||
-		!contactShadowIndexList->srv || !contactShadowGrid->srv) {
+	if (!context || !state) {
+		clusteredLightsAvailable = false;
 		return;
 	}
 
-	CS_GPU_PASS("LightLimitFix::Prepass");
-	UpdateLights();
+	const bool hadClusteredLights = clusteredLightsAvailable;
+	const auto previousClusterSize = std::to_array(clusterSize);
+	clusteredLightsAvailable = false;
+	if (lights && lightIndexList && lightGrid && contactShadowIndexList && contactShadowGrid &&
+		lights->srv && lightIndexList->srv && lightGrid->srv &&
+		contactShadowIndexList->srv && contactShadowGrid->srv) {
+		CS_GPU_PASS("LightLimitFix::Prepass");
+		UpdateLights();
 
-	ID3D11ShaderResourceView* views[5]{};
-	views[0] = lights->srv.get();
-	views[1] = lightIndexList->srv.get();
-	views[2] = lightGrid->srv.get();
-	views[3] = contactShadowIndexList->srv.get();
-	views[4] = contactShadowGrid->srv.get();
-	context->PSSetShaderResources(35, ARRAYSIZE(views), views);
+		ID3D11ShaderResourceView* views[6]{};
+		views[0] = lights->srv.get();
+		views[1] = lightIndexList->srv.get();
+		views[2] = lightGrid->srv.get();
+		views[3] = contactShadowIndexList->srv.get();
+		views[4] = contactShadowGrid->srv.get();
+		views[5] = effectSpotlightsAvailable ? effectSpotlights->srv.get() : nullptr;
+		context->PSSetShaderResources(35, ARRAYSIZE(views), views);
+	}
+
+	// Draws need the current grid; nonzero count changes do not affect this gate.
+	if (hadClusteredLights != clusteredLightsAvailable ||
+		!std::equal(previousClusterSize.begin(), previousClusterSize.end(), clusterSize)) {
+		state->UpdateFeatureData(state->inWorld);
+	}
 }
 
 bool LightLimitFix::IsValidLight(RE::BSLight* a_light)
@@ -3229,9 +3261,64 @@ float3 LightLimitFix::Saturation(float3 color, float saturation)
 	return color;
 }
 
+void LightLimitFix::AddEffectSpotlight(RE::BSShadowLight* a_shadowLight, LightData& a_light)
+{
+	if (!a_shadowLight->GetIsFrustumLight()) {
+		if (!a_shadowLight->GetIsParabolicLight())
+			a_light.effectSpotlightIndex = LightLimitFixDetail::kInvalidEffectSpotlight;
+		return;
+	}
+
+	a_light.effectSpotlightIndex = LightLimitFixDetail::kInvalidEffectSpotlight;
+	if (!effectSpotlights || !effectSpotlights->srv || effectSpotlightScratch.size() >= MAX_LIGHTS)
+		return;
+
+	const auto falloff = static_cast<RE::BSShadowFrustumLight*>(a_shadowLight)->GetShadowFrustumLightRuntimeData().falloff;
+	LightLimitFixDetail::EffectSpotlight projection{};
+	auto readProjection = [&](const auto& a_data) {
+		return !a_data.shadowmapDescriptors.empty() &&
+		       LightLimitFixDetail::TryBuildEffectSpotlight(a_data.shadowmapDescriptors[0].lightTransform.m,
+				   falloff, projection, a_light.effectSpotlightHalfFalloff);
+	};
+	const bool valid = globals::game::isVR ? readProjection(a_shadowLight->GetVRRuntimeData()) :
+	                                         readProjection(a_shadowLight->GetRuntimeData());
+	if (valid) {
+		effectSpotlightScratch.push_back(projection);
+		// Zero means no cone; one-based indices keep ordinary light records zero-initialized.
+		a_light.effectSpotlightIndex = static_cast<uint32_t>(effectSpotlightScratch.size());
+	}
+}
+
+void LightLimitFix::UploadEffectSpotlights()
+{
+	if (effectSpotlightScratch.empty())
+		return;
+
+	D3D11_MAPPED_SUBRESOURCE mapped{};
+	auto* context = globals::d3d::context;
+	const auto result = context->Map(effectSpotlights->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+	if (FAILED(result)) {
+		for (auto& light : lightScratch) {
+			if (light.effectSpotlightIndex != 0)
+				light.effectSpotlightIndex = LightLimitFixDetail::kInvalidEffectSpotlight;
+		}
+		if (!effectSpotlightUploadFailed)
+			logger::warn("[LLF] Effect spotlight upload failed (0x{:08X}); spotlight effects remain excluded", static_cast<uint32_t>(result));
+		effectSpotlightUploadFailed = true;
+		return;
+	}
+
+	std::memcpy(mapped.pData, effectSpotlightScratch.data(), effectSpotlightScratch.size() * sizeof(LightLimitFixDetail::EffectSpotlight));
+	context->Unmap(effectSpotlights->resource.get(), 0);
+	effectSpotlightUploadFailed = false;
+	effectSpotlightsAvailable = true;
+}
+
 void LightLimitFix::UpdateLights()
 {
 	ZoneScopedN("LLF::UpdateLights");
+	effectSpotlightScratch.clear();
+	effectSpotlightsAvailable = false;
 
 	auto clearCachedParticleLights = [&]() {
 		std::lock_guard<std::shared_mutex> lk{ cachedParticleLightsMutex };
@@ -3354,6 +3441,8 @@ void LightLimitFix::UpdateLights()
 
 					if ((light.color.x + light.color.y + light.color.z) * light.fade > 1e-4 && light.radius > 1e-4 &&
 						lightsData.size() < MAX_LIGHTS) {
+						if (light.lightFlags.any(LightFlags::Shadow))
+							AddEffectSpotlight(static_cast<RE::BSShadowLight*>(bsLight), light);
 						lightsData.push_back(light);
 					}
 				}
@@ -3548,6 +3637,7 @@ void LightLimitFix::UpdateLights()
 
 	{
 		CS_PROFILE_CPU_SCOPE("LightLimitFix::UploadLightsCPU");
+		UploadEffectSpotlights();
 		D3D11_MAPPED_SUBRESOURCE mapped;
 		DX::ThrowIfFailed(context->Map(lights->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
 		size_t bytes = sizeof(LightData) * lightCount;
@@ -3664,6 +3754,7 @@ void LightLimitFix::UpdateStructure()
 
 	ID3D11UnorderedAccessView* null_uavs[6] = { nullptr };
 	context->CSSetUnorderedAccessViews(0, 6, null_uavs, nullptr);
+	clusteredLightsAvailable = lightCount != 0;
 }
 
 void LightLimitFix::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
@@ -3776,6 +3867,14 @@ void LightLimitFix::Hooks::BSWaterShader_SetupGeometry::thunk(RE::BSShader* This
 	singleton.BSLightingShader_SetupGeometry_Before(Pass);
 	singleton.BSLightingShader_SetupGeometry_After(Pass);
 };
+
+void LightLimitFix::Hooks::BSParticleShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
+{
+	func(This, Pass, RenderFlags);
+	auto& singleton = globals::features::lightLimitFix;
+	singleton.BSLightingShader_SetupGeometry_Before(Pass);
+	singleton.BSLightingShader_SetupGeometry_After(Pass);
+}
 
 float LightLimitFix::Hooks::AIProcess_CalculateLightValue_GetLuminance::thunk(
 	RE::ShadowSceneNode* shadowSceneNode,

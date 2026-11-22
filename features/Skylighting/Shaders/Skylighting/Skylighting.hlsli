@@ -5,6 +5,7 @@
 #include "Common/Shading.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
+#include "Skylighting/RoofCoverage.hlsli"
 
 namespace Skylighting
 {
@@ -20,6 +21,8 @@ namespace Skylighting
 
 	const static sh2 UNIT_SH = float4(sqrt(4.0 * Math::PI), 0, 0, 0);
 	const static float DEFAULT_PROBE_FIELD_SIZE = 4096.f * 2.5f;
+	// Keep interpolation defined when every neighboring probe is behind the surface.
+	const static float MIN_TANGENT_WEIGHT = 1e-3;
 
 	bool IsEnabled()
 	{
@@ -132,7 +135,7 @@ namespace Skylighting
 	float GetProbeTangentWeight(float3 probeOffset, float3 normalWS)
 	{
 		// Cubic probe cells preserve world-space direction in grid coordinates.
-		return saturate(dot(probeOffset, normalWS) * rsqrt(max(dot(probeOffset, probeOffset), EPSILON_WEIGHT_SUM)) * 0.5 + 0.5);
+		return saturate(dot(probeOffset, normalWS) * rsqrt(max(dot(probeOffset, probeOffset), EPSILON_WEIGHT_SUM))) + MIN_TANGENT_WEIGHT;
 	}
 
 	sh2 Sample(float3 positionMS, float3 normalWS)
@@ -154,6 +157,11 @@ namespace Skylighting
 		if (any(uvw < 0) || any(uvw > 1))
 			return unoccludedProbe;
 
+#	if defined(SKYLIGHTING_COVERAGE)
+		float roofDepth;
+		bool receiverCovered = RoofCoverage::ReceiverIsCovered(positionMS, roofDepth);
+#	endif
+
 		float3 cellVxCoord = uvw * arrayDims;
 		int3 cell000 = floor(cellVxCoord - 0.5);
 		float3 trilinearPos = cellVxCoord - 0.5 - cell000;
@@ -172,11 +180,18 @@ namespace Skylighting
 						continue;
 
 					float3 probeOffset = offset - trilinearPos;
+					uint3 cellTexID = offset == 0 ? lowerProbe : upperProbe;
 					float tangentWeight = GetProbeTangentWeight(probeOffset, normalWS);
+#	if defined(SKYLIGHTING_COVERAGE)
+					[branch] if (receiverCovered)
+					{
+						if (RoofCoverage::ProbeIsAboveRoof(cellTexID, positionMS + probeOffset * cellSize, roofDepth))
+							tangentWeight = MIN_TANGENT_WEIGHT;
+					}
+#	endif
 					float3 trilinearWeights = 1 - abs(probeOffset);
 					float w = trilinearWeights.x * trilinearWeights.y * trilinearWeights.z * tangentWeight;
 
-					uint3 cellTexID = offset == 0 ? lowerProbe : upperProbe;
 					sh2 probe = SphericalHarmonics::Scale(SkylightingProbeArray[cellTexID], w);
 
 					sum = SphericalHarmonics::Add(sum, probe);
@@ -214,6 +229,10 @@ namespace Skylighting
 				float3 positionMSAdjusted = positionMS - params.PosOffset.xyz;
 				float3 uvw = positionMSAdjusted / arraySize + .5;
 				if (!any(uvw < 0) && !any(uvw > 1)) {
+#		if defined(SKYLIGHTING_COVERAGE)
+					float roofDepth;
+					bool receiverCovered = RoofCoverage::ReceiverIsCovered(positionMS, roofDepth);
+#		endif
 					float3 cellVxCoord = uvw * arrayDims;
 					int3 cell000 = floor(cellVxCoord - 0.5);
 					float3 trilinearPos = cellVxCoord - 0.5 - cell000;
@@ -237,6 +256,13 @@ namespace Skylighting
 								float triWeight = trilinearWeights.x * trilinearWeights.y * trilinearWeights.z;
 								uint3 cellTexID = cellOffset == 0 ? lowerProbe : upperProbe;
 								float tangentWeight = GetProbeTangentWeight(probeOffset, normalWS);
+#		if defined(SKYLIGHTING_COVERAGE)
+								[branch] if (receiverCovered)
+								{
+									if (RoofCoverage::ProbeIsAboveRoof(cellTexID, positionMS + probeOffset * cellSize, roofDepth))
+										tangentWeight = MIN_TANGENT_WEIGHT;
+								}
+#		endif
 								float shWeight = triWeight * tangentWeight;
 
 								shSum = SphericalHarmonics::Add(shSum, SphericalHarmonics::Scale(SkylightingProbeArray[cellTexID], shWeight));

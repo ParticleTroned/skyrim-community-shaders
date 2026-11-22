@@ -380,6 +380,7 @@ public:
 		SnowInactive = 1u << 28,
 		SnowFoliage = 1u << 29,
 		NoSnowMelt = 1u << 30,
+		CarriedShadowLight = 1u << 31,
 
 		CharacterFace = 0b01 << CharacterCategoryShift,
 		CharacterSkin = 0b10 << CharacterCategoryShift,

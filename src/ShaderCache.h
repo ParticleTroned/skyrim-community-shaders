@@ -12,6 +12,8 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -19,6 +21,7 @@
 #include <winrt/base.h>
 #include <wrl/client.h>
 
+#include "ShaderCompilationEstimate.h"
 #include "ShaderCompilationSchedulingPolicy.h"
 #include "Utils/CacheInvalidation.h"
 #include "Utils/CacheRollbackState.h"
@@ -251,6 +254,8 @@ namespace SIE
 		/// Based on shader type, class, descriptor complexity, and known heavy defines.
 		/// Computed once at construction and cached.
 		int GetPriority() const { return cachedPriority; }
+		/** Estimated cost category, independent of scheduling priority. */
+		ShaderCompilationEstimate::Category GetEstimateCategory() const;
 		void SetEnqueuedQpc(int64_t qpc) { enqueuedQpc = qpc; }
 		int64_t GetEnqueuedQpc() const { return enqueuedQpc; }
 		/** @brief Records the compilation batch that owns this task. */
@@ -332,7 +337,14 @@ namespace SIE
 		void Add(const ShaderCompilationTask& task);
 		/** @brief Drops unstarted speculative tasks while compilationMutex is held. */
 		void DropPrecompilesLocked();
-		void Complete(const ShaderCompilationTask& task);
+		void Complete(const ShaderCompilationTask& task, double a_elapsedMs,
+			bool a_sourceCompiled, std::string_view a_estimateContext);
+		/** Loads bounded, optional startup timing priors before workers start. */
+		void LoadEstimateHistory();
+		/** Selects compatible timing priors for a current task without changing its scheduling. */
+		std::string PrepareEstimate(const ShaderCompilationTask& a_task, std::string_view a_context);
+		/** Marks actual source work so cache-hit rates cannot discount a running compile. */
+		void MarkEstimateSourceCompile(const ShaderCompilationTask& a_task);
 		/** @brief Frees a dispatch slot and wakes WaitTake(). Call for every
 		 *  dispatched task, including stale-generation and stopped tasks. */
 		void ReleaseDispatchSlot(const ShaderCompilationTask& a_task);
@@ -344,7 +356,7 @@ namespace SIE
 		void IncContentDedupe(RE::BSShader::Type a_type, std::optional<uint64_t> a_taskGeneration);
 		/** @brief Records verified disk content reuse for the active generation. */
 		void IncContentReuse(bool a_previous, RE::BSShader::Type a_type, std::optional<uint64_t> a_taskGeneration);
-		/** @brief Latches timing when a current-generation source compile begins. */
+		/** @brief Records source work for current-generation batch lifecycle reporting. */
 		void MarkPhaseStarted(RE::BSShader::Type a_type, std::optional<uint64_t> a_taskGeneration);
 		/** @brief Combines global and category invalidation without truncating either epoch. */
 		uint64_t LiveGeneration(RE::BSShader::Type a_type) const
@@ -369,7 +381,8 @@ namespace SIE
 		bool IsInProgress(size_t a_taskId);
 		void Forget(const std::unordered_set<size_t>& a_taskIds);
 		static std::string GetHumanTime(double a_totalMs);
-		double GetEta();
+		/** Thread-safe startup estimate; gameplay reports only basic progress and elapsed time. */
+		ShaderCompilationEstimate::Snapshot GetEstimate();
 		std::string GetStatsString(bool a_timeOnly = false, bool a_elapsedOnly = false);
 		std::atomic<uint64_t> completedTasks = 0;
 		std::atomic<uint64_t> totalTasks = 0;
@@ -381,13 +394,9 @@ namespace SIE
 		std::atomic<uint64_t> contentDedupeTasks = 0;       // tasks reusing identical preprocessed bytecode
 		std::atomic<uint64_t> activeReuseTasks = 0;         // content hits in installed packs or active loose cache
 		std::atomic<uint64_t> previousReuseTasks = 0;       // content hits in the complete loose rollback cache
-		std::atomic<uint64_t> diskHitPriorityWeight = 0;    // cumulative priority weight of disk-hit tasks
-		LARGE_INTEGER compilationPhaseStart = { 0 };        // QPC timestamp when the first real source compile begins
 		std::atomic<bool> compilationPhaseStarted = false;  // set when first actual compilation begins
 		std::atomic<uint64_t> slowTasks = 0;                // shaders taking >= 2s
 		std::atomic<uint64_t> verySlowTasks = 0;            // shaders taking >= 8s
-		std::atomic<uint64_t> totalPriorityWeight = 0;      // sum of (GetPriority()+1) for all queued tasks
-		std::atomic<uint64_t> completedPriorityWeight = 0;  // sum of (GetPriority()+1) for completed/failed tasks
 		std::atomic<uint32_t> heavyTasksInFlight = 0;       // number of dispatched heavy (>= kHeavyPriorityThreshold) tasks still running
 		std::atomic<uint64_t> generation = 0;               // incremented by Clear() to invalidate detached workers
 		mutable std::mutex compilationMutex;
@@ -437,6 +446,15 @@ namespace SIE
 		std::optional<ParallelismStats> GetParallelismStats() const;
 
 	private:
+		/** Releases the startup model and persists its priors once, before startup transition returns. */
+		void FinishStartupEstimate();
+		std::unique_ptr<ShaderCompilationEstimate::Estimator> estimate = std::make_unique<ShaderCompilationEstimate::Estimator>();
+		std::string estimateContext;
+		std::string savedEstimateContext;
+		std::vector<ShaderCompilationEstimate::HistoryEntry> savedEstimateHistory;
+		bool estimateHistoryDirty = false;
+		int64_t estimateBatchStartQpc = 0;
+		int64_t estimateBatchEndQpc = 0;
 		/** @brief Invalidates one category and removes its tasks; caller holds compilationMutex and cache map locks. */
 		void ClearTypeLocked(RE::BSShader::Type a_type);
 		/** @brief Finalizes progress after completion or cancellation removes the last pending task. */
@@ -517,6 +535,10 @@ namespace SIE
 		inline static bool IsShaderSourceAvailable(const RE::BSShader& shader);
 
 		bool IsCompiling();
+		/** Observes the same estimate used by the compilation UI; never dispatches work. */
+		ShaderCompilationEstimate::Snapshot GetCompilationEstimate() { return compilationSet.GetEstimate(); }
+		/** Stops ETA collection at DataLoaded, even if startup compilation continues in the background. */
+		void FinishStartupCompilationEstimate() { compilationSet.FinishStartupEstimate(); }
 		void TryCompleteStartupCompilationPhase();
 		bool IsEnabled() const;
 		bool IsEnableRequested() const;
@@ -739,7 +761,7 @@ namespace SIE
 			uint32_t descriptor);
 
 		RE::BSGraphics::VertexShader* MakeAndAddVertexShader(const RE::BSShader& shader,
-			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
+			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt, bool a_prepareAuxiliary = false);
 		RE::BSGraphics::PixelShader* MakeAndAddPixelShader(const RE::BSShader& shader,
 			uint32_t descriptor, std::optional<uint64_t> a_taskGeneration = std::nullopt);
 		RE::BSGraphics::ComputeShader* MakeAndAddComputeShader(const RE::BSShader& shader,

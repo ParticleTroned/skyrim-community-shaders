@@ -15,6 +15,10 @@ namespace Hooks
 		static void thunk(bool isCompute);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
+	/** @brief Commit grass native state while always running the shared feature hooks. */
+	void CommitGrassDrawState();
+	/** @brief End native-state reuse before geometry ownership or fallback changes. */
+	void ResetGrassDrawState() noexcept;
 
 	struct BSBatchRenderer_RenderPassImmediately1
 	{

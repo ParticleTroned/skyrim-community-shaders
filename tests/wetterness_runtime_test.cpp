@@ -197,6 +197,7 @@ struct Wetterness
 	static constexpr float MAX_RAIN_PARTICLE_DENSITY = 3.0f;
 	bool IsRuntimeActive() const { return loaded && settings.EnableWetterness != 0; }
 	void ResetRuntimeState() const;
+	void ApplyReflectionSettings(ShaderSettings& a_settings) const;
 	void InvalidateSanitizedSettingsCache();
 	const Settings& GetSanitizedSettings() const;
 	bool HasPendingDrying() const;

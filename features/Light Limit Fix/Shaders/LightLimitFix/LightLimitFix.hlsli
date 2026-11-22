@@ -2,6 +2,8 @@
 #	include "LightLimitFix/ContactShadowRay.hlsli"
 #endif
 
+#include "LightLimitFix/EffectSpotlight.hlsli"
+
 namespace LightLimitFix
 {
 
@@ -19,6 +21,7 @@ namespace LightLimitFix
 	StructuredBuffer<Light> lights : register(t35);
 	StructuredBuffer<uint> lightList : register(t36);       //MAX_CLUSTER_LIGHTS * 16^3
 	StructuredBuffer<LightGrid> lightGrid : register(t37);  //16^3
+	StructuredBuffer<EffectSpotlight> effectSpotlights : register(t40);
 #if defined(DEFERRED) || defined(WATER)
 	StructuredBuffer<uint> contactShadowList : register(t38);
 	StructuredBuffer<LightGrid> contactShadowGrid : register(t39);
@@ -26,21 +29,24 @@ namespace LightLimitFix
 
 	bool GetClusterIndex(in float2 uv, in float z, inout uint clusterIndex)
 	{
-		const uint3 clusterSize = SharedData::lightLimitFixSettings.ClusterSize.xyz;
+		bool found = false;
+		[branch] if (SharedData::lightLimitFixSettings.HasClusteredLights != 0)
+		{
+			const uint3 clusterSize = SharedData::lightLimitFixSettings.ClusterSize.xyz;
 
-		if (!FrameBuffer::FrameParams.y)  // Fix first person lights
-			uv = 0.5;
+			if (!FrameBuffer::FrameParams.y)  // Fix first person lights
+				uv = 0.5;
 
-		z = max(z, SharedData::CameraData.y);
-		uint clusterZ = log(z / SharedData::CameraData.y) * clusterSize.z / log(SharedData::CameraData.x / SharedData::CameraData.y);
-		uint3 cluster = uint3(uint2(uv * clusterSize.xy), clusterZ);
+			z = max(z, SharedData::CameraData.y);
+			uint clusterZ = log(z / SharedData::CameraData.y) * clusterSize.z / log(SharedData::CameraData.x / SharedData::CameraData.y);
+			uint3 cluster = uint3(uint2(uv * clusterSize.xy), clusterZ);
 
-		// Bounds validation to prevent out-of-range cluster indices
-		if (any(cluster >= clusterSize))
-			return false;
-
-		clusterIndex = cluster.x + (clusterSize.x * cluster.y) + (clusterSize.x * clusterSize.y * cluster.z);
-		return true;
+			if (all(cluster < clusterSize)) {
+				clusterIndex = cluster.x + (clusterSize.x * cluster.y) + (clusterSize.x * clusterSize.y * cluster.z);
+				found = true;
+			}
+		}
+		return found;
 	}
 
 #if defined(DEFERRED) || defined(WATER)
@@ -218,12 +224,8 @@ namespace LightLimitFix
 	}
 #endif
 
-	bool IsLightIgnored(Light light)
+	bool IsLightIgnoredByRoom(Light light)
 	{
-		if (light.lightFlags & LightLimitFix::LightFlags::Shadow) {
-			return !(ShadowBitMask & (1 << light.shadowLightIndex));
-		}
-
 		bool lightIgnored = false;
 		if ((light.lightFlags & LightFlags::PortalStrict) && RoomIndex >= 0) {
 			lightIgnored = true;
@@ -240,5 +242,24 @@ namespace LightLimitFix
 			}
 		}
 		return lightIgnored;
+	}
+
+	bool IsLightIgnored(Light light)
+	{
+		if (light.lightFlags & LightFlags::Shadow)
+			return !(ShadowBitMask & (1 << light.shadowLightIndex));
+		return IsLightIgnoredByRoom(light);
+	}
+
+	float GetEffectLightVisibility(Light light, float3 relativePosition, uint eyeIndex)
+	{
+		if (IsLightIgnoredByRoom(light))
+			return 0.0;
+		[branch] if (!(light.lightFlags & LightFlags::Shadow) || light.effectSpotlightIndex == 0) return 1.0;
+		[branch] if (light.effectSpotlightIndex == 0xFFFFFFFFu) return 0.0;
+
+		// Opaque scene-depth shadows do not describe the surface of translucent effects.
+		return GetEffectSpotlightFootprint(effectSpotlights[light.effectSpotlightIndex - 1], light.effectSpotlightHalfFalloff,
+			relativePosition + FrameBuffer::CameraPosAdjust[eyeIndex].xyz);
 	}
 }

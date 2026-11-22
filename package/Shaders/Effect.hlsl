@@ -600,13 +600,16 @@ float3 GetEffectAmbientLighting(float skylightingDiffuse)
 		ambientColor = ShadowSampling::GetRawAmbientLighting(ShadowSampling::LightingSampleNormal);
 
 #	if defined(IBL)
-	if (SharedData::iblSettings.EnableIBL) {
+	[branch] if (SharedData::iblSettings.EnableIBL)
+	{
 #		if defined(SKYLIGHTING)
 		ambientColor = ImageBasedLighting::GetDiffuseIBLOccluded(ambientColor, ShadowSampling::ImageBasedLightingNormal, skylightingDiffuse);
 #		else
 		ambientColor = ImageBasedLighting::GetDiffuseIBL(ambientColor, ShadowSampling::ImageBasedLightingNormal);
 #		endif
-	} else {
+	}
+	else
+	{
 #	endif
 
 #	if defined(SKYLIGHTING)
@@ -626,7 +629,8 @@ float GetEffectSkylightingDiffuse(float3 worldPosition, uint eyeIndex)
 {
 	float skylightingDiffuse = 1.0;
 #	if defined(SKYLIGHTING)
-	if (!SharedData::InInterior) {
+	[branch] if (!SharedData::InInterior)
+	{
 #		if defined(VR)
 		float3 positionMSSkylight = worldPosition + FrameBuffer::CameraPosAdjust[eyeIndex].xyz - FrameBuffer::CameraPosAdjust[0].xyz;
 #		else
@@ -658,12 +662,14 @@ float3 GetAmbientEffectLighting(float3 worldPosition, float2 screenPosition, uin
 		float3 viewDirection = worldPosition / max(length(worldPosition), 1e-5);
 		float shadow = 1.0;
 #	if defined(LIGHTING)
-		if (ShadowSampling::HasDirectionalShadows()) {
+		[branch] if (ShadowSampling::HasDirectionalShadows())
+		{
 			shadow = ShadowSampling::Get3DFilteredShadow(worldPosition, viewDirection, screenPosition, eyeIndex);
 		}
 #	else
 		// Sky statics use world shadows without depending on the scene shadow-mask pass.
-		if (!SharedData::InInterior && !SharedData::HideSky && !SharedData::InMapMenu) {
+		[branch] if (!SharedData::InInterior && !SharedData::HideSky && !SharedData::InMapMenu)
+		{
 			static const uint SampleCount = 8;
 			static const float ViewRayLength = 2048.0;
 			float3 startPosition = worldPosition - viewDirection * ViewRayLength;
@@ -729,11 +735,14 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 		float3 ambientColor;
 		ExtractEffectLighting(color, dirLightColor, ambientColor, GetEffectSkylightingDiffuse(worldPosition, eyeIndex));
 
-		if (inWorld && ShadowSampling::HasDirectionalShadows()) {
+		[branch] if (inWorld && ShadowSampling::HasDirectionalShadows())
+		{
 			float shadow = ShadowSampling::Get3DFilteredShadow(worldPosition.xyz, normalize(worldPosition.xyz), screenPosition, eyeIndex);
 			color = ambientColor + dirLightColor * shadow;
 			shadowVariance = 1.0 - sqrt(saturate(fwidth(shadow)));
-		} else {
+		}
+		else
+		{
 			color = ambientColor + dirLightColor;
 		}
 	}
@@ -761,7 +770,7 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 	color = Color::WeatherEffectLighting(color, (Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) != 0);
 
 #		if defined(LIGHT_LIMIT_FIX)
-	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld))
+	[branch] if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld))
 #		endif
 	{
 		const float effectLightingMult = Color::EffectLightingMult();
@@ -932,14 +941,17 @@ PS_OUTPUT main(PS_INPUT input)
 		bool inWorld = Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld;
 
 		uint clusterIndex = 0;
-		if (inWorld && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
-			lightCount = LightLimitFix::lightGrid[clusterIndex].lightCount;
-			uint lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
+		[branch] if (inWorld && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex))
+		{
+			LightLimitFix::LightGrid clusterGrid = LightLimitFix::lightGrid[clusterIndex];
+			lightCount = clusterGrid.lightCount;
+			uint lightOffset = clusterGrid.offset;
 			[loop] for (uint i = 0; i < lightCount; i++)
 			{
 				uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + i];
 				LightLimitFix::Light light = LightLimitFix::lights[clusteredLightIndex];
-				if (LightLimitFix::IsLightIgnored(light) || light.lightFlags & LightLimitFix::LightFlags::Shadow) {
+				float lightVisibility = LightLimitFix::GetEffectLightVisibility(light, input.WorldPosition.xyz, eyeIndex);
+				if (lightVisibility <= 0.0) {
 					continue;
 				}
 				float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
@@ -954,7 +966,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 				const bool isPointLightLinear = (light.lightFlags & LightLimitFix::LightFlags::Linear) != 0;
 				float3 lightColor =
-					Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * 0.5 * light.fade * Color::EffectLightingMult();
+					Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * lightVisibility * 0.5 * light.fade * Color::EffectLightingMult();
 				propertyColor += ApplyParticlePointInfluence(lightColor);
 			}
 		}
@@ -978,6 +990,13 @@ PS_OUTPUT main(PS_INPUT input)
 #	if !defined(LIGHTING) && !defined(MOTIONVECTORS_NORMALS)
 	if (isSkyStatic || (Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject))
 		propertyColor = Color::WeatherEffectLighting(propertyColor, true);
+#		if defined(PARTICLES) && !defined(ADDBLEND) && !defined(MULTBLEND) && !defined(MULTBLEND_DECAL) && !defined(MEMBRANE)
+	else if (lightingInfluence > 0.0 && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld) && IsParticleEffect()) {
+		propertyColor = Color::WeatherEffectLighting(propertyColor, false);
+		propertyColor = Color::AdjustUtilityColor(propertyColor, SharedData::adaptiveBalanceSettings.appearance.effectLightingSaturation,
+			SharedData::adaptiveBalanceSettings.appearance.effectLightingGammaOffset);
+	}
+#		endif
 #	endif
 	float3 lightColor = lerp(baseColor.xyz, propertyColor * baseColor.xyz, lightingInfluence.xxx);
 

@@ -18,12 +18,6 @@ file(READ "${OUTPUT_DIRECTORY}/hair_indirect_context.hlsli" HAIR_CONTEXT)
 file(READ "${PROJECT_ROOT}/package/Shaders/Common/LightingEval.hlsli" _eval)
 extract_between(
     "${_eval}"
-    "float3 SafeNormalizeLighting("
-    "\n#if defined(TRUE_PBR)"
-    safe_normalize.hlsli
-)
-extract_between(
-    "${_eval}"
     "IndirectContext CreateIndirectLightingContext("
     "\nfloat3 VanillaSpecular("
     indirect_factory.hlsli
@@ -34,7 +28,6 @@ extract_between(
     "\n#if defined(WETTERNESS)"
     indirect_lobes.hlsli
 )
-file(READ "${OUTPUT_DIRECTORY}/safe_normalize.hlsli" SAFE_NORMALIZE)
 file(READ "${OUTPUT_DIRECTORY}/indirect_factory.hlsli" INDIRECT_FACTORY)
 file(READ "${OUTPUT_DIRECTORY}/indirect_lobes.hlsli" INDIRECT_LOBES)
 configure_file(

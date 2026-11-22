@@ -126,6 +126,7 @@ int main() {
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
+namespace GrassInstancePacking { using Record = std::array<uint32_t, 4>; }
 struct ID3D11Buffer {};
 namespace winrt { template<class T> struct com_ptr {
     T* value = nullptr;

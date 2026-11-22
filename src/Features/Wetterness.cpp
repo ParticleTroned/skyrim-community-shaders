@@ -2016,10 +2016,26 @@ float Wetterness::UpdateRuntimeClock(bool gamePaused) const
 	return std::isfinite(deltaSeconds) ? std::clamp(deltaSeconds, 0.0f, static_cast<float>(MAX_TIME_DELTA_SECONDS)) : 0.0f;
 }
 
+void Wetterness::ApplyReflectionSettings(ShaderSettings& a_settings) const
+{
+	const float modernReflectionUi = SanitizeReflectionScale(modernWetIndirectSpecularScale, MAX_MODERN_WET_REFLECTION_UI_SCALE, DEFAULT_MODERN_WET_REFLECTION_UI);
+	const float legacyReflectionUi = SanitizeReflectionScale(legacyWetIndirectSpecularScale, GetLegacyReflectionUiMax(), DEFAULT_LEGACY_WET_REFLECTION_UI);
+	const float modernReflectionScale = ModernWetReflectionScaleFromUi(modernReflectionUi);
+	const float legacyReflectionScale = LegacyWetReflectionScaleFromUi(legacyReflectionUi, GetLegacyReflectionUiMax());
+	SyncActiveReflectionScale(a_settings, modernReflectionScale, legacyReflectionScale);
+}
+
 Wetterness::PerFrame Wetterness::MakeDryPerFrameData() const
 {
 	PerFrame data = MakeDisabledPerFrameData();
 	const auto& sanitizedSettings = GetSanitizedSettings();
+	// Actor sweat and retained water still reflect while weather simulation is idle.
+	data.settings.EnableModernWetReflection = sanitizedSettings.EnableModernWetReflection;
+	data.settings.EnableLegacyWetReflection = sanitizedSettings.EnableLegacyWetReflection;
+	data.settings.EnableForwardReflectionBias = sanitizedSettings.EnableForwardReflectionBias;
+	data.settings.EnableVanillaReflectionCompensation = sanitizedSettings.EnableVanillaReflectionCompensation;
+	data.settings.SkinWetness = sanitizedSettings.SkinWetness;
+	ApplyReflectionSettings(data.settings);
 	data.settings.MaxShoreWetness = sanitizedSettings.MaxShoreWetness;
 	data.settings.ShoreRange = sanitizedSettings.ShoreRange;
 	data.settings.WetDarkeningStrength = sanitizedSettings.WetDarkeningStrength;
@@ -2573,11 +2589,7 @@ Wetterness::PerFrame Wetterness::GetCommonBufferData() const
 	if (weatherRainTransitionWeight <= 0.005f || isInterior) {
 		data.settings.EnableRaindropFx = 0u;
 	}
-	const float modernReflectionUi = SanitizeReflectionScale(modernWetIndirectSpecularScale, MAX_MODERN_WET_REFLECTION_UI_SCALE, DEFAULT_MODERN_WET_REFLECTION_UI);
-	const float legacyReflectionUi = SanitizeReflectionScale(legacyWetIndirectSpecularScale, GetLegacyReflectionUiMax(), DEFAULT_LEGACY_WET_REFLECTION_UI);
-	const float modernReflectionScale = ModernWetReflectionScaleFromUi(modernReflectionUi);
-	const float legacyReflectionScale = LegacyWetReflectionScaleFromUi(legacyReflectionUi, GetLegacyReflectionUiMax());
-	SyncActiveReflectionScale(data.settings, modernReflectionScale, legacyReflectionScale);
+	ApplyReflectionSettings(data.settings);
 	const float clampedPuddleLayout = std::clamp(puddleLayout, PUDDLE_LAYOUT_MIN, PUDDLE_LAYOUT_MAX);
 	// Shader CB carries puddle layout in its dedicated shader-facing field.
 	// CPU simulation above still uses settings.WeatherTransitionSpeed.

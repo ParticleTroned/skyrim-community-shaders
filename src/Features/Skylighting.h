@@ -121,9 +121,13 @@ public:
 		uint ProbeUpdateSliceStart;
 		uint ProbeUpdateSliceCount;
 		uint ShadowDataAvailable;
-		uint ShadowDataPadding[3];
+		uint AccumulateOcclusion;
+		uint ShadowDataPadding[2];
+		REX::W32::XMFLOAT4X4 ZenithViewProj;
+		float3 ZenithOffset;
+		uint ZenithValid;
 	};
-	static_assert(sizeof(SkylightingCB) % 16 == 0);
+	static_assert(sizeof(SkylightingCB) == 256);
 
 	SkylightingCB GetCommonBufferData(bool a_inWorld);
 	bool IsRuntimeActive() const { return loaded && settings.EnableSkylighting && !resourceRebuildFailed.load(std::memory_order_acquire); }
@@ -132,6 +136,7 @@ public:
 	winrt::com_ptr<ID3D11SamplerState> comparisonSampler = nullptr;
 
 	Texture2D* texOcclusion = nullptr;
+	Texture2D* texZenithOcclusion = nullptr;
 	Texture3D* texProbeArray = nullptr;
 	Texture3D* texAccumFramesArray = nullptr;
 	ID3D11Device* resourceDevice = nullptr;
@@ -144,6 +149,16 @@ public:
 	uint probeArrayDims[3] = { 256, 256, 128 };
 
 	// cached variables
+	static constexpr uint kZenithCaptureInterval = 7;
+	static constexpr float kZenithOcclusionExtent = 4096.0f;
+	static constexpr uint kCoverageUnknown = 2;
+	static constexpr uint kProbeCoverageShift = 13;
+	REX::W32::XMFLOAT4X4 zenithTransform{};
+	float3 zenithEyePosition{};
+	uint32_t zenithCaptureFrame = 0;
+	bool zenithValid = false;
+	bool zenithEyePending = false;
+	bool zenithFrame = false;
 	std::atomic_bool queuedRebuildSkylighting{ false };
 	std::atomic_bool resourceRebuildFailed{ false };
 	std::optional<uint32_t> runtimeSettingsFrame;

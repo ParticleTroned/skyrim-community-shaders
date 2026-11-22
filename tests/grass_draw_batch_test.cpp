@@ -1,6 +1,9 @@
 #include "Features/GrassOptimizations/GrassFadeHistory.h"
 #include "Features/GrassOptimizations/GrassFrustum.h"
 #include "Features/GrassOptimizations/GrassPolicy.h"
+#include "grass_culling_cost_simd_test.h"
+#include "grass_culling_hierarchy_test.h"
+#include "grass_draw_state_test.h"
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -105,6 +108,9 @@ int main()
 	try {
 		CheckSpawnFades();
 		CheckWindHistory();
+		CheckCullingHierarchy();
+		CheckGrassCostAndSimd();
+		CheckGrassDrawState();
 		const auto require = [](bool condition) {if(!condition)throw std::runtime_error("Grass settings policy failed"); };
 		require(GrassPolicy::MeshAttributesValid(28, 16, 16, 20, 24));
 		require(GrassPolicy::MeshAttributesValid(20, 8, 8, 12, 16));
@@ -130,6 +136,28 @@ int main()
 		auto jittered = identity;
 		jittered[3] = .001f;
 		require(GrassFrustum::SelectProjection(jittered, identity, jittered, identity) == identity);
+		{
+			auto perspective = identity;
+			perspective[14] = 1;
+			perspective[15] = 0;
+			const auto visible = [&](const auto& matrix, float x, float z, float cutoff) {
+				return GrassFrustum::AbovePixelThreshold(GrassFrustum::PreparePixelProjection(matrix, 1000), { x, 0, z }, { x + 1, 1, z + 1 }, 1, cutoff);
+			};
+			require(visible(perspective, 0, 100, 5));
+			require(visible(perspective, 100, 100, 5));
+			require(!visible(perspective, 0, 100, 6));
+			require(visible(perspective, 0, -.5f, 10000));
+			require(visible(perspective, 0, 0, 10000));
+			require(visible(identity, 0, 10000, 500));
+			require(!visible(identity, 0, 10000, 501));
+			auto rightEye = perspective;
+			rightEye[15] = -50;
+			require(!visible(perspective, 0, 100, 8) && visible(rightEye, 0, 100, 8));
+			auto invalid = perspective;
+			invalid[0] = NAN;
+			require(visible(invalid, 0, 100, 10000));
+			require(visible(perspective, NAN, 100, 10000));
+		}
 		const auto dense = GrassPolicy::PlanCullCapacity({}, 32769, 1);
 		require(dense && *dense == GrassPolicy::CullCapacity{ 65536, 1 });
 		const auto stereoLOD = GrassPolicy::PlanCullCapacity(*dense, 64, 6);
@@ -317,6 +345,16 @@ int main()
 		settings = {};
 		settings.OcclusionBias = .051f;
 		require(!settings.Valid());
+		settings = {};
+		require(settings.OcclusionTightness == .9f);
+		for (float valid : { .25f, .9f, 1.0f }) {
+			settings.OcclusionTightness = valid;
+			require(settings.Valid());
+		}
+		for (float invalid : { .249f, 1.001f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() }) {
+			settings.OcclusionTightness = invalid;
+			require(!settings.Valid());
+		}
 		settings = {};
 		settings.MinDensity = 0;
 		require(settings.Valid());

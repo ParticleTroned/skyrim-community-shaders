@@ -2,9 +2,16 @@ cmake_minimum_required(VERSION 3.21)
 
 add_library(Streamline INTERFACE)
 
+include("${CMAKE_CURRENT_LIST_DIR}/CompatibleHeaders.cmake")
+csx_prepare_streamline_headers(
+    "${CMAKE_SOURCE_DIR}/extern/Streamline-DX12/include"
+    "${CMAKE_CURRENT_BINARY_DIR}/compatible-headers"
+    _streamline_include_directory
+)
+
 target_include_directories(
   Streamline INTERFACE
-    ${CMAKE_SOURCE_DIR}/extern/Streamline-DX12/include
+    "${_streamline_include_directory}"
     ${CMAKE_SOURCE_DIR}/extern/Streamline-DX12/external/ngx-sdk/include)
 
 # The NGX declarations are compile-time inputs only. Runtime delivery remains

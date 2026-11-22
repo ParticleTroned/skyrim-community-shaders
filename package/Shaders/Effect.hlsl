@@ -964,6 +964,9 @@ PS_OUTPUT main(PS_INPUT input)
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #			endif
 
+				if (intensityMultiplier == 0.0)
+					continue;
+
 				const bool isPointLightLinear = (light.lightFlags & LightLimitFix::LightFlags::Linear) != 0;
 				float3 lightColor =
 					Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * lightVisibility * 0.5 * light.fade * Color::EffectLightingMult();

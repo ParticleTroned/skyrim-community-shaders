@@ -367,6 +367,9 @@ PS_OUTPUT main(PS_INPUT input)
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #		endif
 
+				if (intensityMultiplier == 0.0)
+					continue;
+
 				const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
 				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * lightVisibility * light.fade * 0.5;
 				if (Color::IsSceneColorDraw() && SharedData::adaptiveBalanceSettings.appearance.particlePointInfluence != 1.0)

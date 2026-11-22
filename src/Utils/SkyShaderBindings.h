@@ -4,18 +4,21 @@
 #include <d3d11_1.h>
 #include <winrt/base.h>
 
-namespace SunGlare
+namespace SkyShader
 {
-	/** @brief Own the vertex depth and frame constants only for a sun-glare geometry draw. */
+	/** @brief Scope sky vertex constants and optional sun-glare depth without disturbing native bindings. */
 	class ScopedBindings
 	{
 	public:
-		ScopedBindings(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_depth)
+		ScopedBindings(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_depth,
+			ID3D11Buffer* a_permutation = nullptr, bool a_bindDepth = true) :
+			depthBound(a_bindDepth), permutationBound(a_permutation != nullptr)
 		{
 			context.copy_from(a_context);
 			if (FAILED(context->QueryInterface(IID_PPV_ARGS(context1.put()))))
 				context1 = nullptr;
-			context->VSGetShaderResources(17, 1, previousDepth.put());
+			if (depthBound)
+				context->VSGetShaderResources(17, 1, previousDepth.put());
 			winrt::com_ptr<ID3D11Buffer> frame;
 			UINT frameFirst = 0, frameCount = 0;
 			if (context1) {
@@ -28,7 +31,7 @@ namespace SunGlare
 
 			if (!frame)
 				a_depth = nullptr;
-			if (a_depth) {
+			if (depthBound && a_depth) {
 				winrt::com_ptr<ID3D11DepthStencilView> dsv;
 				context->OMGetRenderTargets(0, nullptr, dsv.put());
 				if (dsv) {
@@ -51,13 +54,30 @@ namespace SunGlare
 				context1->VSSetConstantBuffers1(12, 1, &buffer, &frameFirst, &frameCount);
 			else
 				context->VSSetConstantBuffers(12, 1, &buffer);
-			context->VSSetShaderResources(17, 1, &a_depth);
+			if (depthBound)
+				context->VSSetShaderResources(17, 1, &a_depth);
+			if (permutationBound) {
+				if (context1)
+					context1->VSGetConstantBuffers1(4, 1, previousPermutation.put(), &previousPermutationFirst, &previousPermutationCount);
+				else
+					context->VSGetConstantBuffers(4, 1, previousPermutation.put());
+				context->VSSetConstantBuffers(4, 1, &a_permutation);
+			}
 		}
 
 		~ScopedBindings()
 		{
-			auto* depth = previousDepth.get();
-			context->VSSetShaderResources(17, 1, &depth);
+			if (depthBound) {
+				auto* depth = previousDepth.get();
+				context->VSSetShaderResources(17, 1, &depth);
+			}
+			if (permutationBound) {
+				auto* permutation = previousPermutation.get();
+				if (context1)
+					context1->VSSetConstantBuffers1(4, 1, &permutation, &previousPermutationFirst, &previousPermutationCount);
+				else
+					context->VSSetConstantBuffers(4, 1, &permutation);
+			}
 			auto* frame = previousFrame.get();
 			if (context1)
 				context1->VSSetConstantBuffers1(12, 1, &frame, &previousFirst, &previousCount);
@@ -73,6 +93,9 @@ namespace SunGlare
 		winrt::com_ptr<ID3D11DeviceContext1> context1;
 		winrt::com_ptr<ID3D11ShaderResourceView> previousDepth;
 		winrt::com_ptr<ID3D11Buffer> previousFrame;
+		winrt::com_ptr<ID3D11Buffer> previousPermutation;
 		UINT previousFirst = 0, previousCount = 0;
+		UINT previousPermutationFirst = 0, previousPermutationCount = 0;
+		bool depthBound, permutationBound;
 	};
 }

@@ -1,4 +1,4 @@
-#include "Utils/SunGlareBindings.h"
+#include "Utils/SkyShaderBindings.h"
 #include "d3d11_shader_test.h"
 
 #include <array>
@@ -190,7 +190,7 @@ struct Vertex { float4 color : COLOR0; };
 			auto* stream = output.Get();
 			context->SOSetTargets(1, &stream, &offset);
 			{
-				SunGlare::ScopedBindings bindings(context.Get(), depthView.Get());
+				SkyShader::ScopedBindings bindings(context.Get(), depthView.Get());
 				context->DrawInstanced(1, stereo ? 2 : 1, 0, 0);
 			}
 			context->SOSetTargets(0, nullptr, nullptr);
@@ -224,7 +224,7 @@ struct Vertex { float4 color : COLOR0; };
 			auto* oldView = depthView.Get();
 			context->VSSetShaderResources(17, 1, &oldView);
 			{
-				SunGlare::ScopedBindings bindings(context.Get(), nullptr);
+				SkyShader::ScopedBindings bindings(context.Get(), nullptr);
 				ComPtr<ID3D11ShaderResourceView> bound;
 				context->VSGetShaderResources(17, 1, &bound);
 				Require(!bound, "Unavailable scene depth must be unbound");
@@ -242,6 +242,37 @@ struct Vertex { float4 color : COLOR0; };
 			Require(restored.Get() == oldView && restoredFrame.Get() == previous.Get() &&
 						restoredFirst == first && restoredCount == count,
 				"Glare must restore the SRV and exact CB range");
+			extended->VSSetConstantBuffers1(4, 1, &previousRaw, &first, &count);
+			{
+				SkyShader::ScopedBindings bindings(context.Get(), nullptr, frameRaw, false);
+				ComPtr<ID3D11ShaderResourceView> boundDepth;
+				context->VSGetShaderResources(17, 1, &boundDepth);
+				Require(boundDepth.Get() == oldView, "Sky ordering must leave sun-glare depth bindings untouched");
+				ComPtr<ID3D11Buffer> boundPermutation;
+				UINT boundFirst = 0, boundCount = 0;
+				extended->VSGetConstantBuffers1(4, 1, &boundPermutation, &boundFirst, &boundCount);
+				Require(boundPermutation.Get() == frameRaw && boundFirst == 0 && boundCount >= desc.ByteWidth / 16,
+					"Sky vertices must receive the whole permutation buffer");
+				ComPtr<ID3D11Buffer> boundFrame;
+				extended->VSGetConstantBuffers1(12, 1, &boundFrame, &boundFirst, &boundCount);
+				Require(boundFrame.Get() == frameRaw && boundFirst == first && boundCount == count,
+					"Sky ordering must use the active projection constants and range");
+			}
+			ComPtr<ID3D11Buffer> restoredPermutation;
+			extended->VSGetConstantBuffers1(4, 1, &restoredPermutation, &restoredFirst, &restoredCount);
+			Require(restoredPermutation.Get() == previousRaw && restoredFirst == first && restoredCount == count,
+				"Sky ordering must restore the previous permutation slot and exact CB range");
+			restoredFrame.Reset();
+			extended->VSGetConstantBuffers1(12, 1, &restoredFrame, &restoredFirst, &restoredCount);
+			Require(restoredFrame.Get() == previousRaw && restoredFirst == first && restoredCount == count,
+				"Sky ordering must restore the previous projection constants and range");
+			context->ClearState();
+			{
+				SkyShader::ScopedBindings bindings(context.Get(), nullptr, frameRaw, false);
+			}
+			restoredPermutation.Reset();
+			context->VSGetConstantBuffers(4, 1, &restoredPermutation);
+			Require(!restoredPermutation, "Sky ordering must restore an originally empty permutation slot");
 
 			D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
 			dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
@@ -253,14 +284,14 @@ struct Vertex { float4 color : COLOR0; };
 			context->PSSetConstantBuffers(12, 1, &frameRaw);
 			context->OMSetRenderTargets(0, nullptr, dsv.Get());
 			{
-				SunGlare::ScopedBindings bindings(context.Get(), depthView.Get());
+				SkyShader::ScopedBindings bindings(context.Get(), depthView.Get());
 				ComPtr<ID3D11ShaderResourceView> bound;
 				context->VSGetShaderResources(17, 1, &bound);
 				Require(!bound, "A depth attachment must never also be bound as a visibility SRV");
 			}
 			context->ClearState();
 			{
-				SunGlare::ScopedBindings bindings(context.Get(), depthView.Get());
+				SkyShader::ScopedBindings bindings(context.Get(), depthView.Get());
 				ComPtr<ID3D11ShaderResourceView> bound;
 				context->VSGetShaderResources(17, 1, &bound);
 				Require(!bound, "Missing frame constants must disable depth filtering");
@@ -272,7 +303,7 @@ struct Vertex { float4 color : COLOR0; };
 			context->PSSetConstantBuffers(12, 1, &frameRaw);
 			context->OMSetRenderTargets(0, nullptr, dsv.Get());
 			{
-				SunGlare::ScopedBindings bindings(context.Get(), depthView.Get());
+				SkyShader::ScopedBindings bindings(context.Get(), depthView.Get());
 				ComPtr<ID3D11ShaderResourceView> bound;
 				context->VSGetShaderResources(17, 1, &bound);
 				Require(bound.Get() == depthView.Get(), "Read-only depth must remain available for visibility");

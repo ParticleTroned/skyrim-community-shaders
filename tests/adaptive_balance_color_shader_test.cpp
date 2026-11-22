@@ -174,7 +174,8 @@ namespace
 					 std::pair{ "godrayOpacity", 172u }, std::pair{ "godrayTint", 176u }, std::pair{ "godrayTintAmount", 188u },
 					 std::pair{ "godraySaturation", 192u }, std::pair{ "eyeSpecularBrightness", 196u },
 					 std::pair{ "eyeBrightness", 200u }, std::pair{ "auroraIntensity", 204u },
-					 std::pair{ "auroraCurve", 208u }, std::pair{ "padding", 212u },
+					 std::pair{ "auroraCurve", 208u }, std::pair{ "moonCurve", 212u },
+					 std::pair{ "moonEdgeTrim", 216u }, std::pair{ "padding", 220u },
 					 std::pair{ "sceneGammaOffset", 224u }, std::pair{ "linearPointLightSaturation", 240u },
 					 std::pair{ "emissiveSaturation", 280u }, std::pair{ "fogSaturation", 328u },
 					 std::pair{ "volumetricSaturation", 336u }, std::pair{ "nonlinearPointLightSaturation", 340u },
@@ -631,6 +632,45 @@ namespace
 				checked += unsigned(result.size());
 			}
 		}
+		return checked;
+	}
+
+	unsigned VerifyMoonAppearance(ID3D11Device* device, ID3D11DeviceContext* context, bool vr)
+	{
+		Fixture fixture(device, vr, ShaderMode::Appearance);
+		auto authored = pointLightColors;
+		for (size_t i = 0; i < authored.size(); ++i)
+			authored[i][3] = float(i) / 8.0f;
+		unsigned checked = 0;
+		for (bool linear : { false, true })
+			for (uint32_t scene : { 0u, 1u, 2u })
+				for (uint32_t features : { 0u, 1u << 10, 1u << 11, 0xFFFFFFFFu })
+					for (float curve : { 0.1f, 1.0f, 2.0f, 4.0f })
+						for (float trim : { 0.0f, 0.75f, 5.0f })
+							for (const auto uv : { std::array{ 0.0f, 0.5f }, std::array{ 0.005f, 0.5f },
+									 std::array{ 0.5f, 0.5f }, std::array{ 0.5f, 0.995f }, std::array{ 0.5f, 1.0f } }) {
+								auto settings = AdaptiveBalanceTest::NeutralAppearance();
+								settings[53] = curve;
+								settings[54] = trim;
+								fixture.permutation->SetVariable("Permutation::ExtraFeatureDescriptor", features);
+								const auto actual = fixture.DrawAppearance(context, linear, scene | (1u << 11), 15,
+									settings, { uv[0], uv[1], 0, 0 }, { 1, 1, 1, 1 }, { 1, 1, 1, 1 }, false, authored);
+								const bool active = scene != 0 && (features & (1u << 11));
+								const bool trimmed = active && trim > 0 &&
+								                     (uv[0] < trim / 100 || uv[0] > 1 - trim / 100 || uv[1] < trim / 100 || uv[1] > 1 - trim / 100);
+								for (size_t i = 0; i < actual.size(); ++i)
+									for (size_t channel = 0; channel < 4; ++channel) {
+										float expected = authored[i][channel];
+										if (trimmed)
+											expected = 0;
+										else if (active && curve != 1 && channel < 3)
+											expected = std::min(65504.0f, std::pow(std::max(expected, 0.0f), curve));
+										Require(Close(actual[i][channel], expected), "Moon appearance changed the wrong flags, alpha, border or colour");
+										if (!active || (curve == 1 && trim == 0))
+											Require(actual[i][channel] == authored[i][channel], "Neutral moon appearance was not exact");
+									}
+								checked += unsigned(actual.size());
+							}
 		return checked;
 	}
 
@@ -1602,6 +1642,7 @@ int main(int argc, char** argv)
 			appearanceSamples += VerifyUtilityControls(device.Get(), context.Get(), vr, true);
 			appearanceSamples += VerifyEyeAppearance(device.Get(), context.Get(), vr);
 			appearanceSamples += VerifyAuroraAppearance(device.Get(), context.Get(), vr);
+			appearanceSamples += VerifyMoonAppearance(device.Get(), context.Get(), vr);
 			emissiveSamples += VerifyEmissive(device.Get(), context.Get(), vr);
 			fireSamples += VerifyFireModes(device.Get(), context.Get(), vr);
 			for (bool fade : { false, true })

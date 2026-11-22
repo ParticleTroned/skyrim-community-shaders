@@ -612,16 +612,18 @@ void State::Draw(bool isCompute)
 
 		if (!isCompute && currentShader && currentShader->shaderType.get() == RE::BSShader::Type::Sky &&
 			techniqueShaderSelection.vertex &&
-			(currentVertexDescriptor & 255) == static_cast<uint32_t>(SIE::ShaderCache::SkyShaderTechniques::SunGlare)) {
+			(globals::features::reverseZ.IsActive() ||
+				(currentVertexDescriptor & 255) == static_cast<uint32_t>(SIE::ShaderCache::SkyShaderTechniques::SunGlare))) {
+			const bool isSunGlare = (currentVertexDescriptor & 255) == static_cast<uint32_t>(SIE::ShaderCache::SkyShaderTechniques::SunGlare);
 			auto* sky = globals::game::sky;
-			const bool sceneDepthValid = !isMapMenuOpen && !Util::IsInterior() && sky &&
+			const bool sceneDepthValid = isSunGlare && !isMapMenuOpen && !Util::IsInterior() && sky &&
 			                             !sky->flags.any(RE::Sky::Flags::kHideSky) &&
 			                             !(permutationData.ExtraShaderDescriptor & static_cast<uint32_t>(ExtraShaderDescriptors::IsReflections));
 			// Sky writes the depth copy, so the main depth view supplies opaque scene visibility.
 			auto* depth = sceneDepthValid && globals::game::renderer ?
 			                  reinterpret_cast<ID3D11ShaderResourceView*>(globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV) :
 			                  nullptr;
-			sunGlareBindings.emplace(context, depth);
+			skyShaderBindings.emplace(context, depth, globals::features::reverseZ.IsActive() ? permutationCB->CB() : nullptr, isSunGlare);
 		}
 	}
 }
@@ -912,7 +914,7 @@ void State::UpdateSaveLoadSafeMode()
 
 void State::Reset()
 {
-	RestoreSunGlareBindings();
+	RestoreSkyShaderBindings();
 	techniqueShaderSelection = {};
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	CSX::Diagnostics::PerformanceCosts::ProcessPendingChanges();
@@ -2664,6 +2666,17 @@ void State::UpdateLightingShaderPermutation(RE::BSRenderPass* a_pass)
 		alphaProperty->GetDestBlendMode() == RE::NiAlphaProperty::AlphaFunction::kOne) {
 		permutationData.ExtraShaderDescriptor |= additiveLighting;
 	}
+}
+
+void State::UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass)
+{
+	constexpr auto isMoon = static_cast<uint32_t>(ExtraFeatureDescriptors::IsMoon);
+	permutationData.ExtraFeatureDescriptor &= ~isMoon;
+	if (!a_pass || !a_pass->shaderProperty)
+		return;
+	const auto* property = static_cast<const RE::BSSkyShaderProperty*>(a_pass->shaderProperty);
+	if (property->uiSkyObjectType == RE::BSSkyShaderProperty::SkyObject::SO_MOON)
+		permutationData.ExtraFeatureDescriptor |= isMoon;
 }
 
 void State::UpdateEffectShaderPermutation(RE::BSRenderPass* a_pass)

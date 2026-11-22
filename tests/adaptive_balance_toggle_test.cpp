@@ -65,6 +65,18 @@ struct LinearLighting
 
 namespace RE
 {
+	struct BSShaderProperty
+	{};
+	struct BSSkyShaderProperty : BSShaderProperty
+	{
+		enum class SkyObject
+		{
+			SO_MOON,
+			SO_SUN,
+			SO_CLOUDS
+		};
+		SkyObject uiSkyObjectType = SkyObject::SO_SUN;
+	};
 	struct NiAVObject
 	{
 		NiAVObject* parent = nullptr;
@@ -72,6 +84,7 @@ namespace RE
 	struct BSRenderPass
 	{
 		NiAVObject* geometry = nullptr;
+		BSShaderProperty* shaderProperty = nullptr;
 	};
 	struct NiColor
 	{
@@ -163,7 +176,9 @@ namespace globals
 		struct
 		{
 			uint32_t ExtraShaderDescriptor = 0;
+			uint32_t ExtraFeatureDescriptor = 0;
 		} permutationData;
+		void UpdateSkyShaderPermutation(RE::BSRenderPass* pass);
 		void UpdateEffectShaderPermutation(RE::BSRenderPass* pass);
 		bool menuOpen = false;
 		std::atomic<uint32_t> frameCountAtomic{ 1 };
@@ -1068,6 +1083,34 @@ void CheckAtmosphereMigrationAndValidation()
 	assert(!ValidateAdaptiveBalanceVisuals({ { "cloudBrightness", 1 }, { "unknown", 1 } }).empty());
 }
 
+void CheckMoonDrawScope()
+{
+	globals::State state;
+	constexpr auto moonFlag = static_cast<uint32_t>(globals::State::ExtraFeatureDescriptors::IsMoon);
+	constexpr uint32_t otherFeatures = ~(1u << 11);
+	static_assert((moonFlag & otherFeatures) == 0);
+	RE::BSSkyShaderProperty property;
+	RE::BSRenderPass pass{ nullptr, &property };
+	state.permutationData.ExtraShaderDescriptor = 0xFFFFFFFFu;
+	state.permutationData.ExtraFeatureDescriptor = otherFeatures;
+	for (const auto type : { RE::BSSkyShaderProperty::SkyObject::SO_MOON,
+			 RE::BSSkyShaderProperty::SkyObject::SO_SUN, RE::BSSkyShaderProperty::SkyObject::SO_CLOUDS }) {
+		property.uiSkyObjectType = type;
+		state.permutationData.ExtraFeatureDescriptor |= moonFlag;
+		state.UpdateSkyShaderPermutation(&pass);
+		assert(state.permutationData.ExtraFeatureDescriptor ==
+			   (otherFeatures | (type == RE::BSSkyShaderProperty::SkyObject::SO_MOON ? moonFlag : 0)));
+		assert(state.permutationData.ExtraShaderDescriptor == 0xFFFFFFFFu);
+	}
+	for (bool absentPass : { false, true }) {
+		pass.shaderProperty = nullptr;
+		state.permutationData.ExtraFeatureDescriptor |= moonFlag;
+		state.UpdateSkyShaderPermutation(absentPass ? nullptr : &pass);
+		assert(state.permutationData.ExtraFeatureDescriptor == otherFeatures);
+	}
+	std::cout << "Moon draw scope: native type, absent data, stale flags and unrelated flags passed\n";
+}
+
 void CheckAuroraDrawScope()
 {
 	globals::State state;
@@ -1118,6 +1161,8 @@ void CheckAppearanceProfiles()
 	auto legacyJson = defaultJson;
 	legacyJson.erase("auroraIntensity");
 	legacyJson.erase("auroraCurve");
+	legacyJson.erase("moonCurve");
+	legacyJson.erase("moonEdgeTrim");
 	assert(json(legacyJson.get<Settings>()) == defaultJson);
 	for (const auto& field : kScalars) {
 		assert(defaults.*field.member == field.neutral);
@@ -1186,6 +1231,29 @@ void CheckAppearanceProfiles()
 		balance.settings.globalProfile.advanced = false;
 		assert(balance.GetCommonBufferData().appearance.*field.member == 1.0f);
 	}
+	AdaptiveBrightness moons;
+	moons.settings.globalProfile.appearance.moonEdgeTrim = 0.75f;
+	AdaptiveBrightness::ProfileSettings moonDay, moonNight;
+	moonDay.advanced = moonNight.advanced = true;
+	moonNight.appearance.moonEdgeTrim = 1.0f;
+	moons.testProfileBlend = { &moonDay, &moonNight, 0.25f };
+	assert(Close(moons.GetCommonBufferData().appearance.moonEdgeTrim, 1.0f));
+	AdaptiveBrightness::LocationOverride moonLocation;
+	moonLocation.profile.advanced = true;
+	moonLocation.profile.appearance.moonEdgeTrim = 0.5f;
+	moons.testLocationLayers = { &moonLocation };
+	assert(Close(moons.GetCommonBufferData().appearance.moonEdgeTrim, 1.25f));
+	moonLocation.layered = true;
+	assert(Close(moons.GetCommonBufferData().appearance.moonEdgeTrim, 1.5f));
+	moonLocation.profile.appearance.moonEdgeTrim = 5.0f;
+	assert(moons.GetCommonBufferData().appearance.moonEdgeTrim == 5.0f);
+	moons.SetEnabled(false);
+	assert(moons.GetCommonBufferData().appearance.moonEdgeTrim == 0.0f);
+	moons.SetEnabled(true);
+	moons.testLocationLayers.clear();
+	moons.testProfileBlend = {};
+	moons.settings.globalProfile.advanced = false;
+	assert(moons.GetCommonBufferData().appearance.moonEdgeTrim == 0.0f);
 	for (const auto& field : kTints) {
 		assert(ValidateAdaptiveBalanceVisuals({ { "appearance", { { field.name, { 0.0, 0.5, 1.0 } } } } }).empty());
 		for (const auto& value : std::vector<json>{ 1.0, json::array({ 1, 1 }), json::array({ 1, 1, 1, 1 }), json::array({ 1, -0.1, 1 }), json::array({ 1, true, 1 }), json::array({ 1, field.maximum + 0.01, 1 }) })
@@ -1701,6 +1769,7 @@ int main()
 	CheckVolumetricClarity();
 	CheckGodrayContextOwnership();
 	CheckAuroraDrawScope();
+	CheckMoonDrawScope();
 	CheckAppearanceProfiles();
 	CheckSkyGradientOwnership();
 	CheckWeatherColors();

@@ -7,6 +7,7 @@
 #include "Common/AdaptiveBalanceColor.hlsli"
 #if defined(APPEARANCE_TEST)
 #	include "Common/EyeAppearance.hlsli"
+#	include "Common/MoonAppearance.hlsli"
 #endif
 #if defined(FIRE_TEST)
 #	include "Common/AdaptiveBalanceFire.hlsli"
@@ -38,6 +39,10 @@ RWTexture2D<float4> Result : register(u0);
 #if defined(EMISSIVE_TEST)
 	Result[id.xy] = float4(Color::EmitColor(color), 1.0);
 #elif defined(APPEARANCE_TEST)
+	if (appearanceParameters.x == 15) {
+		Result[id.xy] = MoonAppearance::Apply(float4(color, colors[id.x].a), appearanceControls.xy);
+		return;
+	}
 	float3 graded = color;
 	float3 original = color;
 	if (appearanceParameters.x == 0) {

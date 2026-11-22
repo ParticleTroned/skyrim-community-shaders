@@ -58,6 +58,8 @@ struct VS_OUTPUT
 };
 
 #ifdef VSHADER
+#	include "Common/SkyDepth.hlsli"
+
 cbuffer PerGeometry : register(b2)
 {
 #	if !defined(VR)
@@ -147,7 +149,7 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif
 
 	float4 skyClip = mul(WorldViewProj[eyeIndex], inputPosition);
-	vsout.Position = float4(skyClip.xy, FrameBuffer::FarPlaneClipZ(skyClip.w), skyClip.w);
+	vsout.Position = float4(skyClip.xy, SkyDepth::FarPlaneClipZ(skyClip.w, eyeIndex), skyClip.w);
 	vsout.WorldPosition = mul(World[eyeIndex], inputPosition);
 	vsout.PreviousWorldPosition = mul(PreviousWorld[eyeIndex], inputPosition);
 
@@ -203,6 +205,11 @@ cbuffer AlphaTestRefCB : register(b11)
 #	include "Common/MotionBlur.hlsli"
 #	include "Common/SharedData.hlsli"
 
+#	if defined(TEX) && !defined(DITHER) && !defined(CLOUDS) && !defined(MOONMASK) && !defined(TEXLERP) && !defined(OCCLUSION)
+#		include "Common/MoonAppearance.hlsli"
+#		define MOON_APPEARANCE
+#	endif
+
 #	if defined(CLOUD_SHADOWS)
 #		include "CloudShadows/CloudShadows.hlsli"
 #	endif
@@ -231,6 +238,9 @@ PS_OUTPUT main(PS_INPUT input)
 #	ifndef OCCLUSION
 #		ifndef TEXLERP
 	float4 baseColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
+#			ifdef MOON_APPEARANCE
+	baseColor = MoonAppearance::Apply(baseColor, input.TexCoord0.xy);
+#			endif
 #			if defined(HORIZFADE)
 	baseColor.xyz = AdaptiveBalanceAppearance::ApplyColor(baseColor.xyz, 1.0,
 		SharedData::adaptiveBalanceSettings.appearance.starsCurve, 1.0, 1.0.xxx);

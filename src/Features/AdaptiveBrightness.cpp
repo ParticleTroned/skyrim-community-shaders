@@ -1890,7 +1890,7 @@ namespace
 	void DrawAppearanceSettings(AdaptiveBalanceAppearanceSettings& appearance)
 	{
 		constexpr std::array groups{ "Direct and Ambient Lighting", "Fog and Clouds", "Sky Gradient",
-			"Stars", "Auroras", "Sky Static Mist", "Particles and Glow Sprites", "Godrays and Cloud Shadows", "Eyes",
+			"Stars", "Moons", "Auroras", "Sky Static Mist", "Particles and Glow Sprites", "Godrays and Cloud Shadows", "Eyes",
 			"Scene Colour", "Point Light Colour", "Material Colour", "Atmosphere Colour" };
 		MenuUI::SectionHeading("Appearance controls", "Gamma offsets are neutral at zero; negative values lift midtones and positive values darken them. Saturation is neutral at one. Point-light subtype adjustments compose with the shared Point Lights controls.");
 		for (const auto* group : groups) {
@@ -1901,6 +1901,8 @@ namespace
 					ImGui::TextWrapped("Specular Brightness adjusts eye highlights and reflections. Eye Brightness scales all eye lighting. One preserves the original appearance; zero removes that contribution. Applies to eye materials in the scene, including reflections.");
 				else if (std::string_view(group) == "Auroras")
 					ImGui::TextWrapped("Intensity scales aurora RGB brightness; zero removes its colour contribution while preserving alpha and the model's blend mode. Colour Curve shapes dim colours and HDR highlights before intensity. One preserves the original appearance. Applies to sky objects in the game's aurora slot, including replacement models.");
+				else if (std::string_view(group) == "Moons")
+					ImGui::TextWrapped("Colour Curve adjusts the visible moon textures; one preserves their colours. Edge Trim clears a percentage of each texture edge to remove border bleed; zero preserves the full texture. Try 0.75 for a thin border; larger values may cut into the artwork. These controls affect both moons without changing their phases or the moonlight on surfaces.");
 				else if (std::string_view(group) == "Godrays and Cloud Shadows")
 					ImGui::TextWrapped("Godray profile adjustments compose over the exterior or interior base in Global > Godrays. Scale 1 and colour contribution 0 preserve that base. Atmospheric Clarity controls broad haze separately. Cloud shadow strength adjusts the active Cloud Shadows feature.");
 				else if (std::string_view(group) == "Particles and Glow Sprites")

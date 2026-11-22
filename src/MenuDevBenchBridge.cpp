@@ -411,7 +411,7 @@ namespace
 		}
 		return {
 			{ "type", "object" }, { "minProperties", 1 }, { "additionalProperties", false },
-			{ "description", "Partial Global appearance update. Requires Global lightingAdvanced; omitted fields retain their saved values. RGB tints are three finite numeric channels. eyeSpecularBrightness scales eye highlights and reflections; eyeBrightness scales all eye lighting. Both accept 0..5, default 1, and preserve non-eye materials and previews. auroraIntensity (0..5) and auroraCurve (0.1..4) grade sky objects in the aurora slot, including replacements; both default to 1 and preserve alpha." },
+			{ "description", "Partial Global appearance update. Requires Global lightingAdvanced; omitted fields retain their saved values. RGB tints are three finite numeric channels. eyeSpecularBrightness scales eye highlights and reflections; eyeBrightness scales all eye lighting. Both accept 0..5, default 1, and preserve non-eye materials and previews. auroraIntensity (0..5) and auroraCurve (0.1..4) grade sky objects in the aurora slot, including replacements; both default to 1 and preserve alpha. moonCurve (0.1..4, default 1) grades native moon textures while preserving alpha. moonEdgeTrim (0..5 percent per edge, default 0) clears border RGBA; 0.75 matches the upstream border cleanup. Moon controls support SE/AE/VR and scene reflections, preserve non-moon draws and previews, and do not change moonlight on surfaces. Reverse-Z sky depth ordering remains independent of Visuals." },
 			{ "properties", std::move(properties) }
 		};
 	}
@@ -1963,6 +1963,8 @@ namespace MenuDevBenchBridge
 			                          " set_adaptive_balance_visuals accepts appearance.eyeSpecularBrightness and appearance.eyeBrightness in [0,5] (default 1). They scale eye highlights/reflections and overall eye lighting respectively, require Global lightingAdvanced, and remain neutral while Visuals is disabled.";
 			document["description"] = document["description"].get<std::string>() +
 			                          " set_adaptive_balance_visuals accepts appearance.auroraIntensity in [0,5] and appearance.auroraCurve in [0.1,4] (both default 1). They grade sky objects under the active aurora root, including replacement models, without changing alpha or other effects. Requires Global lightingAdvanced; neutral while Visuals is disabled and in object previews.";
+			document["description"] = document["description"].get<std::string>() +
+			                          " set_adaptive_balance_visuals accepts appearance.moonCurve in [0.1,4] (default 1) and appearance.moonEdgeTrim in [0,5] percent per texture edge (default 0). Curve preserves alpha; trim clears border RGBA, with 0.75 matching upstream cleanup. Applies only to native moon textures in SE/AE/VR and scene reflections. Requires Global lightingAdvanced; neutral while Visuals is disabled and in previews. Moonlight on surfaces is independent. Reverse-Z moon-mask depth ordering is always corrected when Reverse Z is active, regardless of Visuals.";
 			document["inputSchema"]["properties"]["depthOfField"] = MenuDepthOfFieldSettingsPolicy::Schema();
 			const auto dofValues = document["inputSchema"]["properties"]["depthOfField"]["properties"]["sceneDof"]["properties"]["values"];
 			const json liveDof = { { "oneOf", json::array({ dofValues, { { "type", "null" } } }) } };

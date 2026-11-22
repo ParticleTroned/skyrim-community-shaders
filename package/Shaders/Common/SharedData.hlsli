@@ -357,7 +357,9 @@ namespace SharedData
 		float eyeBrightness;
 		float auroraIntensity;
 		float auroraCurve;
-		float3 padding;
+		float moonCurve;
+		float moonEdgeTrim;
+		float padding;
 		float sceneGammaOffset;
 		float ambientGammaOffset;
 		float directionalGammaOffset;

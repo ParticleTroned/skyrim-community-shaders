@@ -99,6 +99,7 @@ namespace Permutation
 		static const int THLand5HasDisplacement = (1 << 5);
 		static const int THLandHasDisplacement = (1 << 9);
 		static const int TVMeshVariation = (1 << 10);
+		static const uint IsMoon = (1 << 11);
 	}
 
 	cbuffer PerShader : register(b4)

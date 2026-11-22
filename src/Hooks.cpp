@@ -1535,11 +1535,21 @@ namespace EffectExtensions
 
 namespace SkyExtensions
 {
+	struct BSSkyShader_SetupGeometry
+	{
+		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
+		{
+			globals::state->UpdateSkyShaderPermutation(pass);
+			func(shader, pass, renderFlags);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct BSSkyShader_RestoreGeometry
 	{
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
-			globals::state->RestoreSunGlareBindings();
+			globals::state->RestoreSkyShaderBindings();
 			func(shader, pass, renderFlags);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -2013,7 +2023,7 @@ void Hooks::CommitGrassDrawState()
 void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 {
 	// Release owned bindings before native state updates can replace their saved values.
-	globals::state->RestoreSunGlareBindings();
+	globals::state->RestoreSkyShaderBindings();
 	const auto callerRva = static_cast<uint32_t>(reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - REL::Module::get().base());
 	if (!ShouldRecordCSFramePhaseDiag()) {
 		CommitNativeGraphicsState(isCompute);
@@ -3460,6 +3470,7 @@ namespace Hooks
 		stl::write_thunk_call<TESWaterReflections_Update_Actor_GetLOSPosition>(REL::RelocationID(31373, 32160).address() + REL::Relocate(0x1AD, 0x1CA, 0x1ed));
 
 		logger::info("Installing SetupGeometry hooks");
+		stl::write_vfunc<0x6, SkyExtensions::BSSkyShader_SetupGeometry>(RE::VTABLE_BSSkyShader[0]);
 		stl::write_vfunc<0x7, SkyExtensions::BSSkyShader_RestoreGeometry>(RE::VTABLE_BSSkyShader[0]);
 		stl::write_vfunc<0x4, EffectExtensions::BSEffectShader_SetupMaterial>(RE::VTABLE_BSEffectShader[0]);
 		stl::write_vfunc<0x6, EffectExtensions::BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);

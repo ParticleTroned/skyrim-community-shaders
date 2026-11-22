@@ -51,7 +51,9 @@ struct AdaptiveBalanceAppearanceSettings
 	float eyeBrightness = 1.0f;
 	float auroraIntensity = 1.0f;
 	float auroraCurve = 1.0f;
-	float3 padding{};
+	float moonCurve = 1.0f;
+	float moonEdgeTrim = 0.0f;
+	float padding = 0.0f;
 	float sceneGammaOffset = 0.0f;
 	float ambientGammaOffset = 0.0f;
 	float directionalGammaOffset = 0.0f;
@@ -93,6 +95,8 @@ static_assert(offsetof(AdaptiveBalanceAppearanceSettings, eyeSpecularBrightness)
 static_assert(offsetof(AdaptiveBalanceAppearanceSettings, eyeBrightness) == 200);
 static_assert(offsetof(AdaptiveBalanceAppearanceSettings, auroraIntensity) == 204);
 static_assert(offsetof(AdaptiveBalanceAppearanceSettings, auroraCurve) == 208);
+static_assert(offsetof(AdaptiveBalanceAppearanceSettings, moonCurve) == 212);
+static_assert(offsetof(AdaptiveBalanceAppearanceSettings, moonEdgeTrim) == 216);
 
 namespace AdaptiveBalanceAppearance
 {
@@ -155,6 +159,8 @@ namespace AdaptiveBalanceAppearance
 		ScalarField{ "cloudOpacity", "Cloud Opacity", "Fog and Clouds", &Settings::cloudOpacity, 0.0f, 2.0f, 1.0f },
 		ScalarField{ "starsIntensity", "Stars Intensity", "Stars", &Settings::starsIntensity, 0.0f, 5.0f, 1.0f },
 		ScalarField{ "starsCurve", "Stars Colour Curve", "Stars", &Settings::starsCurve, 0.1f, 4.0f, 1.0f },
+		ScalarField{ "moonCurve", "Moon Colour Curve", "Moons", &Settings::moonCurve, 0.1f, 4.0f, 1.0f },
+		ScalarField{ "moonEdgeTrim", "Moon Edge Trim (%)", "Moons", &Settings::moonEdgeTrim, 0.0f, 5.0f, 0.0f },
 		ScalarField{ "auroraIntensity", "Aurora Intensity", "Auroras", &Settings::auroraIntensity, 0.0f, 5.0f, 1.0f },
 		ScalarField{ "auroraCurve", "Aurora Colour Curve", "Auroras", &Settings::auroraCurve, 0.1f, 4.0f, 1.0f },
 		ScalarField{ "skyTopIntensity", "Upper Sky Intensity", "Sky Gradient", &Settings::skyTopIntensity, 0.0f, 5.0f, 1.0f },

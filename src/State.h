@@ -20,7 +20,7 @@ using json = nlohmann::json;
 
 #include <FeatureBuffer.h>
 
-#include "Utils/SunGlareBindings.h"
+#include "Utils/SkyShaderBindings.h"
 #include <Hooks.h>
 
 struct Feature;
@@ -113,8 +113,8 @@ public:
 	RE::BSShader* currentShader = nullptr;
 	// Only an explicitly bound custom pixel stage proves which shared resources it consumes.
 	RE::BSShader::Type selectedCustomPixelShaderType = RE::BSShader::Type::None;
-	/** @brief Release sun-glare vertex bindings before the engine restores geometry state. */
-	void RestoreSunGlareBindings() { sunGlareBindings.reset(); }
+	/** @brief Release owned sky vertex bindings before the engine restores geometry state. */
+	void RestoreSkyShaderBindings() { skyShaderBindings.reset(); }
 	std::string adapterDescription = "";
 
 	uint32_t currentVertexDescriptor = 0;
@@ -398,7 +398,8 @@ public:
 		THLand5HasDisplacement = 1 << 5,
 		ETMaterialModel = 0b111 << 6,
 		THLandHasDisplacement = 1 << 9,
-		TVMeshVariation = 1 << 10
+		TVMeshVariation = 1 << 10,
+		IsMoon = 1 << 11
 	};
 
 	bool inWorld = false;
@@ -442,6 +443,8 @@ public:
 	 * @param a_pass Lighting render pass to inspect.
 	 */
 	void UpdateLightingShaderPermutation(RE::BSRenderPass* a_pass);
+	/** Identifies moon geometry from the native sky type and clears stale identification on every sky draw. */
+	void UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass);
 	/** Flags sky-object draws under the active sky's aurora root; clears stale flags on every effect draw. */
 	void UpdateEffectShaderPermutation(RE::BSRenderPass* a_pass);
 	bool HasDirectionalShadows() const;
@@ -616,7 +619,7 @@ public:
 	}
 
 private:
-	std::optional<SunGlare::ScopedBindings> sunGlareBindings;
+	std::optional<SkyShader::ScopedBindings> skyShaderBindings;
 	/** Uses current world samples or the no-water sentinel for the shared upload. */
 	void UpdateWaterData(SharedDataCB& a_data, bool a_inWorld);
 	// Render-thread samples are camera-relative and cannot outlive their frame or eye-0 origin.

@@ -48,6 +48,24 @@ try {
 		}
 	} cleanup{ root };
 	std::filesystem::create_directories(root);
+	{
+		const Json settings{ { "EnableSkin", false }, { "EnableSkinDetail", true }, { "UseSSS", true },
+			{ "F0", .0278f }, { "BaseColorMultiplier", 1.f }, { "SSSAmount", .8f }, { "WetResponse", .7f },
+			{ "WetParams", { 512.f, .7f, 10.f, 4.f } }, { "FutureField", 9 } };
+		const auto appearance = SelectDomain("Skin", settings, SettingsDomain::Appearance);
+		Require(HasProfileSettings("Skin") && appearance.size() == 7 && !appearance.contains("EnableSkin") && !appearance.contains("FutureField"),
+			"Advanced Skin packs share reviewed appearance and retain master/local settings");
+		const auto changed = ReplaceAppearance("Skin", settings, Json{ { "F0", .05f }, { "WetParams", { 128.f, .8f, 8.f, 2.f } } });
+		Require(changed["EnableSkin"] == false && changed["FutureField"] == 9 && changed["F0"] == .05f, "Skin appearance changes preserve the performance switch and local fields");
+		const Json skinSchemas{ { "Skin", settings } };
+		LookPack skinPack;
+		skinPack.id = "Skin-look";
+		skinPack.baseline["Skin"] = appearance;
+		std::string error;
+		Require(WriteLookPack(root, skinPack, skinSchemas, error), "Advanced Skin pack exports");
+		const auto restored = ReadLookPack(root, skinPack.id, skinSchemas);
+		Require(restored.IsCompatible() && restored.baseline["Skin"] == appearance, "Advanced Skin pack round trip preserves wetness and lighting");
+	}
 	const Json schemas = { { "Advanced", { { "Refraction Scale", 1.f } } }, { "Skylighting", { { "EnableSkylighting", true }, { "ProbeGridQuality", 2 }, { "MinDiffuseVisibility", .3f }, { "MinSpecularVisibility", .4f } } } };
 	Save(root / "Example" / "preset.json", { { "name", "Example" }, { "type", "CS" }, { "description", "Shared profile" } });
 	Save(root / "Example" / "Baseline" / "Skylighting.json", { { "EnableSkylighting", false }, { "ProbeGridQuality", 0 }, { "MinDiffuseVisibility", .7f } });

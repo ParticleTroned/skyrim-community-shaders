@@ -15,6 +15,7 @@ namespace Presets
 		const std::map<std::string_view, std::set<std::string_view>> profileKeys{
 			{ "AdaptiveBrightness", { "enabled", "bloomEnabled", "useAmbientEffectLighting", "godrayFinalBrightness", "volumetricClarity", "godrays", "moonReflectionStrength", "dayStartHour", "nightStartHour", "transitionHours", "globalProfile", "depthOfField", "profiles", "locationOverrides" } },
 			{ "SubsurfaceScattering", { "EnableSubsurfaceScattering", "EnableCharacterLighting", "CharacterLightingStrength", "SSMode", "BaseProfile", "HumanProfile", "BurleySamples", "MeanFreePathBase", "MeanFreePathHuman", "HumanMaleSSSIntensity", "HumanMaleSSSSaturation", "HumanMaleSSSBrightness", "HumanMaleSSSBaseSaturation", "HumanFemaleSSSIntensity", "HumanFemaleSSSSaturation", "HumanFemaleSSSBrightness", "HumanFemaleSSSBaseSaturation" } },
+			{ "Skin", { "EnableSkin", "EnableSkinDetail", "UseSSS", "SkinMainRoughness", "SkinSecondRoughness", "SkinSpecularTexMultiplier", "SecondarySpecularStrength", "F0", "BaseColorMultiplier", "PhysicalMainRoughnessMultiplier", "PhysicalSecondRoughnessMultiplier", "PhysicalSpecularStrength", "ExtraEdgeRoughness", "FuzzStrength", "FuzzRoughness", "FuzzF0", "Translucency", "sssWidth", "SSSAmount", "SkinDetailStrength", "SkinDetailTiling", "BodyTilingMultiplier", "ExtraSkinWetness", "WetResponse", "WetFadeTime", "StartSweat", "FullSweat", "WetParams" } },
 			{ "HairSpecular", { "Enabled", "HairGlossiness", "SpecularMult", "DiffuseMult", "EnableTangentShift", "PrimaryTangentShift", "SecondaryTangentShift", "HairSaturation", "SpecularIndirectMult", "DiffuseIndirectMult", "BaseColorMult", "Transmission", "EnableSelfShadow", "SelfShadowStrength", "SelfShadowExponent", "SelfShadowScale", "HairMode" } },
 			{ "CloudShadows", { "Enabled", "Opacity" } },
 			{ "FoliageLighting", { "EnableFoliageScattering", "EnableFoliageAmbientBoost", "EnableFoliageAmbientFlip", "FoliageAmbientAmount", "EnableGrassScattering" } },
@@ -185,6 +186,8 @@ namespace Presets
 				return SettingsDomain::Performance;
 			return SettingsDomain::Appearance;
 		}
+		if (feature == "Skin")
+			return key == "EnableSkin" ? SettingsDomain::Performance : SettingsDomain::Appearance;
 		if (feature == "SubsurfaceScattering")
 			return key == "BurleySamples" ? SettingsDomain::Performance : SettingsDomain::Appearance;
 		if (OneOf(feature, { "HairSpecular", "CloudShadows", "FoliageLighting", "GrassLighting", "LinearLighting",

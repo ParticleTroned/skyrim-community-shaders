@@ -1941,6 +1941,10 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_skin_controls_under_test.h"
             "${_settings_ui_dir}/settings_skin_under_test.h"
             "${_settings_ui_dir}/settings_skin_fields_under_test.h"
+            "${_settings_ui_dir}/settings_advanced_skin_fields_under_test.h"
+            "${_settings_ui_dir}/settings_advanced_skin_metadata_under_test.h"
+            "${_settings_ui_dir}/settings_advanced_skin_save_under_test.h"
+            "${_settings_ui_dir}/settings_advanced_skin_under_test.h"
             "${_settings_ui_dir}/settings_ui_inventory_under_test.h"
             "${_settings_ui_dir}/settings_shell_under_test.h"
             "${_settings_ui_dir}/settings_capture_feedback_under_test.h"
@@ -1974,6 +1978,8 @@ if(BUILD_CONTROLLER_TESTS)
             src/Features/FoliageLighting.h
             src/Features/SubsurfaceScattering.cpp
             src/Features/SubsurfaceScattering.h
+            src/Features/Skin.cpp
+            src/Features/Skin.h
             src/Utils/UI.cpp
             src/Utils/WinApi.cpp
             src/Features/Upscaling.cpp
@@ -2016,6 +2022,10 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_skin_controls_under_test.h"
             "${_settings_ui_dir}/settings_skin_under_test.h"
             "${_settings_ui_dir}/settings_skin_fields_under_test.h"
+            "${_settings_ui_dir}/settings_advanced_skin_fields_under_test.h"
+            "${_settings_ui_dir}/settings_advanced_skin_metadata_under_test.h"
+            "${_settings_ui_dir}/settings_advanced_skin_save_under_test.h"
+            "${_settings_ui_dir}/settings_advanced_skin_under_test.h"
             "${_settings_ui_dir}/settings_ui_inventory_under_test.h"
             "${_settings_ui_dir}/settings_shell_under_test.h"
             "${_settings_ui_dir}/settings_capture_feedback_under_test.h"

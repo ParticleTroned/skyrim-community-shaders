@@ -690,6 +690,26 @@ struct SubsurfaceScattering : Feature
 };
 #include "Utils/StringUtils.h"
 #include "settings_skin_under_test.h"
+namespace AdvancedSkinFixture
+{
+	struct Skin
+	{
+#include "settings_advanced_skin_fields_under_test.h"
+		bool wetnessActive = true;
+		int reloads = 0;
+		bool IsWetnessEnabled() const { return wetnessActive; }
+		void ReloadTextures() { ++reloads; }
+		void DrawSettings();
+		void LoadSettings(json&);
+		void SaveSettings(json&);
+		void RestoreDefaultSettings();
+		json CapturePerformanceSettingsState() const;
+		void RestorePerformanceToggleState(const json&);
+	};
+#include "settings_advanced_skin_metadata_under_test.h"
+#include "settings_advanced_skin_save_under_test.h"
+#include "settings_advanced_skin_under_test.h"
+}
 #include "settings_ui_inventory_under_test.h"
 namespace
 {
@@ -3382,6 +3402,61 @@ int main()
 			require(toggle == 1, "integer-backed toggles normalize the full value");
 			click(toggleBounds.GetCenter(), drawToggle);
 			require(toggle == 0, "integer-backed toggles can clear values outside the low byte");
+		}
+
+		{
+			AdvancedSkinFixture::Skin skin;
+			json baseline;
+			skin.SaveSettings(baseline);
+			for (const bool enabled : { false, true }) {
+				skin.settings.EnableSkin = enabled;
+				for (const bool effects : { false, true }) {
+					skin.settings.EnableSkinDetail = skin.settings.UseSSS = effects;
+					skin.wetnessActive = effects;
+					for (const char* section : { "overview", "lighting", "detail", "transmission", "wetness" }) {
+						MenuUI::SettingsPage::Select("Skin", section);
+						std::string text;
+						const auto draw = [&] {
+							shadowControls.clear();
+							ImGui::LogToBuffer();
+							skin.DrawSettings();
+							text = GImGui->LogBuffer.c_str();
+							ImGui::LogFinish();
+						};
+						frame(draw);
+						frame(draw);
+						require(text.find("Enable Advanced Skin") == text.npos, "Advanced Skin master control belongs only in the shared header");
+						for (const auto& field : AdvancedSkinFixture::Numbers) {
+							if (std::string_view(section) != field.section)
+								continue;
+							const auto& control = shadowControls.at(field.label);
+							const std::string_view path(field.path);
+							const bool inactive = !enabled || (!effects && (std::string_view(section) == "detail" ||
+																			   std::string_view(section) == "wetness" || path == "/Translucency" || path == "/sssWidth"));
+							require(control.disabled == inactive, "Advanced Skin controls respect master and effect availability without disabling diffusion with transmission");
+							require(control.minimum == field.minimum && control.maximum == field.maximum, "Advanced Skin numeric controls retain validated ranges");
+							require(field.help && *field.help, "Advanced Skin controls explain their effect in tooltips");
+						}
+					}
+				}
+			}
+			skin.LoadSettings(baseline);
+			skin.settings.F0 = .05f;
+			skin.settings.WetParams.x = 128;
+			const auto captured = skin.CapturePerformanceSettingsState();
+			skin.RestoreDefaultSettings();
+			skin.RestorePerformanceToggleState(captured);
+			require(skin.settings.F0 == .05f && skin.settings.WetParams.x == 128, "Advanced Skin tuning rollback preserves appearance and wetness");
+			skin.RestorePerformanceToggleState(false);
+			require(!skin.settings.EnableSkin && skin.settings.F0 == .05f, "Advanced Skin master switch preserves personal tuning");
+			json invalid{ { "WetParams", { 1, 2 } } };
+			bool rejected = false;
+			try {
+				skin.LoadSettings(invalid);
+			} catch (const std::exception&) {
+				rejected = true;
+			}
+			require(rejected && skin.settings.F0 == .05f, "Invalid Advanced Skin settings cannot partially replace current values");
 		}
 
 		{

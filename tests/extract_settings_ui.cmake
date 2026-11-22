@@ -205,3 +205,19 @@ file(READ "${PROJECT_ROOT}/src/Menu/PerformanceResultsUI.cpp" source)
 extract_between("${source}" "\t\tvoid ContextLine(" "\n\t}\n\n\tvoid Draw()" "settings_results_under_test.h")
 file(READ "${OUTPUT_DIRECTORY}/settings_results_under_test.h" body)
 file(WRITE "${OUTPUT_DIRECTORY}/settings_results_under_test.h" "namespace MenuUI::PerformanceResultsPage { namespace {\n${body}\n} }\n")
+
+# Exercise Advanced Skin's production serialization, controls and shared page layout.
+file(READ "${PROJECT_ROOT}/src/Features/Skin.h" source)
+extract_between("${source}" "	struct Settings
+" "
+	struct alignas(16) SkinData" "settings_advanced_skin_fields_under_test.h")
+file(READ "${PROJECT_ROOT}/src/Features/Skin.cpp" source)
+extract_between("${source}" "namespace
+{" "
+std::pair<std::string, std::vector<std::string>> Skin::GetFeatureSummary()" "settings_advanced_skin_metadata_under_test.h")
+extract_between("${source}" "void Skin::LoadSettings(" "
+void Skin::DrawPerformanceSettings(" "settings_advanced_skin_save_under_test.h")
+string(REPLACE "Util::Widgets::Checkbox(" "TrackedShadowCheckbox(" source "${source}")
+string(REPLACE "Util::Widgets::SliderFloat(" "TrackedShadowSlider(" source "${source}")
+extract_between("${source}" "void Skin::DrawSettings()" "
+Skin::SkinData Skin::GetCommonBufferData()" "settings_advanced_skin_under_test.h")

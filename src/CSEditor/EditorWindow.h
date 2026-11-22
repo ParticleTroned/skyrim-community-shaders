@@ -269,6 +269,9 @@ public:
 	// Navigation helpers for weather-controlled settings
 	void OpenWeatherFeatureSetting(RE::TESWeather* weather, const std::string& featureName, const std::string& settingName);
 
+	/** Record a successful feature-only weather save without accepting unrelated editor drafts. */
+	void RecordWeatherFeatureSave(WeatherWidget& widget, const std::string& featureName, const json& value);
+
 	~EditorWindow();
 
 private:

@@ -9,14 +9,13 @@
 #include "Feature.h"
 #include "Globals.h"
 #include "State.h"
-#include "Utils/FileSystem.h"
 #include "Utils/Form.h"
+#include "WeatherFeatureOverrides.h"
 #include "WeatherManager.h"
 #include "WeatherVariableRegistry.h"
 
 #include <algorithm>
 #include <chrono>
-#include <filesystem>
 #include <format>
 #include <limits>
 #include <map>
@@ -167,12 +166,6 @@ namespace
 		return result;
 	}
 
-	std::filesystem::path GetWeatherPath(RE::TESWeather* a_weather)
-	{
-		return Util::PathHelpers::GetCommunityShaderPath() / "Weathers" /
-		       (std::string(WeatherManager::GetWeatherKey(a_weather)) + ".json");
-	}
-
 	CSX::WeatherAPI::ValueKind GetValueKind(const json& a_value)
 	{
 		if (a_value.is_boolean())
@@ -190,33 +183,6 @@ namespace
 		return CSX::WeatherAPI::ValueKind::kUnknown;
 	}
 
-	bool ReadWeatherAttachment(RE::TESWeather* a_weather, json& a_root, std::string& a_error)
-	{
-		const auto result = Util::FileHelpers::ReadJsonFile(GetWeatherPath(a_weather), a_root, a_error);
-		if (result == Util::FileHelpers::JsonFileReadResult::NotFound) {
-			a_root = json::object();
-			return true;
-		}
-		if (result != Util::FileHelpers::JsonFileReadResult::Success)
-			return false;
-		if (!a_root.is_object()) {
-			a_error = "weather attachment root is not an object";
-			return false;
-		}
-		return true;
-	}
-
-	std::map<std::string, json> ExtractFeatureSettings(const json& a_root)
-	{
-		std::map<std::string, json> result;
-		const auto found = a_root.find("featureSettings");
-		if (found == a_root.end() || !found->is_object())
-			return result;
-		for (const auto& [name, value] : found->items())
-			result.emplace(name, value);
-		return result;
-	}
-
 	bool ReadPersistedOverride(
 		RE::TESWeather* a_weather,
 		std::string_view a_featureName,
@@ -225,7 +191,7 @@ namespace
 		std::string& a_error)
 	{
 		json root;
-		if (!ReadWeatherAttachment(a_weather, root, a_error))
+		if (!WeatherFeatureOverrides::Read(a_weather, root, a_error))
 			return false;
 		a_present = false;
 		a_value = json();
@@ -248,43 +214,7 @@ namespace
 			a_error = std::format("valueJson is invalid JSON: {}", e.what());
 			return false;
 		}
-		if (!a_value.is_object()) {
-			a_error = "valueJson must encode an object";
-			return false;
-		}
-		const auto enabled = a_value.find("__enabled");
-		if (enabled == a_value.end() || !enabled->is_boolean()) {
-			a_error = "valueJson.__enabled is required and must be boolean";
-			return false;
-		}
-		try {
-			a_feature->NormalizeWeatherSettings(a_value);
-		} catch (const std::exception& e) {
-			a_error = std::format("feature normalization failed: {}", e.what());
-			return false;
-		}
-		auto* featureRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton()->GetFeatureRegistry(a_feature->GetShortName());
-		if (!featureRegistry) {
-			a_error = "feature has no registered weather variables";
-			return false;
-		}
-		std::map<std::string, const WeatherVariables::IWeatherVariable*> variables;
-		for (const auto& variable : featureRegistry->GetVariables())
-			variables.emplace(variable->GetName(), variable.get());
-		for (const auto& [name, value] : a_value.items()) {
-			if (name == "__enabled")
-				continue;
-			const auto found = variables.find(name);
-			if (found == variables.end()) {
-				a_error = std::format("unknown weather variable '{}.{}'", a_feature->GetShortName(), name);
-				return false;
-			}
-			if (!found->second->IsValidJsonValue(value)) {
-				a_error = std::format("invalid value for weather variable '{}.{}'", a_feature->GetShortName(), name);
-				return false;
-			}
-		}
-		return true;
+		return WeatherFeatureOverrides::Prepare(a_feature, a_value, a_error);
 	}
 
 	class WeatherService
@@ -736,38 +666,13 @@ namespace
 				}
 			}
 			auto* manager = WeatherManager::GetSingleton();
-			json persistedRoot;
 			std::map<std::string, json> persistedSettings;
 			bool persistedChanged = false;
 			if ((a_mutation.flags & CSX::WeatherAPI::kMutationPersist) != 0) {
-				std::string error;
-				if (!ReadWeatherAttachment(a_weather, persistedRoot, error)) {
-					a_message = std::format("failed to read weather attachment: {}", error);
+				const auto* value = a_mutation.action == CSX::WeatherAPI::MutationAction::kSetFeatureOverride ? &normalized : nullptr;
+				if (!WeatherFeatureOverrides::Save(a_weather, a_feature->GetShortName(), value,
+						persistedSettings, persistedChanged, a_message))
 					return Status::kPersistenceFailed;
-				}
-				auto& featureSettings = persistedRoot["featureSettings"];
-				if (featureSettings.is_null())
-					featureSettings = json::object();
-				if (!featureSettings.is_object()) {
-					a_message = "weather attachment featureSettings is not an object";
-					return Status::kPersistenceFailed;
-				}
-				const auto persistedIt = featureSettings.find(a_feature->GetShortName());
-				if (a_mutation.action == CSX::WeatherAPI::MutationAction::kSetFeatureOverride) {
-					persistedChanged = persistedIt == featureSettings.end() || *persistedIt != normalized;
-					featureSettings[a_feature->GetShortName()] = normalized;
-				} else {
-					persistedChanged = persistedIt != featureSettings.end();
-					featureSettings.erase(a_feature->GetShortName());
-				}
-				if (persistedChanged) {
-					Util::FileHelpers::EnsureDirectoryExists(GetWeatherPath(a_weather).parent_path());
-					if (!Util::FileHelpers::WriteTextFileAtomic(GetWeatherPath(a_weather), persistedRoot.dump(2), error)) {
-						a_message = std::format("failed to persist weather attachment: {}", error);
-						return Status::kPersistenceFailed;
-					}
-				}
-				persistedSettings = ExtractFeatureSettings(persistedRoot);
 				a_persisted = true;
 			}
 

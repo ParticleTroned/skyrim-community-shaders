@@ -4634,6 +4634,14 @@ if(BUILD_CONTROLLER_TESTS)
             LABELS "ControllerTests"
             ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
     )
+    add_test(
+        NAME VisualsWeather
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/visuals_weather_test.py" --json-include
+            "$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
+    )
+    set_tests_properties(VisualsWeather PROPERTIES LABELS "ControllerTests")
     add_controller_test(
         camera_reprojection_test
         CameraReprojection

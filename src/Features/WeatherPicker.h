@@ -1,6 +1,8 @@
 #pragma once
 
 #include "OverlayFeature.h"
+#include "Utils/WeatherFilter.h"
+#include <span>
 
 struct WeatherPicker : OverlayFeature
 {
@@ -76,6 +78,9 @@ public:
 		bool PositionSet = false;
 	} WeatherDetailsWindow;
 
+	/** Loaded weather records in the picker's stable display order; browsing never changes weather. */
+	static std::span<RE::TESWeather* const> GetWeatherCatalog();
+
 	static ImVec4 GetWeatherTypeColor(RE::TESWeather* weather);
 	static bool RenderMultiColorWeatherName(RE::TESWeather* weather, const std::string& weatherName);
 	static ImVec4 GetWeatherFlagColor(RE::TESWeather::WeatherDataFlag flag);
@@ -89,16 +94,14 @@ private:
 	static void DrawWeatherStatusPanel();
 
 	static constexpr float WIND_DIRECTION_OFFSET = 30.5f;
-	static constexpr uint32_t ALL_WEATHER_FLAGS = 0x7F;
-	static constexpr uint32_t UNCLASSIFIED_FLAG = 0x40;
 
 	static inline bool s_dataAvailable = false;
 	static inline bool s_weathersLoaded = false;
 	static inline std::vector<RE::TESWeather*> s_allWeathers;
 	static inline std::vector<RE::TESWeather*> s_filteredWeathers;
 	static inline int s_selectedWeatherIdx = -1;
-	static inline uint32_t s_weatherFlagFilter = ALL_WEATHER_FLAGS;
-	static inline uint32_t s_lastWeatherFlagFilter = UNCLASSIFIED_FLAG;
+	static inline uint32_t s_weatherFlagFilter = Util::WeatherFilter::All;
+	static inline uint32_t s_lastWeatherFlagFilter = Util::WeatherFilter::Unclassified;
 	static inline bool s_accelerateWeatherChange = true;
 	static inline bool s_transientAcceleratedWeatherPreview = false;
 	static inline RE::TESWeather* s_cachedLastWeather = nullptr;

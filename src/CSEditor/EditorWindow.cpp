@@ -1409,6 +1409,13 @@ void EditorWindow::OpenWeatherFeatureSetting(RE::TESWeather* weather, const std:
 	}
 }
 
+void EditorWindow::RecordWeatherFeatureSave(WeatherWidget& widget, const std::string& featureName, const json& value)
+{
+	widget.settings.featureSettings[featureName] = value;
+	widget.originalSettings.featureSettings[featureName] = value;
+	InvalidateJsonAttachmentCache(&widget);
+}
+
 EditorWindow::~EditorWindow()
 {
 	delete tempTexture;

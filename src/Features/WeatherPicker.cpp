@@ -7,6 +7,7 @@
 #include "Util.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
+#include "Utils/WeatherFilter.h"
 #include "WeatherManager.h"
 
 #include "CSEditor.h"
@@ -26,31 +27,19 @@ namespace
 	constexpr const char* TKEY(const char* a_key) noexcept { return a_key; }
 	constexpr const char* T(const char*, const char* a_fallback) noexcept { return a_fallback; }
 
-	struct WeatherFlagInfo
-	{
-		RE::TESWeather::WeatherDataFlag flag;
-		std::string_view canonicalName;
-	};
-
-	constexpr std::array<WeatherFlagInfo, 6> kClassifiedWeatherFlags = { {
-		{ RE::TESWeather::WeatherDataFlag::kPleasant, "Pleasant" },
-		{ RE::TESWeather::WeatherDataFlag::kCloudy, "Cloudy" },
-		{ RE::TESWeather::WeatherDataFlag::kRainy, "Rainy" },
-		{ RE::TESWeather::WeatherDataFlag::kSnow, "Snow" },
-		{ RE::TESWeather::WeatherDataFlag::kPermAurora, "Aurora" },
-		{ RE::TESWeather::WeatherDataFlag::kAuroraFollowsSun, "Aurora Sun" },
-	} };
+	using WeatherFlagInfo = Util::WeatherFilter::Category;
+	using Util::WeatherFilter::Classified;
 
 	const WeatherFlagInfo* FindWeatherFlagInfo(RE::TESWeather::WeatherDataFlag flag)
 	{
-		auto it = std::ranges::find(kClassifiedWeatherFlags, flag, &WeatherFlagInfo::flag);
-		return it != kClassifiedWeatherFlags.end() ? &*it : nullptr;
+		auto it = std::ranges::find(Classified, flag, &WeatherFlagInfo::flag);
+		return it != Classified.end() ? &*it : nullptr;
 	}
 
 	const WeatherFlagInfo* FindWeatherFlagInfo(std::string_view canonicalName)
 	{
-		auto it = std::ranges::find(kClassifiedWeatherFlags, canonicalName, &WeatherFlagInfo::canonicalName);
-		return it != kClassifiedWeatherFlags.end() ? &*it : nullptr;
+		auto it = std::ranges::find(Classified, canonicalName, &WeatherFlagInfo::canonicalName);
+		return it != Classified.end() ? &*it : nullptr;
 	}
 
 	const char* GetWeatherFilterLabel(const WeatherFlagInfo& info)
@@ -519,19 +508,19 @@ void WeatherPicker::RenderWeatherControls(RE::Sky* sky)
 
 	ImGui::Text("%s", T(TKEY("filter_by_weather_type"), "Filter by Weather Type:"));
 	if (ImGui::Button(T(TKEY("select_all"), "Select All"))) {
-		s_weatherFlagFilter = ALL_WEATHER_FLAGS;  // All weather flags (bits 0-6, including unclassified)
+		s_weatherFlagFilter = Util::WeatherFilter::All;  // All weather flags (bits 0-6, including unclassified)
 	}
 	ImGui::SameLine();
 	if (ImGui::Button(T(TKEY("clear_all"), "Clear All"))) {
 		s_weatherFlagFilter = 0x00;  // No flags
 	}
 	float filterWidth = 0;
-	for (const auto& filter : kClassifiedWeatherFlags)
+	for (const auto& filter : Classified)
 		filterWidth = std::max(filterWidth, ImGui::CalcTextSize(GetWeatherFilterLabel(filter)).x);
 	filterWidth = filterWidth * 14.0f / 12.0f + Util::Widgets::CheckboxSize() + ImGui::GetFontSize() * 2;
 	{
-		MenuUI::DetailGrid filters("WeatherFilters", static_cast<int>(kClassifiedWeatherFlags.size()) + 1, filterWidth);
-		for (const auto& filter : kClassifiedWeatherFlags) {
+		MenuUI::DetailGrid filters("WeatherFilters", static_cast<int>(Classified.size()) + 1, filterWidth);
+		for (const auto& filter : Classified) {
 			filters.Next();
 			const auto flag = static_cast<uint32_t>(filter.flag);
 			bool enabled = (s_weatherFlagFilter & flag) == flag;
@@ -541,9 +530,9 @@ void WeatherPicker::RenderWeatherControls(RE::Sky* sky)
 			ImGui::PopStyleColor();
 		}
 		filters.Next();
-		bool unclassified = (s_weatherFlagFilter & UNCLASSIFIED_FLAG) != 0;
+		bool unclassified = (s_weatherFlagFilter & Util::WeatherFilter::Unclassified) != 0;
 		if (Util::Widgets::Checkbox(T(TKEY("none_filter"), "None"), &unclassified))
-			s_weatherFlagFilter = unclassified ? s_weatherFlagFilter | UNCLASSIFIED_FLAG : s_weatherFlagFilter & ~UNCLASSIFIED_FLAG;
+			s_weatherFlagFilter = unclassified ? s_weatherFlagFilter | Util::WeatherFilter::Unclassified : s_weatherFlagFilter & ~Util::WeatherFilter::Unclassified;
 		Util::AddTooltip(T(TKEY("none_filter_tooltip_0"), "Shows weathers that are not classified under any specific category."));
 	}
 
@@ -769,42 +758,18 @@ void WeatherPicker::LoadAllWeathers()
 	}
 }
 
+std::span<RE::TESWeather* const> WeatherPicker::GetWeatherCatalog()
+{
+	EnsureWeatherListLoaded();
+	return s_allWeathers;
+}
+
 void WeatherPicker::UpdateFilteredWeathers()
 {
 	s_filteredWeathers.clear();
-	for (auto weather : s_allWeathers) {
-		bool shouldInclude = false;
-
-		// Check if all filters are selected (0x7F = all 7 bits)
-		if (s_weatherFlagFilter == ALL_WEATHER_FLAGS) {
-			shouldInclude = true;
-		} else {
-			// Check regular weather flags
-			uint32_t weatherFlags = weather->data.flags.underlying();
-			if ((weatherFlags & (s_weatherFlagFilter & 0x3F)) != 0) {
-				shouldInclude = true;
-			}
-
-			// Check for None filter (bit 6) - includes weathers that don't match any of our tracked flags
-			if (s_weatherFlagFilter & UNCLASSIFIED_FLAG) {
-				// Define the mask for all the specific weather flags we track
-				uint32_t trackedFlags = static_cast<uint32_t>(RE::TESWeather::WeatherDataFlag::kPleasant) |
-				                        static_cast<uint32_t>(RE::TESWeather::WeatherDataFlag::kCloudy) |
-				                        static_cast<uint32_t>(RE::TESWeather::WeatherDataFlag::kRainy) |
-				                        static_cast<uint32_t>(RE::TESWeather::WeatherDataFlag::kSnow) |
-				                        static_cast<uint32_t>(RE::TESWeather::WeatherDataFlag::kPermAurora) |
-				                        static_cast<uint32_t>(RE::TESWeather::WeatherDataFlag::kAuroraFollowsSun);
-
-				// Include if weather has no flags or only has flags we don't track
-				if ((weatherFlags & trackedFlags) == 0) {
-					shouldInclude = true;
-				}
-			}
-		}
-
-		if (shouldInclude) {
+	for (auto* weather : s_allWeathers) {
+		if (Util::WeatherFilter::Matches(weather->data.flags.underlying(), s_weatherFlagFilter))
 			s_filteredWeathers.push_back(weather);
-		}
 	}
 }
 

@@ -28,6 +28,8 @@
 #	include "Menu.h"
 #	include "Menu/SettingsPage.h"
 #	include "Menu/VisualsProfiles.h"
+#	include "Menu/VisualsWeather.h"
+#	include "Utils/WeatherFilter.h"
 #	include "Presets/LookProfiles.h"
 #	include "Menu/SettingsActions.h"
 #	include "Menu/SettingsNavigation.h"
@@ -927,6 +929,17 @@ namespace
 				return result;
 			});
 		}
+		if (action == "apply_visuals_weather") {
+			if (!a_args.contains("weatherKey") || !a_args["weatherKey"].is_string() ||
+				!a_args.contains("weatherFilter") || !a_args["weatherFilter"].is_number_unsigned() ||
+				a_args["weatherFilter"].get<uint64_t>() > Util::WeatherFilter::All ||
+				!a_args.contains("allMatches") || !a_args["allMatches"].is_boolean() ||
+				(a_args.contains("weatherSettings") && !a_args["weatherSettings"].is_object()))
+				return { { "ok", false }, { "error", "weatherKey, weatherFilter (1..127) and allMatches are required; weatherSettings must be an object" } };
+			return RunOnMainThread([key = a_args["weatherKey"].get<std::string>(), filter = a_args["weatherFilter"].get<uint32_t>(), all = a_args["allMatches"].get<bool>(), settings = a_args.value("weatherSettings", json())] {
+				return MenuUI::ApplyVisualsWeather(key, filter, all, settings.is_null() ? nullptr : &settings);
+			});
+		}
 		if (action == "adaptive_balance_locations" || action == "teleport_adaptive_balance_location") {
 			if (action == "teleport_adaptive_balance_location" &&
 				(!a_args.contains("locationKey") || !a_args["locationKey"].is_string() || a_args["locationKey"].get_ref<const std::string&>().empty()))
@@ -1253,7 +1266,7 @@ namespace
 			return {
 				{ "error", "unknown action" },
 				{ "action", action },
-				{ "supported", json::array({ "feature_settings", "status", "search_settings", "reveal_setting", "search_status", "grass_placement", "reset_adaptive_balance_dof", "configure_grass_collision", "grass_telemetry", "set_grass_collision_strength", "open", "open_vr_fov", "set_fov_enabled", "set_fov_blend_curve", "close", "screenshot", "set_path", "set_layout_unlocked", "reset_menu_layout", "set_menu_placement", "set_wand_settings", "texture_stats", "set_depth_culling_settings", "set_depth_culling_legacy_mode", "set_depth_culling_telemetry_enabled", "reset_depth_culling_telemetry", "set_adaptive_balance_enabled", "set_adaptive_balance_visuals", "set_adaptive_balance_dof", "set_foliage_lighting_enabled", "set_terrain_variation_mesh_enabled", "set_pbr_grass_enabled", "set_pbr_grass_diagnostics_enabled", "set_truepbr_verbose_json_logging", "set_dynamic_cubemap_resolution", "request_dynamic_cubemap_refresh", "prepare_coc", "prepare_tuning", "set_motion_adaptive_sharpening", "set_parallax_strength", "set_sky_sync_sunlight", "set_sky_sync_disabled_worldspaces", "set_grass_optimizations_enabled", "set_grass_optimizations_settings", "set_grass_background_preparation_enabled", "set_grass_culling_controls", "set_grass_hiz_enabled", "set_grass_optimizations_diagnostics_enabled", "ui_status", "open_feature", "select_tab", "set_sidebar_visible", "scroll", "restore_defaults", "set_visuals_profile_ui", "set_hide_overview_tabs" }) },
+				{ "supported", json::array({ "apply_visuals_weather", "feature_settings", "status", "search_settings", "reveal_setting", "search_status", "grass_placement", "reset_adaptive_balance_dof", "configure_grass_collision", "grass_telemetry", "set_grass_collision_strength", "open", "open_vr_fov", "set_fov_enabled", "set_fov_blend_curve", "close", "screenshot", "set_path", "set_layout_unlocked", "reset_menu_layout", "set_menu_placement", "set_wand_settings", "texture_stats", "set_depth_culling_settings", "set_depth_culling_legacy_mode", "set_depth_culling_telemetry_enabled", "reset_depth_culling_telemetry", "set_adaptive_balance_enabled", "set_adaptive_balance_visuals", "set_adaptive_balance_dof", "set_foliage_lighting_enabled", "set_terrain_variation_mesh_enabled", "set_pbr_grass_enabled", "set_pbr_grass_diagnostics_enabled", "set_truepbr_verbose_json_logging", "set_dynamic_cubemap_resolution", "request_dynamic_cubemap_refresh", "prepare_coc", "prepare_tuning", "set_motion_adaptive_sharpening", "set_parallax_strength", "set_sky_sync_sunlight", "set_sky_sync_disabled_worldspaces", "set_grass_optimizations_enabled", "set_grass_optimizations_settings", "set_grass_background_preparation_enabled", "set_grass_culling_controls", "set_grass_hiz_enabled", "set_grass_optimizations_diagnostics_enabled", "ui_status", "open_feature", "select_tab", "set_sidebar_visible", "scroll", "restore_defaults", "set_visuals_profile_ui", "set_hide_overview_tabs" }) },
 			};
 		}
 		const std::string path = a_args.value("path", std::string());
@@ -1731,6 +1744,20 @@ namespace MenuDevBenchBridge
 			auto& presetStatus = document["outputSchema"]["properties"]["visualsProfileUI"]["properties"];
 			presetStatus["exportFolder"] = { { "type", "string" }, { "description", "Effective export folder; the default is the game's virtual Data path and remains subject to MO2 routing." } };
 			presetStatus["usesDefaultFolder"] = { { "type", "boolean" } };
+			document["inputSchema"]["properties"]["action"]["enum"].push_back("apply_visuals_weather");
+			document["description"] = document["description"].get<std::string>() +
+			                          " apply_visuals_weather applies the selected weather editor's current AdaptiveBrightness block to itself or all category matches, saving each weather atomically. Other features and native weather fields are preserved. Invalid source settings change nothing; a failed target stops the batch and reports matchedWeathers, savedWeathers and appliedWeathers counts, failedWeather and error. weatherRefreshed reports whether the final weather evaluation completed; a refresh exception fails the result without losing the save receipts. Categories use Weather Picker flags with OR matching; this copies to current loaded records and does not install a category rule. Use weather_api weathers for source keys and flags. Optional weatherSettings supplies a complete validated source block; omission uses an existing editor draft or the saved source block without populating the editor.";
+			document["inputSchema"]["properties"]["weatherKey"] = { { "type", "string" }, { "minLength", 1 }, { "description", "Source weather's portable key; it must match weatherFilter." } };
+			document["inputSchema"]["properties"]["weatherSettings"] = { { "type", "object" }, { "required", { "__enabled" } }, { "properties", { { "__enabled", { { "type", "boolean" } } } } }, { "description", "Optional complete Visuals weather block, with literal registered variable keys. Omit to use an existing editor draft or the saved source block." } };
+			document["inputSchema"]["properties"]["weatherFilter"] = { { "type", "integer" }, { "minimum", 1 }, { "maximum", Util::WeatherFilter::All },
+				{ "description", "Weather Picker bitmask: Pleasant=1, Cloudy=2, Rainy=4, Snow=8, Aurora=16, Aurora Sun=32, None=64, All=127." } };
+			document["inputSchema"]["properties"]["allMatches"] = { { "type", "boolean" }, { "description", "False applies and saves only the source; true replaces Visuals for all matching loaded weathers." } };
+			document["inputSchema"]["allOf"].push_back({ { "if", { { "properties", { { "action", { { "const", "apply_visuals_weather" } } } } }, { "required", { "action" } } } },
+				{ "then", { { "required", { "weatherKey", "weatherFilter", "allMatches" } } } } });
+			for (const auto* count : { "matchedWeathers", "savedWeathers", "appliedWeathers" })
+				document["outputSchema"]["properties"][count] = { { "type", "integer" }, { "minimum", 0 } };
+			document["outputSchema"]["properties"]["weatherRefreshed"] = { { "type", "boolean" }, { "description", "Whether the final live weather evaluation completed." } };
+			document["outputSchema"]["properties"]["failedWeather"] = { { "type", "string" }, { "description", "First target that failed to save or apply; already saved entries are retained." } };
 			for (const auto* action : { "adaptive_balance_locations", "teleport_adaptive_balance_location" })
 				document["inputSchema"]["properties"]["action"]["enum"].push_back(action);
 			document["inputSchema"]["properties"]["locationKey"] = {

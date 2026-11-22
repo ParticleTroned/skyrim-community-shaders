@@ -13,6 +13,7 @@
 #include "GrassOptimizations/GrassBucketRenderer.h"
 #include "InverseSquareLighting.h"
 #include "LocationContext.h"
+#include "Menu/VisualsWeather.h"
 #include "SettingsMigrations.h"
 #include "State.h"
 #include "UnderwaterDepthOfField.h"
@@ -1367,7 +1368,7 @@ void AdaptiveBrightness::DrawSettings()
 	MenuUI::SettingsPage page("AdaptiveBrightness", {
 														{ "global", "Global", "Start with shared lighting, colour, bloom, water and depth of field.", "Shared appearance and depth of field", true, true, "Build the shared look", nullptr, nullptr, true, true, nullptr, "profiles" },
 														{ "profiles", "Profiles", "Refine the shared look for time and location types.", "Time and location profiles", true, true, nullptr },
-														{ "weather", "Weather", "Refine the outdoor look for individual weathers.", "Blended weather adjustments", true, true, nullptr },
+														{ "weather", "Weather", "Refine the outdoor look by weather category or individual weather.", "Blended weather adjustments", true, true, nullptr },
 														{ "locations", "Locations", "Add precise changes for individual places.", "Exact places and cells", true, true, "Refine local changes" },
 														{ "presets", "Presets", "Select, import or export a complete Visuals profile.", "Complete appearance profiles", true, true, nullptr },
 													});
@@ -1413,15 +1414,8 @@ void AdaptiveBrightness::DrawSettings()
 			DrawCurrentContextProfileControls(kContextProfileOrder[selected - profileCount], true, settings.enabled);
 	}
 
-	if (page.Is("weather")) {
-		auto* sky = globals::game::sky;
-		const auto disabled = Util::DisableGuard(!sky || !sky->currentWeather);
-		if (ImGui::Button("Edit Current Weather"))
-			EditorWindow::GetSingleton()->OpenWeatherFeatureSetting(sky->currentWeather, GetShortName(), "brightness");
-		Util::AddTooltip("Tune lighting, colour, bloom and water for each weather. Adjustments blend with weather transitions after the active time and location profiles. Unset values are neutral; interiors keep their own profiles. Requires an active weather.");
-		if (!sky || !sky->currentWeather)
-			ImGui::TextDisabled("Load an outdoor scene to select its weather.");
-	}
+	if (page.Is("weather"))
+		MenuUI::DrawVisualsWeather();
 
 	if (page.Is("locations")) {
 		DrawLocationOverrides(false, true, settings.enabled);

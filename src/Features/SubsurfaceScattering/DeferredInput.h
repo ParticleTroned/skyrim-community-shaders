@@ -17,6 +17,8 @@ namespace SSS
 			UINT height = 0;
 			UINT enabled = 0;
 			UINT padding = 0;
+
+			bool operator==(const Control&) const = default;
 		};
 		static_assert(sizeof(Control) == 16);
 

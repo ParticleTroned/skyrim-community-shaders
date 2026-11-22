@@ -6,9 +6,54 @@
 #include "d3d11_shader_test.h"
 
 #include <array>
+#include <cstdint>
 #include <d3d11sdklayers.h>
 #include <iostream>
-#include <span>
+#include <memory>
+#include <new>
+#include <optional>
+#include <utility>
+
+// Count uploads while retaining the real D3D resource, allocation and copy paths.
+struct UploadContext
+{
+	ID3D11DeviceContext* context;
+	unsigned uploads = 0;
+	HRESULT Map(ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE* mapped)
+	{
+		return context->Map(resource, subresource, type, flags, mapped);
+	}
+	void Unmap(ID3D11Resource* resource, UINT subresource) { context->Unmap(resource, subresource); }
+	void UpdateSubresource(ID3D11Resource* resource, UINT subresource, const D3D11_BOX* box, const void* data, UINT pitch, UINT depthPitch)
+	{
+		++uploads;
+		context->UpdateSubresource(resource, subresource, box, data, pitch, depthPitch);
+	}
+	void CSSetConstantBuffers(UINT slot, UINT count, ID3D11Buffer* const* buffers) { context->CSSetConstantBuffers(slot, count, buffers); }
+};
+
+namespace globals::d3d
+{
+	ID3D11Device* device;
+	UploadContext* context;
+}
+namespace DX
+{
+	bool failAllocationCheck = false;
+	void ThrowIfFailed(HRESULT result)
+	{
+		if (std::exchange(failAllocationCheck, false))
+			throw std::runtime_error("Injected allocation failure");
+		D3D11ShaderTest::Check(result);
+	}
+}
+namespace logger
+{
+	unsigned failures = 0;
+	void warn(const char*, const char*) { ++failures; }
+}
+#include "../src/Buffer.h"
+#include "sss_deferred_upload_under_test.h"
 
 namespace
 {
@@ -22,6 +67,81 @@ namespace
 	{
 		if (!value)
 			throw std::runtime_error(message);
+	}
+
+	void CheckControlUpload(ID3D11Device* device, ID3D11DeviceContext* context)
+	{
+		UploadContext uploads{ context };
+		globals::d3d::device = device;
+		globals::d3d::context = &uploads;
+		Deferred deferred;
+		deferred.SetupDiffuseInputBuffer();
+		Require(bool(deferred.diffuseInputCB), "Diffuse control setup failed");
+		D3D11_BUFFER_DESC desc{};
+		deferred.diffuseInputCB->CB()->GetDesc(&desc);
+		Require(desc.ByteWidth == sizeof(SSS::DeferredInput::Control), "Control allocation overreads its upload payload");
+
+		SYSTEM_INFO info{};
+		GetSystemInfo(&info);
+		auto* memory = static_cast<std::byte*>(VirtualAlloc(nullptr, SIZE_T(info.dwPageSize) * 2, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+		Require(memory != nullptr, "Control guard allocation failed");
+		const auto release = [](std::byte* p) { VirtualFree(p, 0, MEM_RELEASE); };
+		const std::unique_ptr<std::byte, decltype(release)> storage(memory, release);
+		DWORD oldProtection = 0;
+		Require(VirtualProtect(memory + info.dwPageSize, info.dwPageSize, PAGE_NOACCESS, &oldProtection) != FALSE, "Control guard protection failed");
+		auto* control = new (memory + info.dwPageSize - sizeof(SSS::DeferredInput::Control)) SSS::DeferredInput::Control{ width, height, 1, 0 };
+
+		desc.Usage = D3D11_USAGE_STAGING;
+		desc.BindFlags = 0;
+		desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		ComPtr<ID3D11Buffer> staging;
+		Check(device->CreateBuffer(&desc, nullptr, staging.GetAddressOf()));
+		Util::SetResourceName(staging.Get(), "SSSDeferredTest::ControlReadback");
+		const auto verify = [&] {
+			ComPtr<ID3D11Buffer> bound;
+			context->CSGetConstantBuffers(0, 1, bound.GetAddressOf());
+			Require(bound.Get() == deferred.diffuseInputCB->CB(), "Intervening pass left stale control binding");
+			context->CopyResource(staging.Get(), bound.Get());
+			D3D11_MAPPED_SUBRESOURCE mapped{};
+			Check(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped));
+			const auto actual = *static_cast<const SSS::DeferredInput::Control*>(mapped.pData);
+			context->Unmap(staging.Get(), 0);
+			Require(actual == *control, "GPU control contents are stale");
+		};
+		deferred.BindDiffuseInput(*control);
+		verify();
+		Require(uploads.uploads == 1, "First control upload missing");
+		for (unsigned i = 0; i < 8; ++i) {
+			// Cubemap compute work replaces b0 between invocations.
+			context->ClearState();
+			deferred.BindDiffuseInput(*control);
+			verify();
+		}
+		Require(uploads.uploads == 1, "Unchanged direct input uploaded repeatedly");
+		*control = {};
+		deferred.BindDiffuseInput(*control);
+		verify();
+		for (unsigned i = 0; i < 8; ++i)
+			deferred.BindDiffuseInput(*control);
+		Require(uploads.uploads == 2, "Inactive/capture fallback input uploaded repeatedly");
+		*control = { width - 3, height - 2, 1, 0 };
+		deferred.BindDiffuseInput(*control);
+		verify();
+		Require(uploads.uploads == 3, "Changed extent was not uploaded");
+		deferred.SetupDiffuseInputBuffer();
+		deferred.BindDiffuseInput(*control);
+		verify();
+		Require(uploads.uploads == 4, "Resource recreation retained stale upload state");
+		DX::failAllocationCheck = true;
+		deferred.SetupDiffuseInputBuffer();
+		Require(!deferred.diffuseInputCB && !deferred.uploadedDiffuseInput && logger::failures == 1, "Failed allocation retained stale state or swallowed failure");
+		deferred.BindDiffuseInput({});
+		ComPtr<ID3D11Buffer> bound;
+		context->CSGetConstantBuffers(0, 1, bound.GetAddressOf());
+		Require(!bound && uploads.uploads == 4, "Unavailable control retained a stale binding");
+		context->ClearState();
+		globals::d3d::context = nullptr;
+		globals::d3d::device = nullptr;
 	}
 
 	struct Shader
@@ -303,8 +423,17 @@ namespace
 				Clear(context, main, { 0.04f, 0.08f, 0.16f, 0.5f });
 				Clear(context, taa, { 0.1f, 0.2f, 0.3f, 0.4f });
 				Clear(context, motion, { 0.3f, -0.7f, 0, 0 });
-				auto input = Pending(context, temp, main, std::min(width, groupsX * 8), std::min(height, groupsY * 8), cropped);
-				if (route != 1)
+				// Keep the baseline independent of the handoff's copy and rectangle logic.
+				if (route == 0) {
+					if (cropped) {
+						const D3D11_BOX box{ 0, 0, 0, tempWidth, tempHeight, 1 };
+						context->CopySubresourceRegion(main.resource.Get(), 0, 0, 0, 0, temp.resource.Get(), 0, &box);
+					} else {
+						context->CopyResource(main.resource.Get(), temp.resource.Get());
+					}
+				}
+				auto input = route == 0 ? SSS::DeferredInput{} : Pending(context, temp, main, std::min(width, groupsX * 8), std::min(height, groupsY * 8), cropped);
+				if (route == 2)
 					input.Materialize();
 				if (route == 0)
 					captureInput = main.Read(device, context);
@@ -347,6 +476,7 @@ int main()
 			device.GetAddressOf(), nullptr, context.GetAddressOf()));
 		ComPtr<ID3D11InfoQueue> messages;
 		Check(device.As(&messages));
+		CheckControlUpload(device.Get(), context.Get());
 		CheckLifetime(device.Get(), context.Get());
 		CheckViews(device.Get(), context.Get());
 		for (bool vr : { false, true })
@@ -364,7 +494,7 @@ int main()
 			if (message->Severity <= D3D11_MESSAGE_SEVERITY_WARNING)
 				throw std::runtime_error(message->pDescription);
 		}
-		std::cout << "PASS: 432 Burley/composite routes; exact production-format color/alpha, normal/TAA and motion; copy lifecycle and D3D11 debug layer\n";
+		std::cout << "PASS: production control upload bounds/cache/rebinding; 432 Burley/composite routes; exact color/alpha, normal/TAA and motion; copy lifecycle and D3D11 debug layer\n";
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';
 		return 1;

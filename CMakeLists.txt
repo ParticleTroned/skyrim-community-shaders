@@ -3502,6 +3502,33 @@ if(BUILD_CONTROLLER_TESTS)
     add_d3d_shader_test(
         sss_deferred_input_test SSSDeferredInput tests/sss_deferred_input_test.cpp
     )
+    set(_sss_deferred_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/sss-deferred"
+    )
+    set(_sss_deferred_upload_header
+        "${_sss_deferred_test_dir}/sss_deferred_upload_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT "${_sss_deferred_upload_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_sss_deferred_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_sss_deferred_input.cmake"
+        DEPENDS
+            src/Deferred.h
+            src/Deferred.cpp
+            tests/extract_sss_deferred_input.cmake
+        VERBATIM
+    )
+    target_sources(
+        sss_deferred_input_test
+        PRIVATE "${_sss_deferred_upload_header}"
+    )
+    target_include_directories(
+        sss_deferred_input_test
+        PRIVATE "${_sss_deferred_test_dir}"
+    )
+    target_link_libraries(sss_deferred_input_test PRIVATE windowsapp.lib)
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_shadows.cmake")
     add_d3d_shader_test(
         wetterness_highlights_test WetternessHighlights

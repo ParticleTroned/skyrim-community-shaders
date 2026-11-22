@@ -180,6 +180,31 @@ void Deferred::ReleaseRenderTargets()
 	ReleaseRenderTargetSlot(RE::RENDER_TARGETS::kWATER_2);
 }
 
+void Deferred::SetupDiffuseInputBuffer()
+{
+	diffuseInputCB.reset();
+	uploadedDiffuseInput.reset();
+	try {
+		auto desc = ConstantBufferDesc<SSS::DeferredInput::Control>(false);
+		// UpdateSubresource reads the entire allocation, including any buffer padding.
+		desc.ByteWidth = sizeof(SSS::DeferredInput::Control);
+		diffuseInputCB = std::make_unique<ConstantBuffer>(desc, "Deferred::DiffuseInputCB");
+	} catch (const std::exception& e) {
+		logger::warn("[Deferred] Using the SSS copy path because diffuse input constants could not be allocated: {}", e.what());
+	}
+}
+
+void Deferred::BindDiffuseInput(const SSS::DeferredInput::Control& a_input)
+{
+	if (diffuseInputCB && uploadedDiffuseInput != a_input) {
+		diffuseInputCB->Update(a_input);
+		uploadedDiffuseInput = a_input;
+	}
+	// Private passes can replace b0 even when our buffer contents have not changed.
+	ID3D11Buffer* buffer = diffuseInputCB ? diffuseInputCB->CB() : nullptr;
+	globals::d3d::context->CSSetConstantBuffers(0, 1, &buffer);
+}
+
 void Deferred::SetupResources()
 {
 	finalSceneDepthFrame.reset();
@@ -202,12 +227,7 @@ void Deferred::SetupResources()
 		shaderDevice = globals::d3d::device;
 	}
 
-	diffuseInputCB.reset();
-	try {
-		diffuseInputCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<SSS::DeferredInput::Control>(false), "Deferred::DiffuseInputCB");
-	} catch (const std::exception& e) {
-		logger::warn("[Deferred] Using the SSS copy path because diffuse input constants could not be allocated: {}", e.what());
-	}
+	SetupDiffuseInputBuffer();
 
 	{
 		auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
@@ -763,10 +783,7 @@ void Deferred::DeferredPasses()
 		// state left behind by SSGI/SSS/shadows or future feature passes.
 		Util::BindGlobalConstantBuffersForCS(context);
 
-		ID3D11Buffer* inputBuffer = diffuseInputCB ? diffuseInputCB->CB() : nullptr;
-		if (diffuseInputCB)
-			diffuseInputCB->Update(diffuseInput);
-		context->CSSetConstantBuffers(0, 1, &inputBuffer);
+		BindDiffuseInput(diffuseInput);
 
 		ID3D11ShaderResourceView* srvs[17]{
 			REX::W32::AsReal(specular.SRV),

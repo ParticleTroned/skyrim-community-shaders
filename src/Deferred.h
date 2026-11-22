@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Buffer.h"
+#include "Features/SubsurfaceScattering/DeferredInput.h"
 #include "RE/B/BSShadowDirectionalLight.h"
 #include "Utils/LazyShader.h"
 
@@ -99,6 +100,9 @@ public:
 
 private:
 	std::unique_ptr<ConstantBuffer> diffuseInputCB;
+	std::optional<SSS::DeferredInput::Control> uploadedDiffuseInput;
+	void SetupDiffuseInputBuffer();
+	void BindDiffuseInput(const SSS::DeferredInput::Control& a_input);
 	ID3D11ComputeShader* GetComputeMainComposite(bool interior);
 
 	/// Copies completed opaque depth without changing the active render targets.

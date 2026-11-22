@@ -5278,6 +5278,7 @@ if(BUILD_CONTROLLER_TESTS)
         ShaderCompilationEstimate
         tests/shader_compilation_estimate_test.cpp
     )
+    include("${PROJECT_SOURCE_DIR}/tests/shader_compilation_history.cmake")
     add_controller_test(
         vr_depth_culling_cache_refresh_policy_test
         VRDepthCullingCacheRefreshPolicy

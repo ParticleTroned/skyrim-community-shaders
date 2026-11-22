@@ -15,6 +15,8 @@ namespace ShaderCompilationEstimate
 	inline constexpr std::size_t kLightingCategoryOffset = kStageCount * kFamilyCount;
 	inline constexpr std::size_t kCategoryCount = kLightingCategoryOffset + kStageCount * 64 * 8;
 	inline constexpr double kMaximumSampleMs = 30.0 * 60.0 * 1000.0;
+	inline constexpr std::uint32_t kMinimumCostSamples = 3;
+	inline constexpr std::size_t kMinimumCalibrationCategories = 3;
 
 	struct Category
 	{
@@ -82,7 +84,6 @@ namespace ShaderCompilationEstimate
 			if (queued > 0)
 				--queued;
 			running.insert_or_assign(a_id, Running{ a_category.index, a_nowMs });
-			peakWorkers = std::max(peakWorkers, running.size());
 			if (firstStartMs < 0)
 				firstStartMs = a_nowMs;
 		}
@@ -98,12 +99,13 @@ namespace ShaderCompilationEstimate
 			pendingTasks -= running.erase(a_id);
 		}
 
-		/** Only successful source work teaches compile cost; cache and shared work teach reuse cost. */
-		void Complete(std::size_t a_id, double a_elapsedMs, Outcome a_outcome, bool a_learn)
+		/** Returns true only when a valid source completion changes persistent compile costs. */
+		bool Complete(std::size_t a_id, double a_elapsedMs, Outcome a_outcome, bool a_learn)
 		{
 			const auto it = running.find(a_id);
 			if (it == running.end())
-				return;
+				return false;
+			bool learnedSource = false;
 			auto& group = groups[it->second.category];
 			if (a_learn && a_outcome != Outcome::Failed && ValidSample(a_elapsedMs)) {
 				switch (a_outcome) {
@@ -111,6 +113,7 @@ namespace ShaderCompilationEstimate
 					group.compile.Add(a_elapsedMs);
 					++group.compiled;
 					++sourceSamples;
+					learnedSource = true;
 					break;
 				case Outcome::Disk:
 					group.disk.Add(a_elapsedMs);
@@ -126,6 +129,7 @@ namespace ShaderCompilationEstimate
 			}
 			running.erase(it);
 			--pendingTasks;
+			return learnedSource;
 		}
 
 		/** Drops pending work but retains cost priors; reuse rates belong only to the current batch. */
@@ -139,7 +143,6 @@ namespace ShaderCompilationEstimate
 			}
 			sourceSamples = 0;
 			pendingTasks = 0;
-			peakWorkers = 0;
 			firstStartMs = -1;
 			lastRefreshMs = -1;
 			cached = {};
@@ -191,29 +194,35 @@ namespace ShaderCompilationEstimate
 			result.enabled = true;
 			result.active = true;
 			result.sourceSamples = sourceSamples;
-			result.workers = std::max<std::size_t>(1, std::min(a_workerLimit, peakWorkers));
+			result.workers = std::max<std::size_t>(1, std::min<std::uint64_t>(a_workerLimit, pendingTasks));
+			const auto calibration = CalibrateStages();
 			double workMs = 0;
 			double learnedMs = 0;
+			double supportedMs = 0;
 			double longestMs = 0;
-			for (const auto& group : groups) {
+			for (std::size_t i = 0; i < groups.size(); ++i) {
+				const auto& group = groups[i];
 				if (group.queued == 0)
 					continue;
-				const auto cost = ExpectedCost(group);
+				const auto cost = ExpectedCost(group, calibration[i % kStageCount]);
 				workMs += cost.totalMs * static_cast<double>(group.queued);
 				learnedMs += cost.learnedMs * static_cast<double>(group.queued);
+				supportedMs += cost.supportedMs * static_cast<double>(group.queued);
 				longestMs = std::max(longestMs, cost.totalMs);
 			}
 			activeCosts.clear();
 			for (const auto& [id, task] : running) {
 				const auto& group = groups[task.category];
+				const auto& stage = calibration[task.category % kStageCount];
 				const auto cost = task.sourceCompile ?
-				                      Cost{ CompileMs(group), group.compile.samples >= 3 ? CompileMs(group) : 0 } :
-				                      ExpectedCost(group);
+				                      CompileCost(group, stage) :
+				                      ExpectedCost(group, stage);
 				const auto duration = cost.totalMs;
 				const auto elapsed = std::max(0.0, a_nowMs - task.startMs);
 				const auto remaining = std::max(duration - elapsed, std::max(duration, elapsed) * 0.1);
 				longestMs = std::max(longestMs, remaining);
-				activeCosts.push_back({ remaining, duration > 0 ? remaining * cost.learnedMs / duration : 0 });
+				activeCosts.push_back({ remaining, duration > 0 ? remaining * cost.learnedMs / duration : 0,
+					duration > 0 ? remaining * cost.supportedMs / duration : 0 });
 			}
 			// A lowered dispatch limit does not serialize workers already running above that limit.
 			if (activeCosts.size() > result.workers)
@@ -222,11 +231,11 @@ namespace ShaderCompilationEstimate
 			for (std::size_t i = 0; i < std::min(result.workers, activeCosts.size()); ++i) {
 				workMs += activeCosts[i].totalMs;
 				learnedMs += activeCosts[i].learnedMs;
+				supportedMs += activeCosts[i].supportedMs;
 			}
 			result.remainingMs = std::max(longestMs, workMs / static_cast<double>(result.workers));
 			result.learnedFraction = workMs > 0 ? std::clamp(learnedMs / workMs, 0.0, 1.0) : 0;
-			result.calibrated = firstStartMs >= 0 && a_nowMs - firstStartMs >= 2000.0 &&
-			                    (result.learnedFraction >= 0.5 || sourceSamples >= 3);
+			result.calibrated = firstStartMs >= 0 && a_nowMs - firstStartMs >= 2000.0 && workMs > 0 && supportedMs >= workMs * 0.5;
 			const bool confident = result.learnedFraction >= 0.8;
 			result.lowerRemainingMs = result.remainingMs * (confident ? 0.8 : 0.5);
 			result.upperRemainingMs = result.remainingMs * (confident ? 1.3 : 2.0);
@@ -248,7 +257,7 @@ namespace ShaderCompilationEstimate
 		};
 		struct Group
 		{
-			double fallbackMs = 1000.0;
+			double fallbackMs = 0;
 			Average compile, disk, shared;
 			std::uint64_t queued = 0;
 			std::uint64_t compiled = 0;
@@ -265,27 +274,65 @@ namespace ShaderCompilationEstimate
 		{
 			double totalMs;
 			double learnedMs;
+			double supportedMs;
+		};
+		struct StageCalibration
+		{
+			double scale = 1;
+			bool ready = false;
 		};
 		static bool ValidSample(double a_ms)
 		{
 			return std::isfinite(a_ms) && a_ms > 0 && a_ms <= kMaximumSampleMs;
 		}
-		static double CompileMs(const Group& a_group)
+		std::array<StageCalibration, kStageCount> CalibrateStages() const
 		{
-			return a_group.compile.samples ? a_group.compile.meanMs : a_group.fallbackMs;
+			std::array<std::vector<double>, kStageCount> ratios;
+			for (std::size_t i = 0; i < groups.size(); ++i) {
+				const auto& group = groups[i];
+				if (group.compile.samples >= kMinimumCostSamples && group.fallbackMs > 0) {
+					const auto ratio = group.compile.meanMs / group.fallbackMs;
+					if (std::isfinite(ratio) && ratio > 0)
+						ratios[i % kStageCount].push_back(ratio);
+				}
+			}
+			std::array<StageCalibration, kStageCount> result{};
+			for (std::size_t i = 0; i < ratios.size(); ++i) {
+				auto& stage = ratios[i];
+				if (stage.size() < kMinimumCalibrationCategories)
+					continue;
+				// Equal category weights keep one common or unusually expensive shader from dominating.
+				std::sort(stage.begin(), stage.end());
+				const auto middle = stage.size() / 2;
+				const auto median = stage.size() % 2 ? stage[middle] : (stage[middle - 1] + stage[middle]) * 0.5;
+				result[i] = { median, true };
+			}
+			return result;
 		}
-		static Cost ExpectedCost(const Group& a_group)
+		static Cost CompileCost(const Group& a_group, const StageCalibration& a_calibration)
+		{
+			if (a_group.compile.samples) {
+				const auto learned = a_group.compile.samples >= kMinimumCostSamples ? a_group.compile.meanMs : 0;
+				return { a_group.compile.meanMs, learned, learned };
+			}
+			const auto duration = std::min(a_group.fallbackMs * a_calibration.scale, kMaximumSampleMs);
+			// Inferred stage costs support an initial estimate, but retain the wider uncertainty range.
+			return { duration, 0, a_calibration.ready ? duration : 0 };
+		}
+		static Cost ExpectedCost(const Group& a_group, const StageCalibration& a_calibration)
 		{
 			// Two source-work priors avoid treating a few cache hits as a fully warm queue.
 			const double source = static_cast<double>(a_group.compiled) + 2.0;
-			const double sourceMs = source * CompileMs(a_group);
+			const auto compile = CompileCost(a_group, a_calibration);
+			const double sourceMs = source * compile.totalMs;
 			const double diskMs = a_group.diskHits * a_group.disk.meanMs;
 			const double sharedMs = a_group.sharedHits * a_group.shared.meanMs;
 			const double observations = source + a_group.diskHits + a_group.sharedHits;
+			const double learnedReuseMs = (a_group.disk.samples >= kMinimumCostSamples ? diskMs : 0) +
+			                              (a_group.shared.samples >= kMinimumCostSamples ? sharedMs : 0);
 			return { (sourceMs + diskMs + sharedMs) / observations,
-				((a_group.compile.samples >= 3 ? sourceMs : 0) + (a_group.disk.samples >= 3 ? diskMs : 0) +
-					(a_group.shared.samples >= 3 ? sharedMs : 0)) /
-					observations };
+				(source * compile.learnedMs + learnedReuseMs) / observations,
+				(source * compile.supportedMs + learnedReuseMs) / observations };
 		}
 
 		std::array<Group, kCategoryCount> groups{};
@@ -293,7 +340,6 @@ namespace ShaderCompilationEstimate
 		std::vector<Cost> activeCosts;
 		std::uint64_t sourceSamples = 0;
 		std::uint64_t pendingTasks = 0;
-		std::size_t peakWorkers = 0;
 		double firstStartMs = -1;
 		double lastRefreshMs = -1;
 		std::size_t lastWorkerLimit = 0;

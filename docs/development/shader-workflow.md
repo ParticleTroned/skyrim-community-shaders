@@ -32,34 +32,69 @@ the [Prebuilt Shader Cache Runbook](./prebuilt-shader-cache.md).
 
 ## Startup compilation estimates
 
-During initial startup, the compilation overlay shows elapsed time and an
-approximate total-time range. It displays `estimating...` during initial
-calibration. The range is a heuristic, not a guaranteed completion window.
+During initial startup, the compilation overlay shows elapsed time, a central
+total-time estimate and a labelled range immediately. Compatible saved costs
+are reused; a first run starts with broad defaults and refines them as shaders
+finish. The range is a heuristic, not a guaranteed completion window; its
+upper end is not the predicted total.
 
 ETA uses separate shader family, stage and major Lighting technique costs,
-observed worker capacity, and remaining work in active jobs. Successful source
-compiles refine their own category; disk hits and shared bytecode have separate
-costs. Scheduling priority and compiler options are unchanged.
+worker capacity, and remaining work in active jobs. The estimate uses the
+configured dispatch limit capped by remaining tasks, so the first dispatched
+worker cannot inflate the prediction. Active jobs retain individual tail
+estimates. Successful source compiles refine their own category; disk hits
+and shared bytecode have separate costs. For categories without measurements,
+defaults adapt to the machine using the median measured-to-default cost ratio
+from at least three categories
+in the same shader stage, each with at least three source samples. Each
+category has equal weight, so a common expensive shader cannot dominate.
+Direct category measurements take precedence. Compatible history can supply
+these measurements on subsequent startups.
 
-Startup timing priors are stored in
-`Data/SKSE/Plugins/CommunityShaders/CompileTimeHistory.json`. This optional file
-is independent of shader caches. Its compatibility key covers runtime,
-compiler identity, shader ABI/global defines, compiler options, worker count
-and startup priority mode. Invalid or incompatible history falls back to
-initial estimates. History is saved once at DataLoaded before the game is
-released, then the model and loaded priors are released. This also applies
-when background compilation allows remaining startup tasks to continue.
+Calibration requires direct measurements or a calibrated stage model to
+support at least half the remaining cost, rather than a fixed number of
+completed shaders. Calibration is diagnostic and never hides the initial
+prediction. Inferred stage costs retain the wider range; cache hits,
+failures and stale compiler contexts cannot teach source speed. Scheduling
+priority and compiler options are unchanged. This is a heuristic adaptation,
+not a fixed speedup factor; unusually different category costs can still
+affect accuracy.
+
+Startup timing priors are stored in `CSX-CompileTimeHistory.json` beside
+`CSX.log`, using the runtime's discovered SKSE log directory. This optional
+file survives restarts, shader-cache clears and mod replacement. The file is
+read on startup without deleting or truncating it. When absent, timing
+history starts with the new compilation measurements.
+
+Changed timings are checkpointed as startup tasks complete, at most once
+every five seconds, with a final flush at DataLoaded. Writes use atomic
+replacement outside the compilation queue lock. A failed write retains the
+previous file and remains pending for retry while startup is active. A
+cache-only run leaves existing history unchanged. Compatible categories not
+compiled in the current run are retained when other categories are updated.
+Invalid or stale completions do not schedule writes. Checkpoint deadlines
+are checked under the existing completion lock using its existing timestamp.
+
+The compatibility key covers runtime, compiler identity, shader ABI/global
+defines, compiler options, worker count and startup priority mode. Invalid
+or incompatible history falls back to
+initial estimates without deleting the file. The model and loaded priors
+are released at DataLoaded before waiting for an active history writer.
+The final flush drains before startup returns; a failed in-flight checkpoint
+is retried during this flush. This also applies when background compilation
+allows remaining startup tasks to continue.
 There is no in-game timing learning, history I/O or ETA calculation;
-gameplay keeps basic progress and
-elapsed-time reporting. Different CPU load and changed shader sources can
-still affect startup ETA.
+gameplay keeps basic progress and elapsed-time reporting. Different CPU load
+and changed shader sources can still affect startup ETA.
 
 DevBench's `communityshaders.shader_api` snapshot includes
 `snapshot.compilation.estimate`: elapsed and remaining milliseconds, heuristic
 bounds, enabled/calibration status, learned fraction, source sample count and
-observed worker capacity. Remaining values are null when disabled or while
-active calibration is pending, and zero when enabled but idle. Observing an
-estimate never schedules compilation.
+worker capacity. The learned fraction counts directly measured costs;
+inferred stage costs can enable calibration but do not increase that fraction.
+Remaining values are available from the start, including while calibration
+is pending. They are null when disabled, and zero when enabled but idle.
+Observing an estimate never schedules compilation or writes timing history.
 
 ## Verifying refactors
 

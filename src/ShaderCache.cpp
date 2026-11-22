@@ -78,8 +78,8 @@ namespace SIE
 			bool sourceCompiled = false;
 		};
 		thread_local CompilationTimingObservation* g_compilationTiming = nullptr;
-		const std::filesystem::path kCompileTimeHistoryPath = L"Data/SKSE/Plugins/CommunityShaders/CompileTimeHistory.json";
 		constexpr size_t kMaximumCompileTimeHistoryBytes = 256 * 1024;
+		constexpr auto kCompileTimeHistorySaveInterval = std::chrono::seconds(5);
 
 		Util::CompileDedupe::Registry& GetCompileDedupe()
 		{
@@ -6968,6 +6968,7 @@ namespace SIE
 
 		// Determine whether this task was resolved from the disk cache or actually compiled.
 		bool wasDiskHit = cache.IsShaderLoadedFromDisk(key);
+		bool checkpointHistory = false;
 
 		// Perform all completion operations under one mutex acquisition
 		{
@@ -6997,8 +6998,8 @@ namespace SIE
 				                     wasDiskHit       ? Outcome::Disk :
 				                                        Outcome::Shared;
 				const bool compatible = a_estimateContext == estimateContext || (!a_sourceCompiled && a_estimateContext.empty());
-				estimate->Complete(task.GetId(), a_elapsedMs, outcome, compatible);
-				estimateHistoryDirty |= compatible && outcome == Outcome::Compiled;
+				estimateHistoryDirty |= estimate->Complete(task.GetId(), a_elapsedMs, outcome, compatible);
+				checkpointHistory = IsEstimateHistorySaveDue(now.QuadPart);
 			}
 
 			// Disk retrieval is counted separately from source work and shared bytecode.
@@ -7016,6 +7017,8 @@ namespace SIE
 		}
 
 		NotifyIfComplete();
+		if (checkpointHistory)
+			SaveEstimateHistory();
 	}
 
 	void CompilationSet::NotifyIfComplete()
@@ -7246,15 +7249,21 @@ namespace SIE
 
 	void CompilationSet::LoadEstimateHistory()
 	{
+		if (!estimate)
+			return;
 		try {
+			const auto logPath = Util::PathHelpers::GetLogPath();
+			if (logPath.empty())
+				throw std::runtime_error("CSX log directory is unavailable");
+			estimateHistoryPath = logPath.parent_path() / L"CSX-CompileTimeHistory.json";
 			std::error_code error;
-			const auto size = std::filesystem::file_size(kCompileTimeHistoryPath, error);
+			const auto size = std::filesystem::file_size(estimateHistoryPath, error);
 			if (error == std::errc::no_such_file_or_directory)
 				return;
 			if (error || size > kMaximumCompileTimeHistoryBytes)
 				throw std::runtime_error("unreadable or oversized timing history");
 			// Bound the actual read too: a replaced file must not bypass the size check.
-			std::ifstream input(kCompileTimeHistoryPath, std::ios::binary);
+			std::ifstream input(estimateHistoryPath, std::ios::binary);
 			std::string contents(kMaximumCompileTimeHistoryBytes + 1, '\0');
 			input.read(contents.data(), static_cast<std::streamsize>(contents.size()));
 			if (input.bad() || !input.eof() || input.gcount() > static_cast<std::streamsize>(kMaximumCompileTimeHistoryBytes))
@@ -7293,13 +7302,13 @@ namespace SIE
 
 	std::string CompilationSet::PrepareEstimate(const ShaderCompilationTask& a_task, std::string_view a_context)
 	{
+		std::scoped_lock lock(compilationMutex);
+		if (!estimate || !IsCurrentGeneration(a_task))
+			return {};
 		auto& cache = *globals::shaderCache;
 		const auto workers = ShaderCompilationSchedulingPolicy::DispatchLimit(cache.compilationThreadCount,
 			cache.backgroundCompilationThreadCount, cache.backgroundCompilation.load(std::memory_order_relaxed), cache.compilationPool.get_thread_count());
 		auto context = fmt::format("{};workers={};startup=true", a_context, workers);
-		std::scoped_lock lock(compilationMutex);
-		if (!estimate || !IsCurrentGeneration(a_task))
-			return {};
 		if (estimateContext != context) {
 			estimate->ClearLearning();
 			estimateContext = context;
@@ -7321,24 +7330,58 @@ namespace SIE
 
 	void CompilationSet::FinishStartupEstimate()
 	{
+		SaveEstimateHistory(true);
+	}
+
+	bool CompilationSet::IsEstimateHistorySaveDue(int64_t a_nowQpc) const
+	{
+		return estimate && estimateHistoryDirty && !estimateContext.empty() && !estimateHistoryPath.empty() &&
+		       a_nowQpc >= estimateHistoryNextSaveQpc;
+	}
+
+	void CompilationSet::SaveEstimateHistory(bool a_finish)
+	{
 		std::unique_ptr<ShaderCompilationEstimate::Estimator> finished;
-		std::string context;
-		bool saveHistory;
-		{
+		if (a_finish) {
 			std::scoped_lock lock(compilationMutex);
 			finished = std::move(estimate);
-			context = std::move(estimateContext);
-			saveHistory = std::exchange(estimateHistoryDirty, false);
+			if (!finished)
+				return;
 			std::string{}.swap(savedEstimateContext);
 			std::vector<ShaderCompilationEstimate::HistoryEntry>{}.swap(savedEstimateHistory);
 		}
-		// The model is detached before I/O; gameplay never collects or persists timing observations.
-		if (!finished || !saveHistory || context.empty())
+		// Stop collection before waiting for a checkpoint; all writes drain before startup returns.
+		std::unique_lock writerLock(estimateHistoryMutex, std::defer_lock);
+		if (a_finish)
+			writerLock.lock();
+		else if (!writerLock.try_lock())
 			return;
+
+		std::string context;
 		try {
-			const auto entries = finished->History();
-			if (entries.empty())
-				return;
+			std::vector<ShaderCompilationEstimate::HistoryEntry> entries;
+			{
+				std::scoped_lock lock(compilationMutex);
+				const auto* model = a_finish ? finished.get() : estimate.get();
+				if (a_finish)
+					context = std::move(estimateContext);
+				if (!model || !estimateHistoryDirty || estimateHistoryPath.empty())
+					return;
+				LARGE_INTEGER now;
+				QueryPerformanceCounter(&now);
+				if (!a_finish && !IsEstimateHistorySaveDue(now.QuadPart))
+					return;
+				estimateHistoryNextSaveQpc = now.QuadPart + frequency.QuadPart * kCompileTimeHistorySaveInterval.count();
+				if (!a_finish)
+					context = estimateContext;
+				if (context.empty())
+					return;
+				entries = model->History();
+				if (entries.empty())
+					return;
+				estimateHistoryDirty = false;
+			}
+			// The writer lock orders checkpoints and final flushes without blocking queue updates on disk I/O.
 			nlohmann::json categories = nlohmann::json::array();
 			for (const auto& entry : entries)
 				categories.push_back({ { "category", entry.category }, { "milliseconds", entry.milliseconds }, { "samples", entry.samples } });
@@ -7347,9 +7390,14 @@ namespace SIE
 				{ "processors", std::thread::hardware_concurrency() }, { "context", context }, { "categories", std::move(categories) }
 			};
 			std::string error;
-			if (!Util::FileHelpers::WriteTextFileAtomic(kCompileTimeHistoryPath, history.dump(), error, false))
-				logger::warn("Could not save shader ETA history; compilation is unaffected: {}", error);
+			if (!Util::FileHelpers::WriteTextFileAtomic(estimateHistoryPath, history.dump(), error, false))
+				throw std::runtime_error(error);
 		} catch (const std::exception& error) {
+			{
+				std::scoped_lock lock(compilationMutex);
+				if (context.empty() || context == estimateContext)
+					estimateHistoryDirty = true;
+			}
 			logger::warn("Could not save shader ETA history; compilation is unaffected: {}", error.what());
 		}
 	}
@@ -7385,10 +7433,10 @@ namespace SIE
 		const auto elapsed = GetHumanTime(totalMs);
 		std::string estimated;
 		if (timing.enabled && !(a_timeOnly && a_elapsedOnly))
-			estimated = !timing.active     ? elapsed :
-			            !timing.calibrated ? std::string("estimating...") :
-			                                 fmt::format("~{} to {}", GetHumanTime(totalMs + timing.lowerRemainingMs),
-												 GetHumanTime(totalMs + timing.upperRemainingMs));
+			estimated = !timing.active ? elapsed :
+			                             fmt::format("~{} (range {} to {})", GetHumanTime(totalMs + timing.remainingMs),
+											 GetHumanTime(totalMs + timing.lowerRemainingMs),
+											 GetHumanTime(totalMs + timing.upperRemainingMs));
 
 		if (a_timeOnly) {
 			if (a_elapsedOnly || !timing.enabled) {

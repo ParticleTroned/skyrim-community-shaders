@@ -4,9 +4,11 @@
 #include <ankerl/unordered_dense.h>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <efsw/efsw.hpp>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -446,13 +448,20 @@ namespace SIE
 		std::optional<ParallelismStats> GetParallelismStats() const;
 
 	private:
-		/** Releases the startup model and persists its priors once, before startup transition returns. */
+		/** Flushes pending timing updates and releases the startup model before gameplay. */
 		void FinishStartupEstimate();
+		/** Checkpoints changed priors outside the queue lock; finalization waits for any active writer. */
+		void SaveEstimateHistory(bool a_finish = false);
+		/** Checks the checkpoint deadline while compilationMutex is already held. */
+		bool IsEstimateHistorySaveDue(int64_t a_nowQpc) const;
 		std::unique_ptr<ShaderCompilationEstimate::Estimator> estimate = std::make_unique<ShaderCompilationEstimate::Estimator>();
 		std::string estimateContext;
 		std::string savedEstimateContext;
 		std::vector<ShaderCompilationEstimate::HistoryEntry> savedEstimateHistory;
 		bool estimateHistoryDirty = false;
+		std::filesystem::path estimateHistoryPath;
+		std::mutex estimateHistoryMutex;
+		int64_t estimateHistoryNextSaveQpc = 0;
 		int64_t estimateBatchStartQpc = 0;
 		int64_t estimateBatchEndQpc = 0;
 		/** @brief Invalidates one category and removes its tasks; caller holds compilationMutex and cache map locks. */

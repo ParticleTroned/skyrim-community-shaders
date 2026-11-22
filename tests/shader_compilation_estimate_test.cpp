@@ -1,5 +1,6 @@
 #include "ShaderCompilationEstimate.h"
 
+#include <array>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -38,8 +39,8 @@ namespace
 		for (unsigned i = 0; i < 4; ++i)
 			estimate.Start(10 + i, light, 60'000);
 		const auto result = estimate.Estimate(60'000, 4);
-		Require(result.calibrated && result.remainingMs == 25'000, "Heavy timings must not inflate other categories");
-		Require(result.workers == 4 && result.sourceSamples == 3, "Use observed workers and source samples");
+		Require(!result.calibrated && result.remainingMs == 25'000, "One heavy category must not calibrate or inflate unknown work");
+		Require(result.workers == 4 && result.sourceSamples == 3, "Use available workers and source samples");
 	}
 
 	void HistoryAndActiveTail()
@@ -145,7 +146,7 @@ namespace
 		for (unsigned i = 0; i < 8; ++i)
 			estimate.Start(i, light, 0);
 		const auto full = estimate.Estimate(0, 8);
-		Require(!full.calibrated, "Worker startup must not show a premature estimate even with history");
+		Require(!full.calibrated, "Calibration remains provisional during worker startup, even with history");
 		Require(full.remainingMs == 12'500, "Parallel queue estimate");
 		estimate.Complete(1, 100, Outcome::Compiled, true);
 		Require(estimate.Estimate(100, 8).remainingMs == full.remainingMs, "Completions do not force a per-frame scan");
@@ -153,6 +154,110 @@ namespace
 		Require(limited.workers == 2 && limited.remainingMs > full.remainingMs, "Changed worker limit refreshes immediately");
 		const auto zero = estimate.Estimate(1200, 0);
 		Require(std::isfinite(zero.remainingMs) && zero.workers == 1, "Zero capacity cannot divide by zero");
+	}
+
+	void StartupCapacityDoesNotSwingDuringDispatch()
+	{
+		Estimator estimate;
+		QueueMany(estimate, light, 100);
+		const auto queued = estimate.Estimate(0, 8);
+		estimate.Start(1, light, 0);
+		const auto dispatching = estimate.Estimate(1000, 8);
+		Require(queued.workers == 8 && dispatching.workers == 8 && dispatching.remainingMs <= queued.remainingMs,
+			"The first dispatched worker cannot multiply an immediate queue estimate");
+		const auto raised = estimate.Estimate(1001, 16);
+		Require(raised.workers == 16 && raised.remainingMs < dispatching.remainingMs,
+			"Raising dispatch capacity must update future work before extra workers start");
+	}
+
+	constexpr std::array<Category, 3> calibrationCategories{ { { 100, 60'000 }, { 124, 30'000 }, { 148, 12'000 } } };
+	constexpr Category unmeasured{ 1, 1000 };
+
+	void LearnCategory(Estimator& a_estimate, Category a_category, double a_scale, unsigned a_samples = 3,
+		Outcome a_outcome = Outcome::Compiled, bool a_learn = true)
+	{
+		QueueMany(a_estimate, a_category, a_samples);
+		for (unsigned i = 0; i < a_samples; ++i) {
+			a_estimate.Start(i, a_category, 0);
+			a_estimate.Complete(i, a_category.fallbackMs * a_scale, a_outcome, a_learn);
+		}
+	}
+
+	void MachineSpeedScalesUnmeasuredCategories()
+	{
+		for (const double speed : { 0.25, 0.5, 1.0, 2.0, 4.0 }) {
+			for (const unsigned workers : { 1u, 4u, 16u }) {
+				Estimator estimate;
+				QueueMany(estimate, unmeasured, 960);
+				for (const auto category : calibrationCategories)
+					LearnCategory(estimate, category, speed);
+				for (unsigned i = 0; i < workers; ++i) {
+					estimate.Start(100 + i, unmeasured, 2000);
+					estimate.MarkSourceCompile(100 + i);
+				}
+				const auto result = estimate.Estimate(2000, workers);
+				Require(result.calibrated && result.remainingMs == 960'000 * speed / workers,
+					"Unmeasured work must follow machine speed in both directions and respect worker capacity");
+				Require(result.learnedFraction == 0 && result.upperRemainingMs == result.remainingMs * 2,
+					"Inferred costs must retain broad uncertainty rather than claim direct measurement");
+			}
+		}
+	}
+
+	void CalibrationResistsCategoryBiasAndSeparatesStages()
+	{
+		Estimator estimate;
+		QueueMany(estimate, unmeasured, 100);
+		LearnCategory(estimate, calibrationCategories[0], 8, 80);
+		LearnCategory(estimate, calibrationCategories[1], 0.5);
+		Require(!estimate.Estimate(2000, 1).calibrated, "Two categories cannot establish a stage speed");
+		LearnCategory(estimate, calibrationCategories[2], 0.5);
+		const auto inferred = estimate.Estimate(3000, 1);
+		Require(inferred.calibrated && inferred.remainingMs == 50'000,
+			"A common outlier cannot outweigh the median normalized category cost");
+		QueueMany(estimate, light, 10);
+		const auto mostlySupported = estimate.Estimate(4000, 1);
+		Require(mostlySupported.calibrated && mostlySupported.remainingMs == 60'000,
+			"A small unsupported stage must not hide an otherwise calibrated estimate");
+		QueueMany(estimate, light, 90);
+		const auto mixedStages = estimate.Estimate(5000, 1);
+		Require(mixedStages.remainingMs == 150'000 && !mixedStages.calibrated,
+			"A measured stage must not scale or calibrate an unmeasured stage");
+		LearnCategory(estimate, unmeasured, 0.75);
+		Require(estimate.Estimate(6000, 1).remainingMs == 175'000,
+			"Direct category measurements override inferred machine speed");
+	}
+
+	void CalibrationHistoryAndInvalidation()
+	{
+		Estimator source;
+		for (const auto category : calibrationCategories)
+			LearnCategory(source, category, 0.5);
+		Estimator restored;
+		for (const auto& entry : source.History())
+			Require(restored.Seed(entry), "Measured categories round-trip through existing history");
+		QueueMany(restored, unmeasured, 100);
+		restored.Start(100, unmeasured, 2000);
+		Require(!restored.Estimate(4000, 1).calibrated,
+			"History without a known category baseline cannot infer machine speed");
+		for (const auto category : calibrationCategories) {
+			restored.Queue(category);
+			restored.CancelQueued(category);
+		}
+		Require(restored.Estimate(5000, 1).calibrated && restored.Estimate(5000, 1).remainingMs < 50'000,
+			"Compatible history calibrates known baselines without new source compiles");
+		restored.ClearLearning();
+		const auto cleared = restored.Estimate(6000, 1);
+		Require(!cleared.calibrated && cleared.remainingMs > 99'000,
+			"Compiler-context invalidation removes inferred speed and preserves pending work");
+		for (const auto category : calibrationCategories) {
+			LearnCategory(restored, category, 0.01, 8, Outcome::Disk);
+			LearnCategory(restored, category, 0.01, 8, Outcome::Shared);
+			LearnCategory(restored, category, 0.01, 8, Outcome::Failed);
+			LearnCategory(restored, category, 0.01, 8, Outcome::Compiled, false);
+		}
+		Require(!restored.Estimate(7000, 1).calibrated && restored.History().empty(),
+			"Reuse, failures and stale completions cannot teach machine speed");
 	}
 }
 
@@ -165,4 +270,8 @@ int main()
 	LoweredLimitDoesNotSerializeActiveWorkers();
 	InvalidationAndBadSamples();
 	RefreshAndWorkerLimits();
+	StartupCapacityDoesNotSwingDuringDispatch();
+	MachineSpeedScalesUnmeasuredCategories();
+	CalibrationResistsCategoryBiasAndSeparatesStages();
+	CalibrationHistoryAndInvalidation();
 }

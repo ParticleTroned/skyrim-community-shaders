@@ -29,7 +29,7 @@ target_include_directories(
 target_link_libraries(shader_include_test PRIVATE d3dcompiler.lib)
 set_tests_properties(ShaderInclude PROPERTIES TIMEOUT 120)
 
-
+include("${PROJECT_SOURCE_DIR}/tests/linear_geometry_upload.cmake")
 
 add_d3d_shader_test(
     adaptive_balance_color_shader_test

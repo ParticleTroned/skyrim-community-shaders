@@ -1,5 +1,8 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
+
 struct LinearLighting : Feature
 {
 	static LinearLighting* GetSingleton()
@@ -99,6 +102,7 @@ struct LinearLighting : Feature
 		float emissiveMult;
 		float pad0[3];
 	};
+	static_assert(sizeof(PerGeometryData) == 16);
 
 	ConstantBuffer* PerGeometryCB = nullptr;
 
@@ -136,5 +140,8 @@ struct LinearLighting : Feature
 	struct Hooks;
 
 private:
+	std::array<std::byte, sizeof(PerGeometryData)> lastUploadedPerGeometryBytes{};
+	bool perGeometryUploadValid = false;
+
 	static void SanitizeSettings(Settings& a_settings);
 };

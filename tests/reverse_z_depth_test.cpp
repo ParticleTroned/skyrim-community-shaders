@@ -602,7 +602,7 @@ RWBuffer<uint> Output : register(u0);
 			}
 		}
 	}
-	void TestUnderwaterMaskPixels()
+	void TestUnderwaterMaskPixels(bool sky, float farPlane = 100000.0f)
 	{
 		using D3D11ShaderTest::Check;
 		constexpr UINT width = 64, height = 32;
@@ -714,12 +714,21 @@ RWBuffer<uint> Output : register(u0);
 				D3D11ShaderTest::ConstantBuffer frame(device.get(), reflection.get(), "FrameBuffer::PerFrame");
 				D3D11ShaderTest::ConstantBuffer shared(device.get(), reflection.get(), "SharedData::SharedData");
 				D3D11ShaderTest::ConstantBuffer jitterConstants(device.get(), reflection.get(), "JitterCB");
-				const std::array inverse{
+				std::array inverse{
 					Store(XMMATRIX(1, 0, 0, 0, 0, 1, 0, 0, 0, 20, 10, -5, 0, 0, 0, 1)),
 					Store(XMMATRIX(1, 0, 0, 0, 0, 1, 0, 0, 0, 20, 10, -1, 0, 0, 0, 1))
 				};
+				if (sky) {
+					auto projection = Store(XMMatrixPerspectiveOffCenterLH(-0.8f, 1.2f, -1, 1, 1, farPlane));
+					if (reversed)
+						Depth::SetReverseProjection(projection, 1, farPlane);
+					for (unsigned eye = 0; eye < inverse.size(); ++eye) {
+						const auto view = XMMatrixLookToLH(XMVectorZero(), XMVectorSet(0, 1, eye ? 0.5f : 0, 0), XMVectorSet(0, 0, 1, 0));
+						inverse[eye] = Store(XMMatrixTranspose(XMMatrixInverse(nullptr, XMMatrixMultiply(view, Load(projection)))));
+					}
+				}
 				frame.SetVariable("FrameBuffer::CameraViewProjInverse", inverse);
-				frame.SetVariable("FrameBuffer::CameraPosAdjust", std::array{ XMFLOAT4{}, XMFLOAT4{ 0, 0, 2, 0 } });
+				frame.SetVariable("FrameBuffer::CameraPosAdjust", std::array{ XMFLOAT4{}, XMFLOAT4{ 0, 0, sky ? -0.1f : 2, 0 } });
 				frame.SetVariable("FrameBuffer::DynamicResolutionParams1", XMFLOAT4{ mode.scale, mode.scale, mode.scale, mode.scale });
 				frame.SetVariable("FrameBuffer::DynamicResolutionParams2", XMFLOAT4{ 1 / mode.scale, 1 / mode.scale, mode.scale, mode.scale });
 				shared.SetVariable("SharedData::BufferDim", XMFLOAT4{ width, height, 1.0f / width, 1.0f / height });
@@ -736,7 +745,8 @@ RWBuffer<uint> Output : register(u0);
 				context->PSSetSamplers(0, 1, &rawSampler);
 				auto* rawOutput = outputRTV.get();
 				context->OMSetRenderTargets(1, &rawOutput, nullptr);
-				for (float waterHeight : { -50.0f, 0.0f, 50.0f }) {
+				const auto waterHeights = sky ? std::vector{ -50.0f, -0.05f, 0.0f, 0.05f, 50.0f } : std::vector{ -50.0f, 0.0f, 50.0f };
+				for (float waterHeight : waterHeights) {
 					for (bool fallback : { false, true }) {
 						std::array<XMFLOAT4, 25> waterData;
 						waterData.fill({ 0, 0, 0, fallback ? -2147483648.0f : waterHeight });
@@ -747,9 +757,10 @@ RWBuffer<uint> Output : register(u0);
 							jitterConstants.SetVariable("useWideKernel", kernel);
 							jitterConstants.Bind(context.get(), D3D11ShaderTest::Stage::Pixel);
 							depths.fill(reversed ? 0.0f : 1.0f);
-							for (UINT y = 0; y < static_cast<UINT>(height * mode.scale); ++y)
-								for (UINT x = 0; x < static_cast<UINT>(width * mode.scale); ++x)
-									depths[y * width + x] = 0.5f;
+							if (!sky)
+								for (UINT y = 0; y < static_cast<UINT>(height * mode.scale); ++y)
+									for (UINT x = 0; x < static_cast<UINT>(width * mode.scale); ++x)
+										depths[y * width + x] = 0.5f;
 							context->UpdateSubresource(depth.get(), 0, nullptr, depths.data(), width * sizeof(float), 0);
 							constexpr float unwritten[]{ -1, -1, -1, -1 };
 							context->ClearRenderTargetView(outputRTV.get(), unwritten);
@@ -762,8 +773,9 @@ RWBuffer<uint> Output : register(u0);
 								const auto* row = reinterpret_cast<const float*>(static_cast<const std::byte*>(mapped.pData) + y * mapped.RowPitch);
 								for (UINT x = 0; x < width; ++x) {
 									const bool right = x >= width / 2;
-									// The synthetic plane crosses the eye waterlines at rows 19 and 24.
-									const bool submerged = waterHeight > 0 || (waterHeight == 0 && y >= (right ? 24u : 19u));
+									// Sky horizons are independent of immersion; the right eye looks upward.
+									const bool submerged = sky ? y >= (right ? 24u : 16u) :
+									                             waterHeight > 0 || (waterHeight == 0 && y >= (right ? 24u : 19u));
 									const bool hidden = mode.variant == 0 && x + 1 >= hiddenX && x <= hiddenX + 1 &&
 									                    y + 1 >= hiddenY && y <= hiddenY + 1;
 									correct = correct && row[x] == (submerged && !hidden ? 1.0f : 0.0f);
@@ -771,7 +783,8 @@ RWBuffer<uint> Output : register(u0);
 							}
 							context->Unmap(readback.get(), 0);
 							if (!correct)
-								throw std::runtime_error(std::string("Underwater mask stereo/diagonal regression: ") + mode.name);
+								throw std::runtime_error(std::string(sky ? "Underwater sky mask regression: " : "Underwater mask stereo/diagonal regression: ") + mode.name +
+														 (reversed ? " reverse" : " forward") + ", far=" + std::to_string(farPlane) + ", water=" + std::to_string(waterHeight));
 							++checked;
 						}
 					}
@@ -779,7 +792,7 @@ RWBuffer<uint> Output : register(u0);
 				context->ClearState();
 			}
 		}
-		std::cout << "Underwater mask: " << checked << " stereo pixel checks across the None/TAA/FSR/DLSS mask variants, both depth conventions, water heights, fallback and kernels\n";
+		std::cout << "Underwater " << (sky ? "sky" : "geometry") << " mask (far=" << farPlane << "): " << checked << " stereo pixel checks across the None/TAA/FSR/DLSS mask variants, both depth conventions, water heights, fallback and kernels\n";
 	}
 
 	void TestUpscaleDepthKernel()
@@ -1210,7 +1223,9 @@ int main()
 		TestReflectionHits();
 		TestUnderwaterGeometryDepth();
 		TestUnderwaterMaskInputs();
-		TestUnderwaterMaskPixels();
+		TestUnderwaterMaskPixels(false);
+		TestUnderwaterMaskPixels(true);
+		TestUnderwaterMaskPixels(true, 1e9f);
 		TestUpscaleDepthKernel();
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

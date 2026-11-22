@@ -206,14 +206,11 @@ PS_OUTPUT main(PS_INPUT input)
 			float threshold = (cameraUnderwater && lookingUp) ? waterHeight + kSurfaceBias : waterHeight - kSurfaceBias;
 			psout.UnderwaterMask = (worldPos.z < threshold) ? 1.0 : 0.0;
 		} else {
-			// Sky samples use the native far endpoint for ray reconstruction.
-			// Unproject to obtain the per-pixel ray direction and decide based on that.
+			// Homogeneous camera-relative Z preserves the ray's sign even when far W rounds to zero.
 			float4 worldFarPos = mul(FrameBuffer::CameraViewProjInverse[eyeIndex], float4(ndc, FrameBuffer::FarPlaneDepth(), 1.0));
-			worldFarPos /= worldFarPos.w;
-			float3 rayDir = normalize(worldFarPos.xyz);
-			// Per-eye waterHeight > 0 means the water surface is above THIS eye's camera
-			// (eye is below water); <= 0 means the eye camera is above the water surface.
-			psout.UnderwaterMask = (waterHeight > 0.0 || rayDir.z < 0.0) ? 1.0 : 0.0;
+			// Upward sky rays exit the water even when the eye is submerged.
+			// Fogging their far depth would replace the sky with opaque water colour.
+			psout.UnderwaterMask = (worldFarPos.z < 0.0) ? 1.0 : 0.0;
 		}
 		return psout;
 	}

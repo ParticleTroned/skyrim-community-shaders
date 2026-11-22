@@ -4300,6 +4300,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		lightOffset = clusterGrid.offset;
 	}
 
+	const bool usePreparedColour = LightLimitFix::UsePreparedPointLightColour(inReflection);
 	[loop] for (uint lightIndex = 0; lightIndex < totalLightCount; lightIndex++)
 	{
 		LightLimitFix::Light light;
@@ -4332,8 +4333,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #			endif
 
-		const bool isPointLightLinear = (light.lightFlags & LightLimitFix::LightFlags::Linear) != 0;
-		float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear, light.lightFlags) * intensityMultiplier * light.fade;
+		float3 baseColour = LightLimitFix::GetPointLightColour(light, clusteredLightIndex, usePreparedColour && isClusteredLight);
+		float3 lightColor = baseColour * intensityMultiplier * light.fade;
 		// Every direct lobe, including transmission and wet film, scales by this color.
 		[branch] if (all(lightColor == 0.0)) continue;
 		float lightShadow = 1.0;

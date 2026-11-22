@@ -37,6 +37,13 @@ add_d3d_shader_test(
 target_link_libraries(adaptive_balance_color_shader_test PRIVATE nlohmann_json::nlohmann_json)
 set_tests_properties(AdaptiveBalanceColorShader PROPERTIES TIMEOUT 180)
 
+add_d3d_shader_test(
+    prepared_point_light_colour_test
+    PreparedPointLightColour
+    tests/prepared_point_light_colour_test.cpp
+)
+set_tests_properties(PreparedPointLightColour PROPERTIES TIMEOUT 180)
+
 set(_mapped_emission_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/mapped-emission")
 set(_mapped_emission_shader "${_mapped_emission_dir}/mapped_emission.hlsl")
 add_custom_command(
@@ -195,6 +202,7 @@ foreach(
         shader_include_test
         glint_parallax_shader_test
         adaptive_balance_color_shader_test
+        prepared_point_light_colour_test
         foveated_blend_curve_shader_test
         foveated_mask_overlay_shader_test
         hair_indirect_shader_test

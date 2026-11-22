@@ -1414,13 +1414,23 @@ LightLimitFix::PerFrame LightLimitFix::GetCommonBufferData()
 	perFrame.ContactShadowFlags = PackContactShadowFlags(settings);
 	perFrame.ContactShadowParams = PackContactShadowParams(settings);
 	std::copy(clusterSize, clusterSize + 3, perFrame.ClusterSize);
-	perFrame.HasClusteredLights = clusteredLightsAvailable;
+	perFrame.ClusteredLightFlags = preparedColourState.Flags(clusteredLightsAvailable);
 	return perFrame;
+}
+
+void LightLimitFix::InvalidatePreparedPointLightColours()
+{
+	const bool hadPreparedColours = preparedColourState.IsReady();
+	preparedColourState.Invalidate();
+	if (hadPreparedColours && globals::d3d::context && globals::state && globals::state->featureDataCB)
+		globals::state->UpdateFeatureData(globals::state->inWorld);
 }
 
 void LightLimitFix::SetupResources()
 {
 	clusteredLightsAvailable = false;
+	InvalidatePreparedPointLightColours();
+	preparedPointLightColours.reset();
 	effectSpotlightsAvailable = false;
 	effectSpotlightUploadFailed = false;
 	effectSpotlights.reset();
@@ -1525,6 +1535,19 @@ void LightLimitFix::SetupResources()
 		contactShadowGrid->CreateSRV(srvDesc);
 		uavDesc.Buffer.NumElements = numElements;
 		contactShadowGrid->CreateUAV(uavDesc);
+
+		try {
+			sbDesc.StructureByteStride = sizeof(PreparedPointLightColour);
+			sbDesc.ByteWidth = sbDesc.StructureByteStride * MAX_LIGHTS;
+			srvDesc.Buffer.NumElements = MAX_LIGHTS;
+			uavDesc.Buffer.NumElements = MAX_LIGHTS;
+			auto buffer = eastl::make_unique<Buffer>(sbDesc, nullptr, "LightLimitFix::PreparedPointLightColours");
+			buffer->CreateSRV(srvDesc);
+			buffer->CreateUAV(uavDesc);
+			preparedPointLightColours = std::move(buffer);
+		} catch (const std::exception& error) {
+			logger::error("[LLF] Prepared colours unavailable; retaining inline light colour: {}", error.what());
+		}
 	}
 
 	{
@@ -2014,10 +2037,13 @@ void LightLimitFix::Prepass()
 	auto context = globals::d3d::context;
 	auto state = globals::state;
 	if (!context || !state) {
+		preparedColourState.Invalidate();
 		clusteredLightsAvailable = false;
 		return;
 	}
 
+	const bool hadPreparedColours = preparedColourState.IsReady();
+	preparedColourState.Invalidate();
 	const bool hadClusteredLights = clusteredLightsAvailable;
 	const auto previousClusterSize = std::to_array(clusterSize);
 	clusteredLightsAvailable = false;
@@ -2027,18 +2053,19 @@ void LightLimitFix::Prepass()
 		CS_GPU_PASS("LightLimitFix::Prepass");
 		UpdateLights();
 
-		ID3D11ShaderResourceView* views[6]{};
+		ID3D11ShaderResourceView* views[7]{};
 		views[0] = lights->srv.get();
 		views[1] = lightIndexList->srv.get();
 		views[2] = lightGrid->srv.get();
 		views[3] = contactShadowIndexList->srv.get();
 		views[4] = contactShadowGrid->srv.get();
 		views[5] = effectSpotlightsAvailable ? effectSpotlights->srv.get() : nullptr;
+		views[6] = preparedColourState.IsReady() ? preparedPointLightColours->srv.get() : nullptr;
 		context->PSSetShaderResources(35, ARRAYSIZE(views), views);
 	}
 
 	// Draws need the current grid; nonzero count changes do not affect this gate.
-	if (hadClusteredLights != clusteredLightsAvailable ||
+	if (hadClusteredLights != clusteredLightsAvailable || hadPreparedColours != preparedColourState.IsReady() ||
 		!std::equal(previousClusterSize.begin(), previousClusterSize.end(), clusterSize)) {
 		state->UpdateFeatureData(state->inWorld);
 	}
@@ -3168,6 +3195,7 @@ void LightLimitFix::DataLoaded()
 
 void LightLimitFix::ClearShaderCache()
 {
+	InvalidatePreparedPointLightColours();
 	clusterBuildingCS.Reset();
 	clusterCullingCS.Reset();
 	CompileComputeShaders();
@@ -3312,6 +3340,7 @@ void LightLimitFix::UploadEffectSpotlights()
 
 void LightLimitFix::UpdateLights()
 {
+	preparedColourState.Invalidate();
 	ZoneScopedN("LLF::UpdateLights");
 	effectSpotlightScratch.clear();
 	effectSpotlightsAvailable = false;
@@ -3706,8 +3735,27 @@ void LightLimitFix::UpdateStructure()
 	}
 
 	{
+		const bool prepareColours = preparedColourState.CanPrepare() &&
+		                            globals::state->inWorld && globals::state->featureDataCB &&
+		                            preparedPointLightColours && preparedPointLightColours->srv && preparedPointLightColours->uav;
+		winrt::com_ptr<ID3D11Buffer> previousShared, previousFeature;
+		const SKSE::stl::scope_exit restoreConstants([&] {
+			if (prepareColours) {
+				ID3D11Buffer* buffers[] = { previousShared.get(), previousFeature.get() };
+				context->CSSetConstantBuffers(5, 2, buffers);
+			}
+		});
+		if (prepareColours) {
+			context->CSGetConstantBuffers(5, 1, previousShared.put());
+			context->CSGetConstantBuffers(6, 1, previousFeature.put());
+			Util::BindSharedDataConstantBuffersForCS(context);
+			ID3D11ShaderResourceView* nullColour = nullptr;
+			context->PSSetShaderResources(41, 1, &nullColour);
+		}
+
 		LightCullingCB updateData{};
 		updateData.LightCount = lightCount;
+		updateData.PreparePointLightColours = prepareColours;
 		updateData.ContactShadowFlags = PackContactShadowFlags(settings);
 		updateData.ContactShadowParams = PackContactShadowParams(settings);
 		std::copy(clusterSize, clusterSize + 3, updateData.ClusterSize);
@@ -3724,7 +3772,7 @@ void LightLimitFix::UpdateStructure()
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
 		ID3D11UnorderedAccessView* uavs[] = {
-			nullptr,
+			prepareColours ? preparedPointLightColours->uav.get() : nullptr,
 			lightIndexList->uav.get(),
 			lightGrid->uav.get(),
 			contactShadowIndexCounter->uav.get(),
@@ -3737,6 +3785,7 @@ void LightLimitFix::UpdateStructure()
 		{
 			CS_GPU_PASS("LightLimitFix::ClusterCull");
 			context->Dispatch((clusterSize[0] + 15) / 16, (clusterSize[1] + 15) / 16, (clusterSize[2] + 3) / 4);
+			preparedColourState.Complete(prepareColours && lightCount != 0 && clusterSize[0] != 0 && clusterSize[1] != 0);
 		}
 	}
 

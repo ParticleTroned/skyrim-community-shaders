@@ -18,6 +18,9 @@ namespace LightLimitFix
 		Light StrictLights[15];
 	};
 
+#if defined(LIGHTING)
+#	include "LightLimitFix/PreparedPointLightColour.hlsli"
+#endif
 	StructuredBuffer<Light> lights : register(t35);
 	StructuredBuffer<uint> lightList : register(t36);       //MAX_CLUSTER_LIGHTS * 16^3
 	StructuredBuffer<LightGrid> lightGrid : register(t37);  //16^3
@@ -30,7 +33,7 @@ namespace LightLimitFix
 	bool GetClusterIndex(in float2 uv, in float z, inout uint clusterIndex)
 	{
 		bool found = false;
-		[branch] if (SharedData::lightLimitFixSettings.HasClusteredLights != 0)
+		[branch] if ((SharedData::lightLimitFixSettings.ClusteredLightFlags & ClusteredLightFlags::Available) != 0)
 		{
 			const uint3 clusterSize = SharedData::lightLimitFixSettings.ClusterSize.xyz;
 

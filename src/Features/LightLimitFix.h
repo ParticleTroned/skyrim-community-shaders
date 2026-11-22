@@ -46,7 +46,7 @@ public:
 	virtual inline std::string GetShortName() override { return "LightLimitFix"; }
 	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
 	virtual inline std::string_view GetShaderDefineName() override { return "LIGHT_LIMIT_FIX"; }
-	std::string_view GetShaderCacheAbiVersion() override { return "prepared-point-light-colours-v1"; }
+	std::string_view GetShaderCacheAbiVersion() override { return "cluster-contact-membership-v3+prepared-point-light-colours-v1"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override

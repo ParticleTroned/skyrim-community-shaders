@@ -11,6 +11,19 @@
 #define MAX_CLUSTER_LIGHTS 256
 #define MAX_CONTACT_SHADOW_LIGHTS 8
 
+// Global light indices fit within GROUP_SIZE; membership belongs to each cluster entry.
+static const uint ClusteredContactShadowMemberBit = 0x80000000u;
+
+uint DecodeClusteredLightIndex(uint entry)
+{
+	return entry & ~ClusteredContactShadowMemberBit;
+}
+
+bool HasContactShadowMembership(uint entry)
+{
+	return (entry & ClusteredContactShadowMemberBit) != 0u;
+}
+
 namespace ContactShadowFlags
 {
 	static const uint Point = (1u << 0);

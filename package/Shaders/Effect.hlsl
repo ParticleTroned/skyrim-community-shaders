@@ -948,7 +948,7 @@ PS_OUTPUT main(PS_INPUT input)
 			uint lightOffset = clusterGrid.offset;
 			[loop] for (uint i = 0; i < lightCount; i++)
 			{
-				uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + i];
+				uint clusteredLightIndex = LightLimitFix::DecodeClusteredLightIndex(LightLimitFix::lightList[lightOffset + i]);
 				LightLimitFix::Light light = LightLimitFix::lights[clusteredLightIndex];
 				float lightVisibility = LightLimitFix::GetEffectLightVisibility(light, input.WorldPosition.xyz, eyeIndex);
 				if (lightVisibility <= 0.0) {

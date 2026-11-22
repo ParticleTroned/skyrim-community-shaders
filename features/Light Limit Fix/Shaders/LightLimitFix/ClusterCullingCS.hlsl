@@ -67,6 +67,7 @@ bool IsContactShadowEligible(Light light, uint contactShadowFlags, uint particle
 
 void InsertContactShadowCandidate(
 	uint lightIndex,
+	uint visibleLightSlot,
 	float score,
 	bool isParticle,
 	uint candidateBudget,
@@ -75,7 +76,7 @@ void InsertContactShadowCandidate(
 	inout uint particleCount,
 	inout uint indices[MAX_CONTACT_SHADOW_LIGHTS],
 	inout float scores[MAX_CONTACT_SHADOW_LIGHTS],
-	inout uint particles[MAX_CONTACT_SHADOW_LIGHTS])
+	inout uint particleSlots[MAX_CONTACT_SHADOW_LIGHTS])
 {
 	if (score <= 1e-5 || candidateBudget == 0)
 		return;
@@ -86,11 +87,14 @@ void InsertContactShadowCandidate(
 	if (isParticle && particleBudget == 0)
 		return;
 
+	// Reuse the particle-state word to retain the slot without another per-thread array.
+	const uint particleSlot = (visibleLightSlot << 1) | (isParticle ? 1u : 0u);
+
 	if (isParticle && particleCount >= particleBudget) {
 		uint weakestParticle = MAX_CONTACT_SHADOW_LIGHTS;
 		float weakestParticleScore = score;
 		for (uint i = 0; i < candidateCount; ++i) {
-			if (particles[i] != 0 && scores[i] < weakestParticleScore) {
+			if ((particleSlots[i] & 1u) != 0 && scores[i] < weakestParticleScore) {
 				weakestParticle = i;
 				weakestParticleScore = scores[i];
 			}
@@ -100,6 +104,7 @@ void InsertContactShadowCandidate(
 			return;
 
 		indices[weakestParticle] = lightIndex;
+		particleSlots[weakestParticle] = particleSlot;
 		scores[weakestParticle] = score;
 		return;
 	}
@@ -107,7 +112,7 @@ void InsertContactShadowCandidate(
 	if (candidateCount < candidateBudget) {
 		indices[candidateCount] = lightIndex;
 		scores[candidateCount] = score;
-		particles[candidateCount] = isParticle ? 1 : 0;
+		particleSlots[candidateCount] = particleSlot;
 		candidateCount++;
 		if (isParticle)
 			particleCount++;
@@ -126,12 +131,12 @@ void InsertContactShadowCandidate(
 	if (score <= weakestScore)
 		return;
 
-	if (particles[weakest] != 0)
+	if ((particleSlots[weakest] & 1u) != 0)
 		particleCount--;
 
 	indices[weakest] = lightIndex;
 	scores[weakest] = score;
-	particles[weakest] = isParticle ? 1 : 0;
+	particleSlots[weakest] = particleSlot;
 	if (isParticle)
 		particleCount++;
 }
@@ -165,7 +170,7 @@ void InsertContactShadowCandidate(
 	uint contactShadowParticleCount = 0;
 	uint contactShadowLightIndices[MAX_CONTACT_SHADOW_LIGHTS];
 	float contactShadowLightScores[MAX_CONTACT_SHADOW_LIGHTS];
-	uint contactShadowParticles[MAX_CONTACT_SHADOW_LIGHTS];
+	uint contactShadowParticleSlots[MAX_CONTACT_SHADOW_LIGHTS];
 
 	uint clusterIndex = dispatchThreadId.x +
 	                    dispatchThreadId.y * ClusterSize.x +
@@ -215,6 +220,7 @@ void InsertContactShadowCandidate(
 #endif
 				InsertContactShadowCandidate(
 					i,
+					visibleLightCount - 1,
 					contactShadowScore,
 					(light.lightFlags & LightFlags::Particle) != 0,
 					contactShadowClusterBudget,
@@ -223,7 +229,7 @@ void InsertContactShadowCandidate(
 					contactShadowParticleCount,
 					contactShadowLightIndices,
 					contactShadowLightScores,
-					contactShadowParticles);
+					contactShadowParticleSlots);
 			}
 		}
 
@@ -243,6 +249,8 @@ void InsertContactShadowCandidate(
 
 		for (uint k = 0; k < contactShadowLightCount; k++) {
 			contactShadowIndexList[contactShadowOffset + k] = contactShadowLightIndices[k];
+			const uint visibleSlot = contactShadowParticleSlots[k] >> 1;
+			lightIndexList[offset + visibleSlot] = contactShadowLightIndices[k] | ClusteredContactShadowMemberBit;
 		}
 	}
 

@@ -63,22 +63,6 @@ namespace LightLimitFix
 		return IsSaturated(value.x) && IsSaturated(value.y);
 	}
 
-	bool IsContactShadowCandidate(uint lightIndex, uint contactShadowOffset, uint contactShadowCount)
-	{
-		contactShadowCount = min(contactShadowCount, MAX_CONTACT_SHADOW_LIGHTS);
-
-		[unroll] for (uint i = 0; i < MAX_CONTACT_SHADOW_LIGHTS; ++i)
-		{
-			if (i >= contactShadowCount)
-				break;
-
-			if (contactShadowList[contactShadowOffset + i] == lightIndex)
-				return true;
-		}
-
-		return false;
-	}
-
 	bool GetContactShadowClusterRange(uint clusterIndex, out uint contactShadowOffset, out uint contactShadowCount)
 	{
 		contactShadowOffset = 0;

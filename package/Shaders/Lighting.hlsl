@@ -4305,11 +4305,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	{
 		LightLimitFix::Light light;
 		uint clusteredLightIndex = 0;
+		uint clusteredLightEntry = 0;
 		bool isClusteredLight = false;
 		if (lightIndex < LightLimitFix::NumStrictLights) {
 			light = LightLimitFix::StrictLights[lightIndex];
 		} else {
-			clusteredLightIndex = LightLimitFix::lightList[lightOffset + (lightIndex - LightLimitFix::NumStrictLights)];
+			clusteredLightEntry = LightLimitFix::lightList[lightOffset + (lightIndex - LightLimitFix::NumStrictLights)];
+			clusteredLightIndex = LightLimitFix::DecodeClusteredLightIndex(clusteredLightEntry);
 			light = LightLimitFix::lights[clusteredLightIndex];
 			isClusteredLight = true;
 
@@ -4362,7 +4364,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 					LightLimitFix::GetContactShadowClusterRange(clusterIndex, contactShadowOffset, contactShadowCount);
 					hasContactShadowRange = true;
 				}
-				isContactShadowCandidate = contactShadowCount > 0 && LightLimitFix::IsContactShadowCandidate(clusteredLightIndex, contactShadowOffset, contactShadowCount);
+				isContactShadowCandidate = contactShadowCount > 0 && LightLimitFix::HasContactShadowMembership(clusteredLightEntry);
 			} else {
 				isContactShadowCandidate = !isParticleLight && lightIndex < LightLimitFix::GetStrictContactShadowBudget();
 			}

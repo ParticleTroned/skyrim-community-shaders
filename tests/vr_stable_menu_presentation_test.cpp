@@ -64,9 +64,11 @@ namespace
 		eye.outputHeight = profile.displayEyeHeight;
 		eye.deviceIdentity = kDeviceIdentity;
 		eye.resourceRevision = kResourceRevision;
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		eye.vendorBackend = profile.method == Upscaling::UpscaleMethod::kFSR ?
 		                        Upscaling::VRRenderScaleBackendKind::FSR4Runtime :
 		                        Upscaling::VRRenderScaleBackendKind::DLSS;
+#endif
 		return eye;
 	}
 
@@ -221,6 +223,84 @@ namespace
 		Observe(presentation, 1, nextRight);
 		return MenuAdmitted(stable, presentation);
 	}
+
+	bool AcceptsPresentationWithoutDiagnosticBackend()
+	{
+		const Profile stable{};
+		Presentation presentation{};
+		auto vendor = VendorEye(100, 50, stable);
+		vendor.vendorBackend = Upscaling::VRRenderScaleBackendKind::None;
+		Observe(presentation, 1, vendor);
+		if (MenuAdmitted(stable, presentation))
+			return false;
+		Observe(presentation, 0, vendor);
+		if (!MenuAdmitted(stable, presentation))
+			return false;
+#ifdef DEVBENCH_BRIDGE_ENABLED
+		if (presentation.lastCoherentVendorEyes[0].valid ||
+			presentation.lastCoherentVendorEyes[1].valid)
+			return false;
+
+		const auto attributed = VendorEye(101, 51, stable);
+		Observe(presentation, 0, attributed);
+		Observe(presentation, 1, attributed);
+		for (const auto& eye : presentation.lastCoherentVendorEyes) {
+			if (!eye.valid || eye.frame != attributed.frame ||
+				eye.vendorBackend != attributed.vendorBackend)
+				return false;
+		}
+
+		vendor.frame = 102;
+		vendor.compositorCycleToken = 52;
+		Observe(presentation, 1, vendor);
+		Observe(presentation, 0, vendor);
+		for (const auto& eye : presentation.lastBothEyesVendorEyes) {
+			if (eye.frame != vendor.frame || eye.vendorBackend != vendor.vendorBackend)
+				return false;
+		}
+		for (const auto& eye : presentation.lastCoherentVendorEyes) {
+			if (eye.frame != attributed.frame || eye.vendorBackend != attributed.vendorBackend)
+				return false;
+		}
+#endif
+		return MenuAdmitted(stable, presentation);
+	}
+
+	bool RejectsUnprovenPairsWithoutDiagnosticBackend()
+	{
+		const Profile stable{};
+		auto vendor = VendorEye(100, 50, stable);
+		vendor.vendorBackend = Upscaling::VRRenderScaleBackendKind::None;
+		const auto rejected = [&](const Eye& eye) {
+			Presentation presentation{};
+			Observe(presentation, 0, eye);
+			Observe(presentation, 1, eye);
+			return !MenuAdmitted(stable, presentation);
+		};
+		for (const auto path : { Path::Unknown, Path::NativeOriginal,
+				 Path::ValidatedPresentationHold, Path::PresentationStretch,
+				 Path::VendorFailureStretch, Path::BoundsMismatchOriginalFallback }) {
+			auto fallback = vendor;
+			fallback.path = path;
+			if (!rejected(fallback))
+				return false;
+		}
+		auto invalid = vendor;
+		invalid.valid = false;
+		if (!rejected(invalid))
+			return false;
+		invalid = vendor;
+		invalid.deviceIdentity = 0;
+		if (!rejected(invalid))
+			return false;
+		invalid = vendor;
+		invalid.resourceRevision = 0;
+		if (!rejected(invalid))
+			return false;
+		invalid = vendor;
+		invalid.compositorCycleToken = 0;
+		return rejected(invalid);
+	}
 }
 
 int main()
@@ -233,6 +313,11 @@ int main()
 	if (!RejectsUnprovenOrChangedContract() || !RejectsMixedStereoContract() ||
 		!RetainsProofAcrossRejectedPair()) {
 		std::puts("VR menu accepted missing or mismatched stereo evidence");
+		return 1;
+	}
+	if (!AcceptsPresentationWithoutDiagnosticBackend() ||
+		!RejectsUnprovenPairsWithoutDiagnosticBackend()) {
+		std::puts("VR menu continuity depends on optional vendor diagnostics");
 		return 1;
 	}
 	return 0;

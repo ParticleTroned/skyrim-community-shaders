@@ -37407,16 +37407,17 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 			left.inputWidth == right.inputWidth && left.inputHeight == right.inputHeight &&
 			left.expectedInputWidth == right.expectedInputWidth && left.expectedInputHeight == right.expectedInputHeight &&
 			left.outputWidth == right.outputWidth && left.outputHeight == right.outputHeight &&
-			left.vendorBackend != VRRenderScaleBackendKind::None &&
 			left.vendorBackend == right.vendorBackend &&
 			left.deviceIdentity != 0 &&
 			left.deviceIdentity == right.deviceIdentity &&
 			left.resourceRevision != 0 &&
 			left.resourceRevision == right.resourceRevision;
+		// Release observations omit DevBench backend labels; accepted stereo
+		// presentation and resource identity still prove menu continuity.
 		if (coherentVendorPair && left.path == VRRenderScalePresentationPath::VendorEvaluated)
 			presentation.lastBothEyesVendorEyes = presentation.eyes;
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		if (coherentVendorPair)
+		if (coherentVendorPair && left.vendorBackend != VRRenderScaleBackendKind::None)
 			presentation.lastCoherentVendorEyes = presentation.eyes;
 #endif
 

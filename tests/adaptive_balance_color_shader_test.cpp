@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <string_view>
@@ -85,6 +86,7 @@ namespace
 		Appearance,
 		Emissive,
 		MappedEmission,
+		ZeroAttenuation,
 		Fire
 	};
 
@@ -98,7 +100,7 @@ namespace
 
 		Fixture(ID3D11Device* device, bool vr, ShaderMode mode = ShaderMode::Scene, const std::vector<const char*>& extraDefines = {}, uint32_t referenceFlags = 0)
 		{
-			const bool lights = mode == ShaderMode::PointLights || mode == ShaderMode::SceneLights;
+			const bool lights = mode == ShaderMode::PointLights || mode == ShaderMode::SceneLights || mode == ShaderMode::ZeroAttenuation;
 			std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" } };
 			if (vr)
 				defines.push_back({ "VR", "1" });
@@ -118,6 +120,7 @@ namespace
 			if (referenceFlags)
 				defines.push_back({ "CSX_PERF_REFERENCE_FLAGS", referenceValue.c_str() });
 			auto code = Compile(mode == ShaderMode::MappedEmission        ? MAPPED_EMISSION_TEST_SHADER :
+								mode == ShaderMode::ZeroAttenuation       ? ZERO_ATTENUATION_TEST_SHADER :
 								mode == ShaderMode::ReflectionComposition ? FORWARD_COMPOSITION_TEST_SHADER :
 																			L"tests/adaptive_balance_color.hlsl",
 				defines, "cs_5_0");
@@ -132,7 +135,7 @@ namespace
 			feature->SetMember("SharedData::adaptiveBalanceSettings", "pointLightCurve", 1.0f);
 			for (const auto* name : { "fireIntensity", "fireSaturation", "fireCurve" })
 				feature->SetMember("SharedData::adaptiveBalanceSettings", name, 1.0f);
-			if (mode == ShaderMode::Fire || mode == ShaderMode::Appearance || mode == ShaderMode::Emissive || mode == ShaderMode::MappedEmission || mode == ShaderMode::PointLights || mode == ShaderMode::ReflectionComposition)
+			if (mode == ShaderMode::Fire || mode == ShaderMode::Appearance || mode == ShaderMode::Emissive || mode == ShaderMode::MappedEmission || mode == ShaderMode::PointLights || mode == ShaderMode::ZeroAttenuation || mode == ShaderMode::ReflectionComposition)
 				permutation = std::make_unique<ConstantBuffer>(device, reflection.Get(), "Permutation::PerShader");
 			if (mode == ShaderMode::Emissive || mode == ShaderMode::MappedEmission) {
 				geometry = std::make_unique<ConstantBuffer>(device, reflection.Get(), "LLPerGeometry");
@@ -296,6 +299,8 @@ namespace
 			return result;
 		}
 	};
+
+#include "zero_attenuation_cases.h"
 
 	unsigned VerifyMappedEmission(ID3D11Device* device, ID3D11DeviceContext* context, bool vr)
 	{
@@ -1623,7 +1628,12 @@ int main(int argc, char** argv)
 		const bool reflectionsOnly = argc == 2 && std::string_view(argv[1]) == "--reflections";
 		const bool fogOnly = argc == 2 && std::string_view(argv[1]) == "--fog";
 		const bool mappedEmissionOnly = argc == 2 && std::string_view(argv[1]) == "--mapped-emission";
-		Require(argc == 1 || reflectionsOnly || fogOnly || mappedEmissionOnly, "Unknown shader test arguments");
+		const bool zeroAttenuationOnly = argc == 2 && std::string_view(argv[1]) == "--zero-attenuation";
+		Require(argc == 1 || reflectionsOnly || fogOnly || mappedEmissionOnly || zeroAttenuationOnly, "Unknown shader test arguments");
+		if (zeroAttenuationOnly) {
+			VerifyZeroAttenuation(device.Get(), context.Get());
+			return 0;
+		}
 		if (mappedEmissionOnly) {
 			unsigned checked = 0;
 			for (bool vr : { false, true })

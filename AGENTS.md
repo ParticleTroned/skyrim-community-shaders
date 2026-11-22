@@ -170,6 +170,11 @@ contradict this policy.
 
 ## Validation and long-running work
 
+-   **RenderDoc captures:** Read `.rdc` files directly from their supplied
+    location. Archive copies only when the user explicitly requests it.
+    This is an exception to the general supplied-log preservation rule;
+    other supplied logs still require preservation before analysis.
+
 -   **Live game scope:** Interact with or inspect the running game only when
     the user explicitly requests it for the current task. Earlier in-game
     testing does not authorize live checks or setting changes during later

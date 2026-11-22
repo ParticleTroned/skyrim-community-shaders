@@ -56,3 +56,7 @@ extract("\tNeuralStereoEvaluationSummary EvaluateFinalizedNeuralStereo(" "\n\t}"
     neural_finalized_dispatch_under_test.h)
 extract("\tclass FinalizedFinalLdrNeuralInputs\n" "\n\t};"
     neural_final_ldr_plan_under_test.h)
+extract("\t\tlateStage = LateStage::Evaluation;\n\t\tlateEye = 2u;\n\t\tfinalizedInputs ="
+    "\t\tlateStage = LateStage::InputConversion;" neural_final_ldr_preparation_under_test.h)
+extract("\t\tlateSucceeded = (a_result.committedEyeMask | a_result.bypassedEyeMask)"
+    "\t\treturn lateSucceeded;" neural_final_ldr_publication_under_test.h)

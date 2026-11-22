@@ -1,9 +1,9 @@
 # MIT-licensed cross-plugin API used to register tools with the devbench SKSE host.
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
-    REPO alandtse/devbench
-    REF 5bc4ad7c2a11063747ed4388405c30c3a3595c9b
-    SHA512 0ca6ced4427904fbd3da6e22f7509564e0b3d35bbef1952e60e551196d20f78212e7f970c5e85bd3d84f936f0df3db600d05bfabb30508435d26287b60fdea08
+    REPO ParticleTroned/devbench
+    REF 096e67b00852c32ac11b35f9e50e6d89cfa7c2ce
+    SHA512 edcdbcf80dd20e2d76720303174c356d2124d66e24f2bb90f453c1b827e1aff6b225f0d5c0e84f10e311fa5d90a5c82e0ef608b8d8259d515d8f792f78490811
     HEAD_REF main
 )
 

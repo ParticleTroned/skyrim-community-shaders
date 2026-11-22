@@ -804,7 +804,7 @@ namespace
 	constexpr uint32_t kVRNativeRestoreRejectedCyclesBeforeRecovery = 3u;
 	constexpr uint32_t kVRNativeRestoreRecoveryBackoffFrames = 60u;
 	constexpr uint32_t kVRSubmitStageFoveatedFailureRetryFrames = 30u;
-	constexpr uint32_t kVRSubmitStageUnderwaterMaskTailFrames = 4u;
+	constexpr uint32_t kVRUnderwaterMaskTailFrames = 4u;
 	constexpr uint32_t kVRRetiredIntermediateTextureTailFrames = 4u;
 	constexpr uint32_t kVRRenderScaleMemorySampleIntervalFrames = 30u;
 	constexpr uint32_t kVRRenderScaleMemoryRecoverySamples = 4u;
@@ -1035,7 +1035,7 @@ namespace
 	std::atomic_uint32_t g_vrObservedProjectedMenuTailEndFrame{ 0 };
 	// Track short menu-bridge tails for exact menu draw suppression.
 	std::atomic_uint32_t g_vrMenuBridgeTraceTailEndFrame{ 0 };
-	std::atomic_uint32_t g_vrSubmitStageUnderwaterMaskTailEndFrame{ 0 };
+	std::atomic_uint32_t g_vrUnderwaterMaskTailEndFrame{ 0 };
 	std::atomic_uint64_t g_vrMenuBridgeTraceCachedState{ 0 };
 	std::atomic_uint64_t g_neuralMenuQueryEpoch{ 1 };
 	std::atomic_bool g_renderDocDllDetected{ false };
@@ -7576,15 +7576,15 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		return globals::game::isVR && IsFrameTailActive(a_state, g_vrMenuBridgeTraceTailEndFrame);
 	}
 
-	bool IsVRSubmitStageUnderwaterMaskRefreshRelevant(const State* a_state)
+	bool IsVRUnderwaterMaskRefreshRelevant(const State* a_state)
 	{
 		if (!globals::game::isVR || !a_state)
 			return false;
 
 		const uint32_t currentFrame = std::max(a_state->frameCount, 1u);
-		uint32_t tailEndFrame = g_vrSubmitStageUnderwaterMaskTailEndFrame.load(std::memory_order_acquire);
-		if (tailEndFrame != 0 && currentFrame + kVRSubmitStageUnderwaterMaskTailFrames + 1u < tailEndFrame) {
-			g_vrSubmitStageUnderwaterMaskTailEndFrame.store(0, std::memory_order_release);
+		uint32_t tailEndFrame = g_vrUnderwaterMaskTailEndFrame.load(std::memory_order_acquire);
+		if (tailEndFrame != 0 && currentFrame + kVRUnderwaterMaskTailFrames + 1u < tailEndFrame) {
+			g_vrUnderwaterMaskTailEndFrame.store(0, std::memory_order_release);
 			tailEndFrame = 0;
 		}
 
@@ -7594,7 +7594,7 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 			(waterSystem->playerUnderwater || waterSystem->partiallyUnderwater);
 		if (waterContextActive) {
 			// ExtendFrameTail includes the current frame; keep the configured tail after water clears.
-			ExtendFrameTail(g_vrSubmitStageUnderwaterMaskTailEndFrame, kVRSubmitStageUnderwaterMaskTailFrames + 1u);
+			ExtendFrameTail(g_vrUnderwaterMaskTailEndFrame, kVRUnderwaterMaskTailFrames + 1u);
 			return true;
 		}
 
@@ -23035,9 +23035,13 @@ void Upscaling::PostPostLoad()
 		logger::warn("[Upscaling] Skipping upscaling render hooks because Open Composite has {}=true.", blocker.settingName);
 		return;
 	}
+	// VR water-mask reconstruction must remain available without vendor upscaling.
+	if (globals::game::isVR)
+		stl::write_thunk_call<Main_PostProcessing>(REL::RelocationID(100430, 107148).address() + REL::Relocate(0x1F0, 0x1E7, 0x206));
+
 	if (IsRenderDocUpscalingBlocked(true)) {
 		logger::warn(
-			"[Upscaling] Skipping upscaling render hooks because {}.",
+			"[Upscaling] Skipping vendor upscaling render hooks because {}.",
 			GetRenderDocUpscalingBlockReason());
 		return;
 	}
@@ -23066,7 +23070,8 @@ void Upscaling::PostPostLoad()
 	stl::write_thunk_call<Main_UpdateJitter>(REL::RelocationID(75460, 77245).address() + REL::Relocate(0xE5, isGOG ? 0x133 : 0xE2, 0x104));
 
 	// Performs upscaling in between volumetric lighting and post processing
-	stl::write_thunk_call<Main_PostProcessing>(REL::RelocationID(100430, 107148).address() + REL::Relocate(0x1F0, 0x1E7, 0x206));
+	if (!globals::game::isVR)
+		stl::write_thunk_call<Main_PostProcessing>(REL::RelocationID(100430, 107148).address() + REL::Relocate(0x1F0, 0x1E7, 0x206));
 
 	// Patches RSSetScissorRect calls to use dynamic resolution
 	// This is a PC-specific function hence it was missing
@@ -52419,6 +52424,43 @@ void Upscaling::PrepareFullResolutionPostProcessing(RE::BSGraphics::State* a_vie
 		UpdateCameraData();
 }
 
+void Upscaling::SetupUnderwaterMaskResources()
+{
+	auto* device = globals::d3d::device;
+	auto nextJitterCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<JitterCB>(), "Upscaling::JitterCB");
+	winrt::com_ptr<ID3D11BlendState> nextBlendState;
+	winrt::com_ptr<ID3D11RasterizerState> nextRasterizerState;
+
+	// Create blend state for depth upscaling
+	D3D11_BLEND_DESC blendDesc = {};
+	blendDesc.AlphaToCoverageEnable = false;
+	blendDesc.IndependentBlendEnable = false;
+	blendDesc.RenderTarget[0].BlendEnable = false;
+	blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+	DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, nextBlendState.put()));
+	Util::SetResourceName(nextBlendState.get(), "Upscaling::DepthUpscaleBlendState");
+
+	// Create rasterizer state for fullscreen rendering
+	D3D11_RASTERIZER_DESC rasterizerDesc = {};
+	rasterizerDesc.FillMode = D3D11_FILL_SOLID;
+	rasterizerDesc.CullMode = D3D11_CULL_NONE;
+	rasterizerDesc.FrontCounterClockwise = false;
+	rasterizerDesc.DepthBias = 0;
+	rasterizerDesc.DepthBiasClamp = 0.0f;
+	rasterizerDesc.SlopeScaledDepthBias = 0.0f;
+	rasterizerDesc.DepthClipEnable = false;
+	rasterizerDesc.ScissorEnable = false;
+	rasterizerDesc.MultisampleEnable = false;
+	rasterizerDesc.AntialiasedLineEnable = false;
+	DX::ThrowIfFailed(device->CreateRasterizerState(&rasterizerDesc, nextRasterizerState.put()));
+	Util::SetResourceName(nextRasterizerState.get(), "Upscaling::DepthUpscaleRasterizerState");
+
+	delete jitterCB;
+	jitterCB = nextJitterCB.release();
+	upscaleBlendState = std::move(nextBlendState);
+	upscaleRasterizerState = std::move(nextRasterizerState);
+}
+
 void Upscaling::SetupResources()
 {
 	ApplyOpenCompositeUpscalingBlocker(true);
@@ -52427,12 +52469,7 @@ void Upscaling::SetupResources()
 		logger::warn("[Upscaling] Skipping upscaling resource setup because Open Composite has {}=true.", blocker.settingName);
 		return;
 	}
-	if (IsRenderDocUpscalingBlocked(true)) {
-		logger::warn(
-			"[Upscaling] Skipping upscaling resource setup because {}.",
-			GetRenderDocUpscalingBlockReason());
-		return;
-	}
+
 	auto device = globals::d3d::device;
 	static ID3D11Device* shaderDevice = nullptr;
 	if (shaderDevice != device) {
@@ -52441,6 +52478,24 @@ void Upscaling::SetupResources()
 		ResetVRMenuFinalCompositeLayer();
 		shaderDevice = device;
 	}
+
+	if (IsRenderDocUpscalingBlocked(true)) {
+		if (globals::game::isVR) {
+			try {
+				SetupUnderwaterMaskResources();
+			} catch (const std::exception& e) {
+				delete jitterCB;
+				jitterCB = nullptr;
+				logger::warn("[Upscaling] Native underwater mask resources unavailable: {}", e.what());
+			}
+		}
+		logger::warn(
+			"[Upscaling] Skipping vendor upscaling resource setup because {}.",
+			GetRenderDocUpscalingBlockReason());
+		return;
+	}
+
+	SetupUnderwaterMaskResources();
 
 	QueryPerformanceFrequency(&qpf);
 
@@ -52496,10 +52551,6 @@ void Upscaling::SetupResources()
 	DX::ThrowIfFailed(device->CreateDepthStencilState(&menuCaptureDepthDesc, vrMenuCaptureDepthDisabledState.put()));
 	Util::SetResourceName(vrMenuCaptureDepthDisabledState.get(), "Upscaling::VRMenuCaptureDepthDisabledState");
 
-	// Create jitter offset constant buffer for depth upscaling
-	delete jitterCB;
-	jitterCB = new ConstantBuffer(ConstantBufferDesc<JitterCB>(), "Upscaling::JitterCB");
-
 	// Create upscaling data constant buffer for encode textures compute shader
 	delete upscalingDataCB;
 	upscalingDataCB = new ConstantBuffer(ConstantBufferDesc<UpscalingDataCB>(), "Upscaling::UpscalingDataCB");
@@ -52522,15 +52573,6 @@ void Upscaling::SetupResources()
 	delete peripheryTAACB;
 	peripheryTAACB = new ConstantBuffer(ConstantBufferDesc<PeripheryTAACB>());
 
-	// Create blend state for depth upscaling
-	D3D11_BLEND_DESC blendDesc = {};
-	blendDesc.AlphaToCoverageEnable = false;
-	blendDesc.IndependentBlendEnable = false;
-	blendDesc.RenderTarget[0].BlendEnable = false;
-	blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-	DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, upscaleBlendState.put()));
-	Util::SetResourceName(upscaleBlendState.get(), "Upscaling::DepthUpscaleBlendState");
-
 	D3D11_BLEND_DESC menuLayerCaptureBlendDesc{};
 	menuLayerCaptureBlendDesc.AlphaToCoverageEnable = false;
 	menuLayerCaptureBlendDesc.IndependentBlendEnable = false;
@@ -52549,21 +52591,6 @@ void Upscaling::SetupResources()
 	menuCompositeBlendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
 	DX::ThrowIfFailed(device->CreateBlendState(&menuCompositeBlendDesc, vrMenuCompositeBlendState.put()));
 	Util::SetResourceName(vrMenuCompositeBlendState.get(), "Upscaling::VRMenuCompositeBlendState");
-
-	// Create rasterizer state for fullscreen rendering
-	D3D11_RASTERIZER_DESC rasterizerDesc = {};
-	rasterizerDesc.FillMode = D3D11_FILL_SOLID;
-	rasterizerDesc.CullMode = D3D11_CULL_NONE;
-	rasterizerDesc.FrontCounterClockwise = false;
-	rasterizerDesc.DepthBias = 0;
-	rasterizerDesc.DepthBiasClamp = 0.0f;
-	rasterizerDesc.SlopeScaledDepthBias = 0.0f;
-	rasterizerDesc.DepthClipEnable = false;
-	rasterizerDesc.ScissorEnable = false;
-	rasterizerDesc.MultisampleEnable = false;
-	rasterizerDesc.AntialiasedLineEnable = false;
-	DX::ThrowIfFailed(device->CreateRasterizerState(&rasterizerDesc, upscaleRasterizerState.put()));
-	Util::SetResourceName(upscaleRasterizerState.get(), "Upscaling::DepthUpscaleRasterizerState");
 
 	CheckResources(GetRuntimeUpscaleMethod());
 	RefreshRuntimeResolutionState();
@@ -68851,6 +68878,12 @@ void Upscaling::UpscaleDepth()
 		return;
 	}
 
+	// Mask-only paths have no consumer outside the existing water-entry/exit window.
+	if (repairVRFullResolutionMask &&
+		(!IsVRUnderwaterMaskRefreshRelevant(globals::state) || ShouldDeferVRProjectedMaskRepair(*this, globals::state))) {
+		return;
+	}
+
 	CS_GPU_PASS("Upscaling::UpscaleDepth");
 
 	auto state = globals::state;
@@ -68873,15 +68906,21 @@ void Upscaling::UpscaleDepth()
 	auto& saoCameraZ = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSAO_CAMERAZ];
 	auto& underwaterMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kUNDERWATER_MASK];
 
-	if (!depth.texture || !depthCopy.texture || !depthCopy.depthSRV ||
-		!underwaterMask.texture || !underwaterMask.textureCopy || !underwaterMask.SRVCopy || !underwaterMask.RTV) {
+	if (!depth.texture || !underwaterMask.texture || !underwaterMask.RTV ||
+		(repairVRFullResolutionMask && !depth.depthSRV)) {
 		return;
 	}
 	if (depthUpscaleActive &&
-		(!depth.views[0] || !refractionNormals.texture || !refractionNormals.textureCopy || !refractionNormals.SRVCopy || !refractionNormals.RTV || !saoCameraZ.RTV)) {
+		(!depthCopy.texture || !depthCopy.depthSRV || !underwaterMask.textureCopy || !underwaterMask.SRVCopy || !depth.views[0] || !refractionNormals.texture || !refractionNormals.textureCopy || !refractionNormals.SRVCopy || !refractionNormals.RTV || !saoCameraZ.RTV)) {
 		return;
 	}
 	if (depthUpscaleActive && isVR && (!depthCopy.stencilSRV || !depthCopy.views[0])) {
+		return;
+	}
+
+	D3D11_TEXTURE2D_DESC maskDesc{};
+	if (repairVRFullResolutionMask &&
+		(!TryGetTexture2DDesc(REX::W32::AsReal(underwaterMask.texture), maskDesc) || !maskDesc.Width || !maskDesc.Height)) {
 		return;
 	}
 
@@ -68889,7 +68928,9 @@ void Upscaling::UpscaleDepth()
 	const bool deferVRDynamicDepthCopyPropagationForUnderwaterMask = useVRDynamicDepthNoStencilUnderwaterMask;
 	auto* fullscreenVS = GetUpscaleVS();
 	auto* depthUpscalePS = depthUpscaleActive ? GetDepthRefractionUpscalePS() : nullptr;
-	const auto underwaterMaskVariant = useVRDynamicDepthNoStencilUnderwaterMask ?
+	const auto underwaterMaskVariant = repairVRFullResolutionMask ?
+	                                       UnderwaterMaskUpscaleVariant::RawDepthNoStencil :
+	                                   useVRDynamicDepthNoStencilUnderwaterMask ?
 	                                       UnderwaterMaskUpscaleVariant::DynamicDepthNoStencil :
 	                                       UnderwaterMaskUpscaleVariant::Default;
 	auto* underwaterMaskPS = GetUnderwaterMaskUpscalePS(underwaterMaskVariant);
@@ -68899,8 +68940,7 @@ void Upscaling::UpscaleDepth()
 
 	Util::FullscreenPassState<0, 3> restore(context);
 
-	// UpscaleDepth can run without the main upscale pass on VR full-resolution
-	// mask paths. Unbind current outputs before copying depth/depthCopy.
+	// Release engine outputs before sampling native depth or copying its upscaled counterpart.
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
 	// Set up Input Assembler for fullscreen triangle (no vertex/index buffers needed)
@@ -68934,7 +68974,9 @@ void Upscaling::UpscaleDepth()
 
 	// Set up jitter/depth-kernel constant buffer for upscaling
 	JitterCB jitterData{};
-	jitterData.jitter = jitter;
+	// Native full-resolution depth already matches the projection used for reconstruction.
+	if (depthUpscaleActive)
+		jitterData.jitter = jitter;
 	UpdateDepthUpscaleKernelState(jitterData, depthUpscaleActive);
 
 	jitterCB->Update(jitterData);
@@ -68983,18 +69025,13 @@ void Upscaling::UpscaleDepth()
 			CS_GPU_PASS("Upscaling::DepthVRPropagate");
 			CopyResourceIfNonAliased(context, REX::W32::AsReal(depthCopy.texture), REX::W32::AsReal(depth.texture));
 		}
-	} else {
-		CS_GPU_PASS("Upscaling::FullResolutionUnderwaterMaskDepthCopy");
-
-		// Full-resolution paths only need to refresh the underwater mask depth source.
-		CopyResourceIfNonAliased(context, REX::W32::AsReal(depthCopy.texture), REX::W32::AsReal(depth.texture));
 	}
 
 	if (!(isVR && ShouldDeferVRProjectedMaskRepair(*this, state))) {
 		CS_GPU_PASS("Upscaling::UnderwaterMaskUpscale");
 
-		viewport.Width = screenSize.x * 0.5f;
-		viewport.Height = screenSize.y * 0.5f;
+		viewport.Width = repairVRFullResolutionMask ? static_cast<float>(maskDesc.Width) : screenSize.x * 0.5f;
+		viewport.Height = repairVRFullResolutionMask ? static_cast<float>(maskDesc.Height) : screenSize.y * 0.5f;
 		context->RSSetViewports(1, &viewport);
 
 		// Dynamic VR no-render-scale keeps t1 on the original dynamic depth and
@@ -69005,8 +69042,8 @@ void Upscaling::UpscaleDepth()
 			REX::W32::AsReal(underwaterMask.texture),
 			REX::W32::AsReal(underwaterMask.RTV),
 			REX::W32::AsReal(underwaterMask.SRVCopy),
-			REX::W32::AsReal(depthCopy.depthSRV),
-			useVRDynamicDepthNoStencilUnderwaterMask ? nullptr : REX::W32::AsReal(depthCopy.stencilSRV),
+			REX::W32::AsReal(repairVRFullResolutionMask ? depth.depthSRV : depthCopy.depthSRV),
+			UnderwaterMaskUpscaleVariantUsesNoHMDStencil(underwaterMaskVariant) ? nullptr : REX::W32::AsReal(depthCopy.stencilSRV),
 			underwaterMaskVariant);
 
 		if (underwaterMaskPassBound) {
@@ -69034,7 +69071,7 @@ void Upscaling::RefreshSubmitStageUnderwaterMask()
 	if (!state || !renderer || !context || !deferred || !deferred->linearSampler || !jitterCB || !upscaleRasterizerState || !upscaleBlendState) {
 		return;
 	}
-	if (!IsVRSubmitStageUnderwaterMaskRefreshRelevant(state)) {
+	if (!IsVRUnderwaterMaskRefreshRelevant(state)) {
 		return;
 	}
 	if (ShouldDeferVRProjectedMaskRepair(*this, state)) {
@@ -69308,6 +69345,20 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5)
 {
 	auto& upscaling = globals::features::upscaling;
+	if (IsRenderDocUpscalingBlocked()) {
+		// Keep native post-processing and TAA intact when only the VR mask repair is available.
+		static bool loggedMaskRepairFailure = false;
+		try {
+			if (globals::game::isVR)
+				upscaling.UpscaleDepth();
+		} catch (const std::exception& e) {
+			LogWarnOnce(loggedMaskRepairFailure, "[Upscaling] Native underwater mask repair unavailable; retaining native mask", e);
+		} catch (...) {
+			LogWarnOnce(loggedMaskRepairFailure, "[Upscaling] Native underwater mask repair unavailable; retaining native mask");
+		}
+		func(a_this, a3, a_target, a_4, a_5);
+		return;
+	}
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	CSX::Diagnostics::ColourPipelineProbe::ServiceReadbacks(
 		globals::d3d::context, globals::state ? globals::state->frameCount : 0);

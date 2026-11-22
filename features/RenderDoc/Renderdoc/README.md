@@ -1,46 +1,25 @@
-# RenderDoc Runtime DLL
+# CSX RenderDoc runtime
 
-This directory contains the RenderDoc runtime library for frame capture functionality.
+This package contains the Windows x64 Release build of
+[ParticleTroned/renderdoc](https://github.com/ParticleTroned/renderdoc),
+version **1.47+pt.0.0.0.dev.49a6a5e57c93**, from commit
+`49a6a5e57c9324922be3e86e843d0d66f6c73281`.
 
-## Version
+The fork has not tagged a release. This version identifies the exact source
+used; it does not claim an official RenderDoc release.
 
-Current version: **1.43**
+The DLL exposes D3D11 state compatibility version 2 and external-write
+version 1. In CSX, supported Skyrim VR startup can retain DLSS with RenderDoc
+loaded after vendor passthrough and device-creation checks succeed. SE/AE
+and failed compatibility checks still block upscaling. Frame Generation
+remains unavailable with RenderDoc.
 
-## Source
+DLSS/NR captures contain opaque vendor-output boundaries. Replay restores
+the captured output; it does not rerun inference or measure vendor kernels.
+Use replay tools built from this same fork revision. Upstream RenderDoc
+cannot replay the fork capture format. Enable CSX capture, save settings,
+and restart to load this DLL; an externally injected DLL takes precedence.
 
-The `renderdoc.dll` file must be obtained from official RenderDoc releases.
-
-For stable Windows builds, the runtime package uses this pattern:
-
--   `https://renderdoc.org/stable/${VERSION}/RenderDoc_${VERSION}_64.zip`
-
-For example, for v1.43:
-
--   `https://renderdoc.org/stable/1.43/RenderDoc_1.43_64.zip`
-
-## Installation Steps
-
-1. Download the Windows x64 installer (MSI) from the link above
-2. Install RenderDoc or extract the MSI using a tool like 7-Zip
-3. Copy `renderdoc.dll` from the installation directory (typically `<RenderDoc-installation>`)
-4. Place it in this directory (`features/RenderDoc/Renderdoc/`)
-5. The DLL will be deployed with CSX mod package
-
-## License
-
-RenderDoc is licensed under the MIT License. See LICENSE.md for details.
-
-## Updating
-
-To update to a newer version of RenderDoc:
-
-1. Update the vcpkg port version in `cmake/ports/renderdoc/vcpkg.json`
-2. Update the REF in `cmake/ports/renderdoc/portfile.cmake`
-3. Download the new Windows x64 installer from https://renderdoc.org/builds
-4. Extract `renderdoc.dll` and replace it in this directory
-5. Update the version number in this README
-6. Verify LICENSE.md is current (check RenderDoc repository)
-
-## API Header
-
-The compile-time API header (`renderdoc_app.h`) is automatically managed by the vcpkg port at `cmake/ports/renderdoc/` and is fetched from the RenderDoc GitHub repository during build.
+`LICENSE.md` preserves upstream MIT notices. `COPYING` covers fork additions
+under GPL-3.0-or-later. `Source/` contains the corresponding source archive,
+original generated build properties, and rebuild instructions.

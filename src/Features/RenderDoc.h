@@ -1,8 +1,8 @@
 #pragma once
 
 #include "Feature.h"
-#include "Features/RenderDocExternalWrite.h"
 #include "Features/VR/RenderDocFrameCapture.h"
+#include <Renderdoc/renderdoc_d3d11.h>
 #include <atomic>
 #include <filesystem>
 #include <mutex>

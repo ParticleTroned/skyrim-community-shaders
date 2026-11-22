@@ -53,3 +53,9 @@ csx_check_install_runtime(
     [==[@STREAMLINE_RUNTIME_PAYLOAD_FILES@]==]
     [==[@STREAMLINE_RUNTIME_PAYLOAD_HASHES@]==]
 )
+csx_check_install_runtime(
+    "RenderDoc" "Shaders"
+    [==[@RENDERDOC_RUNTIME_PAYLOAD_MISSING@]==]
+    [==[@RENDERDOC_RUNTIME_PAYLOAD_FILES@]==]
+    [==[@RENDERDOC_RUNTIME_PAYLOAD_HASHES@]==]
+)

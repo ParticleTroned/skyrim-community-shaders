@@ -34,6 +34,7 @@ function(csx_configure_runtime_payload)
     set(_missing
         ${FFX_RUNTIME_PAYLOAD_MISSING}
         ${STREAMLINE_RUNTIME_PAYLOAD_MISSING}
+        ${RENDERDOC_RUNTIME_PAYLOAD_MISSING}
     )
     if(_missing)
         if(AIO_ZIP_TO_DIST OR ZIP_TO_DIST)
@@ -51,7 +52,7 @@ function(csx_configure_runtime_payload)
             "with SKIP_RUNTIME_DOWNLOADS=OFF. Other build dependencies are still required."
         )
     endif()
-    foreach(_provider IN ITEMS FFX STREAMLINE)
+    foreach(_provider IN ITEMS FFX STREAMLINE RENDERDOC)
         set(${_provider}_RUNTIME_PAYLOAD_HASHES "")
         foreach(_file IN LISTS ${_provider}_RUNTIME_PAYLOAD_FILES)
             set(_hash "missing")

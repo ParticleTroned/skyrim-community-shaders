@@ -73,6 +73,29 @@ and the fork rejects their failed capture. Capturing synchronously reads
 vendor output and can perturb timing; it is not a performance or
 synchronization qualification.
 
+## Updating the bundled fork
+
+`cmake/ports/renderdoc/pin.cmake` pins the fork source revision, source
+archive hashes, and the separately built Windows x64 runtime hash. The
+overlay port fetches both application headers from that revision. CMake
+verifies the tracked DLL and stages the matching source archive alongside
+the original notices and build properties. Installation checks these inputs
+again before clearing AIO staging or copying automatic AIO/core payloads.
+Source caches are isolated by revision so an update cannot package older
+archives left in the build cache. `SKIP_RUNTIME_DOWNLOADS=ON` can reuse a
+verified source archive; missing source blocks packaging.
+
+To update, select a reviewed commit from `ParticleTroned/renderdoc`, clone
+with tags and history, and check out that exact commit. Generate metadata
+with `python util/fork_version.py metadata --msbuild-props Directory.Build.props`;
+add `--allow-unreleased` only before the fork's first tagged release. Build
+the `DLL\renderdoc` solution target in x64 Release using the supported MSVC
+toolset. Copy the DLL, unchanged `LICENSE.md` and `COPYING`, and generated
+properties into `features/RenderDoc/Renderdoc/` (properties under `Source/`).
+Update the pin hashes, overlay version, and packaged runtime README together.
+Do not substitute an upstream runtime or resolve a floating branch at build
+time. Run the checks below against the actual DLL before packaging.
+
 ## Validation
 
 Build the controller tests and run `DeviceContextState`,

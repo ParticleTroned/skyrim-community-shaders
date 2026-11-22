@@ -354,6 +354,7 @@ find_library(DETOURS_LIBRARY detours REQUIRED)
 include(FidelityFX-SDK)
 include(FidelityFX-Runtime)
 include(Streamline-Runtime)
+include(RenderDoc-Runtime)
 include(NeuralRendering-Runtime)
 include(ValidateNeuralColor)
 csx_validate_neural_color("${CMAKE_CURRENT_SOURCE_DIR}")
@@ -847,6 +848,7 @@ endif()
 # #######################################################################################################################
 
 # Append a '/' to the end of each feature path for installation all its contents but not itself
+list(APPEND FEATURE_PATHS "${RENDERDOC_RUNTIME_FEATURE_ROOT}")
 set(FEATURE_PATHS_SLASH ${FEATURE_PATHS})
 list(TRANSFORM FEATURE_PATHS_SLASH APPEND /)
 
@@ -932,7 +934,13 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     # Prepare AIO by copying files only when different. This avoids updating
     # timestamps for unchanged files and prevents downstream incremental
     # deploys from copying everything every build.
-    set(_prepare_aio_cmds)
+    set(_prepare_aio_cmds
+        COMMAND
+        ${CMAKE_COMMAND}
+        "-DCMAKE_INSTALL_PREFIX=${AIO_DIR}"
+        -P
+        "${CSX_RUNTIME_INSTALL_GUARD}"
+    )
     # Write the list to a file instead of passing an escaped-semicolon value
     # through -D. Ninja misquotes list entries containing spaces.
     set(_feature_paths_list_file
@@ -1465,6 +1473,9 @@ add_custom_command(
         ${CORE_SOURCES}
         ${FFX_RUNTIME_FILES}
         ${STREAMLINE_RUNTIME_FILES}
+    COMMAND
+        ${CMAKE_COMMAND} "-DCMAKE_INSTALL_PREFIX=${FEATURE_PATH}" -P
+        "${CSX_RUNTIME_INSTALL_GUARD}"
     COMMAND
         ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --prefix ${FEATURE_PATH}
         --component SKSE

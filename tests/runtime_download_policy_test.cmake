@@ -165,6 +165,26 @@ function(check_runtime_modules)
 endfunction()
 check_runtime_modules()
 
+# The real RenderDoc module rejects a wrong DLL and missing pinned source.
+file(WRITE "${_root}/renderdoc-policy.cmake"
+    "set(CMAKE_SOURCE_DIR \"${PROJECT_ROOT}\")\n"
+    "set(CMAKE_CURRENT_BINARY_DIR \"${_root}/renderdoc payload\")\n"
+    "set(SKIP_RUNTIME_DOWNLOADS ON)\n"
+    "set(AIO_ZIP_TO_DIST ON)\n"
+    "include(\"${PROJECT_ROOT}/cmake/RenderDoc-Runtime.cmake\")\n"
+    "csx_configure_runtime_payload()\n"
+)
+run_cmake("Runtime payloads are missing" -P "${_root}/renderdoc-policy.cmake")
+set(_wrong_renderdoc "${_root}/wrong renderdoc/features/RenderDoc")
+file(MAKE_DIRECTORY "${_wrong_renderdoc}/Renderdoc")
+file(WRITE "${_wrong_renderdoc}/CORE" "")
+file(WRITE "${_wrong_renderdoc}/Renderdoc/renderdoc.dll" "wrong fork")
+file(READ "${_root}/renderdoc-policy.cmake" _renderdoc_policy)
+string(REPLACE "set(CMAKE_SOURCE_DIR \"${PROJECT_ROOT}\")"
+    "set(CMAKE_SOURCE_DIR \"${_root}/wrong renderdoc\")" _renderdoc_policy "${_renderdoc_policy}")
+file(WRITE "${_root}/renderdoc-policy.cmake" "${_renderdoc_policy}")
+run_cmake("RenderDoc DLL does not match" -P "${_root}/renderdoc-policy.cmake")
+
 # A language-free fixture checks install ordering without building any target.
 set(_fixture "${_root}/install project")
 file(MAKE_DIRECTORY "${_fixture}")
@@ -220,6 +240,30 @@ file(REMOVE "${_root}/sl-runtime.dll")
 run_cmake("Streamline runtime payload" --install "${_root}/install build" --component StreamlineRuntime)
 expect_content("${_root}/install-mutated" "preserved")
 file(WRITE "${_root}/sl-runtime.dll" "verified SL fixture")
+run_cmake(pass --install "${_root}/install build")
+expect_content("${_root}/install-mutated" "changed")
+
+# RenderDoc source is required, and changed payloads must fail before reset.
+set(RENDERDOC_RUNTIME_PAYLOAD_MISSING source.tar.gz)
+csx_configure_runtime_payload()
+file(WRITE "${_root}/install-mutated" "preserved")
+run_cmake("RenderDoc runtime payload" --install "${_root}/install build")
+run_cmake("RenderDoc runtime payload" --install "${_root}/install build" --component Shaders)
+run_cmake(pass --install "${_root}/install build" --component SKSE)
+expect_content("${_root}/install-mutated" "preserved")
+set(RENDERDOC_RUNTIME_PAYLOAD_MISSING "")
+set(RENDERDOC_RUNTIME_PAYLOAD_FILES "${_root}/renderdoc.dll" "${_root}/source.tar.gz")
+file(WRITE "${_root}/renderdoc.dll" "verified RenderDoc fixture")
+file(WRITE "${_root}/source.tar.gz" "verified source fixture")
+csx_configure_runtime_payload()
+file(WRITE "${_root}/source.tar.gz" "modified after configure")
+run_cmake("RenderDoc runtime payload" --install "${_root}/install build")
+expect_content("${_root}/install-mutated" "preserved")
+file(WRITE "${_root}/source.tar.gz" "verified source fixture")
+file(REMOVE "${_root}/renderdoc.dll")
+run_cmake("RenderDoc runtime payload" --install "${_root}/install build" --component Shaders)
+expect_content("${_root}/install-mutated" "preserved")
+file(WRITE "${_root}/renderdoc.dll" "verified RenderDoc fixture")
 run_cmake(pass --install "${_root}/install build")
 expect_content("${_root}/install-mutated" "changed")
 

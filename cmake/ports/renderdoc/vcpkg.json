@@ -1,8 +1,8 @@
 {
     "name": "renderdoc",
-    "version-string": "1.43-v1x-9c4dc886",
+    "version-string": "1.47-pt-49a6a5e57c93",
     "description": "RenderDoc in-application API for frame capture and debugging",
-    "homepage": "https://github.com/baldurk/renderdoc",
+    "homepage": "https://github.com/ParticleTroned/renderdoc",
     "license": "MIT",
     "supports": "windows"
 }

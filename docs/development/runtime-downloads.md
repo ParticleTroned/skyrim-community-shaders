@@ -4,7 +4,9 @@
 
 `SKIP_RUNTIME_DOWNLOADS=ON` allows DLL development when the FidelityFX, Streamline or
 Neural Rendering runtime payloads are unavailable. It defaults to `OFF`. This
-option does not supply other dependencies: the compiler, SDK headers,
+option also skips downloading the RenderDoc fork's corresponding source
+archive; a verified cached copy is required for packaging. It does not
+supply other dependencies: the compiler, SDK headers,
 submodules and vcpkg dependencies must still be available.
 
 For a DLL-only configuration, set these CMake cache values on your usual

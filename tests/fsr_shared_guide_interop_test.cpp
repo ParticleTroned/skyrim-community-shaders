@@ -1,16 +1,22 @@
 #define NOMINMAX
+#include "ShaderPackageIncludes.h"
 #include <d3d11_4.h>
+#include <d3dcompiler.h>
 #include <directx/d3d12.h>
 #include <dxgi1_2.h>
 #include <winrt/base.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <functional>
 #include <iostream>
+#include <limits>
+#include <memory>
 #include <new>
 #include <span>
 #include <stdexcept>
@@ -37,7 +43,35 @@ struct WrappedResource
 	winrt::com_ptr<ID3D11Texture2D> resource11;
 	winrt::com_ptr<ID3D12Resource> resource;
 };
+#include "fsr_output_types_under_test.h"
 #include "shared_guide_import_under_test.h"
+
+namespace globals::d3d
+{
+	ID3D11Device* device = nullptr;
+}
+struct OutputAdmission
+{
+	struct Canonical
+	{
+		winrt::com_ptr<ID3D11Texture2D> resource;
+		winrt::com_ptr<ID3D11UnorderedAccessView> uav;
+		D3D11_TEXTURE2D_DESC desc{};
+	};
+	std::array<std::unique_ptr<Canonical>, 2> vrIntermediateColorOut;
+	static bool TryGetTexture2DDesc(ID3D11Resource* resource, D3D11_TEXTURE2D_DESC& desc)
+	{
+		winrt::com_ptr<ID3D11Texture2D> texture;
+		if (!resource || FAILED(resource->QueryInterface(IID_PPV_ARGS(texture.put()))))
+			return false;
+		texture->GetDesc(&desc);
+		return true;
+	}
+	bool CanCompose(ID3D11Resource* a_destination, const ImmediateOutputPair& a_pair) const
+	{
+#include "fsr_output_preflight_under_test.h"
+	}
+};
 
 namespace
 {
@@ -283,6 +317,205 @@ namespace
 		std::cout << "Colour format " << static_cast<uint32_t>(a_format) << ": both eyes, padding, active copies and queued overwrite passed\n";
 	}
 
+	void CheckImmediateOutput(Devices& gpu, DXGI_FORMAT format)
+	{
+		constexpr UINT width = 16, height = 12, frames = 3;
+		const UINT bytes = format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8 : 4;
+		const auto root = std::filesystem::path(__FILE__).parent_path().parent_path();
+		PackageIncludes includes(root / "package/Shaders");
+		winrt::com_ptr<ID3DBlob> blob, errors;
+		DX::ThrowIfFailed(D3DCompileFromFile((root / "features/Upscaling/Shaders/Upscaling/ClearHMDMaskCS.hlsl").c_str(),
+			nullptr, &includes, "main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, blob.put(), errors.put()));
+		winrt::com_ptr<ID3D11ComputeShader> mask;
+		DX::ThrowIfFailed(gpu.device11->CreateComputeShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, mask.put()));
+		Util::SetResourceName(mask.get(), "InteropTest::Mask");
+		D3D11_TEXTURE2D_DESC desc{ width, height, 1, 1, format, { 1, 0 }, D3D11_USAGE_DEFAULT,
+			D3D11_BIND_UNORDERED_ACCESS, 0, D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE };
+		std::array<TextureHandleOwner, 2> output, input;
+		std::array<std::unique_ptr<WrappedResource>, 2> output12, input12;
+		std::array<winrt::com_ptr<ID3D11Texture2D>, 2> canonical;
+		std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, 2> outputUAV, canonicalUAV;
+		for (UINT eye = 0; eye < 2; ++eye) {
+			for (auto* texture : { &output[eye], &input[eye] }) {
+				texture->desc = desc;
+				DX::ThrowIfFailed(gpu.device11->CreateTexture2D(&desc, nullptr, texture->resource.put()));
+				Util::SetResourceName(texture->resource.get(), "InteropTest::PrivateOutputOrInput");
+			}
+			output12[eye] = std::make_unique<WrappedResource>(output[eye].resource.get(), gpu.device12.get(), "InteropTest::PrivateOutput", output[eye].GetOrCreateSharedHandle());
+			input12[eye] = std::make_unique<WrappedResource>(input[eye].resource.get(), gpu.device12.get(), "InteropTest::ProviderInput", input[eye].GetOrCreateSharedHandle());
+			DX::ThrowIfFailed(gpu.device11->CreateUnorderedAccessView(output[eye].resource.get(), nullptr, outputUAV[eye].put()));
+			Util::SetResourceName(outputUAV[eye].get(), "InteropTest::PrivateOutput UAV");
+			auto local = desc;
+			local.MiscFlags = 0;
+			DX::ThrowIfFailed(gpu.device11->CreateTexture2D(&local, nullptr, canonical[eye].put()));
+			Util::SetResourceName(canonical[eye].get(), "InteropTest::Canonical");
+			DX::ThrowIfFailed(gpu.device11->CreateUnorderedAccessView(canonical[eye].get(), nullptr, canonicalUAV[eye].put()));
+			Util::SetResourceName(canonicalUAV[eye].get(), "InteropTest::Canonical UAV");
+		}
+		std::array<float, width * 2 * height> depths;
+		for (UINT y = 0; y < height; ++y)
+			for (UINT x = 0; x < width * 2; ++x)
+				depths[y * width * 2 + x] = x < 2 || x >= width * 2 - 2 ? 0.0f : 0.5f;
+		auto depthDesc = desc;
+		depthDesc.Width *= 2;
+		depthDesc.Format = DXGI_FORMAT_R32_FLOAT;
+		depthDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		depthDesc.MiscFlags = 0;
+		D3D11_SUBRESOURCE_DATA depthData{ depths.data(), width * 2 * sizeof(float), 0 };
+		winrt::com_ptr<ID3D11Texture2D> depth;
+		winrt::com_ptr<ID3D11ShaderResourceView> depthSRV;
+		DX::ThrowIfFailed(gpu.device11->CreateTexture2D(&depthDesc, &depthData, depth.put()));
+		Util::SetResourceName(depth.get(), "InteropTest::Depth");
+		DX::ThrowIfFailed(gpu.device11->CreateShaderResourceView(depth.get(), nullptr, depthSRV.put()));
+		Util::SetResourceName(depthSRV.get(), "InteropTest::Depth SRV");
+		D3D11_BUFFER_DESC cbDesc{};
+		cbDesc.ByteWidth = 32;
+		cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+		winrt::com_ptr<ID3D11Buffer> constants;
+		DX::ThrowIfFailed(gpu.device11->CreateBuffer(&cbDesc, nullptr, constants.put()));
+		Util::SetResourceName(constants.get(), "InteropTest::MaskConstants");
+		std::array<winrt::com_ptr<ID3D12CommandAllocator>, frames> allocators;
+		std::array<winrt::com_ptr<ID3D12GraphicsCommandList>, frames> lists;
+		std::array<std::array<winrt::com_ptr<ID3D11Texture2D>, 2>, frames> combined;
+		for (UINT frame = 0; frame < frames; ++frame) {
+			for (UINT eye = 0; eye < 2; ++eye) {
+				const auto pixels = ColorPattern(format, width, height, width, height, eye, frame);
+				gpu.context11->UpdateSubresource(input[eye].resource.get(), 0, nullptr, pixels.data(), width * bytes, 0);
+			}
+			const auto inputValue = ++gpu.fenceValue;
+			DX::ThrowIfFailed(gpu.context4->Signal(gpu.fence11.get(), inputValue));
+			gpu.context11->Flush();
+			DX::ThrowIfFailed(gpu.queue->Wait(gpu.fence12.get(), inputValue));
+			DX::ThrowIfFailed(gpu.device12->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(allocators[frame].put())));
+			DX::ThrowIfFailed(gpu.device12->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocators[frame].get(), nullptr, IID_PPV_ARGS(lists[frame].put())));
+			for (UINT eye = 0; eye < 2; ++eye) {
+				std::array<D3D12_RESOURCE_BARRIER, 2> barriers{};
+				for (UINT index = 0; index < 2; ++index) {
+					barriers[index].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+					barriers[index].Transition = { index ? output12[eye]->resource.get() : input12[eye]->resource.get(),
+						D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATE_COMMON,
+						index ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_COPY_SOURCE };
+				}
+				lists[frame]->ResourceBarrier(2, barriers.data());
+				lists[frame]->CopyResource(output12[eye]->resource.get(), input12[eye]->resource.get());
+				for (auto& barrier : barriers) std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+				lists[frame]->ResourceBarrier(2, barriers.data());
+			}
+			DX::ThrowIfFailed(lists[frame]->Close());
+			ID3D12CommandList* commands[]{ lists[frame].get() };
+			gpu.queue->ExecuteCommandLists(1, commands);
+			const auto completion = ++gpu.fenceValue;
+			DX::ThrowIfFailed(gpu.queue->Signal(gpu.fence12.get(), completion));
+			DX::ThrowIfFailed(gpu.context4->Wait(gpu.fence11.get(), completion));
+			auto combinedDesc = desc;
+			combinedDesc.Width *= 2;
+			combinedDesc.MiscFlags = combinedDesc.BindFlags = 0;
+			for (auto& destination : combined[frame]) {
+				DX::ThrowIfFailed(gpu.device11->CreateTexture2D(&combinedDesc, nullptr, destination.put()));
+				Util::SetResourceName(destination.get(), "InteropTest::Combined");
+			}
+			OutputAdmission admission;
+			ImmediateOutputPair pair;
+			pair.displayWidth = width;
+			pair.displayHeight = height;
+			globals::d3d::device = gpu.device11.get();
+			for (UINT eye = 0; eye < 2; ++eye) {
+				pair.resources[eye] = output[eye].resource;
+				pair.uavs[eye] = outputUAV[eye];
+				admission.vrIntermediateColorOut[eye] = std::make_unique<OutputAdmission::Canonical>();
+				admission.vrIntermediateColorOut[eye]->resource = canonical[eye];
+				admission.vrIntermediateColorOut[eye]->uav = canonicalUAV[eye];
+				canonical[eye]->GetDesc(&admission.vrIntermediateColorOut[eye]->desc);
+			}
+			Require(admission.CanCompose(combined[frame][0].get(), pair), "Valid runtime pair failed production preflight");
+			for (UINT defect = 0; defect < 8; ++defect) {
+				auto candidate = pair;
+				switch (defect) {
+				case 0:
+					candidate.resources[1] = candidate.resources[0];
+					break;
+				case 1:
+					candidate.uavs[1] = candidate.uavs[0];
+					break;
+				case 2:
+					candidate.resources[1] = canonical[1];
+					break;
+				case 3:
+					++candidate.displayWidth;
+					break;
+				case 4:
+					++candidate.displayHeight;
+					break;
+				case 5:
+					candidate.uavs[1] = nullptr;
+					break;
+				case 6:
+					globals::d3d::device = nullptr;
+					break;
+				case 7:
+					candidate.resources[1] = canonical[0];
+					candidate.uavs[1] = canonicalUAV[0];
+					break;
+				}
+				Require(!admission.CanCompose(combined[frame][0].get(), candidate), "Invalid runtime pair passed production preflight");
+				globals::d3d::device = gpu.device11.get();
+			}
+			Require(!admission.CanCompose(output[0].resource.get(), pair), "Aliased or undersized destination accepted");
+			for (UINT eye = 0; eye < 2; ++eye) {
+				gpu.context11->CopyResource(canonical[eye].get(), output[eye].resource.get());
+				const std::array<UINT, 8> values{ eye * width, 0, 0, 0, width, height, width, height };
+				gpu.context11->UpdateSubresource(constants.get(), 0, nullptr, values.data(), 0, 0);
+				for (UINT route = 0; route < 2; ++route) {
+					auto* uav = route ? outputUAV[eye].get() : canonicalUAV[eye].get();
+					auto* srv = depthSRV.get();
+					auto* cb = constants.get();
+					gpu.context11->CSSetShader(mask.get(), nullptr, 0);
+					gpu.context11->CSSetShaderResources(0, 1, &srv);
+					gpu.context11->CSSetConstantBuffers(0, 1, &cb);
+					gpu.context11->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+					gpu.context11->Dispatch((width + 7) / 8, (height + 7) / 8, 1);
+					gpu.context11->ClearState();
+					const D3D11_BOX box{ 0, 0, 0, width, height, 1 };
+					gpu.context11->CopySubresourceRegion(combined[frame][route].get(), 0, eye * width, 0, 0,
+						route ? output[eye].resource.get() : canonical[eye].get(), 0, &box);
+				}
+			}
+		}
+		for (UINT frame = 0; frame < frames; ++frame) {
+			std::array<std::vector<uint8_t>, 2> readback;
+			for (UINT route = 0; route < 2; ++route) {
+				auto readDesc = desc;
+				readDesc.Width *= 2;
+				readDesc.MiscFlags = readDesc.BindFlags = 0;
+				readDesc.Usage = D3D11_USAGE_STAGING;
+				readDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+				winrt::com_ptr<ID3D11Texture2D> staging;
+				DX::ThrowIfFailed(gpu.device11->CreateTexture2D(&readDesc, nullptr, staging.put()));
+				Util::SetResourceName(staging.get(), "InteropTest::OutputReadback");
+				gpu.context11->CopyResource(staging.get(), combined[frame][route].get());
+				D3D11_MAPPED_SUBRESOURCE mapped{};
+				DX::ThrowIfFailed(gpu.context11->Map(staging.get(), 0, D3D11_MAP_READ, 0, &mapped));
+				readback[route].resize(width * 2 * height * bytes);
+				for (UINT y = 0; y < height; ++y)
+					std::memcpy(readback[route].data() + y * width * 2 * bytes, static_cast<uint8_t*>(mapped.pData) + y * mapped.RowPitch, width * 2 * bytes);
+				gpu.context11->Unmap(staging.get(), 0);
+			}
+			Require(readback[0] == readback[1], "Immediate masked output differs from materialized output");
+			for (UINT eye = 0; eye < 2; ++eye) {
+				const auto expected = ColorPattern(format, width, height, width, height, eye, frame);
+				for (UINT y = 0; y < height; ++y)
+					for (UINT x = 0; x < width; ++x) {
+						const bool hidden = (eye == 0 && x < 4) || (eye == 1 && x >= width - 4);
+						for (UINT byte = 0; byte < bytes; ++byte)
+							Require(readback[1][((y * 2 + eye) * width + x) * bytes + byte] ==
+										(hidden ? 0 : expected[(y * width + x) * bytes + byte]),
+								"Later dispatch overwrote immediate consumers or mask/alpha changed");
+					}
+			}
+		}
+		std::cout << "Immediate output format " << static_cast<UINT>(format) << ": exact mask/copy and three queued frames passed\n";
+	}
+
 }
 
 int main(int a_argc, char** a_argv)
@@ -305,6 +538,9 @@ int main(int a_argc, char** a_argv)
 		CheckColor(devices, DXGI_FORMAT_R16G16B16A16_FLOAT);
 		CheckColor(devices, DXGI_FORMAT_R11G11B10_FLOAT);
 		CheckColor(devices, DXGI_FORMAT_R8G8B8A8_UNORM);
+		CheckImmediateOutput(devices, DXGI_FORMAT_R8G8B8A8_UNORM);
+		CheckImmediateOutput(devices, DXGI_FORMAT_R11G11B10_FLOAT);
+		CheckImmediateOutput(devices, DXGI_FORMAT_R16G16B16A16_FLOAT);
 		return 0;
 	} catch (const winrt::hresult_error& error) {
 		std::cerr << "D3D interop failed: 0x" << std::hex << static_cast<uint32_t>(error.code()) << "\n";

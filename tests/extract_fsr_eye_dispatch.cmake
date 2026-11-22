@@ -46,7 +46,7 @@ extract_between("${_upscaling_source}" "bool Upscaling::EnsureVRPresentationText
 extract_between("${_upscaling_source}" "bool Upscaling::StretchSubmitStageEyeOutput(" "if (DispatchSubmitStageColorRegion(" _stretch_admission)
 extract_between("${_fidelity_source}" "bool FidelityFX::CanDispatchHostFallbackForRegions(" "FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(" _fallback)
 extract_between("${_fidelity_source}" "FidelityFX::UpscaleResult FidelityFX::UpscaleRegion(" "FidelityFX::StereoUpscaleResult FidelityFX::UpscaleStereoRegions(" _region)
-extract_between("${_fidelity_source}" "FidelityFX::StereoUpscaleResult FidelityFX::UpscaleStereoRegions(" "FidelityFX::UpscaleResult FidelityFX::Upscale(" _stereo)
+extract_between("${_fidelity_source}" "FidelityFX::StereoUpscaleResult FidelityFX::UpscaleStereoRegions(" "bool FidelityFX::IsImmediateOutputCurrent(" _stereo)
 extract_between("${_upscaling_source}" "FidelityFX::UpscaleResult Upscaling::DispatchVendorEyeRegion(" "\n}\n" _vendor)
 file(
     WRITE "${OUTPUT_DIRECTORY}/fsr_eye_dispatch_under_test.h"
@@ -58,3 +58,10 @@ file(WRITE "${OUTPUT_DIRECTORY}/fsr_runtime_gate_under_test.h" "${_gate}")
 
 extract_between("${_upscaling_source}" "auto presentDeferredVendorOutput =" "auto finalizeSubmitStageEyeOutput =" _presentation)
 file(WRITE "${OUTPUT_DIRECTORY}/fsr_deferred_presentation_under_test.h" "${_presentation}")
+
+extract_between("${_fidelity_source}" "\t\tif (dispatchOk) {\n\t\t\tstd::array<D3D12_RESOURCE_BARRIER, 12> endBarriers"
+    "\n}\n\nFidelityFX::UpscaleResult FidelityFX::UpscaleRegion(" _publication)
+file(WRITE "${OUTPUT_DIRECTORY}/fsr_output_publication_under_test.h" "try {\n${_publication}")
+extract_between("${_fidelity_source}" "bool FidelityFX::IsImmediateOutputCurrent(" "FidelityFX::UpscaleResult FidelityFX::Upscale(" _current_output)
+string(REPLACE "FidelityFX::IsImmediateOutputCurrent" "OutputPublication::IsImmediateOutputCurrent" _current_output "${_current_output}")
+file(WRITE "${OUTPUT_DIRECTORY}/fsr_output_current_under_test.h" "${_current_output}")

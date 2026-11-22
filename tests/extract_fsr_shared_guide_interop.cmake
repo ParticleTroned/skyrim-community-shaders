@@ -29,3 +29,11 @@ file(WRITE "${OUTPUT_DIRECTORY}/shared_guide_import_under_test.h" "namespace Uti
 ${_names}
 }
 ${_import}")
+file(READ "${PROJECT_ROOT}/src/Features/Upscaling.cpp" _upscaling)
+file(READ "${PROJECT_ROOT}/src/Features/Upscaling/FidelityFX.h" _fidelity)
+extract_between("${_fidelity}" "struct ImmediateOutputPair" "#ifdef DEVBENCH_BRIDGE_ENABLED" _pair)
+extract_between("${_upscaling}" "struct VRStereoEyeRegion" "bool TextureContainsVREyeRegion(" _layout)
+file(WRITE "${OUTPUT_DIRECTORY}/fsr_output_types_under_test.h" "${_pair}\n${_layout}")
+extract_between("${_upscaling}" "\tconst auto layout = ResolveVRSideBySideStereoLayout(a_pair.displayWidth"
+    "\n}\n\nvoid Upscaling::FinalizePerEyeOutputs(" _preflight)
+file(WRITE "${OUTPUT_DIRECTORY}/fsr_output_preflight_under_test.h" "${_preflight}")

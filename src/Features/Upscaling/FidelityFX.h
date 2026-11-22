@@ -110,6 +110,17 @@ public:
 		float motionVectorScaleY = 0.0f;
 		float sharpness = 0.0f;
 	};
+	/** One completed pair, consumable only before the next render-thread runtime dispatch. */
+	struct ImmediateOutputPair
+	{
+		std::array<winrt::com_ptr<ID3D11Texture2D>, 2> resources;
+		std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, 2> uavs;
+		winrt::com_ptr<ID3D11Fence> fence;
+		uint64_t completionValue = 0;
+		uint64_t providerRevision = 0;
+		uint32_t renderWidth = 0, renderHeight = 0;
+		uint32_t displayWidth = 0, displayHeight = 0;
+	};
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	struct FsrColorContractSnapshot
 	{
@@ -337,9 +348,11 @@ public:
 		ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_output,
 		uint32_t a_renderWidth, uint32_t a_renderHeight, uint32_t a_displayWidth, uint32_t a_displayHeight,
 		float a_motionVectorScaleX, float a_motionVectorScaleY, float a_sharpness, bool* a_usedRuntimeUpscaler = nullptr);
-	/** @brief Dispatch both ready VR runtime-FSR contexts in one interop transaction when eligible. */
+	/** Dispatch both contexts together. A returned opt-in pair replaces caller output copies
+	 * and must be finalized immediately, before any further runtime dispatch. */
 	StereoUpscaleResult UpscaleStereoRegions(const std::array<UpscaleRegionParameters, 2>& a_regions,
-		bool a_compositorSubmit = false);
+		bool a_compositorSubmit = false, ImmediateOutputPair* a_immediateOutput = nullptr,
+		ID3D11Resource* a_immediateDestination = nullptr);
 
 private:
 	const std::string& GetRuntimeUpscalerFramePathLabel(RuntimeUpscalerFramePath a_path) const;
@@ -566,14 +579,17 @@ private:
 		const D3D11_TEXTURE2D_DESC& a_transparencyDesc,
 		const D3D11_TEXTURE2D_DESC& a_outputDesc);
 	LifecycleResult ExecuteRuntimeUpscalerBatch(const RuntimeDispatchPlan& a_plan, std::span<const UpscaleRegionParameters> a_regions,
-		bool a_compositorSubmit = false);
+		bool a_compositorSubmit = false, ImmediateOutputPair* a_immediateOutput = nullptr,
+		ID3D11Resource* a_immediateDestination = nullptr);
 	/** Returns a retained exact full-eye input import, or null to use the copy fallback. */
 	WrappedResource* ResolveRuntimeSharedInput(uint32_t a_eye, std::size_t a_inputIndex,
 		ID3D11Resource* a_source, const D3D11_TEXTURE2D_DESC& a_desc);
 	[[nodiscard]] bool HasQuarantinedRuntimeSharedGuides(const UpscaleRegionParameters& a_region) const noexcept;
 	[[nodiscard]] bool CanDispatchHostFallbackForRegions(std::span<const UpscaleRegionParameters> a_regions, const RuntimeDispatchPlan& a_plan) const;
 	LifecycleResult DispatchRuntimeUpscalerBatch(std::span<const UpscaleRegionParameters> a_regions, RuntimeUpscalerFramePath a_path,
-		bool a_compositorSubmit);
+		bool a_compositorSubmit, ImmediateOutputPair* a_immediateOutput,
+		ID3D11Resource* a_immediateDestination);
+	[[nodiscard]] bool IsImmediateOutputCurrent(const ImmediateOutputPair& a_pair) const noexcept;
 	LifecycleResult DestroyRuntimeUpscalerContexts(bool a_waitForIdle = true);
 	LifecycleResult DestroyRuntimeUpscalerResources(bool a_waitForIdle = true);
 	LifecycleResult RetireQuarantinedRuntimeUpscalerResources();

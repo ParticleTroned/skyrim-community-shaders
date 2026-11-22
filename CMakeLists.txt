@@ -4900,6 +4900,8 @@ if(BUILD_CONTROLLER_TESTS)
     set(_fsr_shared_guide_headers
         "${_fsr_shared_guide_test_dir}/shared_guide_handle_under_test.h"
         "${_fsr_shared_guide_test_dir}/shared_guide_import_under_test.h"
+        "${_fsr_shared_guide_test_dir}/fsr_output_types_under_test.h"
+        "${_fsr_shared_guide_test_dir}/fsr_output_preflight_under_test.h"
     )
     add_custom_command(
         OUTPUT ${_fsr_shared_guide_headers}
@@ -4910,6 +4912,8 @@ if(BUILD_CONTROLLER_TESTS)
         DEPENDS
             src/Buffer.h
             src/Features/Upscaling/DX12SwapChain.cpp
+            src/Features/Upscaling.cpp
+            src/Features/Upscaling/FidelityFX.h
             src/Utils/D3D.cpp
             tests/extract_fsr_shared_guide_interop.cmake
         VERBATIM
@@ -4927,7 +4931,13 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_link_libraries(
         fsr_shared_guide_interop_test
-        PRIVATE d3d11 d3d12 dxgi runtimeobject Microsoft::DirectX-Headers
+        PRIVATE
+            d3d11
+            d3d12
+            dxgi
+            d3dcompiler
+            runtimeobject
+            Microsoft::DirectX-Headers
     )
     add_test(NAME FSRSharedGuideInterop COMMAND fsr_shared_guide_interop_test)
     add_test(
@@ -5009,6 +5019,8 @@ if(BUILD_CONTROLLER_TESTS)
         "${_fsr_eye_dispatch_test_dir}/fsr_eye_dispatch_under_test.h"
         "${_fsr_eye_dispatch_test_dir}/fsr_deferred_presentation_under_test.h"
         "${_fsr_eye_dispatch_test_dir}/fsr_runtime_gate_under_test.h"
+        "${_fsr_eye_dispatch_test_dir}/fsr_output_publication_under_test.h"
+        "${_fsr_eye_dispatch_test_dir}/fsr_output_current_under_test.h"
     )
     add_custom_command(
         OUTPUT ${_fsr_eye_dispatch_test_headers}

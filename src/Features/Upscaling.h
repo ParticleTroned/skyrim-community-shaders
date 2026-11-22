@@ -2139,6 +2139,10 @@ public:
 		FSRDirectGuidePixels,
 		FSRGuideCopyFallbacks,
 		FSRGuideImportFailures,
+		FSRMaterializedOutputCopies,
+		FSRMaterializedOutputPixels,
+		FSRImmediateOutputEyes,
+		FSRImmediateOutputPixels,
 		RuntimeFSRStereoBatchAttempts,
 		RuntimeFSRStereoBatchReuses,
 		RuntimeFSRStereoBatchSuccesses,
@@ -3119,7 +3123,11 @@ public:
 		ID3D11Resource* a_reactiveSource,
 		ID3D11Resource* a_transparencySource,
 		uint32_t a_contractGeneration) const;
-	void FinalizePerEyeOutputs(ID3D11Resource* colorDst);
+	/** Validates the ordinary main route and both explicit mask/copy sources before borrowing them. */
+	[[nodiscard]] bool CanFinalizeImmediateFSROutputs(ID3D11Resource* a_destination,
+		const FidelityFX::ImmediateOutputPair& a_pair) const;
+	/** Explicit sources require successful preflight and immediate consumption on the render thread. */
+	void FinalizePerEyeOutputs(ID3D11Resource* colorDst, const FidelityFX::ImmediateOutputPair* a_sources = nullptr);
 	/// Publish a completed eye pair to the existing desktop mirror consumer.
 	bool UpdateVRSubmitDesktopMirror(uint32_t eyeIndex, uint32_t currentFrame, uint64_t compositorCycleToken,
 		ID3D11Texture2D* sourceTexture, const D3D11_TEXTURE2D_DESC& sourceDesc, uint32_t eyeWidthOut, uint32_t eyeHeightOut);

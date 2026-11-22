@@ -50279,7 +50279,78 @@ bool Upscaling::AreExistingVRSubmitVendorResourcesCompatible(
 			   GetRuntimeFSR4Enabled());
 }
 
-void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst)
+bool Upscaling::CanFinalizeImmediateFSROutputs(ID3D11Resource* a_destination,
+	const FidelityFX::ImmediateOutputPair& a_pair) const
+{
+	const auto* state = globals::state;
+	const auto* renderer = globals::game::renderer;
+	if (!globals::game::isVR || !state || !renderer || !globals::d3d::context ||
+		globals::d3d::context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE ||
+		!a_destination || a_destination != REX::W32::AsReal(renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN].texture) ||
+		GetRuntimeUpscaleMethod() != UpscaleMethod::kFSR || IsPresentationUpscalingActive() ||
+		IsFoveatedVendorDispatchEnabled(UpscaleMethod::kFSR) || IsFoveatedMaskVisualizationEnabled(UpscaleMethod::kFSR) ||
+		(globals::menu && globals::menu->IsEnabled) || IsVRMenuPresentationContextActive() ||
+		IsVRLoadingPresentationContextActive(state) || IsSaveLoadMutationContextActive(state) ||
+		!HasCompletedVRWorldFrameAfterLatestLoad(state) || IsSubmitStageDeviceLost() ||
+		!IsVRFixedVendorRuntimeStableForPostLoad(*this) ||
+		state->pendingPostLoadRuntimeReset || postLoadRuntimeResetPending.load(std::memory_order_acquire) ||
+		static_cast<VRPostLoadCompositorHoldState>(vrPostLoadCompositorHoldState.load(std::memory_order_acquire)) != VRPostLoadCompositorHoldState::Idle ||
+		HasUnresolvedVRFpsStabilizerSyncForCurrentLoad(*this) ||
+		pendingVRFpsStabilizerSyncFrame.load(std::memory_order_acquire) != 0 ||
+		ShouldDeferVRLoadingPresentationMaskRepair(*this, state)) {
+		return false;
+	}
+	const auto& plan = runtimeResolutionPlan;
+	if (!a_pair.renderWidth || !a_pair.renderHeight || !a_pair.displayWidth || !a_pair.displayHeight ||
+		plan.menuContextActive || plan.knownMenuContextActive || plan.loadingMenuActive || plan.perfModeRestartRequired ||
+		plan.engineRenderSize.x != 2.0f * a_pair.renderWidth || plan.engineRenderSize.y != a_pair.renderHeight ||
+		plan.finalOutputSize.x != 2.0f * a_pair.displayWidth || plan.finalOutputSize.y != a_pair.displayHeight) {
+		return false;
+	}
+	const auto layout = ResolveVRSideBySideStereoLayout(a_pair.displayWidth, a_pair.displayHeight);
+	D3D11_TEXTURE2D_DESC destination{};
+	if (!layout.IsValid() || !TryGetTexture2DDesc(a_destination, destination) ||
+		destination.Width < layout.width || destination.Height < layout.height ||
+		destination.MipLevels != 1 || destination.ArraySize != 1 || destination.SampleDesc.Count != 1) {
+		return false;
+	}
+	winrt::com_ptr<ID3D11Device> destinationDevice;
+	a_destination->GetDevice(destinationDevice.put());
+	if (destinationDevice.get() != globals::d3d::device)
+		return false;
+	for (uint32_t eye = 0; eye < 2; ++eye) {
+		const auto& resource = a_pair.resources[eye];
+		const auto& uav = a_pair.uavs[eye];
+		const auto& canonical = vrIntermediateColorOut[eye];
+		if (!resource || !uav || !canonical || !canonical->resource || !canonical->uav ||
+			resource.get() == a_destination || resource == a_pair.resources[1 - eye] ||
+			std::ranges::any_of(vrIntermediateColorOut, [&](const auto& output) {
+				return output && resource.get() == output->resource.get();
+			})) {
+			return false;
+		}
+		D3D11_TEXTURE2D_DESC desc{};
+		resource->GetDesc(&desc);
+		D3D11_UNORDERED_ACCESS_VIEW_DESC view{}, canonicalView{};
+		uav->GetDesc(&view);
+		canonical->uav->GetDesc(&canonicalView);
+		winrt::com_ptr<ID3D11Resource> viewed;
+		uav->GetResource(viewed.put());
+		winrt::com_ptr<ID3D11Device> sourceDevice;
+		resource->GetDevice(sourceDevice.put());
+		if (desc.Width < a_pair.displayWidth || desc.Height < a_pair.displayHeight ||
+			desc.Format != destination.Format || desc.Format != canonical->desc.Format ||
+			desc.ArraySize != 1 || desc.MipLevels != 1 || desc.SampleDesc.Count != 1 ||
+			view.ViewDimension != D3D11_UAV_DIMENSION_TEXTURE2D || view.Texture2D.MipSlice != 0 ||
+			view.Format != desc.Format || view.Format != canonicalView.Format ||
+			viewed.get() != resource.get() || sourceDevice != destinationDevice) {
+			return false;
+		}
+	}
+	return true;
+}
+
+void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst, const FidelityFX::ImmediateOutputPair* a_sources)
 {
 	if (!globals::game::isVR)
 		return;
@@ -50325,18 +50396,27 @@ void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst)
 
 	// Final display-color scrub only. Periphery TAA history, velocity, and lock
 	// resources are left untouched so the temporal path remains active.
+	std::array<ID3D11Texture2D*, 2> sources{};
+	std::array<ID3D11UnorderedAccessView*, 2> sourceUAVs{};
+	for (uint32_t eye = 0; eye < 2; ++eye) {
+		const auto* canonical = vrIntermediateColorOut[eye].get();
+		sources[eye] = a_sources ? a_sources->resources[eye].get() : canonical ? canonical->resource.get() :
+		                                                                         nullptr;
+		sourceUAVs[eye] = a_sources ? a_sources->uavs[eye].get() : canonical ? canonical->uav.get() :
+		                                                                       nullptr;
+	}
 	auto renderer = globals::game::renderer;
 	if (renderer) {
 		auto& depthTexture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 		if (depthTexture.depthSRV) {
 			for (uint32_t i = 0; i < 2; ++i) {
-				if (!vrIntermediateColorOut[i] || !vrIntermediateColorOut[i]->uav)
+				if (!sourceUAVs[i])
 					continue;
 
 				ClearHMDMaskForEye(
 					HMDMaskClearPhase::PerEyeOutput,
 					i,
-					vrIntermediateColorOut[i]->uav.get(),
+					sourceUAVs[i],
 					REX::W32::AsReal(depthTexture.depthSRV),
 					eyeWidthIn,
 					eyeHeightIn,
@@ -50349,17 +50429,16 @@ void Upscaling::FinalizePerEyeOutputs(ID3D11Resource* colorDst)
 	}
 
 	// Write upscaled outputs back
-	if (!vrIntermediateColorOut[0] || !vrIntermediateColorOut[0]->resource ||
-		!vrIntermediateColorOut[1] || !vrIntermediateColorOut[1]->resource) {
+	if (!sources[0] || !sources[1]) {
 		return;
 	}
 	for (uint32_t i = 0; i < 2; ++i) {
 		const auto& outputEyeRegion = outputStereoLayout.eyes[i];
 		D3D11_BOX outBox = { 0, 0, 0, outputEyeRegion.width, outputEyeRegion.height, 1 };
-		context->CopySubresourceRegion(colorDst, 0, outputEyeRegion.minX, 0, 0, vrIntermediateColorOut[i]->resource.get(), 0, &outBox);
+		context->CopySubresourceRegion(colorDst, 0, outputEyeRegion.minX, 0, 0, sources[i], 0, &outBox);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		CSX::Diagnostics::ColourPipelineProbe::RecordFsrOutputCopyBack(
-			colorDst, vrIntermediateColorOut[i]->resource.get(), i,
+			colorDst, sources[i], i,
 			outputEyeRegion.minX, outputEyeRegion.width, outputEyeRegion.height,
 			"Upscaling::FinalizePerEyeOutputs", "after queuing the per-eye copy");
 #endif

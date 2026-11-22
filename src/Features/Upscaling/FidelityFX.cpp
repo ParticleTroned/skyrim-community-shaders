@@ -4006,7 +4006,8 @@ FidelityFX::LifecycleResult FidelityFX::EnsureRuntimeUpscalerSharedResources(uin
 
 FidelityFX::LifecycleResult FidelityFX::ExecuteRuntimeUpscalerBatch(
 	const RuntimeDispatchPlan& a_plan,
-	std::span<const UpscaleRegionParameters> a_regions, bool a_compositorSubmit)
+	std::span<const UpscaleRegionParameters> a_regions, bool a_compositorSubmit,
+	ImmediateOutputPair* a_immediateOutput, ID3D11Resource* a_immediateDestination)
 {
 	const auto pendingFenceResult = PollPendingRuntimeUpscalerTeardownFence(
 		"runtime upscaler batch dispatch admission");
@@ -4028,7 +4029,8 @@ FidelityFX::LifecycleResult FidelityFX::ExecuteRuntimeUpscalerBatch(
 		}
 
 		const auto dispatchPath = GetRuntimeUpscalerProviderFramePath(a_plan.requestedVersion);
-		const auto dispatchResult = DispatchRuntimeUpscalerBatch(a_regions, dispatchPath, a_compositorSubmit);
+		const auto dispatchResult = DispatchRuntimeUpscalerBatch(a_regions, dispatchPath, a_compositorSubmit,
+			a_immediateOutput, a_immediateDestination);
 		if (dispatchResult == LifecycleResult::Ready)
 			RecordRuntimeUpscalerFramePath(dispatchPath);
 		return dispatchResult;
@@ -4175,8 +4177,9 @@ bool FidelityFX::CanDispatchHostFallbackForRegions(
 
 FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(
 	std::span<const UpscaleRegionParameters> a_regions, RuntimeUpscalerFramePath a_path,
-	[[maybe_unused]] bool a_compositorSubmit)
+	bool a_compositorSubmit, ImmediateOutputPair* a_immediateOutput, ID3D11Resource* a_immediateDestination)
 {
+	ImmediateOutputPair immediateOutput;
 	if (!HasSupportedSubmitColorContract())
 		return LifecycleResult::Failed;
 	if (a_regions.empty() || a_regions.size() > std::size(runtimeUpscalerContexts))
@@ -4428,6 +4431,7 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(
 		// Sample the shared D3D11 alias before the fence hands it to the provider.
 		observeSubmit(Probe::Stage::FsrInput);
 #endif
+		// This signal also covers the previous pair's immediate D3D11 mask and copy.
 		const uint64_t d3d11SubmitFence = runtimeFenceValue++;
 		DX::ThrowIfFailed(swapChain.d3d11Context->Signal(runtimeD3D11Fence.get(), d3d11SubmitFence));
 		DX::ThrowIfFailed(swapChain.commandQueue->Wait(runtimeD3D12Fence.get(), d3d11SubmitFence));
@@ -4539,12 +4543,49 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(
 			commandFenceTracked = true;
 			DX::ThrowIfFailed(swapChain.d3d11Context->Wait(runtimeD3D11Fence.get(), d3d12SubmitFence));
 
-			for (const auto& region : a_regions) {
-				const uint32_t contextIndex = region.contextIndex;
-				D3D11_BOX outputBox{ 0, 0, 0, region.displayWidth, region.displayHeight, 1 };
-				swapChain.d3d11Context->CopySubresourceRegion(region.output, 0, 0, 0, 0, runtimeOutputShared[contextIndex]->resource11.get(), 0, &outputBox);
+			if (a_immediateOutput && a_immediateDestination && !a_compositorSubmit &&
+				a_regions.size() == 2 && a_regions[0].contextIndex == 0 && a_regions[1].contextIndex == 1 &&
+				upscaling.vrIntermediateColorOut[0] && upscaling.vrIntermediateColorOut[1] &&
+				a_regions[0].output == upscaling.vrIntermediateColorOut[0]->resource.get() &&
+				a_regions[1].output == upscaling.vrIntermediateColorOut[1]->resource.get() &&
+				a_regions[0].renderWidth == a_regions[1].renderWidth &&
+				a_regions[0].renderHeight == a_regions[1].renderHeight &&
+				a_regions[0].displayWidth == a_regions[1].displayWidth &&
+				a_regions[0].displayHeight == a_regions[1].displayHeight) {
+				immediateOutput.fence = runtimeD3D11Fence;
+				immediateOutput.completionValue = d3d12SubmitFence;
+				immediateOutput.providerRevision = fsrRelatchDrainProof.ProviderRevision();
+				immediateOutput.renderWidth = a_regions[0].renderWidth;
+				immediateOutput.renderHeight = a_regions[0].renderHeight;
+				immediateOutput.displayWidth = a_regions[0].displayWidth;
+				immediateOutput.displayHeight = a_regions[0].displayHeight;
+				for (uint32_t eye = 0; eye < 2; ++eye) {
+					immediateOutput.resources[eye] = runtimeOutputShared[eye]->resource11;
+					immediateOutput.uavs[eye] = runtimeOutputShared[eye]->uav;
+				}
+				if (!upscaling.CanFinalizeImmediateFSROutputs(a_immediateDestination, immediateOutput))
+					immediateOutput = {};
+			}
+			if (!immediateOutput.fence) {
+				for (const auto& region : a_regions) {
+					const uint32_t contextIndex = region.contextIndex;
+					D3D11_BOX outputBox{ 0, 0, 0, region.displayWidth, region.displayHeight, 1 };
+					swapChain.d3d11Context->CopySubresourceRegion(region.output, 0, 0, 0, 0, runtimeOutputShared[contextIndex]->resource11.get(), 0, &outputBox);
+				}
 			}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			for (const auto& region : a_regions) {
+				using Counter = Upscaling::VRRenderScaleGPUPerformanceCounter;
+				upscaling.RecordVRRenderScaleGPUPerformanceCounter(immediateOutput.fence ?
+																	   Counter::FSRImmediateOutputEyes :
+																	   Counter::FSRMaterializedOutputCopies);
+				upscaling.RecordVRRenderScaleGPUPerformanceCounter(immediateOutput.fence ?
+																	   Counter::FSRImmediateOutputPixels :
+																	   Counter::FSRMaterializedOutputPixels,
+					static_cast<uint64_t>(region.displayWidth) * region.displayHeight);
+			}
+#endif
 			const uint32_t completedResets = std::min<uint32_t>(runtimeResumeResetDispatchesRemaining, static_cast<uint32_t>(a_regions.size()));
 			runtimeResumeResetDispatchesRemaining -= completedResets;
 			if (runtimeResumeResetDispatchesRemaining == 0)
@@ -4573,6 +4614,8 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(
 		}
 		observeSubmit(Probe::Stage::FsrOutput);
 #endif
+		if (a_immediateOutput)
+			*a_immediateOutput = std::move(immediateOutput);
 		return LifecycleResult::Ready;
 	}
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -4797,8 +4840,11 @@ FidelityFX::UpscaleResult FidelityFX::UpscaleRegion(uint32_t a_contextIndex, ID3
 }
 
 FidelityFX::StereoUpscaleResult FidelityFX::UpscaleStereoRegions(
-	const std::array<UpscaleRegionParameters, 2>& a_regions, bool a_compositorSubmit)
+	const std::array<UpscaleRegionParameters, 2>& a_regions, bool a_compositorSubmit,
+	ImmediateOutputPair* a_immediateOutput, ID3D11Resource* a_immediateDestination)
 {
+	if (a_immediateOutput)
+		*a_immediateOutput = {};
 	if (!HasSupportedSubmitColorContract())
 		return StereoUpscaleResult::Failed;
 	if (fsrHostStateQuarantined ||
@@ -4848,11 +4894,14 @@ FidelityFX::StereoUpscaleResult FidelityFX::UpscaleStereoRegions(
 		return StereoUpscaleResult::NotHandled;
 	}
 
-	const auto runtimeResult = ExecuteRuntimeUpscalerBatch(runtimePlan, a_regions, a_compositorSubmit);
+	const auto runtimeResult = ExecuteRuntimeUpscalerBatch(runtimePlan, a_regions, a_compositorSubmit,
+		a_immediateOutput, a_immediateDestination);
 	if (runtimeResult == LifecycleResult::Ready) {
 		runtimeUpscalerUsedForFrame = true;
 		return StereoUpscaleResult::Ready;
 	}
+	if (a_immediateOutput)
+		*a_immediateOutput = {};
 	if (runtimeResult == LifecycleResult::Pending &&
 		FSRRuntimeLifecyclePolicy::ResolvePendingDispatch(
 			safeHostFallbackReady) ==
@@ -4884,6 +4933,23 @@ FidelityFX::StereoUpscaleResult FidelityFX::UpscaleStereoRegions(
 	}
 
 	return StereoUpscaleResult::NotHandled;
+}
+
+bool FidelityFX::IsImmediateOutputCurrent(const ImmediateOutputPair& a_pair) const noexcept
+{
+	if (!a_pair.fence || a_pair.fence != runtimeD3D11Fence ||
+		!a_pair.completionValue || a_pair.completionValue != runtimeFenceValue - 1 ||
+		a_pair.providerRevision != fsrRelatchDrainProof.ProviderRevision() ||
+		IsRuntimeUpscalerOwnershipDetached() || runtimeUpscalerSessionQuarantined) {
+		return false;
+	}
+	for (uint32_t eye = 0; eye < 2; ++eye) {
+		if (!runtimeOutputShared[eye] || a_pair.resources[eye] != runtimeOutputShared[eye]->resource11 ||
+			a_pair.uavs[eye] != runtimeOutputShared[eye]->uav) {
+			return false;
+		}
+	}
+	return true;
 }
 
 FidelityFX::UpscaleResult FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture, ID3D11Resource* a_depth, ID3D11Resource* a_reactiveMask, ID3D11Resource* a_transparencyCompositionMask, ID3D11Resource* a_motionVectors, float a_sharpness,
@@ -4982,7 +5048,11 @@ FidelityFX::UpscaleResult FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture
 			}
 		}
 #endif
-		const auto stereoResult = UpscaleStereoRegions(stereoRegions);
+		ImmediateOutputPair immediateOutput;
+		const bool stableRuntime = dispatchAdmission.contextsCompatible && !runtimeHostFallbackActive &&
+		                           runtimeResumeResetDispatchesRemaining == 0 && !upscaling.ShouldResetHistoryThisFrame();
+		const auto stereoResult = UpscaleStereoRegions(stereoRegions, false,
+			stableRuntime ? &immediateOutput : nullptr, a_upscalingTexture);
 		if (stereoResult == StereoUpscaleResult::Ready) {
 			usedRuntimeUpscaler = { true, true };
 		} else if (stereoResult == StereoUpscaleResult::Deferred) {
@@ -5032,6 +5102,8 @@ FidelityFX::UpscaleResult FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture
 			allEvaluated = false;
 		}
 
+		if (immediateOutput.fence && !IsImmediateOutputCurrent(immediateOutput))
+			allEvaluated = false;
 		if (allEvaluated) {
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (probeBatch && Probe::WantsVendorCapture()) {
@@ -5068,13 +5140,16 @@ FidelityFX::UpscaleResult FidelityFX::Upscale(ID3D11Resource* a_upscalingTexture
 					const auto* output = upscaling.vrIntermediateColorOut[eye].get();
 					CSX::Diagnostics::ColourPipelineProbe::CaptureVendorStage(
 						CSX::Diagnostics::ColourPipelineProbe::Stage::FsrOutput, eye,
-						output->resource.get(), output->srv.get(), output->rtv.get(), output->uav.get(),
+						immediateOutput.fence ? immediateOutput.resources[eye].get() : output->resource.get(),
+						immediateOutput.fence ? nullptr : output->srv.get(),
+						immediateOutput.fence ? nullptr : output->rtv.get(),
+						immediateOutput.fence ? immediateOutput.uavs[eye].get() : output->uav.get(),
 						eyeDisplayWidth, eyeDisplayHeight, metadata, "FidelityFX::Upscale",
 						"after successful stereo FSR evaluation");
 				}
 			}
 #endif
-			upscaling.FinalizePerEyeOutputs(a_upscalingTexture);
+			upscaling.FinalizePerEyeOutputs(a_upscalingTexture, immediateOutput.fence ? &immediateOutput : nullptr);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (CSX::Diagnostics::ColourPipelineProbe::WantsVendorCapture()) {
 				winrt::com_ptr<ID3D11Texture2D> combined;

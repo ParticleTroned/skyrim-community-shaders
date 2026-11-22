@@ -20,6 +20,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 // Compile the production provider and vendor dispatch functions against effect
 // counters, so deferred admission cannot silently become an evaluation failure.
@@ -41,6 +42,7 @@ struct TestPointer
 	T* value = nullptr;
 	T* get() const { return value; }
 	explicit operator bool() const { return value != nullptr; }
+	bool operator==(const TestPointer&) const = default;
 };
 struct Texture2D
 {
@@ -48,6 +50,16 @@ struct Texture2D
 	D3D11_TEXTURE2D_DESC desc;
 	bool srv = true, uav = true;
 };
+using ID3D11Texture2D = ID3D11Resource;
+struct ID3D11UnorderedAccessView
+{};
+struct ID3D11Fence
+{};
+namespace winrt
+{
+	template <class T>
+	using com_ptr = TestPointer<T>;
+}
 namespace eastl
 {
 	template <class T>
@@ -293,7 +305,8 @@ struct FidelityFX
 		plan.contextsCompatible = runtimeContextsCompatible;
 #include "fsr_runtime_gate_under_test.h"
 	}
-	LifecycleResult ExecuteRuntimeUpscalerBatch(const RuntimeDispatchPlan&, std::span<const UpscaleRegionParameters> a_regions, bool = false)
+	LifecycleResult ExecuteRuntimeUpscalerBatch(const RuntimeDispatchPlan&, std::span<const UpscaleRegionParameters> a_regions,
+		bool = false, ImmediateOutputPair* = nullptr, ID3D11Resource* = nullptr)
 	{
 		++runtimeCalls;
 		runtimeRegionCount += static_cast<uint32_t>(a_regions.size());
@@ -340,7 +353,8 @@ struct FidelityFX
 	UpscaleResult UpscaleRegion(uint32_t, ID3D11Resource*, ID3D11Resource*, ID3D11Resource*,
 		ID3D11Resource*, ID3D11Resource*, ID3D11Resource*, uint32_t, uint32_t,
 		uint32_t, uint32_t, float, float, float, bool* = nullptr);
-	StereoUpscaleResult UpscaleStereoRegions(const std::array<UpscaleRegionParameters, 2>&, bool = false);
+	StereoUpscaleResult UpscaleStereoRegions(const std::array<UpscaleRegionParameters, 2>&, bool = false,
+		ImmediateOutputPair* = nullptr, ID3D11Resource* = nullptr);
 };
 
 struct Upscaling
@@ -1078,8 +1092,183 @@ void QuarantinedColorBlocksPresentation()
 	}
 }
 
+using UINT = uint32_t;
+using HRESULT = int;
+struct D3D11_BOX
+{
+	UINT left, top, front, right, bottom, back;
+};
+enum ResourceState
+{
+	D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+	D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+	D3D12_RESOURCE_STATE_COMMON
+};
+struct D3D12_RESOURCE_BARRIER
+{};
+namespace CD3DX12_RESOURCE_BARRIER
+{
+	D3D12_RESOURCE_BARRIER Transition(int*, ResourceState, ResourceState) { return {}; }
+}
+namespace DX
+{
+	void ThrowIfFailed(HRESULT result)
+	{
+		if (result)
+			throw std::runtime_error("Injected submission failure");
+	}
+}
+struct ID3D12CommandList
+{};
+
+struct OutputPublication
+{
+	using LifecycleResult = FidelityFX::LifecycleResult;
+	using ImmediateOutputPair = FidelityFX::ImmediateOutputPair;
+	using Region = FidelityFX::UpscaleRegionParameters;
+	struct Resource
+	{
+		TestPointer<int> resource;
+		TestPointer<ID3D11Texture2D> resource11;
+		TestPointer<ID3D11UnorderedAccessView> uav;
+	};
+	struct Submission : ID3D12CommandList
+	{
+		uint32_t failure = 0, step = 0, copies = 0, barriers = 0;
+		void ResourceBarrier(UINT count, D3D12_RESOURCE_BARRIER*) { barriers += count; }
+		HRESULT Close()
+		{
+			step = 1;
+			return failure == 1;
+		}
+		void ExecuteCommandLists(UINT, ID3D12CommandList**) { step = 2; }
+		HRESULT Signal(ID3D11Fence*, uint64_t)
+		{
+			step = 3;
+			return failure == 2;
+		}
+		HRESULT Wait(ID3D11Fence*, uint64_t)
+		{
+			step = 4;
+			return failure == 3;
+		}
+		void CopySubresourceRegion(ID3D11Resource*, UINT, UINT, UINT, UINT, ID3D11Resource*, UINT, D3D11_BOX*)
+		{
+			Require(step == 4, "Output copied before successful wait");
+			++copies;
+		}
+	} submission;
+	struct
+	{
+		Submission* commandQueue;
+		Submission* d3d11Context;
+	} swapChain{ &submission, &submission };
+	struct
+	{
+		uint64_t fenceValue = 0;
+	} commandContextStorage;
+	struct Admission
+	{
+		std::array<std::unique_ptr<Texture2D>, 2> vrIntermediateColorOut;
+		bool eligible = true;
+		uint32_t preflights = 0;
+		bool CanFinalizeImmediateFSROutputs(ID3D11Resource*, const ImmediateOutputPair&)
+		{
+			++preflights;
+			return eligible;
+		}
+	} upscaling;
+	struct
+	{
+		uint64_t revision = 7;
+		uint64_t ProviderRevision() const { return revision; }
+	} fsrRelatchDrainProof;
+	std::array<std::unique_ptr<Resource>, 2> runtimeOutputShared;
+	TestPointer<ID3D11Fence> runtimeD3D11Fence, runtimeD3D12Fence;
+	uint64_t runtimeFenceValue = 2;
+	uint32_t runtimeResumeResetDispatchesRemaining = 0, recoveries = 0;
+	bool runtimeHostFallbackActive = false, runtimeUpscalerSessionQuarantined = false, detached = false;
+	std::array<bool, 2> runtimeUpscalerContextIndeterminate{};
+	LifecycleResult runtimeUpscalerQuarantineRetirement = LifecycleResult::Pending;
+	bool IsRuntimeUpscalerOwnershipDetached() const noexcept { return detached; }
+	LifecycleResult ResolveRuntimeUpscalerLifecycleFailure(const char*) { return LifecycleResult::Failed; }
+	bool IsImmediateOutputCurrent(const ImmediateOutputPair&) const noexcept;
+
+	LifecycleResult Run(std::span<const Region> a_regions, bool a_compositorSubmit,
+		ImmediateOutputPair* a_immediateOutput, ID3D11Resource* a_immediateDestination, bool dispatchOk)
+	{
+		ImmediateOutputPair immediateOutput;
+		bool commandListRecording = true, commandListSubmitted = false, commandFenceTracked = false;
+		auto* commandContext = &commandContextStorage;
+		auto* commandList = &submission;
+		UINT barrierCount = 0;
+		std::array<Resource*, 2> colorInputs{ runtimeOutputShared[0].get(), runtimeOutputShared[1].get() };
+		std::array<std::array<Resource*, 4>, 2> guideInputs{};
+		for (auto& eye : guideInputs) eye.fill(runtimeOutputShared[0].get());
+		const auto recoverCommandContext = [&] {
+			++recoveries;
+			Require(commandListSubmitted == (submission.step >= 2), "Submission tracking lost on failure");
+			Require(commandFenceTracked == (submission.step >= 4), "Fence tracking lost on failure");
+			Require(commandListRecording == (submission.step == 0), "List tracking lost on failure");
+		};
+#include "fsr_output_publication_under_test.h"
+	}
+};
+#include "fsr_output_current_under_test.h"
+
+static void CheckOutputPublication()
+{
+	for (uint32_t failure = 0; failure <= 3; ++failure) {
+		for (uint32_t excluded = 0; excluded < 6; ++excluded) {
+			for (bool completePair : { false, true }) {
+				OutputPublication test;
+				std::array<ID3D11Resource, 4> resources;
+				std::array<ID3D11UnorderedAccessView, 2> views;
+				ID3D11Fence fence;
+				test.runtimeD3D11Fence.value = test.runtimeD3D12Fence.value = &fence;
+				std::array<OutputPublication::Region, 2> regions{};
+				for (uint32_t eye = 0; eye < 2; ++eye) {
+					test.runtimeOutputShared[eye] = std::make_unique<OutputPublication::Resource>();
+					test.runtimeOutputShared[eye]->resource11.value = &resources[eye];
+					test.runtimeOutputShared[eye]->uav.value = &views[eye];
+					test.upscaling.vrIntermediateColorOut[eye] = std::make_unique<Texture2D>();
+					test.upscaling.vrIntermediateColorOut[eye]->resource.value = &resources[eye + 2];
+					regions[eye].contextIndex = eye;
+					regions[eye].output = &resources[eye + 2];
+					regions[eye].renderWidth = regions[eye].renderHeight = 4;
+					regions[eye].displayWidth = regions[eye].displayHeight = 8;
+				}
+				test.submission.failure = failure;
+				test.upscaling.eligible = excluded != 1;
+				if (excluded == 4)
+					++regions[1].displayWidth;
+				if (excluded == 5)
+					regions[0].output = &resources[0];
+				OutputPublication::ImmediateOutputPair pair;
+				const auto result = test.Run(regions, excluded == 2, excluded == 3 ? nullptr : &pair, &resources[0], completePair);
+				const bool success = completePair && failure == 0;
+				Require((result == OutputPublication::LifecycleResult::Ready) == success, "Failed operation reported success");
+				Require(static_cast<bool>(pair.fence) == (success && excluded == 0), "Incomplete or ineligible pair escaped");
+				Require(test.submission.copies == (success && excluded != 0 ? 2u : 0u), "Output copy fallback changed");
+				if (pair.fence) {
+					Require(test.IsImmediateOutputCurrent(pair), "Successful pair identity rejected");
+					++test.runtimeFenceValue;
+					Require(!test.IsImmediateOutputCurrent(pair), "Later dispatch did not invalidate pair");
+					--test.runtimeFenceValue;
+					++test.fsrRelatchDrainProof.revision;
+					Require(!test.IsImmediateOutputCurrent(pair), "Provider replacement did not invalidate pair");
+					--test.fsrRelatchDrainProof.revision;
+					test.runtimeOutputShared[1]->resource11.value = &resources[3];
+					Require(!test.IsImmediateOutputCurrent(pair), "Resource replacement did not invalidate pair");
+				}
+			}
+		}
+	}
+}
+
 int main()
 {
+	CheckOutputPublication();
 	OrdinarySaveRetainsFoveatedHostRegions();
 	QuarantinedSharedGuidesRequireReplacement();
 	QuarantinedColorBlocksPresentation();

@@ -146,6 +146,10 @@ try {
         Assert-True ($compatibility.target.minimumVersion -ceq '3.21') "Wrong minimum CSX version for $($tierProperty.Name)."
         Assert-True ($compatibility.target.maximumVersionExclusive -ceq '3.22') "Wrong maximum CSX version for $($tierProperty.Name)."
         Assert-True ($settings.'Weather Picker'.Enabled -eq $true) "Weather Picker was disabled for $($tierProperty.Name)."
+        Assert-True ($settings.Menu.HideOverviewTabs -eq $false) "Overview navigation default changed for $($tierProperty.Name)."
+        foreach ($profile in @($settings.'Adaptive Balance'.globalProfile) + @($settings.'Adaptive Balance'.profiles)) {
+            Assert-True ($profile.appearance.moonCurve -eq 1.0 -and $profile.appearance.moonEdgeTrim -eq 0.0) "Moon appearance must remain neutral in every profile for $($tierProperty.Name)."
+        }
         Assert-True ($settings.'Reverse Z'.EnableReverseZBuffer -eq $false) "Reverse Z was enabled for $($tierProperty.Name)."
         Assert-True ($null -eq $settings.'Disable at Boot'.psobject.Properties['CS Editor']) "CS Editor appeared in Disable at Boot for $($tierProperty.Name)."
         Assert-True ($null -eq $settings.'Disable at Boot'.psobject.Properties['Weather Picker']) "Weather Picker appeared in Disable at Boot for $($tierProperty.Name)."

@@ -7,6 +7,7 @@
 #include "Utils/LazyShader.h"
 #include "Utils/PointLightFlags.h"
 
+#include "Features/LightLimitFix/ClusterBoundsCache.h"
 #include "Features/LightLimitFix/EffectSpotlight.h"
 #include "Features/LightLimitFix/LightAttach.h"
 #include "Features/LightLimitFix/ParticleLights.h"
@@ -26,6 +27,9 @@ class ParticleLights;
 struct LightLimitFix : OverlayFeature
 {
 private:
+	LightLimitFixDetail::ClusterBoundsCache clusterBoundsCache;
+	winrt::com_ptr<ID3D11ComputeShader> clusterBoundsShader;
+
 	Util::RuntimeToggle runtimeToggle{ false };
 	static constexpr std::string_view MOD_ID = "99548";
 	eastl::hash_map<RE::BSLight*, RE::NiLight*> effectLightValidationCache;

@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.11.22.2",
+    "packageVersion": "d2026.11.22.3",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -15,16 +15,17 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "94DB45680147177EE527578774C277585BD479F4B79F72943B37DE9BDD5C4B12"
+        "sha256": "BB8E22A76814D1D76E2B490AC9D3FC684A5ED6EA24A694E55A0363FCC28FE5EC"
     },
     "runtimeSettingsContract": {
-        "revision": 35,
-        "sourceTreeSha256": "B88CE358023C6123008DCCC796F9047B4A4942B738A1C672728A23E47D24ED8C",
+        "revision": 36,
+        "sourceTreeSha256": "2698EB7A8CDAFE9585AF43F1CD4514E3C84B08368214D98094A2BB16171CD98C",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
                 "src/Feature.cpp",
                 "src/Feature.h",
+                "src/Features/AdaptiveBalanceAppearance.h",
                 "src/Features/AdaptiveBalanceDepthOfField.cpp",
                 "src/Features/AdaptiveBalanceDepthOfField.h",
                 "src/Features/AdaptiveBalanceDepthOfFieldSettingsPolicy.h",
@@ -78,6 +79,7 @@
             "src/Api/FeatureDevBenchBridge.cpp",
             "src/Feature.cpp",
             "src/Feature.h",
+            "src/Features/AdaptiveBalanceAppearance.h",
             "src/Features/AdaptiveBalanceDepthOfField.cpp",
             "src/Features/AdaptiveBalanceDepthOfField.h",
             "src/Features/AdaptiveBalanceDepthOfFieldSettingsPolicy.h",
@@ -809,6 +811,15 @@
             ["Volumetric Lighting", "GodrayShaftIntensity"]
         ],
         "requiredValues": [
+            { "path": ["Menu", "HideOverviewTabs"], "value": false },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "moonCurve"],
+                "value": 1.0
+            },
+            {
+                "path": ["Adaptive Balance", "globalProfile", "appearance", "moonEdgeTrim"],
+                "value": 0.0
+            },
             { "path": ["Grass Optimizations", "RefineHiZ"], "value": true },
             { "path": ["Upscaling", "antiLag2Enabled"], "value": false },
             { "path": ["Light Limit Fix", "SkipRedundantLightAttach"], "value": true },

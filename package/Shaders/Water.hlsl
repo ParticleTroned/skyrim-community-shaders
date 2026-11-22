@@ -2124,6 +2124,9 @@ PS_OUTPUT main(PS_INPUT input)
 			float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #					endif
 
+			if (intensityMultiplier == 0.0)
+				continue;
+
 			float3 normalizedLightDirection = normalize(lightDirection);
 
 			float3 H = normalize(normalizedLightDirection - viewDirection);

@@ -1,0 +1,56 @@
+#define LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS
+#include "Common/Color.hlsli"
+#include "Common/AdaptiveBalanceFire.hlsli"
+namespace LightLimitFix
+{
+#include "../../features/Light Limit Fix/Shaders/LightLimitFix/Common.hlsli"
+}
+#include "../../features/Inverse Square Lighting/Shaders/InverseSquareLighting/InverseSquareLighting.hlsli"
+
+@EFFECT_CLASSIFICATION@
+@EFFECT_INFLUENCE@
+
+cbuffer Samples : register(b0)
+{
+	float4 colors[8];
+	uint4 lightParameters;
+	float4 geometryParameters;
+};
+RWTexture2D<float4> Result : register(u0);
+
+[numthreads(8, 1, 1)] void main(uint3 id : SV_DispatchThreadID) {
+	LightLimitFix::Light light = (LightLimitFix::Light)0;
+	light.color = colors[id.x].rgb;
+	light.fade = 0.83;
+	light.radius = geometryParameters.x;
+	light.invRadius = rcp(light.radius);
+	light.fadeZone = 1.0;
+	light.lightFlags = lightParameters.y | (lightParameters.x ? LightLimitFix::LightFlags::Linear : 0);
+	light.positionWS[0] = float4(geometryParameters.y, 0, 0, 1);
+	light.positionWS[1] = float4(0, geometryParameters.y, 0, 1);
+	uint eyeIndex = lightParameters.z;
+	float lightVisibility = geometryParameters.z;
+	struct Input { float4 WorldPosition; float4 WPosition; };
+	Input input = (Input)0;
+	float4 positionWS = 0;
+	float3 normal = float3(0.4, 0.7, 0.6);
+	float3 viewDirection = float3(geometryParameters.w, 0, 0);
+	float3 FresnelRI = float3(1, 1, 8);
+	float3 propertyColor = 0.25;
+	float3 specularLighting = 0.25;
+	[loop] for (uint i = 0; i < lightParameters.w; ++i)
+	{
+#if defined(TEST_EFFECT)
+@Effect_BODY@
+#elif defined(TEST_PARTICLE)
+@Particle_BODY@
+#else
+@Water_BODY@
+#endif
+	}
+#if defined(TEST_EFFECT) || defined(TEST_PARTICLE)
+	Result[id.xy] = float4(propertyColor, 1);
+#else
+	Result[id.xy] = float4(specularLighting, 1);
+#endif
+}

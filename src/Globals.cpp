@@ -61,9 +61,11 @@
 #include "Utils/DeviceContextState.h"
 #include "Utils/Game.h"
 #include "Utils/VRFrameBufferUpload.h"
+
 #include <array>
 #include <cstring>
 #include <mutex>
+#include <winrt/base.h>
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
 #	include "Diagnostics/GpuCrashDiagnostics.h"
@@ -280,8 +282,20 @@ namespace globals
 		}
 	}
 
+	static winrt::com_ptr<ID3D11Resource> cachedFrameBufferResource;
+	static bool frameBufferCacheValid = false;
+
+	bool IsFrameBufferCacheCurrentForCS(ID3D11DeviceContext* context)
+	{
+		if (!context || !frameBufferCacheValid || !cachedFrameBufferResource || context != d3d::context || game::mappedFrameBuffer)
+			return false;
+		winrt::com_ptr<ID3D11Buffer> bound;
+		context->CSGetConstantBuffers(12, 1, bound.put());
+		return bound.get() == cachedFrameBufferResource.get();
+	}
+
 	/// Copy a proven upload source before Unmap invalidates its CPU access.
-	void CacheFramebuffer(const void* data)
+	void CacheFramebuffer(const void* data, ID3D11Resource* resource)
 	{
 		using namespace game;
 		if (REL::Module::IsVR()) {
@@ -292,6 +306,9 @@ namespace globals
 			frameBufferCached.nonVR = *frameBuffer;
 		}
 		mappedFrameBuffer = nullptr;
+		if (cachedFrameBufferResource.get() != resource)
+			cachedFrameBufferResource.copy_from(resource);
+		frameBufferCacheValid = true;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (game::isVR && state && features::upscaling.IsNeuralRenderingEnabled())
 			features::upscaling.RecordNeuralCaptureCamera(state->frameCount);
@@ -305,12 +322,13 @@ namespace globals
 		UINT subresource, const void* source, void* destination)
 	{
 		if (context == d3d::context && resource == *game::perFrame && subresource == 0) {
+			frameBufferCacheValid = false;
 			game::mappedFrameBuffer = nullptr;
 			if (source && destination) {
 				auto corrected = *static_cast<const FrameBufferVR*>(source);
 				if (features::reverseZ.FixupMappedFrameBufferVR(corrected))
 					std::memcpy(destination, &corrected, sizeof(corrected));
-				CacheFramebuffer(&corrected);
+				CacheFramebuffer(&corrected, resource);
 			}
 		}
 		context->Unmap(resource, subresource);
@@ -445,6 +463,10 @@ namespace globals
 #endif
 		static HRESULT thunk(ID3D11DeviceContext* This, ID3D11Resource* pResource, UINT Subresource, D3D11_MAP MapType, UINT MapFlags, D3D11_MAPPED_SUBRESOURCE* pMappedResource)
 		{
+			if (This == d3d::context && Subresource == 0 && *game::perFrame.get() == pResource) {
+				frameBufferCacheValid = false;
+				game::mappedFrameBuffer = nullptr;
+			}
 			HRESULT hr = func(This, pResource, Subresource, MapType, MapFlags, pMappedResource);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			if (FAILED(hr))
@@ -474,7 +496,7 @@ namespace globals
 					features::reverseZ.FixupMappedFrameBufferVR(*static_cast<FrameBufferVR*>(bytes));
 				else
 					features::reverseZ.FixupMappedFrameBuffer(*static_cast<FrameBuffer*>(bytes));
-				CacheFramebuffer(bytes);
+				CacheFramebuffer(bytes, pResource);
 			}
 			func(This, pResource, Subresource);
 		}

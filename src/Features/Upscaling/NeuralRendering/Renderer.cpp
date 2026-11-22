@@ -376,29 +376,124 @@ namespace NeuralRendering
 			       a_format == DXGI_FORMAT_R32G32_FLOAT;
 		}
 
-		bool SupportsD3D11Format(
-			ID3D11Device* a_device,
-			DXGI_FORMAT a_format,
-			UINT a_requiredSupport) noexcept
+		class D3D11CapabilityCache
 		{
-			UINT support = 0;
-			return a_device && a_format != DXGI_FORMAT_UNKNOWN &&
-			       SUCCEEDED(a_device->CheckFormatSupport(a_format, &support)) &&
-			       (support & a_requiredSupport) == a_requiredSupport;
-		}
+		public:
+			bool SupportsFormat(ID3D11Device* a_device, DXGI_FORMAT a_format, UINT a_requiredSupport) noexcept
+			{
+				if (!a_device || a_format == DXGI_FORMAT_UNKNOWN)
+					return false;
+				SelectDevice(a_device);
+				FormatSupport uncached{};
+				auto& entry = FindFormat(a_format, uncached);
+				if (!entry.supportValid) {
+					UINT support = 0;
+					const auto result = a_device->CheckFormatSupport(a_format, &support);
+					if (FAILED(result)) {
+						ObserveFailure(result);
+						return false;
+					}
+					entry.support = support;
+					entry.supportValid = true;
+				}
+				return (entry.support & a_requiredSupport) == a_requiredSupport;
+			}
 
-		bool SupportsD3D11SharedFormat(
-			ID3D11Device* a_device,
-			DXGI_FORMAT a_format) noexcept
-		{
-			if (!a_device || a_format == DXGI_FORMAT_UNKNOWN)
-				return false;
+			bool SupportsSharedFormat(ID3D11Device* a_device, DXGI_FORMAT a_format) noexcept
+			{
+				if (!a_device || a_format == DXGI_FORMAT_UNKNOWN)
+					return false;
+				SelectDevice(a_device);
+				FormatSupport uncached{};
+				auto& entry = FindFormat(a_format, uncached);
+				if (!entry.support2Valid) {
+					D3D11_FEATURE_DATA_FORMAT_SUPPORT2 support{ .InFormat = a_format };
+					const auto result = a_device->CheckFeatureSupport(D3D11_FEATURE_FORMAT_SUPPORT2, &support, sizeof(support));
+					if (FAILED(result)) {
+						ObserveFailure(result);
+						return false;
+					}
+					entry.support2 = support.OutFormatSupport2;
+					entry.support2Valid = true;
+				}
+				return (entry.support2 & D3D11_FORMAT_SUPPORT2_SHAREABLE) != 0;
+			}
 
-			D3D11_FEATURE_DATA_FORMAT_SUPPORT2 support{ .InFormat = a_format };
-			return SUCCEEDED(a_device->CheckFeatureSupport(
-					   D3D11_FEATURE_FORMAT_SUPPORT2, &support, sizeof(support))) &&
-			       (support.OutFormatSupport2 & D3D11_FORMAT_SUPPORT2_SHAREABLE) != 0;
-		}
+			bool SupportsSharedResources(ID3D11Device* a_device) noexcept
+			{
+				if (!a_device)
+					return false;
+				SelectDevice(a_device);
+				if (!options5Valid_) {
+					D3D11_FEATURE_DATA_D3D11_OPTIONS5 options5{};
+					const auto result = a_device->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS5, &options5, sizeof(options5));
+					if (FAILED(result)) {
+						ObserveFailure(result);
+						return false;
+					}
+					options5_ = options5;
+					options5Valid_ = true;
+				}
+				return options5_.SharedResourceTier >= D3D11_SHARED_RESOURCE_TIER_1;
+			}
+
+			// Scalar invalidation must not release ownership before unsafe GPU work is abandoned.
+			void Invalidate() noexcept
+			{
+				formats_ = {};
+				options5_ = {};
+				options5Valid_ = false;
+			}
+
+			void Reset() noexcept
+			{
+				Invalidate();
+				device_.Reset();
+			}
+
+		private:
+			static constexpr std::size_t kFormatCapacity = 8;
+
+			struct FormatSupport
+			{
+				DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+				UINT support = 0;
+				UINT support2 = 0;
+				bool supportValid = false;
+				bool support2Valid = false;
+			};
+
+			void SelectDevice(ID3D11Device* a_device) noexcept
+			{
+				if (device_.Get() != a_device) {
+					Invalidate();
+					device_ = a_device;
+				}
+			}
+
+			FormatSupport& FindFormat(DXGI_FORMAT a_format, FormatSupport& a_uncached) noexcept
+			{
+				for (auto& entry : formats_) {
+					if (entry.format == DXGI_FORMAT_UNKNOWN)
+						entry.format = a_format;
+					if (entry.format == a_format)
+						return entry;
+				}
+				return a_uncached;
+			}
+
+			void ObserveFailure(HRESULT a_result) noexcept
+			{
+				if (IsDeviceLossResult(a_result))
+					Invalidate();
+			}
+
+			// Validation may precede backend initialization; this reference prevents pointer reuse.
+			ComPtr<ID3D11Device> device_;
+			std::array<FormatSupport, kFormatCapacity> formats_{};
+			D3D11_FEATURE_DATA_D3D11_OPTIONS5 options5_{};
+			bool options5Valid_ = false;
+		};
 
 		bool SupportsD3D12Format(
 			ID3D12Device* a_device,
@@ -1058,7 +1153,7 @@ namespace NeuralRendering
 		void SetActiveFeatureSlotLocked(std::uint32_t a_slot) noexcept;
 		[[nodiscard]] std::uint32_t ActiveFeatureSlotOrLocked(
 			std::uint32_t a_fallback) const noexcept;
-		HRESULT GetDeviceRemovalReasonLocked(HRESULT a_candidate) const noexcept;
+		HRESULT GetDeviceRemovalReasonLocked(HRESULT a_candidate) noexcept;
 		/** Observes a terminal failure before ownership detaches, without GPU commands or waits. */
 		void LogFailureDiagnosticsLocked(RendererStage a_stage, HRESULT a_result, std::uint32_t a_slot) noexcept;
 		bool FailLocked(
@@ -1085,6 +1180,7 @@ namespace NeuralRendering
 		Color::Pipeline colorPipeline_;
 		ModelResolution modelResolution_;
 		std::array<Slot, Runtime::kFeatureSlotCount> slots_{};
+		D3D11CapabilityCache d3d11Capabilities_;
 		ComPtr<ID3D11Device> device_;
 		ComPtr<ID3D11DeviceContext> context_;
 		ComPtr<ID3D11ComputeShader> copyDepthGuideCS_;
@@ -1386,7 +1482,7 @@ namespace NeuralRendering
 		}
 		a_resources.depthViewFormat = depthViewDesc.Format;
 		if (depthViewDesc.Format == DXGI_FORMAT_UNKNOWN ||
-			!SupportsD3D11Format(
+			!d3d11Capabilities_.SupportsFormat(
 				a_args.device,
 				depthViewDesc.Format,
 				D3D11_FORMAT_SUPPORT_TEXTURE2D |
@@ -1395,10 +1491,7 @@ namespace NeuralRendering
 			return fail("the depth guide SRV format is not sampleable");
 		}
 
-		D3D11_FEATURE_DATA_D3D11_OPTIONS5 options5{};
-		if (FAILED(a_args.device->CheckFeatureSupport(
-				D3D11_FEATURE_D3D11_OPTIONS5, &options5, sizeof(options5))) ||
-			options5.SharedResourceTier < D3D11_SHARED_RESOURCE_TIER_1) {
+		if (!d3d11Capabilities_.SupportsSharedResources(a_args.device)) {
 			return fail("the D3D11 device does not support shared NT-handle resources");
 		}
 
@@ -1407,28 +1500,28 @@ namespace NeuralRendering
 		                              D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW;
 		constexpr UINT outputSupport = D3D11_FORMAT_SUPPORT_TEXTURE2D |
 		                               D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW;
-		if (!SupportsD3D11Format(a_args.device, a_resources.color.desc.Format, inputSupport))
+		if (!d3d11Capabilities_.SupportsFormat(a_args.device, a_resources.color.desc.Format, inputSupport))
 			return fail("the color format cannot back a shared SRV/UAV texture");
-		if (!SupportsD3D11SharedFormat(a_args.device, a_resources.color.desc.Format))
+		if (!d3d11Capabilities_.SupportsSharedFormat(a_args.device, a_resources.color.desc.Format))
 			return fail("the color format is not shareable across D3D11 and D3D12");
-		if (!SupportsD3D11Format(a_args.device, a_resources.motionVectors.desc.Format, inputSupport))
+		if (!d3d11Capabilities_.SupportsFormat(a_args.device, a_resources.motionVectors.desc.Format, inputSupport))
 			return fail("the motion-vector format cannot back a shared SRV/UAV texture");
-		if (!SupportsD3D11SharedFormat(a_args.device, a_resources.motionVectors.desc.Format))
+		if (!d3d11Capabilities_.SupportsSharedFormat(a_args.device, a_resources.motionVectors.desc.Format))
 			return fail("the motion-vector format is not shareable across D3D11 and D3D12");
-		if (!SupportsD3D11Format(a_args.device, DXGI_FORMAT_R32_FLOAT, inputSupport))
+		if (!d3d11Capabilities_.SupportsFormat(a_args.device, DXGI_FORMAT_R32_FLOAT, inputSupport))
 			return fail("R32_FLOAT depth-guide sharing is unsupported");
-		if (!SupportsD3D11SharedFormat(a_args.device, DXGI_FORMAT_R32_FLOAT))
+		if (!d3d11Capabilities_.SupportsSharedFormat(a_args.device, DXGI_FORMAT_R32_FLOAT))
 			return fail("R32_FLOAT depth guides are not shareable across D3D11 and D3D12");
-		if (!SupportsD3D11Format(a_args.device, a_resources.output.desc.Format, outputSupport))
+		if (!d3d11Capabilities_.SupportsFormat(a_args.device, a_resources.output.desc.Format, outputSupport))
 			return fail("the output format cannot back a shared UAV texture");
-		if (!SupportsD3D11SharedFormat(a_args.device, a_resources.output.desc.Format))
+		if (!d3d11Capabilities_.SupportsSharedFormat(a_args.device, a_resources.output.desc.Format))
 			return fail("the output format is not shareable across D3D11 and D3D12");
 		if (hasControlMask &&
-			!SupportsD3D11Format(a_args.device, DXGI_FORMAT_R8_UNORM, inputSupport)) {
+			!d3d11Capabilities_.SupportsFormat(a_args.device, DXGI_FORMAT_R8_UNORM, inputSupport)) {
 			return fail("R8_UNORM control masks cannot back a shared SRV/UAV texture");
 		}
 		if (hasControlMask &&
-			!SupportsD3D11SharedFormat(a_args.device, DXGI_FORMAT_R8_UNORM)) {
+			!d3d11Capabilities_.SupportsSharedFormat(a_args.device, DXGI_FORMAT_R8_UNORM)) {
 			return fail("R8_UNORM control masks are not shareable across D3D11 and D3D12");
 		}
 
@@ -1705,19 +1798,27 @@ namespace NeuralRendering
 	}
 
 	HRESULT Renderer::State::GetDeviceRemovalReasonLocked(
-		HRESULT a_candidate) const noexcept
+		HRESULT a_candidate) noexcept
 	{
 		if (device_) {
 			const HRESULT reason = device_->GetDeviceRemovedReason();
-			if (IsDeviceLossReason(reason))
+			if (IsDeviceLossReason(reason)) {
+				d3d11Capabilities_.Invalidate();
 				return reason;
+			}
 		}
 		if (auto* device12 = interop_.Device()) {
 			const HRESULT reason = device12->GetDeviceRemovedReason();
-			if (IsDeviceLossReason(reason))
+			if (IsDeviceLossReason(reason)) {
+				d3d11Capabilities_.Invalidate();
 				return reason;
+			}
 		}
-		return IsDeviceLossResult(a_candidate) ? a_candidate : S_OK;
+		if (IsDeviceLossResult(a_candidate)) {
+			d3d11Capabilities_.Invalidate();
+			return a_candidate;
+		}
+		return S_OK;
 	}
 
 	void Renderer::State::LogFailureDiagnosticsLocked(
@@ -1732,6 +1833,8 @@ namespace NeuralRendering
 			auto* device12 = interop_.Device();
 			const HRESULT reason11 = device_ ? device_->GetDeviceRemovedReason() : E_POINTER;
 			const HRESULT reason12 = device12 ? device12->GetDeviceRemovedReason() : E_POINTER;
+			if (fences.deviceRemoved || (device_ && FAILED(reason11)) || (device12 && FAILED(reason12)))
+				d3d11Capabilities_.Invalidate();
 			Util::GpuMemoryBudget::Snapshot memory;
 			bool memoryQueryThrew = false;
 			if (device_) {
@@ -1839,6 +1942,7 @@ namespace NeuralRendering
 		}
 
 		if (deviceRemoved || a_forceQuarantine) {
+			d3d11Capabilities_.Invalidate();
 			LogFailureDiagnosticsLocked(a_stage, originalResult, a_slot);
 			snapshot_.stallRecovery.Cancel();
 			const bool enteringQuarantine = !quarantined_;
@@ -1939,6 +2043,8 @@ namespace NeuralRendering
 		                           !a_resetShader && !a_destruction && !failureLatched_ && !quarantined_ &&
 		                           runtimeReady_ && interop_.IsInitialized() && Runtime::Instance().Status() == RuntimeStatus::Initialized &&
 		                           device_ && SUCCEEDED(device_->GetDeviceRemovedReason()) && SUCCEEDED(GetDeviceRemovalReasonLocked(S_OK));
+		if (!retainBackend)
+			d3d11Capabilities_.Invalidate();
 		// No admitted work has touched an already-empty backend since its completed drain.
 		const bool alreadyRetained = retainBackend && memoryRetirement_.backendRetained;
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -2048,6 +2154,7 @@ namespace NeuralRendering
 		colorPipeline_.Reset();
 		modelResolution_.Reset();
 		if (!retainBackend) {
+			d3d11Capabilities_.Reset();
 			device_.Reset();
 			context_.Reset();
 		}
@@ -2130,6 +2237,7 @@ namespace NeuralRendering
 		bool a_applyFailure,
 		std::uint64_t a_failuresBefore) noexcept
 	{
+		d3d11Capabilities_.Invalidate();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		reconstructionExperiment_.Cancel();
 		peripheralExperiment_.Cancel();
@@ -2935,8 +3043,10 @@ namespace NeuralRendering
 		}
 		if (!ServiceRetainedBackendLocked())
 			return false;
-		if (const HRESULT reason = first.device->GetDeviceRemovedReason(); FAILED(reason))
+		if (const HRESULT reason = first.device->GetDeviceRemovedReason(); FAILED(reason)) {
+			d3d11Capabilities_.Invalidate();
 			return FailLocked(RendererStage::DeviceRemoved, reason, "NR memory admission found a lost D3D11 device", first.featureSlot, true);
+		}
 		if (const HRESULT reason = GetDeviceRemovalReasonLocked(S_OK); FAILED(reason))
 			return FailLocked(RendererStage::DeviceRemoved, reason, "NR memory admission found device loss", first.featureSlot, true);
 		auto additionalBytes = EstimateAdditionalMemoryLocked(a_args, a_resources);
@@ -3729,9 +3839,11 @@ namespace NeuralRendering
 			return FailLocked(RendererStage::OutputCommit, result,
 				"NR model-resolution reconstruction failed before pair commit", first.featureSlot, true);
 		modelResolution_.Commit(args, batch);
-		if (const auto removed = first.device->GetDeviceRemovedReason(); FAILED(removed))
+		if (const auto removed = first.device->GetDeviceRemovedReason(); FAILED(removed)) {
+			d3d11Capabilities_.Invalidate();
 			return FailLocked(RendererStage::OutputCommit, removed,
 				"device removal followed NR model-resolution pair commit", first.featureSlot, true);
+		}
 		for (std::size_t index = 0; index < args.size(); ++index)
 			if (batch.selectedOutputs[index])
 				outcome.selectedOutputFeatureSlotMask |= 1u << args[index].featureSlot;
@@ -4834,6 +4946,7 @@ namespace NeuralRendering
 			AbandonRuntimeOwnershipNoexcept();
 			AbandonSlotsLocked();
 		}
+		d3d11Capabilities_.Reset();
 	}
 
 	Renderer& Renderer::Instance()

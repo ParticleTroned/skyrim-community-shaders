@@ -238,6 +238,11 @@ namespace NeuralRendering
 			} lifetimeDiagnostics_;
 #endif
 			DeviceFixture device11_;
+			struct
+			{
+				unsigned invalidations = 0;
+				void Invalidate() { ++invalidations; }
+			} d3d11Capabilities_;
 			DevicePointer device_{ &device11_ };
 			InteropFixture interop_;
 			std::array<Slot, Runtime::kFeatureSlotCount> slots_{};
@@ -375,6 +380,7 @@ int main()
 		Renderer::State timeout;
 		const auto timeoutResult = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
 		timeout.FailLocked(RendererStage::CommandBegin, timeoutResult, "timeout", 1, true);
+		Require(timeout.d3d11Capabilities_.invalidations == 0, "healthy stalled backend lost capability results");
 		Require(timeout.failureLatched_ && !timeout.quarantined_ && !timeout.abandoned, "timeout handling changed");
 		Require(memoryQueries == 1 && timeout.interop_.captures == 1, "terminal snapshot was not captured exactly once");
 		Require(timeout.device11_.queries == 1 && timeout.interop_.device.queries == 1, "both device reasons must be queried independently");
@@ -383,6 +389,17 @@ int main()
 		Require(Has("requested_model_percent=100, effective_model_percent=70") && Has("fresh=true") && Has("usage_bytes=9000000000, budget_bytes=16000000000"), "memory or model state missing");
 		timeout.FailLocked(RendererStage::FailureLatched, E_FAIL, "bypass", 1, true);
 		Require(memoryQueries == 1 && timeout.interop_.captures == 1, "latched failure repeats diagnostic work");
+
+		for (unsigned source = 0; source < 3; ++source) {
+			Renderer::State lateRemoval;
+			lateRemoval.device11_.reason = source == 0 ? DXGI_ERROR_INVALID_CALL : S_OK;
+			lateRemoval.interop_.device.reason = source == 1 ? DXGI_ERROR_DEVICE_REMOVED : S_OK;
+			lateRemoval.interop_.fences.deviceRemoved = source == 2;
+			lateRemoval.FailLocked(RendererStage::CommandBegin, timeoutResult, "late removal", 1, true);
+			Require(lateRemoval.d3d11Capabilities_.invalidations == 1, "diagnostic device loss retained capability results");
+			Require(lateRemoval.failureLatched_ && !lateRemoval.quarantined_ && !lateRemoval.abandoned,
+				"diagnostic observation changed recovery policy");
+		}
 
 		messages.clear();
 		Renderer::State removed;
@@ -394,6 +411,7 @@ int main()
 		memoryResult.result = DXGI_ERROR_DEVICE_REMOVED;
 		memoryResult.local = {};
 		removed.FailLocked(RendererStage::CommandBegin, timeoutResult, "removed", 1, true);
+		Require(removed.d3d11Capabilities_.invalidations > 0, "device loss retained capability results");
 		Require(removed.abandoned && removed.quarantined_ && removed.snapshot_.lastResult == DXGI_ERROR_DEVICE_REMOVED, "device-loss policy changed");
 		Require(Has("hr=0x800705B4") && Has("d3d11_removal_hr=0x887A0005") && Has("d3d12_removal_hr=0x887A0006"), "raw failure or independent device reasons missing");
 		Require(Has("completed_known=false, device_removed=true") && Has("fresh=false") && Has("issued=109"), "removed-device evidence was overwritten or reported as healthy");
@@ -401,6 +419,7 @@ int main()
 		messages.clear();
 		Renderer::State forced;
 		forced.FailLocked(RendererStage::ResetWait, timeoutResult, "unsafe drain", 1, false, true, false);
+		Require(forced.d3d11Capabilities_.invalidations == 1, "forced quarantine retained capability results");
 		Require(forced.abandoned && Has("issued=109") && forced.snapshot_.counters.failures == 0, "forced teardown snapshot changed failure accounting or ran after detach");
 
 		messages.clear();
@@ -438,6 +457,7 @@ int main()
 		(void)unexpected.reconstructionExperiment_.Resolve(1, 1);
 #endif
 		unexpected.QuarantineAfterUnexpectedFailureLocked(RendererStage::FeatureEvaluate, 1, true, 0);
+		Require(unexpected.d3d11Capabilities_.invalidations == 1, "unexpected failure retained capability results");
 		Require(unexpected.quarantined_ && unexpected.abandoned && Has("issued=109") && Has("color=723x779"), "exception quarantine failed to preserve pre-detach evidence");
 		RendererApplyOutcome unexpectedOutcome;
 		unexpected.FinishApplyLocked(unexpectedOutcome);

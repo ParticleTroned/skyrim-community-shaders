@@ -70,6 +70,24 @@ add_test(NAME NRReconstructionBridgeGate COMMAND "${Python3_EXECUTABLE}"
 set_tests_properties(NRReconstructionBridgeGate PROPERTIES LABELS "ControllerTests" TIMEOUT 30)
 # WARP also compiles every permutation; the bridge adds diagnostic shader cases.
 set_tests_properties(${_nr_model_tests} PROPERTIES TIMEOUT 300)
+set(_neural_capabilities_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/neural-d3d11-capabilities")
+set(_neural_capabilities_headers
+    "${_neural_capabilities_dir}/neural_device_loss_under_test.h"
+    "${_neural_capabilities_dir}/neural_d3d11_capabilities_under_test.h"
+    "${_neural_capabilities_dir}/neural_device_loss_invalidation_under_test.h")
+add_custom_command(
+    OUTPUT ${_neural_capabilities_headers}
+    COMMAND "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_neural_capabilities_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_neural_d3d11_capabilities.cmake"
+    DEPENDS src/Features/Upscaling/NeuralRendering/Renderer.cpp
+        tests/extract_neural_d3d11_capabilities.cmake tests/extract_source_region.cmake
+    VERBATIM)
+add_controller_test(neural_d3d11_capabilities_test NeuralD3D11Capabilities tests/neural_d3d11_capabilities_test.cpp)
+target_sources(neural_d3d11_capabilities_test PRIVATE ${_neural_capabilities_headers})
+target_include_directories(neural_d3d11_capabilities_test PRIVATE "${_neural_capabilities_dir}")
+target_compile_definitions(neural_d3d11_capabilities_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+
 set(_neural_failure_dir "${CMAKE_CURRENT_BINARY_DIR}/neural_failure_diagnostics")
 set(_neural_failure_headers
     "${_neural_failure_dir}/neural_failure_diagnostics_under_test.h"

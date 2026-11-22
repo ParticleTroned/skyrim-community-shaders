@@ -88,6 +88,35 @@ set_tests_properties(
         LABELS ControllerTests
 )
 
+set(_cluster_scheduling_dir
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/cluster-scheduling"
+)
+add_custom_command(
+    OUTPUT
+        "${_cluster_scheduling_dir}/cluster_structure_under_test.h"
+        "${_cluster_scheduling_dir}/cluster_upload_under_test.h"
+    COMMAND
+        "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_cluster_scheduling_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_cluster_scheduling.cmake"
+    DEPENDS
+        src/Features/LightLimitFix.cpp
+        tests/extract_cluster_scheduling.cmake
+        tests/extract_source_region.cmake
+    VERBATIM
+)
+add_controller_test(cluster_scheduling_test ClusterScheduling tests/cluster_scheduling_test.cpp)
+target_sources(
+    cluster_scheduling_test
+    PRIVATE
+        "${_cluster_scheduling_dir}/cluster_structure_under_test.h"
+        "${_cluster_scheduling_dir}/cluster_upload_under_test.h"
+)
+target_include_directories(
+    cluster_scheduling_test
+    PRIVATE "${_cluster_scheduling_dir}"
+)
+
 set(_mapped_emission_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/mapped-emission")
 set(_mapped_emission_shader "${_mapped_emission_dir}/mapped_emission.hlsl")
 add_custom_command(

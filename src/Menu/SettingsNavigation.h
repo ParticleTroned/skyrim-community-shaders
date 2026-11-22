@@ -38,6 +38,8 @@ namespace MenuUI::SettingsNavigation
 			return { page, "overlay", true };
 		if (page == "Screenshot" && (section == "source" || section == "output" || section == "framing" || section == "sequence"))
 			return { page, "overview", true };
+		if (page == "TextureStreaming" && (section == "quality" || section == "categories" || section == "status"))
+			return { page, "overview", true };
 		if (page == "Wetterness" && section == "shore")
 			return { page, "surface", true };
 		if (page == "ScreenSpaceGI" && section == "indirect")

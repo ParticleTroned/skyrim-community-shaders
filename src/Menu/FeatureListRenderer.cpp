@@ -1243,7 +1243,7 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(const BuiltInMenu& menu)
 		std::optional<MenuUI::PageNoticeScope> notices;
 		if (!isHome)
 			notices.emplace();
-		const char* description = isHome                                     ? "Welcome to:" :
+		const char* description = isHome                                     ? "" :
 		                          menu.name == "Settings"                    ? "Configure startup features, controls, display options, and menu appearance." :
 		                          menu.name == "Dev Tools"                   ? "Manage RenderDoc captures, shaders, caches, logging, and renderer tests." :
 		                          menu.name == "Performance"                 ? "Choose performance presets, inspect timings, compare feature costs, and configure the overlay." :

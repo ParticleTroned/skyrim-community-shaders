@@ -1511,16 +1511,19 @@ int main()
 			FeatureListRenderer::RenderPerformancePage("Performance", [&] {
 				require((ImGui::GetCurrentWindow()->Flags & ImGuiWindowFlags_NoScrollbar) && ImGui::GetCursorPosX() == 0, "streaming host adds neither a second scrollbar nor indentation");
 				MenuUI::FeatureScope scope(&streamingFeature);
-				MenuUI::SettingsPage page("TextureStreaming", { { "quality", "Texture detail", "Detail controls" }, { "status", "Status", "Activity" } }); }, "streaming");
+				MenuUI::SettingsPage page("TextureStreaming", {}); }, "streaming");
 		};
 		MenuUI::SettingsPage::Select("Performance", "streaming");
 		MenuUI::SettingsPage::Select("TextureStreaming", "quality");
 		for (int i = 0; i < 3; ++i) frame(drawStreaming);
-		require(MenuUI::SettingsPage::Selected("Performance") == "streaming" && MenuUI::SettingsPage::Selected("TextureStreaming") == "quality", "parent navigation preserves the streaming feature's active section");
+		require(MenuUI::SettingsPage::Selected("Performance") == "streaming" && MenuUI::SettingsPage::Selected("TextureStreaming") == "overview", "legacy streaming sections open the combined page below the parent tab");
+		for (const auto& page : MenuUI::SettingsPage::Describe())
+			if (page["page"] == "TextureStreaming")
+				require(page["tabs"].size() == 1 && !page["tabs"][0]["showTab"].get<bool>(), "streaming has no nested feature tabs or overview tiles");
 		require(!MenuUI::SettingsPage::Navigate("TextureStreaming", "profiling") && !MenuUI::SettingsPage::Navigate("TextureStreaming", "performance"), "hosting streaming preserves its existing profiling and measurement exclusions");
-		require(MenuUI::SettingsPage::Navigate("TextureStreaming", "status"), "streaming keeps its native status view");
+		require(MenuUI::SettingsPage::Navigate("TextureStreaming", "status") && MenuUI::SettingsPage::Navigate("TextureStreaming", "categories"), "streaming status and coverage links resolve to the combined page");
 		for (int i = 0; i < 3; ++i) frame(drawStreaming);
-		require(MenuUI::SettingsPage::Selected("Performance") == "streaming" && MenuUI::SettingsPage::Selected("TextureStreaming") == "status", "streaming status retains the parent tab");
+		require(MenuUI::SettingsPage::Selected("Performance") == "streaming" && MenuUI::SettingsPage::Selected("TextureStreaming") == "overview", "streaming status retains the parent tab and single continuous view");
 		require(MenuUI::SettingsPage::Navigate("Performance", "presets"), "streaming can return to the other Performance tools");
 		globals::menu->destination.clear();
 		for (int i = 0; i < 3; ++i) frame(drawStreaming);

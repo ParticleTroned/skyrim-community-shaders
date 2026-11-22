@@ -14,12 +14,11 @@ namespace MenuUI
 	{
 		ImGui::PushID(name);
 		const SKSE::stl::scope_exit restore([] { ImGui::PopID(); });
-		SectionHeading(name);
 		const Choice modes[]{
 			{ "import", "Import", "Load a shared profile.", "Choose a profile file or installed pack. Your current settings stay active until you press Import." },
 			{ "export", "Export", "Share your complete profile.", "Choose a destination and name. Export creates a new profile without changing Save settings or overwriting an existing profile." }
 		};
-		ChoiceSetting("Transfer", &state.mode, modes);
+		ChoiceSetting(name, &state.mode, modes);
 		if (state.mode == 0) {
 			if (AdaptiveBalancePresets::DrawPathPicker(acceptsPacks ? "Choose profile file or folder" : "Choose profile file", state.importPicker, root, true, acceptsPacks)) {
 				state.source = state.importPicker.selection;

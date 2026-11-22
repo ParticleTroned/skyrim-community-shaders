@@ -24,6 +24,7 @@ public:
 	static void RenderCaptureShortcuts();
 
 private:
+	static void DrawRenderDocShortcut();
 	static void RenderShadersTab();
 	static void RenderKeybindingsTab(
 		SettingsState& state);

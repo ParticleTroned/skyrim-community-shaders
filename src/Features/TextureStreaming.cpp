@@ -2012,13 +2012,12 @@ void TextureStreaming::DrawSettings()
 			}
 	}
 	const bool available = originHookReady.load() && !conflict && inventoryFailure.empty();
-	MenuUI::SettingsPage page("TextureStreaming", {
-													  { "quality", "Texture detail", "Set VRAM reserve and texture detail.", "Streaming controls", true, true, nullptr, nullptr, nullptr, available && enabled },
-													  { "categories", "Coverage", "Optional texture types.", "Additional coverage", true, false, nullptr, nullptr, nullptr, available && enabled },
-													  { "status", "Status", "Current streaming activity.", "Activity and capacity", true, true, nullptr },
-												  });
-	const auto settingsAvailabilityGuard = Util::DisableGuard(!available || !enabled);
-	if (page.Is("quality")) {
+	MenuUI::SettingsPage page("TextureStreaming", {});
+	if (!page.Is("overview"))
+		return;
+	{
+		const auto settingsAvailabilityGuard = Util::DisableGuard(!available || !enabled);
+		MenuUI::SectionHeading("Texture detail");
 		const auto previousModes = modes;
 		const auto previousOptions = options;
 		const auto previousMaximum = maximum;
@@ -2052,7 +2051,9 @@ void TextureStreaming::DrawSettings()
 		if (modes != previousModes || options != previousOptions || maximum != previousMaximum)
 			Configure(enabled, maximum, std::nullopt, modes, options);
 	}
-	if (page.Is("categories")) {
+	{
+		const auto settingsAvailabilityGuard = Util::DisableGuard(!available || !enabled);
+		MenuUI::SectionHeading("Coverage", "Choose which additional texture types may lose detail. Protected textures remain at full quality.");
 		const auto previous = categories;
 		const std::array choices{
 			MenuUI::ToggleChoice{ "Landscape", &categories.landscapeStatics, "Allows reduced texture detail on static objects using landscape textures. Off keeps those objects at full texture detail." },
@@ -2069,10 +2070,9 @@ void TextureStreaming::DrawSettings()
 		if (categories != previous)
 			Configure(enabled, maximum, categories);
 	}
-	if (page.Is("status")) {
-		MenuUI::DetailNote(detail.c_str());
-		MenuUI::DetailText(std::format("Reduced textures: {}", reduced).c_str());
-		MenuUI::DetailText(std::format("Capacity removed: {:.1f} MiB", static_cast<double>(logicalBytesRemoved) / Policy::MiB).c_str());
-		Util::AddTooltip("Logical texture capacity; physical VRAM relief may differ.");
-	}
+	MenuUI::SectionHeading("Status");
+	MenuUI::DetailNote(detail.c_str());
+	MenuUI::DetailText(std::format("Reduced textures: {}", reduced).c_str());
+	MenuUI::DetailText(std::format("Capacity removed: {:.1f} MiB", static_cast<double>(logicalBytesRemoved) / Policy::MiB).c_str());
+	Util::AddTooltip("Logical texture capacity; physical VRAM relief may differ.");
 }

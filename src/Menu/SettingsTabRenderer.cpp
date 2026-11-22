@@ -29,31 +29,22 @@ namespace
 {
 	using FontRoleGuard = MenuFonts::FontRoleGuard;  // Convenience alias
 
-	void DrawReadOnlyKeybinding(const char* label, const char* binding, const char* description, bool inlineBinding = false)
+	void DrawReadOnlyKeybinding(const char* label, const char* binding, const char* description)
 	{
 		const float startX = ImGui::GetCursorPosX();
 		const float available = ImGui::GetContentRegionAvail().x;
 		const float buttonWidth = ImGui::CalcTextSize(binding).x + ImGui::GetStyle().FramePadding.x * 2;
-		if (inlineBinding)
-			ImGui::AlignTextToFramePadding();
+		ImGui::AlignTextToFramePadding();
 		ImGui::TextUnformatted(label);
-		if (inlineBinding) {
-			if (ImGui::CalcTextSize(label).x + ImGui::GetStyle().ItemSpacing.x + buttonWidth <= available)
-				ImGui::SameLine(startX + available - buttonWidth);
-		} else {
-			ImGui::TextDisabled("(hardcoded)");
-		}
+		if (ImGui::CalcTextSize(label).x + ImGui::GetStyle().ItemSpacing.x + buttonWidth <= available)
+			ImGui::SameLine(startX + available - buttonWidth);
 		{
 			const auto disabled = Util::DisableGuard(true);
 			ImGui::Button(binding);
 		}
 
-		if (description && description[0] != '\0') {
-			if (inlineBinding)
-				Util::AddTooltip(description, ImGuiHoveredFlags_AllowWhenDisabled);
-			else
-				ImGui::TextWrapped("%s", description);
-		}
+		if (description && description[0] != '\0')
+			Util::AddTooltip(description, ImGuiHoveredFlags_AllowWhenDisabled);
 		ImGui::Spacing();
 	}
 
@@ -451,6 +442,7 @@ void SettingsTabRenderer::RenderKeybindingsTab(
 	MenuUI::SectionHeading("Fixed shortcuts");
 	DrawReadOnlyKeybinding("Reset Menu:", "Ctrl+Shift+End",
 		"Reopen and restore menu geometry, sidebar, zoom and font sizing, including headset placement. Works while the menu is closed or locked.");
+	DrawRenderDocShortcut();
 }
 
 void SettingsTabRenderer::RenderBehaviorTab()
@@ -1260,10 +1252,15 @@ void SettingsTabRenderer::RenderColorsTab()
 void SettingsTabRenderer::RenderCaptureShortcuts()
 {
 	MenuUI::SectionHeading("Capture");
+	DrawRenderDocShortcut();
+}
+
+void SettingsTabRenderer::DrawRenderDocShortcut()
+{
 	DrawReadOnlyKeybinding(
-		"Shortcut",
+		"RenderDoc capture:",
 		"F12/Print Screen",
-		"Captures the configured frame count when RenderDoc is ready. These capture hotkeys are fixed and cannot be changed here.", true);
+		"Captures the configured frame count when RenderDoc is ready. These capture hotkeys are fixed and cannot be changed here.");
 }
 
 void SettingsTabRenderer::RenderDeveloperShortcuts()

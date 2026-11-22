@@ -165,30 +165,28 @@ void HomePageRenderer::RenderWelcomeSection()
 		faultierAvailable = true;
 	}
 
-	if (faultierAvailable) {
-		const ImVec2 originalSize(menu->uiIcons.faultier.size.x, menu->uiIcons.faultier.size.y);
-		const float aspectRatio = originalSize.y / originalSize.x;
-		const float maxAllowedWidth = std::max(1.0f, windowSize.x - HOME_LINK_ROW_PADDING_MARGIN * scale);
-		const float upperWidth = std::min(FAULTIER_MAX_WIDTH * scale, maxAllowedWidth);
-		const float lowerWidth = std::min(FAULTIER_MIN_WIDTH * scale, upperWidth);
-		float targetWidth = std::clamp(windowSize.x * FAULTIER_TARGET_WIDTH_RATIO, lowerWidth, upperWidth);
-		float targetHeight = targetWidth * aspectRatio;
-		const float maxHeight = std::max(1.0f, std::min(FAULTIER_MAX_HEIGHT * scale,
-												   ImGui::GetContentRegionAvail().y - ImGui::GetStyle().ItemSpacing.y));
-		if (targetHeight > maxHeight) {
-			targetHeight = maxHeight;
-			targetWidth = targetHeight / aspectRatio;
-		}
-
-		const ImVec2 imageSize(targetWidth, targetHeight);
-		ImGui::SetCursorPosX(CenteredTextX(windowSize.x, imageSize.x));
-		ImGui::Image(menu->uiIcons.faultier.texture, imageSize);
-	} else {
-		const float dummyWidth = FAULTIER_MAX_WIDTH * scale;
-		const float dummyHeight = FAULTIER_MAX_HEIGHT * scale;
-		ImGui::SetCursorPosX(CenteredTextX(windowSize.x, dummyWidth));
-		ImGui::Dummy(ImVec2(dummyWidth, dummyHeight));
+	const auto& style = ImGui::GetStyle();
+	const float linkButtonHeight = HOME_LINK_BUTTON_HEIGHT * scale;
+	// Keep the links and third-party heading visible below the artwork.
+	const float footerHeight = linkButtonHeight + ImGui::GetFrameHeight() + style.ItemSpacing.y * 4;
+	const ImVec2 originalSize = faultierAvailable ? menu->uiIcons.faultier.size : ImVec2(FAULTIER_MAX_WIDTH, FAULTIER_MAX_HEIGHT);
+	const float aspectRatio = originalSize.y / originalSize.x;
+	const float maxAllowedWidth = std::max(1.0f, windowSize.x - HOME_LINK_ROW_PADDING_MARGIN * scale);
+	const float upperWidth = std::min(FAULTIER_MAX_WIDTH * scale, maxAllowedWidth);
+	const float lowerWidth = std::min(FAULTIER_MIN_WIDTH * scale, upperWidth);
+	float targetWidth = std::clamp(windowSize.x * FAULTIER_TARGET_WIDTH_RATIO, lowerWidth, upperWidth);
+	float targetHeight = targetWidth * aspectRatio;
+	const float maxHeight = std::max(1.0f, std::min(FAULTIER_MAX_HEIGHT * scale, ImGui::GetContentRegionAvail().y - footerHeight));
+	if (targetHeight > maxHeight) {
+		targetHeight = maxHeight;
+		targetWidth = targetHeight / aspectRatio;
 	}
+	const ImVec2 imageSize(targetWidth, targetHeight);
+	ImGui::SetCursorPosX(CenteredTextX(windowSize.x, imageSize.x));
+	if (faultierAvailable)
+		ImGui::Image(menu->uiIcons.faultier.texture, imageSize);
+	else
+		ImGui::Dummy(imageSize);
 
 	ImGui::Spacing();
 
@@ -203,8 +201,6 @@ void HomePageRenderer::RenderWelcomeSection()
 		{ "Nexus Mods##HomeNexusModsButton", NEXUS_MODS_URL, "Open the CSX Nexus Mods page." },
 		{ "Discord##HomeDiscordButton", DISCORD_URL, "Open the MGO Discord invite." },
 	} };
-	const auto& style = ImGui::GetStyle();
-	const float linkButtonHeight = HOME_LINK_BUTTON_HEIGHT * scale;
 	const float linkButtonSpacing = HOME_LINK_BUTTON_SPACING * scale;
 	float minimumButtonWidth = 0;
 	for (const auto& link : links)

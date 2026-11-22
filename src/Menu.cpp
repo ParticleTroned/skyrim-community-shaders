@@ -186,6 +186,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	BackgroundShaderCompilationOnBoot,
 	ShowCompilationHUDInVR,
 	AutoHideFeatureList,
+	HideOverviewTabs,
 	SkipConstraintWarning,
 	RequireShiftToDock,
 	UseResolutionFont,

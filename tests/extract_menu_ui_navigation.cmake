@@ -4,6 +4,8 @@ endif()
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 include("${CMAKE_CURRENT_LIST_DIR}/extract_source_region.cmake")
 file(READ "${PROJECT_ROOT}/src/MenuDevBenchBridge.cpp" source)
+extract_between("${source}" "\t\tif (action == \"set_hide_overview_tabs\") {"
+    "\n\t\tif (action == \"ui_status\"" "menu_overview_preference_under_test.h")
 extract_between("${source}" "\t\t\t\tconst auto location = MenuUI::SettingsNavigation::Resolve(featureName, tab);"
     "\n\t\t\t});" "menu_ui_navigation_under_test.h")
 

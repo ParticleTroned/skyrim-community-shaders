@@ -440,8 +440,8 @@ void VolumetricShadows::SetShaderResources(ID3D11DeviceContext* a_context, RE::B
 void VolumetricShadows::DrawSettings()
 {
 	MenuUI::SettingsPage page("VolumetricShadows", {
-													   { "appearance", "How it works", "Learn how directional shadows affect light shafts and transparent surfaces.", "Shadows in atmosphere and transparent effects", true, true, "Understand volumetric shadows" },
-													   { "diagnostics", "Diagnostics", "Inspect shadow buffers.", "Diagnostic shadow buffers", true, false, nullptr },
+													   { "appearance", "How it works", "Learn how directional shadows affect light shafts and transparent surfaces.", "Shadows in atmosphere and transparent effects", true, true, "Understand volumetric shadows", nullptr, nullptr, true, true, nullptr, nullptr, MenuUI::SectionContent::Explanation },
+													   { "diagnostics", "Diagnostics", "Inspect shadow buffers.", "Diagnostic shadow buffers", true, false, nullptr, nullptr, nullptr, true, true, nullptr, nullptr, MenuUI::SectionContent::Diagnostics },
 												   });
 
 	if (page.Is("appearance")) {

@@ -40,8 +40,8 @@ void TerrainShadows::SaveSettings(json& o_json)
 void TerrainShadows::DrawSettings()
 {
 	MenuUI::SettingsPage page("TerrainShadows", {
-													{ "appearance", "How it works", "Learn how terrain shadows follow the landscape.", "Landscape shadow coverage", true, true, "Shape terrain shadows" },
-													{ "diagnostics", "Diagnostics", "Inspect terrain shadow diagnostics.", "Diagnostic terrain views", true, false, nullptr },
+													{ "appearance", "How it works", "Learn how terrain shadows follow the landscape.", "Landscape shadow coverage", true, true, "Shape terrain shadows", nullptr, nullptr, true, true, nullptr, nullptr, MenuUI::SectionContent::Explanation },
+													{ "diagnostics", "Diagnostics", "Inspect terrain shadow diagnostics.", "Diagnostic terrain views", true, false, nullptr, nullptr, nullptr, true, true, nullptr, nullptr, MenuUI::SectionContent::Diagnostics },
 												});
 
 	if (page.Is("appearance")) {

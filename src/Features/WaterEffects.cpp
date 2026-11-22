@@ -10,7 +10,7 @@
 void WaterEffects::DrawSettings()
 {
 	MenuUI::SettingsPage page("WaterEffects", {
-												  { "about", "How it works", "Understand underwater caustics and wave depth, and find their appearance controls.", "Caustics, wave depth and tuning" },
+												  { "about", "How it works", "Understand underwater caustics and wave depth, and find their appearance controls.", "Caustics, wave depth and tuning", true, true, nullptr, nullptr, nullptr, true, true, nullptr, nullptr, MenuUI::SectionContent::Explanation },
 											  });
 	if (!page.Is("about"))
 		return;

@@ -451,6 +451,9 @@ void SettingsTabRenderer::RenderBehaviorTab()
 
 	MenuUI::SectionHeading("Menu behaviour");
 
+	Util::Widgets::Checkbox("Hide Overview tabs", &globals::menu->GetSettings().HideOverviewTabs);
+	Util::AddTooltip("Open settings directly without the Overview page. Remembers your selected tab during this session. Features without options show their explanation directly.");
+
 	Util::Widgets::Checkbox("Show Icon Buttons in Header", &themeSettings.ShowActionIcons);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text(

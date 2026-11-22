@@ -57,12 +57,15 @@ namespace MenuUI
 			++navigations;
 			return hostRegistered && std::string_view(a_section) != "missing" && Select(a_page, a_section);
 		}
+		static bool Open(const char* page) { return Select(page, SettingsNavigation::PerformanceSection(page).data()); }
 		static json Describe() { return json::array(); }
 	};
 	struct DevBenchViewport
 	{
 		static inline std::string page, section;
 		static inline bool scrollAccepted = true;
+		static inline int invalidations = 0;
+		static void Invalidate() { ++invalidations; }
 		static bool Scroll(const std::string& a_page, const std::string& a_section, double)
 		{
 			page = a_page;
@@ -108,6 +111,16 @@ namespace globals
 			IsEnabled = true;
 		}
 		bool HasUnsavedSettings() const { return false; }
+		struct Settings
+		{
+			bool HideOverviewTabs = false;
+		} settings;
+		Settings& GetSettings() { return settings; }
+		bool mutationAllowed = true;
+		int dirtyChecks = 0;
+		bool PrepareSettingsMutation() const { return mutationAllowed; }
+		std::string GetSettingsSaveMessage() const { return "Settings mutation blocked"; }
+		void RequestSettingsDirtyCheck() { ++dirtyChecks; }
 	} menuStorage;
 	Menu* menu = &menuStorage;
 	struct State
@@ -146,6 +159,12 @@ namespace MenuUI
 	}
 }
 json RunOnMainThread(auto callback) { return callback(); }
+json ExecuteOverviewPreference(const json& a_args)
+{
+	const std::string action = "set_hide_overview_tabs";
+#include "menu_overview_preference_under_test.h"
+	throw std::runtime_error("overview preference action was not handled");
+}
 json ExecuteFeatureAction(const json& a_args)
 {
 	const std::string action = "feature_settings";
@@ -165,6 +184,27 @@ try {
 			throw std::runtime_error(a_message);
 	};
 	using MenuUI::SettingsPage;
+	for (const auto& invalid : { json{}, json{ { "enabled", 1 } }, json{ { "enabled", "true" } } })
+		require(!ExecuteOverviewPreference(invalid).value("ok", false), "Overview preference requires a boolean");
+	globals::menu->mutationAllowed = false;
+	require(!ExecuteOverviewPreference({ { "enabled", true } }).value("ok", false), "preference changes respect settings ownership");
+	globals::menu->mutationAllowed = true;
+	PerformanceTuningRenderer::busy = true;
+	require(!ExecuteOverviewPreference({ { "enabled", true } }).value("ok", false), "active measurements block navigation preference changes");
+	PerformanceTuningRenderer::busy = false;
+	ImGui::popupOpen = true;
+	require(!ExecuteOverviewPreference({ { "enabled", true } }).value("ok", false), "active dialogs block navigation preference changes");
+	ImGui::popupOpen = false;
+	require(MenuUI::DevBenchViewport::invalidations == 0, "rejected preference changes preserve the viewport");
+	for (const bool enabled : { true, false }) {
+		const auto result = ExecuteOverviewPreference({ { "enabled", enabled } });
+		require(result.value("ok", false) && result.at("hideOverviewTabs") == enabled &&
+					globals::menu->settings.HideOverviewTabs == enabled,
+			"Overview preference changes are observable through DevBench");
+		require(ExecuteOverviewPreference({ { "enabled", enabled } }).value("ok", false), "reapplying the current preference succeeds");
+	}
+	require(globals::menu->dirtyChecks == 2 && SettingsPage::selects == 0, "preference changes mark settings dirty without forcing navigation");
+	require(MenuUI::DevBenchViewport::invalidations == 2, "only changed preferences invalidate old viewport observations and queued scrolls");
 	for (const auto& operation : { "save", "load", "defaults" }) {
 		const auto result = ExecuteFeatureAction({ { "feature", "VR" }, { "settingsOperation", operation } });
 		require(result.value("ok", false) && result.at("saved") == (std::string_view(operation) == "save"), "feature persistence dispatch retains its explicit scope");

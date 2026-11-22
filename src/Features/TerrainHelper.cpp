@@ -37,7 +37,7 @@ void TerrainHelper::DataLoaded()
 void TerrainHelper::DrawSettings()
 {
 	MenuUI::SettingsPage page("TerrainHelper", {
-												   { "appearance", "How it works", "Learn how compatible terrain textures gain surface depth.", "Terrain texture depth and requirements", true, true, "Understand terrain detail", nullptr, nullptr, featureAvailable },
+												   { "appearance", "How it works", "Learn how compatible terrain textures gain surface depth.", "Terrain texture depth and requirements", true, true, "Understand terrain detail", nullptr, nullptr, featureAvailable, true, nullptr, nullptr, MenuUI::SectionContent::Explanation },
 											   });
 	if (!featureAvailable && (page.Is("overview") || page.Is("appearance"))) {
 		Util::Text::WrappedWarning("TerrainHelper.esp was not detected. Install and enable its plugin, then restart to use Terrain Helper.");

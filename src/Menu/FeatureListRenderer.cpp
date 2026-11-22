@@ -1123,9 +1123,9 @@ void FeatureListRenderer::ListMenuVisitor::operator()(const BuiltInMenu& menu)
 	if (ImGui::Selectable(("##" + menu.name).c_str(), false, ImGuiSelectableFlags_SpanAllColumns, { 0, ImGui::GetTextLineHeight() * 2 })) {
 		selectedMenuRef = listId;
 		if (menu.name == "Performance")
-			MenuUI::SettingsPage::Select("Performance", "overview");
+			MenuUI::SettingsPage::Open("Performance");
 		else if (menu.name == "Dev Tools")
-			MenuUI::SettingsPage::Select("DevTools", "overview");
+			MenuUI::SettingsPage::Open("DevTools");
 	}
 	const auto maximum = ImGui::GetItemRectMax();
 	const auto& statusPalette = globals::menu->GetTheme().StatusPalette;
@@ -1603,7 +1603,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 			bool cursorMoved = (std::abs(cursorPosAfter.x - cursorPosBefore.x) > cursorEpsilon ||
 								std::abs(cursorPosAfter.y - cursorPosBefore.y) > cursorEpsilon);
 			if (!cursorMoved) {
-				ImGui::TextColored(themeSettings.StatusPalette.Disable, "There are no settings available for this feature.");
+				MenuUI::PageNotice(MenuUI::NoAdditionalSettingsMessage);
 			}
 
 		} else {

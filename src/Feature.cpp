@@ -615,7 +615,7 @@ void Feature::DrawSettingsEnabledControl()
 
 void Feature::DrawSettings()
 {
-	MenuUI::SettingsPage page(GetShortName().c_str(), { { "about", "How it works", "Learn what this feature contributes to the scene.", "Automatic rendering improvements", true, true, "Review the feature" } });
+	MenuUI::SettingsPage page(GetShortName().c_str(), { { "about", "How it works", "Learn what this feature contributes to the scene.", "Automatic rendering improvements", true, true, "Review the feature", nullptr, nullptr, true, true, nullptr, nullptr, MenuUI::SectionContent::Explanation } });
 	if (page.Is("about")) {
 		const auto [description, keyFeatures] = GetFeatureSummary();
 		MenuUI::SectionHeading("What it does");
@@ -624,7 +624,7 @@ void Feature::DrawSettings()
 			MenuUI::DetailText(benefit.c_str());
 		MenuUI::SectionHeading("Controls");
 		MenuUI::DetailText(SupportsPerformanceCostMeasurement() ?
-							   "Use Enabled in the header to turn this feature on or off. There are no additional tuning controls on this page." :
+							   "Use Enabled in the header to turn this feature on or off." :
 							   "Change this feature in Settings > Startup, save settings and restart the game to apply the change.");
 	}
 }

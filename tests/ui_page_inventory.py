@@ -96,6 +96,9 @@ def write_header(pages, path):
                     parts[i] = "true" if parts[i] == "true" else "conditional"
                 elif i in (5, 9, 10):
                     parts[i] = "true" if parts[i] == "true" else "false" if parts[i] == "false" else "conditional"
+                elif i == 13:
+                    if parts[i] not in ("MenuUI::SectionContent::Settings", "MenuUI::SectionContent::Explanation", "MenuUI::SectionContent::Diagnostics"):
+                        raise ValueError(f"unknown section content: {parts[i]}")
                 elif not STRING.fullmatch(parts[i]) and parts[i] != "nullptr":
                     parts[i] = '""' if i == 3 else "nullptr"
             lines.append("            { " + ", ".join(parts) + " },")

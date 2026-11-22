@@ -26,9 +26,12 @@ namespace MenuUI
 		struct Navigation
 		{
 			std::string selected = "overview";
+			std::string lastDetail;
 			std::function<bool(std::string_view)> canSelect;
 			bool pending = false;
 			bool singlePage = false;
+			bool showOverview = true;
+			bool inlineExplanation = false;
 			int overviewColumns = 0;
 			bool overviewRail = true;
 			std::vector<Section> sections;
@@ -68,16 +71,54 @@ namespace MenuUI
 			return step.visible && !step.showTab && (std::string_view(step.id) == "performance" || std::string_view(step.id) == "profiling");
 		}
 
-		bool DrawFeatureToolTab(const char* page, const Section& step, float width, ImVec4 accent, float* rightEdge)
+		const Section* FirstDetail(const Navigation& state, std::string_view page)
+		{
+			const auto found = std::ranges::find_if(state.sections, [&](const Section& step) {
+				return step.visible && step.showTab && !step.disabledReason &&
+				       SettingsNavigation::SectionAvailable(page, step.id, globals::game::isVR);
+			});
+			return found == state.sections.end() ? nullptr : &*found;
+		}
+
+		bool HideOverview()
+		{
+			return globals::menu->GetSettings().HideOverviewTabs;
+		}
+
+		bool HasOverviewOnlyContent(const Navigation& state)
+		{
+			return std::ranges::any_of(state.sections, [](const Section& step) {
+				return step.visible && step.overview && !step.showTab && !IsFeatureTool(step);
+			});
+		}
+
+		bool ShowSectionTab(const Navigation& state, const Section& step)
+		{
+			return step.visible && step.showTab && !(state.inlineExplanation && step.content == SectionContent::Explanation);
+		}
+
+		void DrawHeadingRule(float width)
+		{
+			auto color = ImLerp(ImGui::GetStyleColorVec4(ImGuiCol_Separator), ImGui::GetStyleColorVec4(ImGuiCol_Text), sectionDividerTextMix);
+			color.w = std::max(color.w, sectionDividerMinimumAlpha);
+			ImGui::Dummy({ width, SectionDividerThickness() });
+			if (ImGui::IsItemVisible())
+				DrawSectionDivider(ImGui::GetItemRectMin(), width, ImGui::GetColorU32(color));
+		}
+
+		bool DrawFeatureToolTab(const char* page, const Section& step, float width, ImVec4 accent, float* rightEdge, bool tabBar = true)
 		{
 			const auto disabled = Util::DisableGuard(step.disabledReason != nullptr);
 			const bool active = navigation.at(page).selected == step.id;
 			ImGui::PushID(step.id);
 			ImGui::PushStyleColor(ImGuiCol_Tab, ImGui::GetStyleColorVec4(active ? ImGuiCol_Header : ImGuiCol_Tab));
 			ImGui::PushStyleColor(ImGuiCol_TabDimmed, ImGui::GetStyleColorVec4(active ? ImGuiCol_Header : ImGuiCol_TabDimmed));
-			const SKSE::stl::scope_exit restoreStyle([] { ImGui::PopStyleColor(2); ImGui::PopID(); });
+			ImGui::PushStyleColor(ImGuiCol_Button, SettingsBarColor(active ? ImGuiCol_Header : ImGuiCol_FrameBg));
+			const SKSE::stl::scope_exit restoreStyle([] { ImGui::PopStyleColor(3); ImGui::PopID(); });
 			ImGui::SetNextItemWidth(width);
-			const bool activated = ImGui::TabItemButton("##FeatureTool", ImGuiTabItemFlags_Trailing) && SettingsPage::Select(page, step.id);
+			const bool clicked = tabBar ? ImGui::TabItemButton("##FeatureTool", ImGuiTabItemFlags_Trailing) :
+			                              ImGui::Button("##FeatureTool", { width, SettingsBarHeight() });
+			const bool activated = clicked && SettingsPage::Select(page, step.id);
 			const auto minimum = ImGui::GetItemRectMin();
 			const auto maximum = ImGui::GetItemRectMax();
 			if (rightEdge)
@@ -91,6 +132,38 @@ namespace MenuUI
 				minimum, maximum, ImGui::GetColorU32(color));
 			Util::AddTooltip(step.disabledReason ? step.disabledReason : step.description, ImGuiHoveredFlags_AllowWhenDisabled);
 			return activated;
+		}
+
+		void DrawExplanationNavigation(const char* page, Navigation& state, float& actionRightEdge)
+		{
+			const auto* detail = FirstDetail(state, page);
+			const float width = SettingsBarHeight();
+			const auto tools = std::ranges::count_if(state.sections, IsFeatureTool);
+			const float right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+			if (detail && state.selected != detail->id) {
+				if (ImGui::Button("Back to feature"))
+					SettingsPage::Select(page, detail->id);
+				Util::AddTooltip("Return to the feature explanation.");
+			} else {
+				ImGui::PushFont(ImGui::GetFont(), ImGui::GetStyle().FontSizeBase * cardSummaryScale);
+				const SKSE::stl::scope_exit restoreFont([] { ImGui::PopFont(); });
+				ImGui::AlignTextToFramePadding();
+				ImGui::TextUnformatted("How it works");
+			}
+			const float toolsLeft = right - static_cast<float>(tools) * (width + ImGui::GetStyle().ItemSpacing.x);
+			if (tools > 0 && toolsLeft > ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x + ImGui::GetStyle().ItemSpacing.x)
+				ImGui::SameLine(toolsLeft);
+			bool first = true;
+			for (const auto& step : state.sections) {
+				if (!IsFeatureTool(step))
+					continue;
+				if (!first)
+					ImGui::SameLine();
+				first = false;
+				DrawFeatureToolTab(page, step, width, globals::menu->GetTheme().StatusPalette.InfoColor,
+					std::string_view(step.id) == "performance" ? &actionRightEdge : nullptr, false);
+			}
+			DrawHeadingRule(std::max(1.0f, ImGui::GetContentRegionAvail().x));
 		}
 
 		struct CardTextLayout
@@ -229,6 +302,9 @@ namespace MenuUI
 			return false;
 		std::scoped_lock lock(navigationMutex);
 		auto& state = navigation[a_page];
+		if (std::string_view(a_section) == "overview" && HideOverview() && !state.singlePage && !HasOverviewOnlyContent(state))
+			if (const auto* detail = FirstDetail(state, a_page))
+				a_section = detail->id;
 		if ((std::string_view(a_section) == "profiling" && ProfilingRenderer::GetProfilingDisabledReason()) ||
 			(std::string_view(a_section) != "profiling" && std::ranges::any_of(state.sections, [&](const Section& step) { return step.disabledReason && std::string_view(a_section) == step.id; })))
 			return false;
@@ -237,11 +313,32 @@ namespace MenuUI
 		if (location.page == "PerformanceTuning")
 			PerformanceTuningRenderer::SelectView(requestedSection);
 		state.selected = a_section;
+		if (state.selected != "overview") {
+			state.lastDetail = state.selected;
+			if (SettingsNavigation::IsPerformancePage(a_page))
+				navigation["Performance"].lastDetail = state.selected;
+		}
 		state.pending = true;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		DevBenchViewport::Invalidate();
 #endif
 		return true;
+	}
+
+	bool SettingsPage::Open(const char* a_page)
+	{
+		std::scoped_lock lock(navigationMutex);
+		const auto found = navigation.find(a_page);
+		if (HideOverview() && found != navigation.end() && !found->second.lastDetail.empty()) {
+			const auto& state = found->second;
+			if (std::ranges::any_of(state.sections, [&](const Section& step) {
+					return step.visible && !step.disabledReason && state.lastDetail == step.id &&
+				           SettingsNavigation::SectionAvailable(a_page, step.id, globals::game::isVR) &&
+				           (std::string_view(step.id) != "profiling" || !ProfilingRenderer::GetProfilingDisabledReason());
+				}))
+				return Select(a_page, state.lastDetail.c_str());
+		}
+		return Select(a_page, SettingsNavigation::PerformanceSection(a_page).data());
 	}
 
 	std::string SettingsPage::Selected(const char* a_page)
@@ -272,13 +369,13 @@ namespace MenuUI
 		std::scoped_lock lock(navigationMutex);
 		auto result = nlohmann::json::array();
 		for (const auto& [id, state] : navigation) {
-			auto tabs = nlohmann::json::array({ { { "id", "overview" }, { "title", "Overview" }, { "showTab", !state.singlePage }, { "enabled", true }, { "disabledReason", "" } } });
+			auto tabs = nlohmann::json::array({ { { "id", "overview" }, { "title", "Overview" }, { "showTab", state.showOverview }, { "enabled", true }, { "disabledReason", "" } } });
 			for (const auto& step : state.sections)
 				if (step.visible) {
 					const auto* reason = std::string_view(step.id) == "profiling" ? ProfilingRenderer::GetProfilingDisabledReason() : step.disabledReason;
-					tabs.push_back({ { "id", step.id }, { "title", step.title }, { "summary", step.summary }, { "showTab", step.showTab }, { "enabled", !reason }, { "disabledReason", reason ? reason : "" } });
+					tabs.push_back({ { "id", step.id }, { "title", step.title }, { "summary", step.summary }, { "showTab", ShowSectionTab(state, step) }, { "enabled", !reason }, { "disabledReason", reason ? reason : "" } });
 				}
-			result.push_back({ { "page", id }, { "selected", state.selected }, { "tabs", std::move(tabs) } });
+			result.push_back({ { "page", id }, { "selected", state.selected }, { "inlineExplanation", state.inlineExplanation }, { "tabs", std::move(tabs) } });
 		}
 		return result;
 	}
@@ -299,6 +396,7 @@ namespace MenuUI
 			profiling.disabledReason = ProfilingRenderer::GetProfilingDisabledReason();
 			profiling.active = !profiling.disabledReason;
 			performance.showTab = profiling.showTab = false;
+			performance.content = profiling.content = SectionContent::Diagnostics;
 			sections.push_back(std::move(performance));
 			sections.push_back(std::move(profiling));
 		}
@@ -322,19 +420,37 @@ namespace MenuUI
 			state.selected = SettingsNavigation::PerformanceSection(pageId);
 			state.pending = true;
 		}
+		if (!singlePage && state.selected == "overview" && HideOverview())
+			Select(a_id, "overview");
+		const auto* firstDetail = FirstDetail(state, pageId);
+		const bool showOverview = !singlePage && (!HideOverview() || state.selected == "overview" || !firstDetail || HasOverviewOnlyContent(state));
+		if (state.showOverview != showOverview)
+			state.pending = true;
+		state.showOverview = showOverview;
+		state.inlineExplanation = !singlePage && !state.showOverview &&
+		                          std::ranges::count_if(sections, [](const Section& step) { return step.visible && step.showTab; }) == 1 &&
+		                          firstDetail && firstDetail->content == SectionContent::Explanation;
+		const bool noAdditionalSettings = std::ranges::any_of(sections, [](const Section& step) { return step.visible && step.content == SectionContent::Explanation; }) &&
+		                                  std::ranges::none_of(sections, [](const Section& step) { return step.visible && step.content == SectionContent::Settings; });
+		if (noAdditionalSettings && (state.selected == "overview" || std::ranges::any_of(sections, [&](const Section& step) {
+				return state.selected == step.id && step.content == SectionContent::Explanation;
+			})))
+			PageNotice(NoAdditionalSettingsMessage);
 		const bool cardOnlySelection = std::ranges::any_of(sections, [&](const Section& step) {
 			return step.visible && !step.showTab && state.selected == step.id;
 		});
 		const auto visibleTabCount = std::ranges::count_if(sections, [](const Section& step) { return step.visible && step.showTab; });
 		float performanceActionRightEdge = 0;
-		if (!singlePage) {
+		if (state.inlineExplanation) {
+			DrawExplanationNavigation(a_id, state, performanceActionRightEdge);
+		} else if (!singlePage) {
 			const float font = ImGui::GetFontSize();
 			const auto accent = globals::menu->GetTheme().StatusPalette.InfoColor;
-			const float tabCount = 1.0f + static_cast<float>(visibleTabCount);
+			const float tabCount = (state.showOverview ? 1.0f : 0.0f) + static_cast<float>(visibleTabCount);
 			const float iconWidth = SettingsBarHeight();
 			const auto toolCount = std::ranges::count_if(sections, IsFeatureTool);
 			const float availableTabs = std::max(1.0f, ImGui::GetContentRegionAvail().x - (iconWidth + 1) * static_cast<float>(toolCount) - tabCount);
-			float naturalTabs = ImGui::CalcTextSize("Overview").x + font * .5f;
+			float naturalTabs = state.showOverview ? ImGui::CalcTextSize("Overview").x + font * .5f : 0;
 			for (const auto& step : sections)
 				if (step.visible && step.showTab)
 					naturalTabs += ImGui::CalcTextSize(step.title).x + font * .5f;
@@ -410,7 +526,8 @@ namespace MenuUI
 					}
 					Util::AddTooltip(disabledReason ? disabledReason : help, ImGuiHoveredFlags_AllowWhenDisabled);
 				};
-				tab("overview", "Overview", "Start here. Choose a card to open its settings.");
+				if (state.showOverview)
+					tab("overview", "Overview", "Start here. Choose a card to open its settings.");
 				for (const auto& step : sections)
 					if (step.visible && step.showTab)
 						tab(step.id, step.title, step.guidance ? step.guidance : step.description, step.disabledReason);
@@ -572,11 +689,7 @@ namespace MenuUI
 		const SKSE::stl::scope_exit restore([] { ImGui::PopFont(); });
 		ImGui::TextUnformatted(a_label, ImGui::FindRenderedTextEnd(a_label));
 		SettingsSearch::NotifyControl(a_label);
-		auto color = ImLerp(ImGui::GetStyleColorVec4(ImGuiCol_Separator), ImGui::GetStyleColorVec4(ImGuiCol_Text), sectionDividerTextMix);
-		color.w = std::max(color.w, sectionDividerMinimumAlpha);
-		ImGui::Dummy({ width, SectionDividerThickness() });
-		if (ImGui::IsItemVisible())
-			DrawSectionDivider(ImGui::GetItemRectMin(), width, ImGui::GetColorU32(color));
+		DrawHeadingRule(width);
 		ImGui::Spacing();
 		ImGui::EndGroup();
 		if (a_help)

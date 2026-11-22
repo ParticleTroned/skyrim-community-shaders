@@ -2061,6 +2061,7 @@ if(BUILD_CONTROLLER_TESTS)
     add_custom_command(
         OUTPUT
             "${_menu_ui_navigation_dir}/menu_ui_navigation_under_test.h"
+            "${_menu_ui_navigation_dir}/menu_overview_preference_under_test.h"
             "${_menu_ui_navigation_dir}/feature_settings_action_under_test.h"
         COMMAND
             "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"

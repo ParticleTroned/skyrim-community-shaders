@@ -52,6 +52,7 @@ void DrawSettings() { Util::Widgets::Checkbox("Skip a light's own flame holder",
     def test_production_interface_controls_have_one_home(self):
         entries = catalog.generate(path.parents[1])
         expected = {
+            "Hide Overview tabs": ("Settings", "behaviour"),
             "Menu Scale": ("Settings", "vr_menu"),
             "Mouse Deadzone": ("Settings", "vr_controls"),
             "Keep Desktop Game Window Focused for VR Menu": ("Settings", "desktop"),

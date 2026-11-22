@@ -458,6 +458,7 @@ public:
 		bool BackgroundShaderCompilationOnBoot = false;                                 // Load the menu immediately and compile shaders in the background on boot
 		bool ShowCompilationHUDInVR = false;                                            // Opt in to shader compilation status in the HMD; desktop status is unaffected
 		bool AutoHideFeatureList = false;                                               // Auto-hide left feature list panel, show on hover
+		bool HideOverviewTabs = false;                                                  // Open detail settings directly while retaining session navigation.
 		bool SkipConstraintWarning = false;                                             // Skip popup when a setting change creates new constraints
 		bool RequireShiftToDock = true;                                                 // Require holding Shift to dock windows
 		bool UseResolutionFont = true;                                                  // When true, runtime font size scales with screen resolution; when persisted to theme files, FontSize is zeroed for backward compatibility

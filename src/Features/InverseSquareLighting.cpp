@@ -57,7 +57,7 @@ namespace
 void InverseSquareLighting::DrawSettings()
 {
 	MenuUI::SettingsPage page("InverseSquareLighting", {
-														   { "appearance", "How it works", "Learn how nearby light falloff changes.", "Nearby light falloff", true, true, "Shape nearby lighting" },
+														   { "appearance", "How it works", "Learn how nearby light falloff changes.", "Nearby light falloff", true, true, "Shape nearby lighting", nullptr, nullptr, true, true, nullptr, nullptr, MenuUI::SectionContent::Explanation },
 													   });
 	if (!page.Is("appearance"))
 		return;

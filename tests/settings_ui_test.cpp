@@ -123,6 +123,7 @@ namespace globals
 		{
 			bool SkipConstraintWarning = false;
 			bool FirstTimeSetupCompleted = true;
+			bool HideOverviewTabs = false;
 		} settings;
 		Settings& GetSettings() { return settings; }
 		const Theme& GetTheme() const { return theme; }
@@ -931,6 +932,14 @@ int main()
 			{ "FirstTimeSetupCompleted", true }, { "RequireShiftToDock", false }
 		};
 		const auto expectedMenu = nlohmann::json(savedMenu.get<Menu::Settings>());
+		require(!savedMenu.get<Menu::Settings>().HideOverviewTabs, "existing settings retain Overview by default");
+		for (const bool hide : { false, true }) {
+			auto preferences = savedMenu.get<Menu::Settings>();
+			preferences.HideOverviewTabs = hide;
+			const nlohmann::json saved = preferences;
+			require(saved.at("HideOverviewTabs") == hide && saved.get<Menu::Settings>().HideOverviewTabs == hide,
+				"Overview preference round-trips through the real CSX settings serializer");
+		}
 		for (const float scale : { -1.0f, -0.5f, 0.0f, 0.35f, 1.0f }) {
 			auto preferences = savedMenu.get<Menu::Settings>();
 			preferences.GlobalScale = scale;
@@ -1220,6 +1229,145 @@ int main()
 		frame(drawPage);
 		frame(drawPage);
 		require(MenuUI::SettingsPage::Selected("TestPage") == "overview", "Overview tab returns to its own overview");
+
+		{
+			bool allowNavigation = true, showFirst = true;
+			const auto direct = [&] {
+				MenuUI::SettingsPage page("DirectSettings", { { "hidden", "Hidden", "Hidden section", {}, false }, { "blocked", "Blocked", "Disabled section", {}, true, true, nullptr, nullptr, nullptr, true, true, "Unavailable" }, { "first", "First", "First settings", {}, showFirst }, { "second", "Second", "Second settings" } }, "", "", [&](std::string_view) { return allowNavigation; });
+			};
+			frame(direct);
+			require(MenuUI::SettingsPage::Selected("DirectSettings") == "overview", "default mode retains the Overview page");
+			globals::menu->settings.HideOverviewTabs = true;
+			allowNavigation = false;
+			frame(direct);
+			require(MenuUI::SettingsPage::Selected("DirectSettings") == "overview", "hiding Overview cannot bypass a navigation lock");
+			allowNavigation = true;
+			frame(direct);
+			frame(direct);
+			require(MenuUI::SettingsPage::Selected("DirectSettings") == "first", "direct entry skips hidden and disabled sections");
+			for (const auto& page : MenuUI::SettingsPage::Describe())
+				if (page["page"] == "DirectSettings")
+					require(!page["tabs"][0]["showTab"].get<bool>(), "hidden Overview is absent from the visible tab inventory");
+			require(MenuUI::SettingsPage::Navigate("DirectSettings", "second"), "explicit detail navigation remains available");
+			frame(direct);
+			require(MenuUI::SettingsPage::Open("DirectSettings") && MenuUI::SettingsPage::Selected("DirectSettings") == "second", "reopening retains the session detail tab");
+			require(MenuUI::SettingsPage::Select("DirectSettings", "overview"), "legacy Overview routes remain usable");
+			frame(direct);
+			require(MenuUI::SettingsPage::Selected("DirectSettings") == "first", "legacy Overview routes open the first available section");
+			showFirst = false;
+			frame(direct);
+			require(MenuUI::SettingsPage::Selected("DirectSettings") == "second", "a removed selection falls back to an available detail");
+			globals::menu->settings.HideOverviewTabs = false;
+			frame(direct);
+			require(MenuUI::SettingsPage::Selected("DirectSettings") == "second", "showing Overview again does not discard the current detail");
+			require(MenuUI::SettingsPage::Navigate("DirectSettings", "overview"), "Overview returns when the preference is disabled");
+			frame(direct);
+
+			const auto explain = [&] {
+				MenuUI::SettingsPage page("DirectExplanation", { { .id = "about", .title = "How it works", .description = "Explanation fixture", .content = MenuUI::SectionContent::Explanation } });
+				if (page.Is("about"))
+					MenuUI::DetailText("This feature has no additional options.");
+			};
+			frame(explain);
+			require(MenuUI::SettingsPage::Selected("DirectExplanation") == "overview", "explanation pages retain tiles in the default mode");
+			globals::menu->settings.HideOverviewTabs = true;
+			for (const float size : { 13.f, 22.f }) {
+				const auto sized = [&] {
+					ImGui::PushFont(ImGui::GetFont(), size);
+					ImGui::BeginChild("ExplanationPanel", { 420, 550 });
+					explain();
+					ImGui::EndChild();
+					ImGui::PopFont();
+				};
+				frame(sized);
+				frame(sized);
+				require(MenuUI::SettingsPage::Selected("DirectExplanation") == "about", "explanations open directly");
+				for (const auto& page : MenuUI::SettingsPage::Describe())
+					if (page["page"] == "DirectExplanation") {
+						require(page["inlineExplanation"].get<bool>(), "explanation-only pages use the direct presentation");
+						for (const auto& tab : page["tabs"])
+							require(!tab["showTab"].get<bool>(), "explanation-only pages have no redundant text tabs");
+					}
+				require(MenuUI::SettingsPage::Navigate("DirectExplanation", "performance"), "inline explanations retain performance tools");
+				frame(sized);
+				frame(sized);
+				click(Util::controls.at("Return to the feature explanation.").GetCenter(), sized);
+				frame(sized);
+				require(MenuUI::SettingsPage::Selected("DirectExplanation") == "about", "the back button returns from tools without a redundant tab");
+			}
+			const auto continuous = [&] { MenuUI::SettingsPage page("DirectContinuous", {}); };
+			frame(continuous);
+			require(MenuUI::SettingsPage::Selected("DirectContinuous") == "overview", "single-page screens keep their actual content");
+			const auto performance = [&] { DrawUiReviewPage("Performance", true); };
+			frame(performance);
+			require(MenuUI::SettingsPage::Selected("Performance") == "presets", "Performance opens its first actual tab");
+			require(MenuUI::SettingsPage::Select("PerformanceTuning", "tuning") && MenuUI::SettingsPage::Open("Performance") &&
+						MenuUI::SettingsPage::Selected("Performance") == "tuning",
+				"Performance remembers selections made inside its other hosts");
+			const auto tools = [&] { DrawUiReviewPage("DevTools", true); };
+			frame(tools);
+			require(MenuUI::SettingsPage::Select("DevTools", "logging") && MenuUI::SettingsPage::Open("DevTools") &&
+						MenuUI::SettingsPage::Selected("DevTools") == "logging",
+				"Dev Tools retains its selected detail on reopening");
+			for (const bool vr : { false, true }) {
+				globals::game::isVR = vr;
+				const auto runtimePage = [&] {
+					MenuUI::SettingsPage page("Settings", { { "vr_menu", "VR Menu", "VR placement" }, { "behaviour", "Interface", "Menu settings" } });
+				};
+				MenuUI::SettingsPage::Select("Settings", "overview");
+				frame(runtimePage);
+				MenuUI::SettingsPage::Select("Settings", "overview");
+				frame(runtimePage);
+				require(MenuUI::SettingsPage::Selected("Settings") == (vr ? "vr_menu" : "behaviour"), "default navigation respects SE/AE and VR availability");
+			}
+			globals::game::isVR = false;
+			require(MenuUI::SettingsPage::Select("Settings", "overview") && MenuUI::SettingsPage::Selected("Settings") == "behaviour",
+				"redirected Overview routes recheck the runtime before using retained section metadata");
+			globals::game::isVR = true;
+
+			bool showSettings = false, settingsTab = true;
+			ImRect explanationNoticeBounds;
+			const auto noticePage = [&] {
+				ImGui::BeginChild("ExplanationNoticePanel", { 700, 550 });
+				{
+					MenuUI::PageNoticeScope notices;
+					const auto start = ImGui::GetCursorScreenPos();
+					const auto width = ImGui::GetContentRegionAvail().x;
+					notices.Reserve();
+					explanationNoticeBounds = { start, { start.x + width, ImGui::GetCursorScreenPos().y } };
+					ImGui::BeginChild("ExplanationNoticeBody", { 0, 0 });
+					{
+						MenuUI::SettingsPage page("ExplanationNotice", {
+																		   { .id = "about", .title = "How it works", .description = "Feature explanation", .content = MenuUI::SectionContent::Explanation },
+																		   { .id = "settings", .title = "Settings", .description = "Optional controls", .visible = showSettings, .showTab = settingsTab },
+																	   });
+						if (page.Is("about"))
+							MenuUI::DetailText("Feature explanation body.");
+					}
+					ImGui::EndChild();
+				}
+				ImGui::EndChild();
+			};
+			for (const bool hide : { false, true })
+				for (const bool controls : { false, true })
+					for (const bool tab : { false, true }) {
+						globals::menu->settings.HideOverviewTabs = hide;
+						showSettings = controls;
+						settingsTab = tab;
+						frame(noticePage);
+						require(MenuUI::SettingsPage::Select("ExplanationNotice", "overview"), "explanation notice fixture can reopen");
+						frame(noticePage);
+						frame(noticePage);
+						require((VisibleTextIndices(explanationNoticeBounds) > 0) == !controls,
+							"tile and direct modes show the no-settings notice only when no visible settings section exists");
+						if (hide && controls && !tab)
+							require(MenuUI::SettingsPage::Selected("ExplanationNotice") == "overview",
+								"Overview remains accessible when it is the only route to settings cards");
+					}
+			globals::menu->settings.HideOverviewTabs = false;
+			globals::game::isVR = true;
+			MenuUI::SettingsPage::Select("Settings", "overview");
+		}
 
 		int selectedChoice = 0;
 		bool parentDisabled = false, narrowChoices = false;

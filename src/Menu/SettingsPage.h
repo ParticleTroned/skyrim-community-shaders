@@ -31,6 +31,15 @@ namespace MenuUI
 	/** Shared theme colour and opacity for navigation tabs and settings action bars. */
 	ImVec4 SettingsBarColor(ImGuiCol source, bool inactive = false);
 
+	/** Distinguish explanations from settings without relying on visible labels. */
+	enum class SectionContent
+	{
+		Settings,
+		Explanation,
+		Diagnostics
+	};
+	inline constexpr char NoAdditionalSettingsMessage[] = "No additional settings are available for this feature.";
+
 	/** A navigable settings section. Navigation never applies or resets settings. */
 	struct Section
 	{
@@ -47,6 +56,7 @@ namespace MenuUI
 		bool showTab = true;                   // Hidden tabs retain navigation through cards or tool icons.
 		const char* disabledReason = nullptr;  // Blocks entry and supplies help when unavailable.
 		const char* nextSectionId = nullptr;   // Explicit workflow successor; adjacency alone never implies a link.
+		SectionContent content = SectionContent::Settings;
 	};
 
 	/** A choice card; independent selections can supply their own selected state. */
@@ -179,6 +189,8 @@ namespace MenuUI
 		SettingsPage& operator=(const SettingsPage&) = delete;
 		bool Is(std::string_view a_section) const;
 		static bool Select(const char* a_page, const char* a_section);
+		/** Open a sidebar destination, retaining its detail selection when Overview is hidden. */
+		static bool Open(const char* a_page);
 		static std::string Selected(const char* a_page);
 		/** Horizontal insets of the active page content, including the scrollbar. */
 		static ImVec2 OverviewCardInsets(const char* a_page, float a_panelWidth);

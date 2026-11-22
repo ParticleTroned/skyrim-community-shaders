@@ -24,11 +24,12 @@ namespace NeuralRendering::Color
 			float exposure, detail, appearance, maximumStops;
 			float lightingPreservation;
 			std::uint32_t regionCount = 0;
-			float padding[2]{};
+			std::uint32_t baselineOffset[2]{};
 			std::array<ComputeSubrect, kMaximumPackedCrops> regions{};
 		};
 		static_assert(sizeof(Constants) == 128);
 		static_assert(offsetof(Constants, regionCount) == 52);
+		static_assert(offsetof(Constants, baselineOffset) == 56);
 		static_assert(offsetof(Constants, regions) == 64);
 		static_assert(offsetof(Constants, lightingPreservation) == 48);
 		static_assert(offsetof(Constants, exposure) == 32);
@@ -63,6 +64,10 @@ namespace NeuralRendering::Color
 				static_cast<std::uint32_t>(profile.transform), flags, profile.exposureMultiplier,
 				settings.detailStrength, settings.appearanceMix, settings.maximumDetailStops,
 				settings.lightingPreservation, work.observation.reconstructionRegions.count };
+			if (work.baselineSource == BaselineSource::IdentityPreparedInput) {
+				result.baselineOffset[0] = roi.baseX;
+				result.baselineOffset[1] = roi.baseY;
+			}
 			for (std::uint32_t i = 0; i < result.regionCount; ++i) {
 				const auto& region = work.observation.reconstructionRegions.regions[i];
 				result.regions[i] = { region.baseX - roi.baseX, region.baseY - roi.baseY, region.width, region.height };
@@ -287,7 +292,7 @@ namespace NeuralRendering::Color
 		baseline.Abandon();
 		result.Abandon();
 		exposure.Abandon();
-		prepared = false;
+		InvalidatePreparation();
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		for (auto& readback : readbacks) readback.Abandon();
 #endif
@@ -381,7 +386,7 @@ namespace NeuralRendering::Color
 			work.capacityWidth = width;
 			work.capacityHeight = height;
 			work.format = format;
-			work.prepared = false;
+			work.InvalidatePreparation();
 		}
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (diagnostics && measure_ && !work.readbackAttempted) {
@@ -446,9 +451,9 @@ namespace NeuralRendering::Color
 #endif
 	}
 	bool Pipeline::Prepare(ID3D11DeviceContext* context, Work& work, ID3D11Resource* original,
-		ID3D11Resource* prepared, ID3D11UnorderedAccessView* preparedUAV, const Configuration& config, Observation observation)
+		ID3D11Resource* prepared, ID3D11UnorderedAccessView* preparedUAV, const Configuration& config, Observation observation, bool providerBlending)
 	{
-		work.prepared = false;
+		work.InvalidatePreparation();
 		if (!context || !original || !prepared || !preparedUAV || !work.baseline.resource || !constants_)
 			return false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -507,8 +512,14 @@ namespace NeuralRendering::Color
 		context->CSSetShaderResources(3, 1, &exposure);
 		const auto& roi = o.rect;
 		D3D11_BOX box{ roi.baseX, roi.baseY, 0, roi.baseX + roi.width, roi.baseY + roi.height, 1 };
-		context->CopySubresourceRegion(work.baseline.resource.Get(), 0, 0, 0, 0, original, 0, &box);
-		o.copiedLogicalBytes = roi.Area() * pixelBytes;
+		// Provider blending also exposes prepared colour as a vendor backbuffer.
+		const bool reusePrepared = !providerBlending && o.profile.transform == Transform::Identity &&
+		                           o.profile.exposureSource == ExposureSource::Manual && o.profile.exposureMultiplier == 1.0f;
+		o.copiedLogicalBytes = 0;
+		if (!reusePrepared) {
+			context->CopySubresourceRegion(work.baseline.resource.Get(), 0, 0, 0, 0, original, 0, &box);
+			o.copiedLogicalBytes += roi.Area() * pixelBytes;
+		}
 		if (o.profile.transform == Transform::Identity) {
 			context->CopySubresourceRegion(prepared, 0, roi.baseX, roi.baseY, 0, original, 0, &box);
 			o.copiedLogicalBytes += roi.Area() * pixelBytes;
@@ -524,6 +535,7 @@ namespace NeuralRendering::Color
 			CS_GPU_PASS("Upscaling::NRColorPrepare");
 			context->Dispatch((roi.width + 7u) / 8u, (roi.height + 7u) / 8u, 1);
 		}
+		work.baselineSource = reusePrepared ? BaselineSource::IdentityPreparedInput : BaselineSource::OwnedBaseline;
 		work.prepared = true;
 		o.preparationCpuMicroseconds = Elapsed(start);
 		Registry::Instance().Record(o);
@@ -553,7 +565,7 @@ namespace NeuralRendering::Color
 			                                                                                                                                  4u;
 			work.observation.copiedLogicalBytes += roi.Area() * pixelBytes;
 		} else {
-			ID3D11ShaderResourceView* sources[]{ work.baseline.srv.Get(), neuralSRV, preparedSRV, exposure };
+			ID3D11ShaderResourceView* sources[]{ work.BaselineSRV(preparedSRV), neuralSRV, preparedSRV, exposure };
 			auto* destination = work.result.uav.Get();
 			context->CSSetShaderResources(0, 4, sources);
 			context->CSSetUnorderedAccessViews(0, 1, &destination, nullptr);
@@ -583,7 +595,7 @@ namespace NeuralRendering::Color
 			}
 			auto& readback = *available;
 			auto* exposure = work.observation.exposureState != ExposureBindingState::NotRequested ? work.exposure.srv.Get() : nullptr;
-			ID3D11ShaderResourceView* sources[]{ work.baseline.srv.Get(), neural, work.result.srv.Get(), exposure, prepared };
+			ID3D11ShaderResourceView* sources[]{ work.BaselineSRV(prepared), neural, work.result.srv.Get(), exposure, prepared };
 			auto* output = readback.uav.Get();
 			context->CSSetShaderResources(0, 5, sources);
 			context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);

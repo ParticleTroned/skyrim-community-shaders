@@ -202,7 +202,8 @@ public:
 	bool enabledAtBoot = false;
 	bool gameSettingsInitialized = false;
 	bool IsSSRRuntimeActive() const;
-	void UpdateCubemap();
+	/** Calls the optional synchronous hook immediately before capture reads MAIN. */
+	void UpdateCubemap(void (*a_beforeMainRead)(void*) = nullptr, void* a_context = nullptr);
 
 	void PostDeferred();
 
@@ -265,7 +266,7 @@ public:
 	ID3D11ComputeShader* GetComputeShaderSpecularIrradiance();
 
 	/** @brief Captures one cubemap stage, or returns false when its shader is unavailable. */
-	bool UpdateCubemapCapture(bool a_reflections);
+	bool UpdateCubemapCapture(bool a_reflections, void (*a_beforeMainRead)(void*), void* a_context);
 
 	/** @brief Runs cubemap inference, or returns false when its shader is unavailable. */
 	bool Inferrence(bool a_reflections);

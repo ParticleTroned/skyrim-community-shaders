@@ -42,8 +42,8 @@ cbuffer PerFrameSSS : register(b1)
 
 	float sssAmount = saturate(MaskTexture[DTid.xy].x);
 
-	// Burley writes through a temporary texture before copying back to main. Preserve
-	// non-SSS pixels explicitly so the temp texture cannot leak stale skin-mask data.
+	// The temporary is a complete diffuse input. Preserve non-SSS pixels so
+	// composition and copy fallback cannot read stale skin-mask data.
 	if (sssAmount > 0.0) {
 		float humanClass = MaskTexture[DTid.xy].y;
 		bool humanProfile = humanClass > 0.5;

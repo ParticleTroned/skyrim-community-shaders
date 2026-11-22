@@ -3,6 +3,7 @@
 #include <mutex>
 
 #include "Buffer.h"
+#include "SubsurfaceScattering/DeferredInput.h"
 #include "Utils/LazyShader.h"
 
 #define SSSS_N_SAMPLES 21
@@ -124,7 +125,8 @@ public:
 	void CalculateKernel(DiffusionProfile& a_profile, Kernel& kernel);
 	bool EnsureBlurHorizontalTemp(uint32_t a_width, uint32_t a_height, bool a_throwOnFailure = true);
 
-	void DrawSSS();
+	/** Optionally hands completed Burley output to this invocation's deferred composite. */
+	SSS::DeferredInput DrawSSS(bool a_deferCopy = false);
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;

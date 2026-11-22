@@ -10,6 +10,7 @@
 #include "LinearLighting.h"
 #include "LocationContext.h"
 #include "Menu/SettingsPage.h"
+#include "ReverseZ.h"
 #include "Utils/UI.h"
 
 #include "Menu/ThemeManager.h"
@@ -27,6 +28,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -1428,6 +1430,8 @@ void LightLimitFix::InvalidatePreparedPointLightColours()
 
 void LightLimitFix::SetupResources()
 {
+	clusterBoundsCache.Invalidate();
+	clusterBoundsShader = nullptr;
 	clusteredLightsAvailable = false;
 	InvalidatePreparedPointLightColours();
 	preparedPointLightColours.reset();
@@ -3195,6 +3199,8 @@ void LightLimitFix::DataLoaded()
 
 void LightLimitFix::ClearShaderCache()
 {
+	clusterBoundsCache.Invalidate();
+	clusterBoundsShader = nullptr;
 	InvalidatePreparedPointLightColours();
 	clusterBuildingCS.Reset();
 	clusterCullingCS.Reset();
@@ -3710,7 +3716,22 @@ void LightLimitFix::UpdateStructure()
 	clusterSize[1] = ((uint)renderSize.y + 63) / 64;
 	clusterSize[2] = 32;
 
-	{
+	const bool projectionProven = globals::IsFrameBufferCacheCurrentForCS(context);
+	LightLimitFixDetail::ClusterBoundsKey boundsKey{};
+	if (projectionProven) {
+		boundsKey.nearPlane = std::bit_cast<uint32_t>(lightsNear);
+		boundsKey.farPlane = std::bit_cast<uint32_t>(lightsFar);
+		boundsKey.farDepth = std::bit_cast<uint32_t>(globals::features::reverseZ.GetFarDepth());
+		boundsKey.eyeCount = globals::game::isVR ? 2u : 1u;
+		std::copy_n(clusterSize, 3, boundsKey.dimensions.begin());
+		for (uint32_t eye = 0; eye < boundsKey.eyeCount; ++eye)
+			boundsKey.inverseProjection[eye] = std::bit_cast<std::array<uint32_t, 16>>(globals::game::frameBufferCached.GetCameraProjInverse(eye));
+	} else {
+		clusterBoundsCache.Invalidate();
+	}
+
+	if (!projectionProven || clusterBoundsShader.get() != clusterBuilding || !clusterBoundsCache.Matches(boundsKey)) {
+		clusterBoundsCache.Invalidate();
 		LightBuildingCB updateData{};
 		updateData.LightsNear = lightsNear;
 		updateData.LightsFar = lightsFar;
@@ -3732,6 +3753,10 @@ void LightLimitFix::UpdateStructure()
 
 		ID3D11UnorderedAccessView* null_uav = nullptr;
 		context->CSSetUnorderedAccessViews(0, 1, &null_uav, nullptr);
+		if (projectionProven && clusterSize[0] != 0 && clusterSize[1] != 0) {
+			clusterBoundsShader.copy_from(clusterBuilding);
+			clusterBoundsCache.Publish(boundsKey);
+		}
 	}
 
 	{

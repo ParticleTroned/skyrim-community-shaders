@@ -6,11 +6,32 @@
 using UINT = unsigned;
 struct ID3D11Resource
 {};
+struct ID3D11Buffer : ID3D11Resource
+{};
 struct ID3D11DeviceContext
 {
 	unsigned unmaps = 0;
+	ID3D11Buffer* bound = nullptr;
+	void CSGetConstantBuffers(UINT slot, UINT count, ID3D11Buffer** buffer)
+	{
+		if (slot != 12 || count != 1)
+			throw std::runtime_error("Unexpected framebuffer binding query");
+		*buffer = bound;
+	}
 	void Unmap(ID3D11Resource*, UINT) { ++unmaps; }
 };
+namespace winrt
+{
+	template <class T>
+	struct com_ptr
+	{
+		T* value = nullptr;
+		T* get() const { return value; }
+		T** put() { return &value; }
+		void copy_from(T* resource) { value = resource; }
+		explicit operator bool() const { return value != nullptr; }
+	};
+}
 namespace globals
 {
 	namespace game
@@ -87,9 +108,11 @@ int main()
 	using namespace globals;
 	const auto require = [](bool condition) { if (!condition) throw std::runtime_error("NR-off camera isolation failed"); };
 	ID3D11DeviceContext context;
-	ID3D11Resource resource, otherResource;
+	ID3D11Buffer resource, otherResource;
 	d3d::context = &context;
+	context.bound = &resource;
 	game::frameResource = &resource;
+	require(!IsFrameBufferCacheCurrentForCS(&context));
 	game::FrameBufferVR upload;
 	game::FrameBufferVR destination;
 	unsigned expectedCaptures = 0;
@@ -114,6 +137,13 @@ int main()
 			require(destination == (features::reverseZ.enabled ? expected : destinationBefore));
 			require(features::reverseZ.fixups == updates);
 			require(game::mappedFrameBuffer == nullptr);
+			require(IsFrameBufferCacheCurrentForCS(&context));
+			context.bound = &otherResource;
+			require(!IsFrameBufferCacheCurrentForCS(&context));
+			context.bound = &resource;
+			game::mappedFrameBuffer = &destination;
+			require(!IsFrameBufferCacheCurrentForCS(&context));
+			game::mappedFrameBuffer = nullptr;
 			require(context.unmaps == updates);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 			expectedCaptures += enabled;
@@ -126,6 +156,7 @@ int main()
 	game::mappedFrameBuffer = &upload;
 	ObserveVRFrameBufferUpload(&context, &resource, 0, nullptr, &destination);
 	require(game::frameBufferCached.vr == last && game::mappedFrameBuffer == nullptr);
+	require(!IsFrameBufferCacheCurrentForCS(&context));
 	game::mappedFrameBuffer = &destination;
 	ObserveVRFrameBufferUpload(&context, &resource, 0, &upload, nullptr);
 	require(game::frameBufferCached.vr == last && game::mappedFrameBuffer == nullptr);
@@ -143,7 +174,13 @@ int main()
 	features::upscaling.enabled = true;
 	game::FrameBuffer flat;
 	flat.bytes.fill(42);
-	CacheFramebuffer(&flat);
+	CacheFramebuffer(&flat, &resource);
 	require(game::frameBufferCached.nonVR == flat);
 	require(features::upscaling.captures == expectedCaptures);
+	require(IsFrameBufferCacheCurrentForCS(&context));
+	require(!IsFrameBufferCacheCurrentForCS(&otherContext));
+	context.bound = nullptr;
+	require(!IsFrameBufferCacheCurrentForCS(&context));
+	d3d::context = nullptr;
+	require(!IsFrameBufferCacheCurrentForCS(nullptr));
 }

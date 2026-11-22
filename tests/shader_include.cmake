@@ -87,6 +87,8 @@ set_tests_properties(
         LABELS ControllerTests
 )
 
+add_controller_test(cluster_bounds_test ClusterBounds tests/cluster_bounds_test.cpp)
+
 set(_mapped_emission_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/mapped-emission")
 set(_mapped_emission_shader "${_mapped_emission_dir}/mapped_emission.hlsl")
 add_custom_command(

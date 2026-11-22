@@ -46838,6 +46838,8 @@ namespace
 		[[nodiscard]] const auto& Args() const { return args_; }
 		/** Uses the empty-region decisions frozen during finalisation. */
 		[[nodiscard]] bool WillEvaluate() const { return bypassedEyeMask_ != expectedEyeMask_; }
+		/** Participating eyes are frozen with the finalized compute rectangles. */
+		[[nodiscard]] uint32_t ActiveEyeMask() const { return expectedEyeMask_ & ~bypassedEyeMask_; }
 
 		/** Consumes this operation's validated plan without repeating character finalisation. */
 		NeuralStereoEvaluationSummary Evaluate()
@@ -47055,7 +47057,8 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 	uint32_t a_outputHeight,
 	uint64_t a_generation,
 	uint32_t a_neuralSourceFrame,
-	FinalLdrNeuralResult& a_result) noexcept
+	FinalLdrNeuralResult& a_result,
+	NeuralRendering::FramebufferTransaction* a_mainTransaction) noexcept
 {
 	a_result = {};
 	const uint32_t eyeCount = globals::game::isVR ? 2u : 1u;
@@ -47419,6 +47422,22 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			a_result.bypassedNoCharacters = evaluation.pairBypassed;
 			return false;
 		}
+		if (a_mainTransaction) {
+			std::array<NeuralRendering::FramebufferTransaction::EyeRegion, 2> regions{};
+			for (uint32_t eye = 0; eye < eyeCount; ++eye) {
+				const auto& target = a_targets[eye];
+				const auto& rect = foveatedRectCache.rects[eye];
+				regions[eye] = { target.resource, target.subresource, target.baseOffsetX,
+					{ rect.outputOffsetX, rect.outputOffsetY, rect.outputWidth, rect.outputHeight },
+					finalizedArgs[eye].computeSubrect };
+			}
+			if (a_role != NeuralStereoRouteRole::Main ||
+				!a_mainTransaction->PrepareRegions(regions, finalizedInputs->ActiveEyeMask(),
+					eyeCount, a_outputWidthPerEye, a_outputHeight)) {
+				RequestHistoryReset();
+				return false;
+			}
+		}
 		lateStage = LateStage::InputConversion;
 		for (uint32_t eye = 0; eye < eyeCount; ++eye) {
 			lateEye = eye;
@@ -47573,6 +47592,12 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 				globals::state->frameCount);
 		}
 		lateSucceeded = (a_result.committedEyeMask | a_result.bypassedEyeMask) == NeuralRendering::RequiredEyeMask(globals::game::isVR);
+		if (lateSucceeded && a_mainTransaction) {
+			// Publish before the enclosing guard restores potentially conflicting compute views.
+			context->CSSetShaderResources(0, 1, &nullSRV);
+			context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+			lateSucceeded = a_mainTransaction->Commit(true);
+		}
 		return lateSucceeded;
 	} catch (const std::exception& e) {
 		restoreCommittedCenters();
@@ -47875,7 +47900,8 @@ void Upscaling::ApplyMainFinalLdrNeuralStereo() noexcept
 		return;
 	}
 	NeuralRendering::FramebufferTransaction transaction(globals::d3d::context,
-		finalTexture, neuralFinalLdrFramebuffer->resource.get());
+		finalTexture, neuralFinalLdrFramebuffer->resource.get(),
+		NeuralRendering::FramebufferTransaction::Preparation::DeferredRegions);
 	if (!transaction.IsValid()) {
 		route.disposition = NeuralStereoPairDisposition::NormalDLSSPair;
 		route.fallbackReason = NeuralStereoFallbackReason::StereoPreflightFailed;
@@ -47898,12 +47924,11 @@ void Upscaling::ApplyMainFinalLdrNeuralStereo() noexcept
 		},
 	};
 	FinalLdrNeuralResult result{};
-	const bool pairApplied = ApplyFinalLdrNeuralStereo(
+	const bool applied = ApplyFinalLdrNeuralStereo(
 		NeuralStereoRouteRole::Main, targets,
 		pending.inputWidthPerEye, pending.inputHeight,
 		pending.outputWidthPerEye, pending.outputHeight,
-		pending.generation, neuralSourceFrame, result);
-	const bool applied = transaction.Commit(pairApplied);
+		pending.generation, neuralSourceFrame, result, &transaction);
 	route.preparedEyeMask = result.preparedEyeMask;
 	route.attemptedEyeMask = result.attemptedEyeMask;
 	route.appliedEyeMask = result.appliedEyeMask;

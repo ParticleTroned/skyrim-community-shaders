@@ -11,7 +11,16 @@ namespace SharedData
 	static SkylightingSettings skylightingSettings;
 	static bool VolumetricShadowsEnabled;
 	static const bool InInterior = false;
+	struct ContactSettings
+	{
+		uint4 ClusterSize;
+	};
+	static ContactSettings lightLimitFixSettings;
 }
+@CONTACT_LIMIT@
+@CONTACT_GRID@
+static LightGrid contactShadowGrid[2];
+@CONTACT_RANGE@
 namespace Skylighting
 {
 	bool IsEnabled() { return SharedData::skylightingSettings.Enabled != 0; }
@@ -61,4 +70,20 @@ RWTexture2D<float4> Results : register(u0);
 @SHADOW_SELECTION@
 @SKYLIGHTING_MERGE@
 	Results[id.xy] = float4(dirSoftShadow, dirDetailedShadow, vsmSamples, Lighting::UseSkylightingShadowVisibility());
+}
+
+[numthreads(64, 1, 1)] void ContactRanges(uint3 id : SV_DispatchThreadID)
+{
+	uint condition = id.x % 9;
+	SharedData::lightLimitFixSettings.ClusterSize = uint4(condition == 7 ? 0 : 2, 1, 1, 0);
+	const uint offsets[] = { 0, 8, 16, 15, 0, 15, 0, 0, 0xFFFFFFFFu };
+	const uint counts[] = { 0, 3, 1, 2, 0xFFFFFFFFu, 1, 1, 1, 1 };
+	contactShadowGrid[0] = (LightGrid)0;
+	contactShadowGrid[0].offset = offsets[condition];
+	contactShadowGrid[0].lightCount = counts[condition];
+	contactShadowGrid[1] = (LightGrid)0;
+	uint offset = 123, count = 123;
+	bool valid = GetContactShadowClusterRange(condition == 6 ? 2 : 0, offset, count);
+	// Callers can consume the output range without retaining the success flag.
+	Results[id.xy] = float4(valid, offset, count, 0);
 }

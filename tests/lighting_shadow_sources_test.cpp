@@ -59,7 +59,7 @@ namespace
 			Util::SetResourceName(permutation.Get(), "LightingShadowTest::Permutation");
 		}
 
-		ComPtr<ID3D11ComputeShader> Compile(bool vr, bool deferred, bool vsm, bool sky, const Material& material)
+		ComPtr<ID3D11ComputeShader> Compile(bool vr, bool deferred, bool vsm, bool sky, const Material& material, const char* entry = "main")
 		{
 			std::vector<D3D_SHADER_MACRO> defines{ { "LIGHTING", "1" } };
 			for (const auto& [enabled, name] : std::array<std::pair<bool, const char*>, 4>{ { { vr, "VR" }, { deferred, "DEFERRED" }, { vsm, "VOLUMETRIC_SHADOWS" }, { sky, "SKYLIGHTING_SHADOW_VIS" } } })
@@ -73,7 +73,7 @@ namespace
 			}
 			defines.push_back({ nullptr, nullptr });
 			ComPtr<ID3DBlob> bytecode, errors;
-			const auto compiled = D3DCompileFromFile(LIGHTING_SHADOW_TEST_SHADER, defines.data(), nullptr, "main", "cs_5_0",
+			const auto compiled = D3DCompileFromFile(LIGHTING_SHADOW_TEST_SHADER, defines.data(), nullptr, entry, "cs_5_0",
 				D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
 				0, bytecode.GetAddressOf(), errors.GetAddressOf());
 			if (errors)
@@ -152,6 +152,16 @@ int main()
 		constexpr std::array<Material, 7> materials{ { { "dynamic", nullptr }, { "soft", "SOFT_LIGHTING", true }, { "rim", "RIM_LIGHTING", true },
 			{ "back", "BACK_LIGHTING", true }, { "skin-sss", "SOFT_LIGHTING", true },
 			{ "landscape", "LANDSCAPE", false, true }, { "lod", "LODOBJECTS", false, true } } };
+		constexpr std::array<Pixel, 9> ranges{ { { 0, 0, 0, 0 }, { 1, 8, 3, 0 }, { 0, 0, 0, 0 },
+			{ 0, 0, 0, 0 }, { 1, 0, 8, 0 }, { 1, 15, 1, 0 },
+			{ 0, 0, 0, 0 }, { 0, 0, 0, 0 }, { 0, 0, 0, 0 } } };
+		for (bool vr : { false, true }) {
+			auto shader = fixture.Compile(vr, true, false, false, materials[0], "ContactRanges");
+			const auto pixels = fixture.Draw(shader.Get(), 0);
+			for (UINT condition = 0; condition < kCases; ++condition)
+				if (pixels[condition] != ranges[condition % ranges.size()])
+					throw std::runtime_error("Contact-shadow range did not fail closed: case=" + std::to_string(condition % ranges.size()));
+		}
 		for (bool vr : { false, true })
 			for (bool deferred : { false, true })
 				for (const auto& [vsm, sky] : std::array<std::pair<bool, bool>, 3>{ { { true, true }, { true, false }, { false, true } } })

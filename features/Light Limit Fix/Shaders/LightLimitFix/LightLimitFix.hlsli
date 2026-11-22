@@ -90,18 +90,19 @@ namespace LightLimitFix
 
 		const uint maxEntries = clusterCount * MAX_CONTACT_SHADOW_LIGHTS;
 		LightGrid cachedLights = contactShadowGrid[clusterIndex];
-		contactShadowCount = min(cachedLights.lightCount, MAX_CONTACT_SHADOW_LIGHTS);
-		if (contactShadowCount == 0)
+		const uint count = min(cachedLights.lightCount, MAX_CONTACT_SHADOW_LIGHTS);
+		if (count == 0)
 			return false;
 
 		const uint offset = cachedLights.offset;
 		if (offset >= maxEntries)
 			return false;
 
-		if (offset > maxEntries - contactShadowCount)
+		if (offset > maxEntries - count)
 			return false;
 
 		contactShadowOffset = offset;
+		contactShadowCount = count;
 		return true;
 	}
 

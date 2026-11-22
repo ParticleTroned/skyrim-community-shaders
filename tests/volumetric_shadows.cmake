@@ -37,6 +37,8 @@ add_custom_command(
         "${PROJECT_SOURCE_DIR}/package/Shaders/Lighting.hlsl"
         "${PROJECT_SOURCE_DIR}/package/Shaders/Common/LightingFlags.hlsli"
         "${PROJECT_SOURCE_DIR}/package/Shaders/Common/Permutation.hlsli"
+        "${PROJECT_SOURCE_DIR}/features/Light Limit Fix/Shaders/LightLimitFix/Common.hlsli"
+        "${PROJECT_SOURCE_DIR}/features/Light Limit Fix/Shaders/LightLimitFix/LightLimitFix.hlsli"
         "${PROJECT_SOURCE_DIR}/tests/extract_source_region.cmake"
         "${PROJECT_SOURCE_DIR}/tests/extract_lighting_shadow_sources.cmake"
         "${PROJECT_SOURCE_DIR}/tests/lighting_shadow_sources.hlsl.in"

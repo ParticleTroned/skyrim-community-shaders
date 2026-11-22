@@ -35,6 +35,21 @@ static void Require(bool value, const char* message)
 	}
 }
 static void Check(HRESULT result) { Require(SUCCEEDED(result), "D3D operation failed"); }
+static void PrintFirstPixelDifference(const std::vector<Pixel>& actual, const std::vector<Pixel>& expected)
+{
+	if (actual.size() != expected.size()) {
+		std::fprintf(stderr, "Pixel counts differ: actual=%zu expected=%zu\n", actual.size(), expected.size());
+		return;
+	}
+	for (size_t i = 0; i < actual.size(); ++i) {
+		if (std::memcmp(&actual[i], &expected[i], sizeof(Pixel)) == 0)
+			continue;
+		std::fprintf(stderr, "Pixel %zu: actual=%a,%a,%a,%a expected=%a,%a,%a,%a\n", i,
+			actual[i].r, actual[i].g, actual[i].b, actual[i].a,
+			expected[i].r, expected[i].g, expected[i].b, expected[i].a);
+		return;
+	}
+}
 struct Texture
 {
 	ComPtr<ID3D11Texture2D> texture;
@@ -42,19 +57,21 @@ struct Texture
 	ComPtr<ID3D11UnorderedAccessView> uav;
 };
 static Texture MakeTexture(ID3D11Device* device, const std::vector<Pixel>& pixels,
-	DXGI_FORMAT format = DXGI_FORMAT_R32G32B32A32_FLOAT)
+	DXGI_FORMAT format = DXGI_FORMAT_R32G32B32A32_FLOAT, unsigned width = 64, unsigned height = 64)
 {
+	Require(format != DXGI_FORMAT_R32G32B32A32_FLOAT || pixels.size() == size_t(width) * height,
+		"texture initialization must cover its actual dimensions");
 	Texture value;
 	D3D11_TEXTURE2D_DESC desc{};
-	desc.Width = 64;
-	desc.Height = 64;
+	desc.Width = width;
+	desc.Height = height;
 	desc.MipLevels = 1;
 	desc.ArraySize = 1;
 	desc.Format = format;
 	desc.SampleDesc.Count = 1;
 	desc.Usage = D3D11_USAGE_DEFAULT;
 	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-	D3D11_SUBRESOURCE_DATA data{ pixels.data(), 64u * sizeof(Pixel), 0 };
+	D3D11_SUBRESOURCE_DATA data{ pixels.data(), width * sizeof(Pixel), 0 };
 	Check(device->CreateTexture2D(&desc, format == DXGI_FORMAT_R32G32B32A32_FLOAT ? &data : nullptr, &value.texture));
 	Check(device->CreateShaderResourceView(value.texture.Get(), nullptr, &value.srv));
 	Check(device->CreateUnorderedAccessView(value.texture.Get(), nullptr, &value.uav));
@@ -104,10 +121,10 @@ static std::vector<Pixel> Read(ID3D11Device* device, ID3D11DeviceContext* contex
 	D3D11_MAPPED_SUBRESOURCE mapped{};
 	// Blocking readback is deliberate in this standalone TEST, never the runtime.
 	Check(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped));
-	std::vector<Pixel> result(64 * 64);
-	for (unsigned y = 0; y < 64; ++y) {
+	std::vector<Pixel> result(size_t(desc.Width) * desc.Height);
+	for (unsigned y = 0; y < desc.Height; ++y) {
 		const auto* row = reinterpret_cast<const Pixel*>(static_cast<const char*>(mapped.pData) + mapped.RowPitch * y);
-		std::copy(row, row + 64, result.begin() + y * 64);
+		std::copy(row, row + desc.Width, result.begin() + y * desc.Width);
 	}
 	context->Unmap(staging.Get(), 0);
 	return result;
@@ -218,11 +235,12 @@ static float NearestPacked(float value, const std::vector<float>& values)
 	const double above = static_cast<double>(*upper) - value;
 	return below < above || (below == above && ((index - 1) & 1u) == 0) ? values[index - 1] : *upper;
 }
-static Constants FullTextureConstants()
+static Constants FullTextureConstants(unsigned width = 64, unsigned height = 64)
 {
 	Constants constants;
 	constants.x = constants.y = 0;
-	constants.width = constants.height = 64;
+	constants.width = width;
+	constants.height = height;
 	constants.mode = 0;
 	return constants;
 }
@@ -233,19 +251,20 @@ static std::vector<Pixel> ReadStored(ID3D11Device* device, ID3D11DeviceContext* 
 	texture.texture->GetDesc(&desc);
 	if (desc.Format == DXGI_FORMAT_R32G32B32A32_FLOAT)
 		return Read(device, context, texture.texture.Get());
-	auto decoded = MakeTexture(device, std::vector<Pixel>(4096));
-	Dispatch(context, copy, cb, FullTextureConstants(), { texture.srv.Get() }, decoded.uav.Get());
+	auto decoded = MakeTexture(device, std::vector<Pixel>(size_t(desc.Width) * desc.Height),
+		DXGI_FORMAT_R32G32B32A32_FLOAT, desc.Width, desc.Height);
+	Dispatch(context, copy, cb, FullTextureConstants(desc.Width, desc.Height), { texture.srv.Get() }, decoded.uav.Get());
 	return Read(device, context, decoded.texture.Get());
 }
 static Texture StorePixels(ID3D11Device* device, ID3D11DeviceContext* context,
 	ID3D11ComputeShader* copy, ID3D11Buffer* cb, const std::vector<Pixel>& pixels,
-	DXGI_FORMAT format = DXGI_FORMAT_R11G11B10_FLOAT)
+	DXGI_FORMAT format = DXGI_FORMAT_R11G11B10_FLOAT, unsigned width = 64, unsigned height = 64)
 {
-	auto input = MakeTexture(device, pixels);
+	auto input = MakeTexture(device, pixels, DXGI_FORMAT_R32G32B32A32_FLOAT, width, height);
 	if (format == DXGI_FORMAT_R32G32B32A32_FLOAT)
 		return input;
-	auto packed = MakeTexture(device, {}, format);
-	Dispatch(context, copy, cb, FullTextureConstants(), { input.srv.Get() }, packed.uav.Get());
+	auto packed = MakeTexture(device, {}, format, width, height);
+	Dispatch(context, copy, cb, FullTextureConstants(width, height), { input.srv.Get() }, packed.uav.Get());
 	return packed;
 }
 static std::vector<float> PackedRoundingCases(const std::vector<float>& values)
@@ -398,9 +417,11 @@ static void CheckPackedInvalidCandidates(ID3D11Device* device, ID3D11DeviceConte
 #include "exposure_range_gpu_checks.h"
 #include "lighting_preservation_gpu_checks.h"
 #include "reference_gpu_checks.h"
+#include "tiled_reconstruction_gpu_checks.h"
 
 int main(int argc, char** argv)
 {
+	std::setvbuf(stdout, nullptr, _IONBF, 0);
 	Require(argc == 2 || ((argc == 3 || argc == 4) && std::string_view(argv[2]) == "--hardware"), "provide NR colour shader directory and optional --hardware [adapter index]");
 	const bool hardware = argc >= 3;
 	ComPtr<ID3D11Device> device;
@@ -509,7 +530,7 @@ int main(int argc, char** argv)
 	for (unsigned domain = 0; domain < 3; ++domain)
 		CheckFineDetail(device.Get(), context.Get(), prepare.Get(), reconstruct.Get(), cb.Get(), domain);
 	// Production optimization must preserve the same packed rounding and fallback contract.
-	for (bool optimized : { false, true }) {
+	for (bool optimized : { true, false }) {
 		const UINT flags = D3DCOMPILE_ENABLE_STRICTNESS |
 		                   (optimized ? D3DCOMPILE_OPTIMIZATION_LEVEL3 : D3DCOMPILE_IEEE_STRICTNESS);
 		const auto packedReconstruct = optimized ? Compile(device.Get(), directory / "ColorReconstructCS.hlsl", {}, flags) : reconstruct;
@@ -520,7 +541,15 @@ int main(int argc, char** argv)
 		const D3D_SHADER_MACRO referenceDefines[]{ { "CSX_PERF_REFERENCE_FLAGS", "32" }, { nullptr, nullptr } };
 		const auto referenceReconstruct = Compile(device.Get(), directory / "ColorReconstructCS.hlsl", {}, flags, referenceDefines);
 		CheckPreparationReference(device.Get(), context.Get(), packedReconstruct.Get(), referenceReconstruct.Get(), rounding.Get(), cb.Get());
-		CheckPackedLightingPreservation(device.Get(), context.Get(), packedReconstruct.Get(), rounding.Get(), cb.Get());
+		const auto tiledPrepare = optimized ? Compile(device.Get(), directory / "ColorPrepareCS.hlsl", {}, flags) : prepare;
+		CheckTiledReconstruction(device.Get(), context.Get(), tiledPrepare.Get(), packedReconstruct.Get(), referenceReconstruct.Get(), rounding.Get(), cb.Get(), optimized);
+		const D3D_SHADER_MACRO diagnosticDefines[]{ { "NR_NVIDIA_REFERENCE", "1" }, { nullptr, nullptr } };
+		const D3D_SHADER_MACRO diagnosticReferenceDefines[]{ { "NR_NVIDIA_REFERENCE", "1" }, { "CSX_PERF_REFERENCE_FLAGS", "32" }, { nullptr, nullptr } };
+		const auto diagnosticPrepare = Compile(device.Get(), directory / "ColorPrepareCS.hlsl", {}, flags, diagnosticDefines);
+		const auto diagnosticReconstruct = Compile(device.Get(), directory / "ColorReconstructCS.hlsl", {}, flags, diagnosticDefines);
+		const auto diagnosticReference = Compile(device.Get(), directory / "ColorReconstructCS.hlsl", {}, flags, diagnosticReferenceDefines);
+		CheckTiledReconstruction(device.Get(), context.Get(), diagnosticPrepare.Get(), diagnosticReconstruct.Get(), diagnosticReference.Get(), rounding.Get(), cb.Get(), optimized, true);
+		CheckPackedLightingPreservation(device.Get(), context.Get(), packedReconstruct.Get(), rounding.Get(), cb.Get(), optimized);
 		CheckPackedRounding(device.Get(), context.Get(), rounding.Get(), cb.Get());
 		CheckPackedDetail(device.Get(), context.Get(), packedReconstruct.Get(), rounding.Get(), cb.Get());
 		CheckPackedInvalidCandidates(device.Get(), context.Get(), packedReconstruct.Get(), rounding.Get(), cb.Get());

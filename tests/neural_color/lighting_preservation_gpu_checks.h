@@ -95,7 +95,13 @@ static void CheckLightingPreservation(ID3D11Device* device, ID3D11DeviceContext*
 						auto oldOutput = StorePixels(device, context, copy, cb, source, format);
 						Dispatch(context, oldShader.Get(), cb, constants, inputs, oldOutput.uav.Get());
 						const auto old = ReadStored(device, context, copy, cb, oldOutput);
-						Require(std::memcmp(actual.data(), old.data(), actual.size() * sizeof(Pixel)) == 0,
+						const bool matches = std::memcmp(actual.data(), old.data(), actual.size() * sizeof(Pixel)) == 0;
+						if (!matches) {
+							std::fprintf(stderr, "Lighting baseline format=%u domain=%u signal=%.*s preservation=%g optimized=%d\n",
+								formatIndex, domain, int(signal.size()), signal.data(), preservation, optimized);
+							PrintFirstPixelDifference(actual, old);
+						}
+						Require(matches,
 							"100% must exactly match pre-change production shader for the same compiler flags");
 						comparisons += preservation == 1.f;
 					}
@@ -210,8 +216,9 @@ static void CheckPreparationReference(ID3D11Device* device, ID3D11DeviceContext*
 }
 
 static void CheckPackedLightingPreservation(ID3D11Device* device, ID3D11DeviceContext* context,
-	ID3D11ComputeShader* reconstruct, ID3D11ComputeShader* copy, ID3D11Buffer* cb)
+	ID3D11ComputeShader* reconstruct, ID3D11ComputeShader* copy, ID3D11Buffer* cb, bool optimized)
 {
+	const auto immutable = BaselineShader(device, optimized);
 	const std::vector<Pixel> empty(4096, Pixel{ 0.01f, 0.02f, 0.03f, 0.375f });
 	// Touching tiles, empty padding and nonzero transport origins must match isolated ROIs.
 	for (const auto format : { DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R16G16B16A16_FLOAT,
@@ -268,6 +275,12 @@ static void CheckPackedLightingPreservation(ID3D11Device* device, ID3D11DeviceCo
 						auto result = StorePixels(device, context, copy, cb, empty, format);
 						Dispatch(context, reconstruct, cb, c, { b.srv.Get(), n.srv.Get(), p.srv.Get() }, result.uav.Get());
 						const auto isolated = ReadStored(device, context, copy, cb, result);
+						if (preservation == 1.f) {
+							Dispatch(context, immutable.Get(), cb, c, { b.srv.Get(), n.srv.Get(), p.srv.Get() }, result.uav.Get());
+							const auto old = ReadStored(device, context, copy, cb, result);
+							Require(std::memcmp(isolated.data(), old.data(), isolated.size() * sizeof(Pixel)) == 0,
+								"each isolated crop must exactly match immutable production DXBC");
+						}
 						for (unsigned y = 0; y < r[3]; ++y)
 							for (unsigned x = 0; x < r[2]; ++x) {
 								const auto& actual = atlas[(y + r[1]) * 64 + x + r[0]];

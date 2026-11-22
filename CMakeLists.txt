@@ -3499,6 +3499,9 @@ if(BUILD_CONTROLLER_TESTS)
     add_d3d_shader_test(
         sss_skin_color_test SSSSkinColor tests/sss_skin_color_test.cpp
     )
+    add_d3d_shader_test(
+        sss_deferred_input_test SSSDeferredInput tests/sss_deferred_input_test.cpp
+    )
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_shadows.cmake")
     add_d3d_shader_test(
         wetterness_highlights_test WetternessHighlights

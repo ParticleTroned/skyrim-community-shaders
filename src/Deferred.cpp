@@ -202,6 +202,13 @@ void Deferred::SetupResources()
 		shaderDevice = globals::d3d::device;
 	}
 
+	diffuseInputCB.reset();
+	try {
+		diffuseInputCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<SSS::DeferredInput::Control>(false), "Deferred::DiffuseInputCB");
+	} catch (const std::exception& e) {
+		logger::warn("[Deferred] Using the SSS copy path because diffuse input constants could not be allocated: {}", e.what());
+	}
+
 	{
 		auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 
@@ -729,14 +736,23 @@ void Deferred::DeferredPasses()
 	auto dispatchCount = Util::GetScreenDispatchCount(true, submitStageSceneDomain);
 
 	auto& sss = globals::features::subsurfaceScattering;
-	if (sss.loaded)
-		sss.DrawSSS();
+	auto sssInput = sss.loaded ? sss.DrawSSS(true) : SSS::DeferredInput{};
 
 	auto& dynamicCubemaps = globals::features::dynamicCubemaps;
 	if (dynamicCubemaps.loaded)
-		dynamicCubemaps.UpdateCubemap();
+		dynamicCubemaps.UpdateCubemap([](void* input) { static_cast<SSS::DeferredInput*>(input)->Materialize(); }, &sssInput);
 
 	auto& ibl = globals::features::ibl;
+
+	auto* compositeShader = interior ? GetComputeMainCompositeInterior() : GetComputeMainComposite();
+	SSS::DeferredInput::Control diffuseInput{};
+	if (compositeShader && diffuseInputCB) {
+		diffuseInput = sssInput.Prepare(REX::W32::AsReal(main.UAV),
+			std::min(dispatchCount.x * 8u, static_cast<uint32_t>(globals::state->screenSize.x)),
+			std::min(dispatchCount.y * 8u, static_cast<uint32_t>(globals::state->screenSize.y)));
+	} else {
+		sssInput.Materialize();
+	}
 
 	// Deferred Composite
 	{
@@ -747,7 +763,12 @@ void Deferred::DeferredPasses()
 		// state left behind by SSGI/SSS/shadows or future feature passes.
 		Util::BindGlobalConstantBuffersForCS(context);
 
-		ID3D11ShaderResourceView* srvs[16]{
+		ID3D11Buffer* inputBuffer = diffuseInputCB ? diffuseInputCB->CB() : nullptr;
+		if (diffuseInputCB)
+			diffuseInputCB->Update(diffuseInput);
+		context->CSSetConstantBuffers(0, 1, &inputBuffer);
+
+		ID3D11ShaderResourceView* srvs[17]{
 			REX::W32::AsReal(specular.SRV),
 			REX::W32::AsReal(albedo.SRV),
 			REX::W32::AsReal(normalRoughness.SRV),
@@ -764,6 +785,7 @@ void Deferred::DeferredPasses()
 			ssgi_hq_spec ? ssgi_gi_spec : nullptr,
 			ibl.IsRuntimeEnabled() && ibl.dynamicIBLValid && ibl.envIBLTexture ? ibl.envIBLTexture->srv.get() : nullptr,
 			ibl.IsRuntimeEnabled() && ibl.dynamicIBLValid && ibl.skyIBLTexture ? ibl.skyIBLTexture->srv.get() : nullptr,
+			sssInput.View(),
 		};
 
 		if (dynamicCubemaps.loaded)
@@ -781,12 +803,18 @@ void Deferred::DeferredPasses()
 		ID3D11UnorderedAccessView* uavs[3]{ REX::W32::AsReal(main.UAV), REX::W32::AsReal(normals.UAV), REX::W32::AsReal(motionVectors.UAV) };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
-		if (auto* shader = interior ? GetComputeMainCompositeInterior() : GetComputeMainComposite()) {
-			context->CSSetShader(shader, nullptr, 0);
+		if (compositeShader) {
+			context->CSSetShader(compositeShader, nullptr, 0);
 			CS_GPU_PASS("DeferredComposite");
 			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+			sssInput.Consume();
 		}
 	}
+
+	ID3D11ShaderResourceView* inputView = nullptr;
+	ID3D11Buffer* inputBuffer = nullptr;
+	context->CSSetShaderResources(16, 1, &inputView);
+	context->CSSetConstantBuffers(0, 1, &inputBuffer);
 
 	if (globals::game::isVR && globals::features::vr.loaded) {
 		CS_GPU_PASS("VR::StereoBlend");
@@ -795,7 +823,7 @@ void Deferred::DeferredPasses()
 
 	// Clear
 	{
-		ID3D11ShaderResourceView* views[16]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+		ID3D11ShaderResourceView* views[17]{};
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 		context->CSSetShaderResources(18, 2, views);
 

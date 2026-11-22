@@ -5,6 +5,7 @@
 #include "Utils/LazyShader.h"
 
 #include <atomic>
+#include <memory>
 #include <optional>
 
 #define ALBEDO RE::RENDER_TARGETS::kINDIRECT
@@ -97,6 +98,7 @@ public:
 	ID3D11ShaderResourceView* shadowView = nullptr;
 
 private:
+	std::unique_ptr<ConstantBuffer> diffuseInputCB;
 	ID3D11ComputeShader* GetComputeMainComposite(bool interior);
 
 	/// Copies completed opaque depth without changing the active render targets.

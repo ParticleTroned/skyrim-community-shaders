@@ -383,21 +383,21 @@ void SubsurfaceScattering::CalculateKernel(DiffusionProfile& a_profile, Kernel& 
 	}
 }
 
-void SubsurfaceScattering::DrawSSS()
+SSS::DeferredInput SubsurfaceScattering::DrawSSS(bool a_deferCopy)
 {
 	if (!settings.EnableSubsurfaceScattering) {
 		validMaterials = false;
-		return;
+		return {};
 	}
 
 	if (!validMaterials)
-		return;
+		return {};
 
 	if (settings.SSMode == 0) {
 		if (!GetComputeShaderHorizontalBlur() || !GetComputeShaderVerticalBlur())
-			return;
+			return {};
 	} else if (settings.SSMode == 1 && !GetComputeShaderBurley()) {
-		return;
+		return {};
 	}
 
 	ZoneScoped;
@@ -413,27 +413,27 @@ void SubsurfaceScattering::DrawSSS()
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
 	if (!renderer || !context || !blurCB)
-		return;
+		return {};
 
 	if (!EnsureBlurHorizontalTemp(sssWidth, sssHeight, false))
-		return;
+		return {};
 
 	auto main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 	if (!main.texture || !main.SRV || !main.UAV)
-		return;
+		return {};
 
 	auto mask = renderer->GetRuntimeData().renderTargets[MASKS];
 	auto albedo = renderer->GetRuntimeData().renderTargets[ALBEDO];
 	auto normal = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS];
 	if (!mask.SRV || !albedo.SRV || !normal.SRV)
-		return;
+		return {};
 
 	if (!blurHorizontalTemp)
-		return;
+		return {};
 
 	ID3D11UnorderedAccessView* blurUAV = blurHorizontalTemp->uav.get();
 	if (!blurUAV || !blurHorizontalTemp->srv || !blurHorizontalTemp->resource)
-		return;
+		return {};
 
 	auto dispatchCount = Util::GetScreenDispatchCount(true, submitStageSceneDomain);
 
@@ -458,9 +458,6 @@ void SubsurfaceScattering::DrawSSS()
 	{
 		ID3D11Buffer* buffer[1] = { blurCB->CB() };
 		context->CSSetConstantBuffers(1, 1, buffer);
-
-		D3D11_TEXTURE2D_DESC mainDesc{};
-		REX::W32::AsReal(main.texture)->GetDesc(&mainDesc);
 
 		ID3D11UnorderedAccessView* uav = blurUAV;
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
@@ -506,7 +503,7 @@ void SubsurfaceScattering::DrawSSS()
 				}
 			}
 		} else if (settings.SSMode == 1) {
-			// Burley pass to main texture
+			// Burley produces the complete diffuse input, including non-skin pixels.
 			{
 				auto shader = GetComputeShaderBurley();
 				context->CSSetShader(shader, nullptr, 0);
@@ -518,20 +515,6 @@ void SubsurfaceScattering::DrawSSS()
 
 				uav = nullptr;
 				context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-
-				if (submitStageSceneDomain && (blurHorizontalTemp->desc.Width != mainDesc.Width || blurHorizontalTemp->desc.Height != mainDesc.Height)) {
-					const D3D11_BOX sourceBox{
-						0,
-						0,
-						0,
-						std::min(blurHorizontalTemp->desc.Width, mainDesc.Width),
-						std::min(blurHorizontalTemp->desc.Height, mainDesc.Height),
-						1
-					};
-					context->CopySubresourceRegion(REX::W32::AsReal(main.texture), 0, 0, 0, 0, blurHorizontalTemp->resource.get(), 0, &sourceBox);
-				} else {
-					context->CopyResource(REX::W32::AsReal(main.texture), blurHorizontalTemp->resource.get());
-				}
 			}
 		}
 	}
@@ -547,6 +530,21 @@ void SubsurfaceScattering::DrawSSS()
 
 	ID3D11ComputeShader* shader = nullptr;
 	context->CSSetShader(shader, nullptr, 0);
+
+	if (settings.SSMode != 1)
+		return {};
+
+	D3D11_TEXTURE2D_DESC mainDesc{};
+	REX::W32::AsReal(main.texture)->GetDesc(&mainDesc);
+	const bool copyRegion = submitStageSceneDomain &&
+	                        (blurHorizontalTemp->desc.Width != mainDesc.Width || blurHorizontalTemp->desc.Height != mainDesc.Height);
+	SSS::DeferredInput result(context, blurHorizontalTemp->resource.get(), blurHorizontalTemp->srv.get(), blurUAV,
+		REX::W32::AsReal(main.texture), REX::W32::AsReal(main.UAV),
+		std::min(dispatchCount.x * 8u, static_cast<uint32_t>(globals::state->screenSize.x)),
+		std::min(dispatchCount.y * 8u, static_cast<uint32_t>(globals::state->screenSize.y)), copyRegion);
+	if (!a_deferCopy)
+		result.Materialize();
+	return result;
 }
 
 bool SubsurfaceScattering::EnsureBlurHorizontalTemp(uint32_t a_width, uint32_t a_height, bool a_throwOnFailure)
@@ -576,6 +574,11 @@ bool SubsurfaceScattering::EnsureBlurHorizontalTemp(uint32_t a_width, uint32_t a
 	if (blurHorizontalTemp &&
 		blurHorizontalTemp->desc.Width == a_width &&
 		blurHorizontalTemp->desc.Height == a_height &&
+		blurHorizontalTemp->desc.Format == texDesc.Format &&
+		blurHorizontalTemp->desc.MipLevels == texDesc.MipLevels &&
+		blurHorizontalTemp->desc.ArraySize == texDesc.ArraySize &&
+		blurHorizontalTemp->desc.SampleDesc.Count == texDesc.SampleDesc.Count &&
+		blurHorizontalTemp->desc.SampleDesc.Quality == texDesc.SampleDesc.Quality &&
 		blurHorizontalTemp->resource &&
 		blurHorizontalTemp->srv &&
 		blurHorizontalTemp->uav)

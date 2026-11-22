@@ -17,6 +17,15 @@ Texture2D<unorm float3> NormalRoughnessTexture : register(t2);
 Texture2D<float3> MasksTexture : register(t3);
 Texture2D<unorm float2> Masks2Texture : register(t9);
 
+Texture2D<float4> DeferredDiffuseTexture : register(t16);
+
+cbuffer DeferredDiffuseInput : register(b0)
+{
+	uint2 DeferredDiffuseExtent;
+	uint DeferredDiffuseEnabled;
+	uint DeferredDiffusePadding;
+};
+
 RWTexture2D<float4> MainRW : register(u0);
 RWTexture2D<float4> NormalTAAMaskSpecularMaskRW : register(u1);
 RWTexture2D<float2> MotionVectorsRW : register(u2);
@@ -107,7 +116,10 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 	float3 normalGlossiness = NormalRoughnessTexture[dispatchID.xy];
 	float3 normalVS = GBuffer::DecodeNormal(normalGlossiness.xy);
 
-	float3 diffuseColor = MainRW[dispatchID.xy].xyz;
+	float3 diffuseColor;
+	[branch] if (DeferredDiffuseEnabled && all(dispatchID.xy < DeferredDiffuseExtent))
+		diffuseColor = DeferredDiffuseTexture.Load(int3(dispatchID.xy, 0)).xyz;
+	else diffuseColor = MainRW[dispatchID.xy].xyz;
 	float3 specularColor = SpecularTexture[dispatchID.xy];
 	float3 albedo = AlbedoTexture[dispatchID.xy];
 

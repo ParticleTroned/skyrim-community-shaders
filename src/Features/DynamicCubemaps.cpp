@@ -499,7 +499,7 @@ ID3D11ComputeShader* DynamicCubemaps::GetComputeShaderBC6HEncode()
 		"DynamicCubemaps::BC6HEncodeCS");
 }
 
-bool DynamicCubemaps::UpdateCubemapCapture(bool a_reflections)
+bool DynamicCubemaps::UpdateCubemapCapture(bool a_reflections, void (*a_beforeMainRead)(void*), void* a_context)
 {
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
@@ -539,6 +539,9 @@ bool DynamicCubemaps::UpdateCubemapCapture(bool a_reflections)
 		context->CSSetSamplers(0, 1, &sampler);
 		context->CSSetShader(nullptr, nullptr, 0);
 	});
+
+	if (a_beforeMainRead)
+		a_beforeMainRead(a_context);
 
 	ID3D11ShaderResourceView* srvs[2] = { REX::W32::AsReal(depth.depthSRV), REX::W32::AsReal(main.SRV) };
 	ID3D11UnorderedAccessView* uavs[4] = {
@@ -827,7 +830,7 @@ void DynamicCubemaps::FinishCurrentCubemapTask(bool a_cadenceEnabled)
 	nextCadenceTaskFrame = cadenceFrameCounter + GetCurrentCubemapCadence();
 }
 
-void DynamicCubemaps::UpdateCubemap()
+void DynamicCubemaps::UpdateCubemap(void (*a_beforeMainRead)(void*), void* a_context)
 {
 	ZoneScoped;
 	CS_GPU_PASS("DynamicCubemaps::UpdateCubemap");
@@ -875,7 +878,7 @@ void DynamicCubemaps::UpdateCubemap()
 
 	switch (nextTask) {
 	case NextTask::kCapture:
-		if (UpdateCubemapCapture(false))
+		if (UpdateCubemapCapture(false, a_beforeMainRead, a_context))
 			nextTask = NextTask::kInferrence;
 		break;
 
@@ -895,7 +898,7 @@ void DynamicCubemaps::UpdateCubemap()
 		break;
 
 	case NextTask::kCapture2:
-		if (UpdateCubemapCapture(true))
+		if (UpdateCubemapCapture(true, a_beforeMainRead, a_context))
 			nextTask = NextTask::kInferrence2;
 		break;
 

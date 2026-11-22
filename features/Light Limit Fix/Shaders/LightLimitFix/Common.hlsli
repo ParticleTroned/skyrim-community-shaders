@@ -35,6 +35,18 @@ namespace LightFlags
 	static const uint OmniDirectional = POINT_LIGHT_FLAG_OMNIDIRECTIONAL;
 }
 
+namespace ClusteredLightFlags
+{
+	static const uint Available = 1u;
+	static const uint PreparedColours = 2u;
+}
+
+struct PreparedPointLightColour
+{
+	float4 nonPBR;
+	float4 pbr;
+};
+
 struct ClusterAABB
 {
 	float4 minPoint;

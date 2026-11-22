@@ -6,9 +6,9 @@
 // Included inside Color after the colour-space helpers and scene-draw gate.
 
 /// Adjust working-space RGB while leaving neutral values and object previews untouched.
-float3 AdjustUtilityColor(float3 color, float saturation, float gammaOffset, bool linearSpace)
+float3 AdjustUtilityColor(float3 color, float saturation, float gammaOffset, bool linearSpace, bool sceneColor)
 {
-	[branch] if (IsSceneColorDraw() && (saturation != 1.0 || gammaOffset != 0.0))
+	[branch] if (sceneColor && (saturation != 1.0 || gammaOffset != 0.0))
 	{
 		color = AdaptiveBalanceColorBounds::Intermediate(color, linearSpace);
 		if (gammaOffset != 0.0) {
@@ -21,6 +21,11 @@ float3 AdjustUtilityColor(float3 color, float saturation, float gammaOffset, boo
 		color = AdaptiveBalanceColorBounds::Intermediate(color, linearSpace);
 	}
 	return color;
+}
+
+float3 AdjustUtilityColor(float3 color, float saturation, float gammaOffset, bool linearSpace)
+{
+	return AdjustUtilityColor(color, saturation, gammaOffset, linearSpace, IsSceneColorDraw());
 }
 
 float3 AdjustUtilityColor(float3 color, float saturation, float gammaOffset)

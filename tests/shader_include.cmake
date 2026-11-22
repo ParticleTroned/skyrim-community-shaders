@@ -29,6 +29,8 @@ target_include_directories(
 target_link_libraries(shader_include_test PRIVATE d3dcompiler.lib)
 set_tests_properties(ShaderInclude PROPERTIES TIMEOUT 120)
 
+
+
 add_d3d_shader_test(
     adaptive_balance_color_shader_test
     AdaptiveBalanceColorShader
@@ -36,6 +38,13 @@ add_d3d_shader_test(
 )
 target_link_libraries(adaptive_balance_color_shader_test PRIVATE nlohmann_json::nlohmann_json)
 set_tests_properties(AdaptiveBalanceColorShader PROPERTIES TIMEOUT 180)
+
+add_d3d_shader_test(
+    prepared_point_light_colour_test
+    PreparedPointLightColour
+    tests/prepared_point_light_colour_test.cpp
+)
+set_tests_properties(PreparedPointLightColour PROPERTIES TIMEOUT 180)
 
 set(_mapped_emission_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/mapped-emission")
 set(_mapped_emission_shader "${_mapped_emission_dir}/mapped_emission.hlsl")

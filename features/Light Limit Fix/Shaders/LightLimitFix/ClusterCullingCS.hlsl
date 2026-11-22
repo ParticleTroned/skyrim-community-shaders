@@ -1,3 +1,4 @@
+#include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "LightLimitFix/Common.hlsli"
 
@@ -6,7 +7,7 @@ cbuffer PerFrame : register(b0)
 	uint LightCount;
 	uint ContactShadowFlagsPacked;
 	uint ContactShadowParamsPacked;
-	uint pad0;
+	uint PreparePointLightColours;
 	uint4 ClusterSize;
 }
 
@@ -15,6 +16,8 @@ cbuffer PerFrame : register(b0)
 
 StructuredBuffer<ClusterAABB> clusters : register(t0);
 StructuredBuffer<Light> lights : register(t1);
+
+RWStructuredBuffer<PreparedPointLightColour> preparedPointLightColours : register(u0);
 
 RWStructuredBuffer<uint> lightIndexList : register(u1);
 RWStructuredBuffer<LightGrid> lightGrid : register(u2);
@@ -133,7 +136,7 @@ void InsertContactShadowCandidate(
 		particleCount++;
 }
 
-[numthreads(NUMTHREAD_X, NUMTHREAD_Y, NUMTHREAD_Z)] void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex) {
+[numthreads(NUMTHREAD_X, NUMTHREAD_Y, NUMTHREAD_Z)] void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex, uint3 groupID : SV_GroupID) {
 	const uint lightCount = min(LightCount, GROUP_SIZE);
 	if (groupIndex < lightCount) {
 		Light light = lights[groupIndex];
@@ -141,6 +144,15 @@ void InsertContactShadowCandidate(
 #if defined(VR)
 		sharedLightsVSRight[groupIndex] = FrameBuffer::WorldToView(light.positionWS[1].xyz, true, 1);
 #endif
+		// Inactive cluster lanes can still own valid lights in the designated group.
+		[branch] if (PreparePointLightColours && all(groupID == 0))
+		{
+			const bool isLinear = (light.lightFlags & LightFlags::Linear) != 0;
+			PreparedPointLightColour prepared;
+			prepared.nonPBR = float4(Color::PointLight(light.color, isLinear, light.lightFlags, false, true, ENABLE_LL, false), 0.0);
+			prepared.pbr = float4(Color::PointLight(light.color, isLinear, light.lightFlags, false, true, ENABLE_LL, true), 0.0);
+			preparedPointLightColours[groupIndex] = prepared;
+		}
 	}
 	// Partial edge groups must reach the barrier before inactive lanes leave.
 	GroupMemoryBarrierWithGroupSync();

@@ -4595,8 +4595,6 @@ public:
 		uint32_t depthWidthPerEye, uint32_t depthHeight, uint32_t colorWidthPerEye, uint32_t colorHeight, uint32_t colorOffsetX = 0);
 
 private:
-	/** Creates the D3D11 resources shared by native mask repair and depth upscaling. */
-	void SetupUnderwaterMaskResources();
 	/** Preserves capture wrapping through the verified VR device-creation import thunk. */
 	bool InstallRenderDocDeviceCreationBridge();
 	void SetNeuralExecutionContext(NeuralRendering::RendererApplyArgs& a_args,

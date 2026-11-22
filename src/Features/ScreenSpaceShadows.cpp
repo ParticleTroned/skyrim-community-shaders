@@ -456,7 +456,7 @@ bool ScreenSpaceShadows::PrewarmVRRenderScaleShaders(
 	       GetOrCreateRaymarchShader(sampleCount, true, a_timing) != nullptr;
 }
 
-void ScreenSpaceShadows::DrawShadows()
+void ScreenSpaceShadows::DrawShadows(bool stereoReprojectActive)
 {
 	ZoneScopedS(8);
 	CS_GPU_PASS("ScreenSpaceShadows::DrawShadows");
@@ -499,6 +499,8 @@ void ScreenSpaceShadows::DrawShadows()
 
 	if (globals::game::isVR)
 		viewportSize[0] /= 2;
+	if (viewportSize[0] <= 0 || viewportSize[1] <= 0)
+		return;
 
 	const FoveatedShadowState foveatedState = ResolveFoveatedShadowState(bendSettings);
 
@@ -519,7 +521,7 @@ void ScreenSpaceShadows::DrawShadows()
 	auto buffer = raymarchCB->CB();
 	context->CSSetConstantBuffers(1, 1, &buffer);
 
-	auto ClearRaymarchState = [&] {
+	const SKSE::stl::scope_exit clearRaymarchState([&] {
 		ID3D11ShaderResourceView* views[1]{ nullptr };
 		context->CSSetShaderResources(0, 1, views);
 
@@ -533,7 +535,7 @@ void ScreenSpaceShadows::DrawShadows()
 
 		buffer = nullptr;
 		context->CSSetConstantBuffers(1, 1, &buffer);
-	};
+	});
 
 	auto viewport = globals::game::graphicsState;
 
@@ -570,20 +572,8 @@ void ScreenSpaceShadows::DrawShadows()
 	}
 
 	auto* raymarchLeft = GetComputeRaymarch();
-	const bool stereoReprojectResourcesReady =
-		stereoSyncCopyTex &&
-		stereoSyncCopyTex->resource &&
-		stereoSyncCopyTex->srv &&
-		stereoSyncCB;
-	const bool stereoReprojectActive =
-		globals::game::isVR &&
-		enableStereoSync &&
-		stereoReprojectResourcesReady &&
-		useStereoReproject &&
-		GetStereoReprojectCS();
 	ID3D11ComputeShader* raymarchRight = (globals::game::isVR && !stereoReprojectActive) ? GetComputeRaymarchRight() : nullptr;
 	if (!raymarchLeft || (globals::game::isVR && !stereoReprojectActive && !raymarchRight)) {
-		ClearRaymarchState();
 		return;
 	}
 
@@ -682,20 +672,25 @@ void ScreenSpaceShadows::DrawShadows()
 			}
 		}
 	}
-
-	ClearRaymarchState();
 }
 
-void ScreenSpaceShadows::DrawStereoSync()
+ScreenSpaceShadows::StereoSyncPass ScreenSpaceShadows::PrepareStereoSync()
 {
+	StereoSyncPass pass{};
 	if (!globals::game::isVR ||
 		!enableStereoSync ||
 		!stereoSyncCopyTex ||
 		!stereoSyncCopyTex->resource ||
 		!stereoSyncCopyTex->srv ||
+		!stereoSyncCopyTex->uav ||
 		!stereoSyncCB) {
-		return;
+		return pass;
 	}
+	pass.resolution = Util::ConvertToDynamic(globals::state->screenSize);
+	if (!(pass.resolution.x >= 1 && pass.resolution.y >= 1 &&
+			pass.resolution.x <= screenSpaceShadowsTexture->desc.Width && pass.resolution.y <= screenSpaceShadowsTexture->desc.Height &&
+			pass.resolution.x <= stereoSyncCopyTex->desc.Width && pass.resolution.y <= stereoSyncCopyTex->desc.Height))
+		return pass;
 
 	const bool useTerrainBlendingDepth = UseTerrainBlendingDepth();
 	if (stereoSyncUsesTerrainBlendingDepth != useTerrainBlendingDepth) {
@@ -713,22 +708,32 @@ void ScreenSpaceShadows::DrawStereoSync()
 			defines.push_back({ "TERRAIN_BLENDING", "" });
 		stereoCS = stereoSyncCS.Get(L"Data\\Shaders\\ScreenSpaceShadows\\StereoSyncCS.hlsl", defines, "cs_5_0", "main", "ScreenSpaceShadows::StereoSyncCS");
 	}
-	if (!stereoCS)
-		return;
+	pass.shader = stereoCS;
+	pass.reproject = stereoCS && !usingSync;
+	return pass;
+}
+
+ID3D11ShaderResourceView* ScreenSpaceShadows::DrawStereoSync(const StereoSyncPass& pass)
+{
+	if (!pass.shader)
+		return screenSpaceShadowsTexture->srv.get();
+	const bool usingSync = !pass.reproject;
 
 	ZoneScoped;
 	CS_GPU_PASS_SELECT(usingSync, "ScreenSpaceShadows::StereoSync", "ScreenSpaceShadows::StereoReproject");
 
 	auto context = globals::d3d::context;
 
-	float2 resolution = Util::ConvertToDynamic(globals::state->screenSize);
+	const float2 resolution = pass.resolution;
 	const uint32_t frameWidth = static_cast<uint32_t>(resolution.x);
 	const uint32_t frameHeight = static_cast<uint32_t>(resolution.y);
 	const FoveatedShadowState foveatedState = ResolveFoveatedShadowState(bendSettings);
-	if (frameWidth == 0 || frameHeight == 0)
-		return;
-
 	const bool foveatedStereoSync = foveatedState.active && frameWidth > 1;
+	// Both kernels overwrite every pixel only for a full, non-foveated allocation.
+	// Sparse source support and expanded raymarch padding retain the copy path.
+	const bool publishSecondary = !foveatedState.active &&
+	                              frameWidth == screenSpaceShadowsTexture->desc.Width &&
+	                              frameHeight == screenSpaceShadowsTexture->desc.Height;
 	std::array<FoveatedCommon::DispatchBounds, 2> syncBounds{};
 	if (foveatedStereoSync) {
 		const uint32_t eyeWidth = frameWidth >> 1;
@@ -748,7 +753,7 @@ void ScreenSpaceShadows::DrawStereoSync()
 	};
 
 	auto CopyStereoSyncSource = [&] {
-		if (!foveatedStereoSync || !stereoSyncCopyTex->uav) {
+		if (!foveatedStereoSync) {
 			context->CopyResource(stereoSyncCopyTex->resource.get(), screenSpaceShadowsTexture->resource.get());
 			return;
 		}
@@ -782,16 +787,27 @@ void ScreenSpaceShadows::DrawStereoSync()
 	// Same 24/32-bit depth path as the raymarch. SrcDepthTexture's HLSL type is
 	// conditional on TERRAIN_BLENDING via the active depth source.
 	auto* depthSRV = Util::GetCurrentSceneDepthSRV(false);
-	ID3D11ShaderResourceView* srvs[2]{ depthSRV, stereoSyncCopyTex->srv.get() };
-	ID3D11UnorderedAccessView* uavs[1]{ screenSpaceShadowsTexture->uav.get() };
+	ID3D11ShaderResourceView* srvs[2]{ depthSRV, publishSecondary ? screenSpaceShadowsTexture->srv.get() : stereoSyncCopyTex->srv.get() };
+	ID3D11UnorderedAccessView* uavs[1]{ publishSecondary ? stereoSyncCopyTex->uav.get() : screenSpaceShadowsTexture->uav.get() };
 
 	{
-		CopyStereoSyncSource();
+		const SKSE::stl::scope_exit clearBindings([&] {
+			ID3D11ShaderResourceView* nullSRVs[2]{};
+			ID3D11UnorderedAccessView* nullUAV = nullptr;
+			ID3D11Buffer* nullBuffer = nullptr;
+			context->CSSetShaderResources(0, 2, nullSRVs);
+			context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+			context->CSSetConstantBuffers(1, 1, &nullBuffer);
+			context->CSSetShader(nullptr, nullptr, 0);
+		});
+		if (!publishSecondary) {
+			CopyStereoSyncSource();
+		}
 
 		Util::BindGlobalConstantBuffersForCS(context);
 		context->CSSetShaderResources(0, 2, srvs);
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-		context->CSSetShader(stereoCS, nullptr, 0);
+		context->CSSetShader(pass.shader, nullptr, 0);
 
 		auto DispatchSyncBounds = [&](const FoveatedCommon::DispatchBounds& bounds, uint32_t eyeIndex) {
 			if (bounds.maxX <= bounds.minX || bounds.maxY <= bounds.minY)
@@ -833,14 +849,7 @@ void ScreenSpaceShadows::DrawStereoSync()
 		ForEachSyncBounds(DispatchSyncBounds);
 	}
 
-	srvs[0] = nullptr;
-	srvs[1] = nullptr;
-	uavs[0] = nullptr;
-	ID3D11Buffer* cbPtr = nullptr;
-	context->CSSetShaderResources(0, 2, srvs);
-	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-	context->CSSetConstantBuffers(1, 1, &cbPtr);
-	context->CSSetShader(nullptr, nullptr, 0);
+	return publishSecondary ? stereoSyncCopyTex->srv.get() : screenSpaceShadowsTexture->srv.get();
 }
 
 void ScreenSpaceShadows::Prepass()
@@ -854,13 +863,13 @@ void ScreenSpaceShadows::Prepass()
 		ID3D11ShaderResourceView* view = nullptr;
 		context->PSSetShaderResources(45, 1, &view);
 	};
+	clearOutputView();
 	if (!screenSpaceShadowsTexture ||
 		!screenSpaceShadowsTexture->resource ||
 		!screenSpaceShadowsTexture->uav ||
 		!screenSpaceShadowsTexture->srv ||
 		!raymarchCB ||
 		!pointBorderSampler) {
-		clearOutputView();
 		return;
 	}
 
@@ -871,12 +880,13 @@ void ScreenSpaceShadows::Prepass()
 		context->ClearUnorderedAccessViewFloat(screenSpaceShadowsTexture->uav.get(), white);
 	}
 	shadowTextureCleared = !drawShadows;
+	auto view = screenSpaceShadowsTexture->srv.get();
 	if (drawShadows) {
-		DrawShadows();
-		DrawStereoSync();
+		const auto stereoPass = PrepareStereoSync();
+		DrawShadows(stereoPass.reproject);
+		view = DrawStereoSync(stereoPass);
 	}
 
-	auto view = screenSpaceShadowsTexture->srv.get();
 	context->PSSetShaderResources(45, 1, &view);
 }
 

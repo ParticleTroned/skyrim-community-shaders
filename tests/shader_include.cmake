@@ -118,6 +118,33 @@ target_include_directories(
     PRIVATE "${_cluster_scheduling_dir}"
 )
 
+set(_stereo_output_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/stereo-output")
+add_custom_command(
+    OUTPUT "${_stereo_output_dir}/stereo_output_selection.h"
+    COMMAND
+        "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT_DIRECTORY=${_stereo_output_dir}" -P
+        "${PROJECT_SOURCE_DIR}/tests/extract_stereo_shadow_output.cmake"
+    DEPENDS
+        src/Features/ScreenSpaceShadows.cpp
+        tests/extract_stereo_shadow_output.cmake
+        tests/extract_source_region.cmake
+    VERBATIM
+)
+add_d3d_shader_test(stereo_shadow_output_test StereoShadowOutput tests/stereo_shadow_output_test.cpp)
+target_sources(
+    stereo_shadow_output_test
+    PRIVATE
+        "${_stereo_output_dir}/stereo_output_selection.h"
+        src/Utils/ShaderInclude.cpp
+)
+target_include_directories(
+    stereo_shadow_output_test
+    PRIVATE "${_stereo_output_dir}"
+)
+target_link_libraries(stereo_shadow_output_test PRIVATE spdlog::spdlog)
+set_tests_properties(StereoShadowOutput PROPERTIES TIMEOUT 180)
+
 set(_mapped_emission_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/mapped-emission")
 set(_mapped_emission_shader "${_mapped_emission_dir}/mapped_emission.hlsl")
 add_custom_command(

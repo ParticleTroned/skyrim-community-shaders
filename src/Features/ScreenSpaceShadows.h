@@ -174,10 +174,20 @@ public:
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 
-	void DrawShadows();
-	void DrawStereoSync();
-
 	virtual void RestoreDefaultSettings() override;
 
 	virtual bool SupportsVR() override { return true; };
+
+private:
+	struct StereoSyncPass
+	{
+		ID3D11ComputeShader* shader = nullptr;
+		float2 resolution{};
+		bool reproject = false;
+	};
+	/** Resolve the output producer before deciding whether to march the right eye. */
+	StereoSyncPass PrepareStereoSync();
+	void DrawShadows(bool stereoReprojectActive);
+	/** Return this invocation's published output after all compute views are unbound. */
+	ID3D11ShaderResourceView* DrawStereoSync(const StereoSyncPass& pass);
 };

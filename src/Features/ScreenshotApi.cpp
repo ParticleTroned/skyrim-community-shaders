@@ -1394,7 +1394,7 @@ ScreenshotApi::json ScreenshotApi::BuildCapabilities(const ScreenshotFeature&) c
 		{ "formats", { "png", "bmp" } },
 		{ "framing", { { "resolutions", { "4k", "native" } }, { "defaultResolution", "4k" },
 						 { "width", CSX::ScreenshotPolicy::FramedWidth }, { "height", CSX::ScreenshotPolicy::FramedHeight },
-						 { "nativeSize", "selected_or_dominant_eye_16_9_crop_at_least_4k" },
+						 { "nativeSize", "selected_eye_crop_or_bounded_combined_central_density_at_least_4k" },
 						 { "maximumDimension", CSX::ScreenshotPolicy::MaximumFramedDimension } } },
 		{ "colourContracts", { "sdr_srgb" } },
 		{ "scheduleBases", { "game_frames", "wall_clock" } },

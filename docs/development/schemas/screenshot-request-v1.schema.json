@@ -64,7 +64,7 @@
                 "resolution": {
                     "enum": ["4k", "native"],
                     "default": "4k",
-                    "description": "Framed views only. 4k saves 3840 x 2160. Native uses the selected eye's largest 16:9 crop, at least 4K; combined views use the dominant eye. Native dimensions resolve after acquisition, with a maximum source dimension of 16384. Omit width and height for native. Explicit legacy 2560 x 1440 remains supported when resolution is omitted."
+                    "description": "Framed views only. 4k saves 3840 x 2160. Native uses the selected eye's largest 16:9 crop, at least 4K. Combined native views can grow to retain the dominant eye's central sampling density across the visible frame, bounded by that eye's pixel count or the 4K minimum. Native dimensions resolve after acquisition, with a maximum source dimension of 16384. Omit width and height for native. Explicit legacy 2560 x 1440 remains supported when resolution is omitted."
                 },
                 "width": { "type": "integer", "enum": [2560, 3840] },
                 "height": { "type": "integer", "enum": [1440, 2160] },

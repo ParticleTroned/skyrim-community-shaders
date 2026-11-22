@@ -1079,13 +1079,14 @@ namespace
 		// Differentiate the perspective divide in head space so canted eyes use
 		// the sampling density at the same optical axis as the combined frame.
 		const auto& rotation = a_eyeToHead.m;
-		const double horizontalDensity = std::hypot(
-			(rotation[0][0] * forward + eyeX * rotation[0][2]) * horizontalScale,
-			(rotation[0][1] * forward + eyeY * rotation[0][2]) * verticalScale);
-		const double verticalDensity = std::hypot(
-			(rotation[1][0] * forward + eyeX * rotation[1][2]) * horizontalScale,
-			(rotation[1][1] * forward + eyeY * rotation[1][2]) * verticalScale);
-		const double density = std::max(horizontalDensity, verticalDensity);
+		const double pixelXPerHeadX = (rotation[0][0] * forward + eyeX * rotation[0][2]) * horizontalScale;
+		const double pixelYPerHeadX = (rotation[0][1] * forward + eyeY * rotation[0][2]) * verticalScale;
+		const double pixelXPerHeadY = (rotation[1][0] * forward + eyeX * rotation[1][2]) * horizontalScale;
+		const double pixelYPerHeadY = (rotation[1][1] * forward + eyeY * rotation[1][2]) * verticalScale;
+		// The largest singular value also covers oblique detail when rotation
+		// couples axes with unequal pixel densities.
+		const double density = 0.5 * std::hypot(pixelXPerHeadX + pixelYPerHeadY, pixelYPerHeadX - pixelXPerHeadY) +
+		                       0.5 * std::hypot(pixelXPerHeadX - pixelYPerHeadY, pixelYPerHeadX + pixelXPerHeadY);
 		return std::isfinite(density) && density > 0 ? std::optional{ density } : std::nullopt;
 	}
 
@@ -1109,6 +1110,12 @@ namespace
 
 		std::array<HeadTangentBounds, 2> headBounds{};
 		for (std::size_t eyeIndex = 0; eyeIndex < headBounds.size(); ++eyeIndex) {
+			const auto& eye = *a_eyeImages[eyeIndex];
+			if (!eye.pixels || eye.width == 0 || eye.height == 0 ||
+				eye.width > CSX::ScreenshotPolicy::MaximumFramedDimension ||
+				eye.height > CSX::ScreenshotPolicy::MaximumFramedDimension) {
+				return false;
+			}
 			if (!ComputeHeadTangentBounds(
 					a_projectionTangents[eyeIndex],
 					a_eyeToHeadTransforms[eyeIndex],
@@ -1298,7 +1305,8 @@ namespace
 		const float frameLeft = desiredCenterX - frameHalfWidth;
 		const float frameTop = desiredCenterY + frameHalfHeight;
 
-		if (FAILED(a_output.Initialize2D(
+		DirectX::ScratchImage composite;
+		if (FAILED(composite.Initialize2D(
 				DXGI_FORMAT_R32G32B32A32_FLOAT,
 				a_outputSize.width,
 				a_outputSize.height,
@@ -1306,7 +1314,7 @@ namespace
 				1))) {
 			return false;
 		}
-		auto* outputImage = a_output.GetImage(0, 0, 0);
+		auto* outputImage = composite.GetImage(0, 0, 0);
 		if (!outputImage || !outputImage->pixels ||
 			outputImage->rowPitch < outputImage->width * sizeof(DirectX::XMFLOAT4)) {
 			return false;
@@ -1439,6 +1447,7 @@ namespace
 			}
 		}
 
+		a_output = std::move(composite);
 		return true;
 	}
 

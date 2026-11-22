@@ -107,6 +107,11 @@ try {
 	}
 	DirectX::Image densityEye{};
 	densityEye.height = 4000;
+	densityEye.width = 8000;
+	const float diagonal = std::sqrt(0.5f);
+	const vr::HmdMatrix34_t rolled{ { { diagonal, -diagonal, 0, 0 }, { diagonal, diagonal, 0, 0 }, { 0, 0, 1, 0 } } };
+	const auto rolledDensity = GetCentralHeadTangentPixelDensity(densityEye, projections[0], rolled, 0, 0);
+	Require(rolledDensity && std::abs(*rolledDensity - 4000.0) < 0.001, "rolled eye density missed the most detailed direction");
 	const float cosine = std::sqrt(0.75f);
 	for (const float sine : { -0.5f, 0.5f }) {
 		const vr::HmdMatrix34_t canted{ { { cosine, 0, sine, 0 }, { 0, 1, 0, 0 }, { -sine, 0, cosine, 0 } } };
@@ -115,6 +120,25 @@ try {
 			const auto density = GetCentralHeadTangentPixelDensity(densityEye, projections[0], canted, -sine / cosine, 0);
 			const double expected = std::max(width * 0.5 * cosine * cosine, 2000.0 * cosine);
 			Require(density && std::abs(*density - expected) < 0.001, "canted eye density ignored the perspective divide");
+		}
+	}
+	DirectX::Image invalidEye = *images[0];
+	invalidEye.format = DXGI_FORMAT_UNKNOWN;
+	DirectX::ScratchImage failedComposite;
+	Require(!ComposeFramedStereo({ &invalidEye, &invalidEye }, projections, transforms, {}, vr::Eye_Left, vr::ColorSpace_Linear, { 16, 9 }, false, failedComposite), "invalid source format accepted");
+	Require(failedComposite.GetPixelsSize() == 0, "failed composition retained its output allocation before fallback");
+	for (const bool native : { false, true }) {
+		for (const size_t invalidSize : { size_t{ 0 }, size_t{ 16385 }, std::numeric_limits<size_t>::max() }) {
+			for (size_t eyeIndex = 0; eyeIndex < images.size(); ++eyeIndex) {
+				for (const bool invalidWidth : { false, true }) {
+					invalidEye = *images[eyeIndex];
+					(invalidWidth ? invalidEye.width : invalidEye.height) = invalidSize;
+					auto invalidImages = images;
+					invalidImages[eyeIndex] = &invalidEye;
+					Require(!ComposeFramedStereo(invalidImages, projections, transforms, {}, vr::Eye_Left, vr::ColorSpace_Linear, { 16, 9 }, native, failedComposite), "invalid eye dimensions reached composition");
+					Require(failedComposite.GetPixelsSize() == 0, "invalid dimensions allocated a composite");
+				}
+			}
 		}
 	}
 

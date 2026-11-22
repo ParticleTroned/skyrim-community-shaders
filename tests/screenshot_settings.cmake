@@ -75,6 +75,7 @@ add_custom_command(
     VERBATIM
 )
 add_controller_test(screenshot_framing_test ScreenshotFraming tests/screenshot_framing_test.cpp)
+add_controller_test(screenshot_framing_policy_test ScreenshotFramingPolicy tests/screenshot_framing_policy_test.cpp)
 target_sources(screenshot_framing_test PRIVATE "${_framing_header}")
 target_include_directories(
     screenshot_framing_test

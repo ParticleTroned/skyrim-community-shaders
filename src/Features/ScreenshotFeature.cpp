@@ -1060,6 +1060,35 @@ namespace
 			a_output));
 	}
 
+	std::optional<double> GetCentralHeadTangentPixelDensity(
+		const DirectX::Image& a_eye,
+		const std::array<float, 4>& a_tangents,
+		const vr::HmdMatrix34_t& a_eyeToHead,
+		float a_headX,
+		float a_headY)
+	{
+		float eyeX, eyeY, eyeZ;
+		TransformHeadDirectionToEye(a_eyeToHead, a_headX, a_headY, -1.0f, eyeX, eyeY, eyeZ);
+		const double forward = -eyeZ;
+		if (!std::isfinite(forward) || forward <= 1.0e-4)
+			return std::nullopt;
+		const double horizontalScale = static_cast<double>(a_eye.width) /
+		                               (a_tangents[kProjectionRight] - a_tangents[kProjectionLeft]) / (forward * forward);
+		const double verticalScale = static_cast<double>(a_eye.height) /
+		                             (a_tangents[kProjectionTop] - a_tangents[kProjectionBottom]) / (forward * forward);
+		// Differentiate the perspective divide in head space so canted eyes use
+		// the sampling density at the same optical axis as the combined frame.
+		const auto& rotation = a_eyeToHead.m;
+		const double horizontalDensity = std::hypot(
+			(rotation[0][0] * forward + eyeX * rotation[0][2]) * horizontalScale,
+			(rotation[0][1] * forward + eyeY * rotation[0][2]) * verticalScale);
+		const double verticalDensity = std::hypot(
+			(rotation[1][0] * forward + eyeX * rotation[1][2]) * horizontalScale,
+			(rotation[1][1] * forward + eyeY * rotation[1][2]) * verticalScale);
+		const double density = std::max(horizontalDensity, verticalDensity);
+		return std::isfinite(density) && density > 0 ? std::optional{ density } : std::nullopt;
+	}
+
 	bool ComposeFramedStereo(
 		const std::array<const DirectX::Image*, 2>& a_eyeImages,
 		const std::array<std::array<float, 4>, 2>& a_projectionTangents,
@@ -1068,6 +1097,7 @@ namespace
 		vr::EVREye a_dominantEye,
 		vr::EColorSpace a_colorSpace,
 		CSX::ScreenshotPolicy::FramedSize a_outputSize,
+		bool a_nativeFraming,
 		DirectX::ScratchImage& a_output)
 	{
 		if (!a_eyeImages[0] || !a_eyeImages[1] ||
@@ -1200,6 +1230,18 @@ namespace
 			frameHeight *= kFrameCoverageSafetyScale;
 			frameHalfWidth = frameWidth * 0.5f;
 			frameHalfHeight = frameHeight * 0.5f;
+		}
+		if (a_nativeFraming) {
+			const auto* dominantEye = a_eyeImages[dominantIndex];
+			const auto density = GetCentralHeadTangentPixelDensity(
+				*dominantEye, a_projectionTangents[dominantIndex], a_eyeToHeadTransforms[dominantIndex], desiredCenterX, desiredCenterY);
+			const auto size = density ? CSX::ScreenshotPolicy::ResolveFramedSourceDensitySize(
+											frameWidth, *density, dominantEye->width, dominantEye->height) :
+			                            std::nullopt;
+			if (!size)
+				return false;
+			// Freeze dimensions before fitting coverage on the actual output grid.
+			a_outputSize = *size;
 		}
 		if (!IsFrameCoverageComplete(
 				desiredCenterX,
@@ -2159,7 +2201,7 @@ void ScreenshotFeature::DrawFramingSettings()
 	if (usesFixedEyeFraming) {
 		Util::Widgets::Checkbox("Use native resolution when larger than 4K", &vrFramedNativeResolution);
 		if (auto tooltip = Util::HoverTooltipWrapper()) {
-			ImGui::TextWrapped("Default: 3840 x 2160. Native uses the selected eye's largest 16:9 crop when larger; combined views use the dominant eye's size.");
+			ImGui::TextWrapped("Default: 3840 x 2160. Native keeps larger single-eye crops and can increase combined-view size to retain central detail across the wider view. Combined growth is limited to the dominant eye's pixel count, with 4K as the minimum.");
 			ImGui::TextWrapped("%s", vrCaptureSource == VRCaptureSource::FramedStereo ?
 										 "Combined aligns submitted eyes in head-projection space. The dominant eye supplies the shared view; the other fills the outer edge with a feathered join. No scene depth: nearby objects may show seams or duplication." :
 										 "The selected submitted eye is center-cropped to 16:9 without stretching. A native crop larger than 4K is saved without resizing.");
@@ -3187,6 +3229,7 @@ void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerSta
 									output.dominantEye,
 									colourSpace,
 									framedSize,
+									output.nativeFraming,
 									stereoComposite)) {
 								sourceScratch = &stereoComposite;
 								sourceImage = stereoComposite.GetImage(0, 0, 0);
@@ -3334,6 +3377,7 @@ void ScreenshotFeature::ScreenshotWorkerLoop(std::shared_ptr<ScreenshotWorkerSta
 										  screenshot.dominantEye,
 										  combinedColorSpace,
 										  { screenshot.aspectFillWidth, screenshot.aspectFillHeight },
+										  screenshot.nativeFraming,
 										  stereoCompositeImage);
 				if (composed) {
 					assembledImage = &stereoCompositeImage;

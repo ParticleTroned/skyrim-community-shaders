@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.11.20.3",
+    "packageVersion": "d2026.11.22.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "21F24D0D8AB1861167394204F83A490124E3A709C7DF7E0735417639DBAEA031"
+        "sha256": "BF094FE1C5563730F4AD0CC955957478439FC7210330E2EC5C9FB149D1CA3034"
     },
     "runtimeSettingsContract": {
-        "revision": 34,
-        "sourceTreeSha256": "0E12EE41076D1BFA2ED8BA28CF0F441571A650D898669DC7C8EBF4DBB6A86782",
+        "revision": 35,
+        "sourceTreeSha256": "430F85090778C4034F2250DB8BAD8BB1C4BC0C31E81F9127237D632FE86A3960",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -144,6 +144,8 @@
             "src/Features/SeasonalWeatherConfig.cpp",
             "src/Features/SeasonalWeatherConfig.h",
             "src/Features/SeasonalWeatherPolicy.h",
+            "src/Features/Skin.cpp",
+            "src/Features/Skin.h",
             "src/Features/Skylighting.cpp",
             "src/Features/Skylighting.h",
             "src/Features/SkySync.cpp",

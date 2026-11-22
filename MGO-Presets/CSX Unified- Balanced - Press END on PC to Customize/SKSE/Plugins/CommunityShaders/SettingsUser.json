@@ -78,15 +78,15 @@
   "Preset Compatibility": {
     "contractVersion": 1,
     "presetId": "csx-unified-balanced",
-    "presetVersion": "d2026.11.20.3",
+    "presetVersion": "d2026.11.22.1",
     "target": {
       "runtime": "VR",
       "minimumVersion": "3.21",
       "maximumVersionExclusive": "3.22"
     },
     "settingsContract": {
-      "revision": 34,
-      "sourceTreeSha256": "0E12EE41076D1BFA2ED8BA28CF0F441571A650D898669DC7C8EBF4DBB6A86782"
+      "revision": 35,
+      "sourceTreeSha256": "430F85090778C4034F2250DB8BAD8BB1C4BC0C31E81F9127237D632FE86A3960"
     }
   },
   "Upscaling": {
@@ -2430,6 +2430,7 @@
     "MinDensity": 0.029999999329447746,
     "MinPixelSize": 2.0,
     "OcclusionBias": 0.0010000000474974513,
+    "OcclusionTightness": 0.9,
     "ProportionalDensityFade": false,
     "RenderDistanceOverride": 0.0,
     "SimpleShadingPixelSize": 0.0

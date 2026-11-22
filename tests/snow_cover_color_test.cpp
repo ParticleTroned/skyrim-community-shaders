@@ -61,6 +61,17 @@ namespace
 			Util::SetResourceName(staging.Get(), "SnowColorTest::Readback");
 		}
 
+		void Bind(ID3D11DeviceContext* context, ID3D11VertexShader* vertex, ID3D11PixelShader* pixel)
+		{
+			context->ClearState();
+			context->OMSetRenderTargets(1, view.GetAddressOf(), nullptr);
+			const D3D11_VIEWPORT viewport{ 0, 0, 3, 1, 0, 1 };
+			context->RSSetViewports(1, &viewport);
+			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+			context->VSSetShader(vertex, nullptr, 0);
+			context->PSSetShader(pixel, nullptr, 0);
+		}
+
 		Results Read(ID3D11DeviceContext* context)
 		{
 			context->CopyResource(staging.Get(), texture.Get());
@@ -181,6 +192,50 @@ namespace
 		return count;
 	}
 
+	size_t CheckObjectFade(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11VertexShader* vertex, bool vr, bool pbr, const char* technique, bool fades)
+	{
+		std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "SNOW_COVER", "1" } };
+		if (vr)
+			defines.push_back({ "VR", "1" });
+		if (pbr)
+			defines.push_back({ "TRUE_PBR", "1" });
+		if (*technique)
+			defines.push_back({ technique, "1" });
+		if (std::strcmp(technique, "LODLANDSCAPE") == 0 || std::strcmp(technique, "LODLANDNOISE") == 0)
+			defines.push_back({ "MODELSPACENORMALS", "1" });
+		auto bytecode = CompilePixel(std::move(defines), "ObjectFadeCoverage");
+		ComPtr<ID3D11PixelShader> shader;
+		Check(device->CreatePixelShader(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), nullptr, shader.GetAddressOf()));
+		Util::SetResourceName(shader.Get(), "SnowColorTest::ObjectFadePS");
+		ComPtr<ID3D11ShaderReflection> reflection;
+		Check(D3DReflect(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
+		ConstantBuffer features(device, reflection.Get(), "SharedData::FeatureData");
+		features.SetMember("SharedData::snowCoverSettings", "BlendSmoothness", 1.0f);
+		features.SetMember("SharedData::snowCoverSettings", "maxAngle", 1.0f);
+		features.SetMember("SharedData::snowCoverSettings", "ObjectFadeStart", 100.0f);
+		features.SetMember("SharedData::snowCoverSettings", "ObjectFadeEnd", 300.0f);
+		Target target(device);
+		target.Bind(context, vertex, shader.Get());
+		size_t count = 0;
+		for (float amount : { 0.0f, 0.5f, 1.0f }) {
+			features.SetMember("SharedData::snowCoverSettings", "ObjectFadeAmount", amount);
+			features.Bind(context, D3D11ShaderTest::Stage::Pixel);
+			context->Draw(3, 0);
+			const auto values = target.Read(context);
+			// Pixels lie before, halfway through and beyond the configured fade interval.
+			const std::array expected{ 1.0f, fades ? 1.0f - amount * 0.5f : 1.0f, fades ? 1.0f - amount : 1.0f };
+			for (size_t i = 0; i < values.size(); ++i) {
+				for (size_t channel = 0; channel < 3; ++channel) {
+					if (!std::isfinite(values[i][channel]) || std::abs(values[i][channel] - expected[i]) > 1e-6f || values[i][3] != 1)
+						throw std::runtime_error("Snow surface/melt coverage has incorrect distance fade: VR=" + std::to_string(vr) + " PBR=" + std::to_string(pbr) + " technique=" + technique + " amount=" + std::to_string(amount));
+				}
+				++count;
+			}
+		}
+		context->ClearState();
+		return count;
+	}
+
 	void CheckWeatherRange(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11VertexShader* vertex, bool vr, bool reference)
 	{
 		std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "SNOW_COVER", "1" } };
@@ -198,13 +253,7 @@ namespace
 		features.SetMember("SharedData::snowCoverSettings", "WeatherFadeStart", 200.0f);
 		features.SetMember("SharedData::snowCoverSettings", "WeatherFadeEnd", 1000.0f);
 		Target target(device);
-		context->ClearState();
-		context->OMSetRenderTargets(1, target.view.GetAddressOf(), nullptr);
-		const D3D11_VIEWPORT viewport{ 0, 0, 3, 1, 0, 1 };
-		context->RSSetViewports(1, &viewport);
-		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-		context->VSSetShader(vertex, nullptr, 0);
-		context->PSSetShader(shader.Get(), nullptr, 0);
+		target.Bind(context, vertex, shader.Get());
 		Results weather{};
 		for (float accumulation : { 1.0f, 0.0f, -1.0f }) {
 			features.SetMember("SharedData::snowCoverSettings", "TimeSnowing", accumulation);
@@ -250,20 +299,31 @@ int main()
 		for (bool vr : { false, true })
 			for (bool reference : { false, true })
 				CheckWeatherRange(device.Get(), context.Get(), vertex.Get(), vr, reference);
+		constexpr std::array<std::pair<const char*, bool>, 7> fadePermutations{ { { "", true }, { "LODOBJECTS", true }, { "LODOBJECTSHD", true },
+			{ "LANDSCAPE", false }, { "LODLANDSCAPE", false }, { "LODLANDNOISE", false }, { "WORLD_MAP", false } } };
+		size_t fadeCount = 0;
 		for (bool vr : { false, true })
 			for (bool pbr : { false, true })
-				for (bool lodBlending : { false, true }) {
-					std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "SNOW_COVER", "1" }, { "DO_ALPHA_TEST", "1" }, { "DEFERRED", "1" } };
-					if (vr)
-						defines.push_back({ "VR", "1" });
-					if (pbr)
-						defines.push_back({ "TRUE_PBR", "1" });
-					if (lodBlending)
-						defines.push_back({ "LOD_BLENDING", "1" });
-					CompilePixel(std::move(defines), "ProductionLightingMain");
-				}
+				for (const auto& [technique, fades] : fadePermutations)
+					fadeCount += CheckObjectFade(device.Get(), context.Get(), vertex.Get(), vr, pbr, technique, fades);
+		for (bool vr : { false, true })
+			for (bool pbr : { false, true })
+				for (bool lodBlending : { false, true })
+					for (const auto* technique : { "", "LODOBJECTS", "LODOBJECTSHD" }) {
+						std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "SNOW_COVER", "1" }, { "DO_ALPHA_TEST", "1" }, { "DEFERRED", "1" } };
+						if (vr)
+							defines.push_back({ "VR", "1" });
+						if (pbr)
+							defines.push_back({ "TRUE_PBR", "1" });
+						if (lodBlending)
+							defines.push_back({ "LOD_BLENDING", "1" });
+						if (*technique)
+							defines.push_back({ technique, "1" });
+						CompilePixel(std::move(defines), "ProductionLightingMain");
+					}
 		std::cout << "Snow color: " << count << " production surface/foliage samples match native shading on WARP (SE/AE and VR, legacy/PBR sources and targets, LL controls, main/alternate fallback, retained tints/AO)\n";
 		std::cout << "Snow weather distance: positive, zero and negative accumulation passed on WARP (SE/AE and VR, optimized/reference)\n";
+		std::cout << "Snow object fade: " << fadeCount << " distance/amount/permutation cases passed on WARP (SE/AE and VR, legacy/PBR, objects/LOD, terrain/map exemptions)\n";
 		for (bool vr : { false, true })
 			for (bool animated : { false, true })
 				for (bool snowCover : { false, true }) {

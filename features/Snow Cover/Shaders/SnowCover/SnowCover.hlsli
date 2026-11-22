@@ -142,7 +142,7 @@ namespace SnowCover
 		footprint.weatherUpness = max(SharedData::snowCoverSettings.minAngle, normal.z);
 		footprint.waterFade = smoothstep(-WaterFadeDepth, WaterFadeHeight, -waterDist - disp);
 		footprint.scale = skylight * smoothstep(SharedData::snowCoverSettings.minAngle, SharedData::snowCoverSettings.maxAngle, normal.z);
-#	if !defined(LANDSCAPE) && !defined(LOD) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE)
+#	if !defined(LANDSCAPE) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE) && !defined(WORLD_MAP)
 		footprint.scale *= GetObjectFade(viewDist);
 #	endif
 		footprint.foliage = 0;

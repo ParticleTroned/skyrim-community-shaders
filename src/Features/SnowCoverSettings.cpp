@@ -116,7 +116,7 @@ void SnowCover::DrawWorldSettings()
 	Util::Widgets::SliderFloat("Object snow fade end", &wsettings.ObjectFadeEnd, 1.0f, 40001.0f);
 	Util::AddTooltip("Distance where object snow reaches the selected fade amount. Increase it to keep full coverage farther away.");
 	Util::Widgets::SliderFloat("Object snow fade amount", &wsettings.ObjectFadeAmount, 0.0f, 1.0f);
-	Util::AddTooltip("How much distant object snow disappears. 0 keeps all coverage; 1 removes it fully beyond the fade distance.");
+	Util::AddTooltip("How much snow fades from objects and their distant models. Defaults to 0, keeping full coverage; 1 removes it fully beyond the fade distance.");
 	MenuUI::SectionHeading("Snow altitude map", "Use the texture and world coordinates supplied with a custom snow map. Save region settings to apply texture changes.");
 	Util::Widgets::InputText("Map texture", mapTextureInput, sizeof(mapTextureInput));
 	Util::AddTooltip("Snow map supplied for this region. Change it only when configuring a custom map; save region settings to apply it.");

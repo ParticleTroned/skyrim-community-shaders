@@ -994,7 +994,9 @@ json SnowCover::GetDiagnostics()
 #ifdef DEVBENCH_BRIDGE_ENABLED
 json SnowCover::GetControlSchemas()
 {
-	return SnowConfig::Schemas();
+	auto schemas = SnowConfig::Schemas();
+	schemas["world"]["properties"]["ObjectFadeAmount"]["default"] = DEFAULT_OBJECT_FADE_AMOUNT;
+	return schemas;
 }
 
 json SnowCover::Control(const json& args)

@@ -77,6 +77,20 @@ float4 WeatherRange(float4 position : SV_Position) : SV_Target0
 	return float4(range, 0, 0, 1);
 }
 
+float4 ObjectFadeCoverage(float4 position : SV_Position) : SV_Target0
+{
+	float viewDist = floor(position.x) * 200;
+	SnowCover::CoverageInputs footprint = SnowCover::GetSurfaceFootprint(float3(0, 0, 1), 0, 0, 1, 100, viewDist, 0, 1);
+	MaterialProperties material = (MaterialProperties)0;
+	float3 normal = float3(0, 0, 1);
+#if defined(TRUE_PBR)
+	float coverage = SnowCover::ApplySnowPBR(material, normal, 0, 0, 1, 100, viewDist, 0, 0, 1);
+#else
+	float coverage = SnowCover::ApplySnow(material, normal, 0, 0, 1, 100, viewDist, 0, 0, 1);
+#endif
+	return float4(footprint.scale, SnowCover::GetCoverage(footprint, 0, 0), coverage, 1);
+}
+
 #if defined(TRUE_PBR)
 ColorOutput FoliageMaterial(float4 position : SV_Position)
 {

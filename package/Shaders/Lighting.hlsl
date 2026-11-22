@@ -3696,9 +3696,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				snowNormal = treeSnowNormal;
 				if (SharedData::snowCoverSettings.AffectTreeTint)
 					SnowCover::ApplyFoliageColor(material.BaseColor, snowEnvironment);
-#			if defined(LOD)
-				snowOcclusion *= SnowCover::GetObjectFade(length(viewPosition.xyz));
-#			endif
 			}
 #		endif
 #		if defined(DO_ALPHA_TEST) && !defined(TREE_ANIM)

@@ -51,7 +51,7 @@ namespace SnowConfig
 			result["world"]["properties"]["WeatherFadeEnd"] = json::parse(R"({"type":"number","minimum":1,"maximum":300000})");
 			result["world"]["properties"]["ObjectFadeStart"] = json::parse(R"({"type":"number","minimum":0,"maximum":40000})");
 			result["world"]["properties"]["ObjectFadeEnd"] = json::parse(R"({"type":"number","minimum":1,"maximum":40001})");
-			result["world"]["properties"]["ObjectFadeAmount"] = json::parse(R"({"type":"number","minimum":0,"maximum":1})");
+			result["world"]["properties"]["ObjectFadeAmount"] = json::parse(R"({"type":"number","minimum":0,"maximum":1,"description":"Distance fade shared by full-detail objects and their distant models. Zero preserves coverage; one removes it beyond ObjectFadeEnd. Saved region values are retained. Terrain and world-map surfaces are exempt."})");
 			result["world"]["properties"]["ScreenSpaceScale"] = json::parse(R"({"type":"number","minimum":1,"maximum":3})");
 			result["world"]["properties"]["LogMicrofacetDensity"] = json::parse(R"({"type":"number","minimum":0,"maximum":40})");
 			result["world"]["properties"]["MicrofacetRoughness"] = json::parse(R"({"type":"number","minimum":0.001,"maximum":1})");

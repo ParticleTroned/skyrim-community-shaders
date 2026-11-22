@@ -3427,7 +3427,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			material.CoatRoughness *= sampledCoatProperties.w;
 			[branch] if ((PBRFlags & PBR::Flags::CoatNormal) != 0)
 			{
-				coatWorldNormal = normalize(mul(tbn, TransformNormal(sampledCoatProperties.xyz)));
+#			if defined(MODELSPACENORMALS) && !defined(SKINNED)
+				const float3x3 coatTBN = transpose(ReconstructTBN(input.WorldPosition.xyz, worldNormal, coatUv));
+#			else
+				const float3x3 coatTBN = tbn;
+#			endif
+				coatWorldNormal = normalize(mul(coatTBN, TransformNormal(sampledCoatProperties.xyz)));
 			}
 		}
 		material.CoatStrength = lerp(material.CoatStrength, 0, projectedMaterialWeight);

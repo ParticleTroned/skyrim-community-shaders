@@ -30,6 +30,75 @@ groupshared float4 sharedLightsVS[GROUP_SIZE];
 groupshared float3 sharedLightsVSRight[GROUP_SIZE];
 #endif
 
+static const uint CandidateWordBits = 32;
+static const uint CandidateWordCount = (GROUP_SIZE + CandidateWordBits - 1) / CandidateWordBits;
+static const uint BoundsWorkerCount = 32;
+groupshared uint candidateMask[CandidateWordCount];
+groupshared float4 partialGroupMin[BoundsWorkerCount];
+groupshared float3 partialGroupMax[BoundsWorkerCount];
+
+void ReduceClusterBounds(uint groupIndex, uint3 groupID)
+{
+	if (groupIndex < CandidateWordCount)
+		candidateMask[groupIndex] = 0;
+
+	if (groupIndex < BoundsWorkerCount) {
+		float3 groupMin = FLT_MAX.xxx;
+		float3 groupMax = -groupMin;
+		bool valid = true;
+		for (uint ordinal = groupIndex; ordinal < GROUP_SIZE; ordinal += BoundsWorkerCount) {
+			uint3 child = groupID * uint3(NUMTHREAD_X, NUMTHREAD_Y, NUMTHREAD_Z) +
+			              uint3(ordinal % NUMTHREAD_X, (ordinal / NUMTHREAD_X) % NUMTHREAD_Y, ordinal / (NUMTHREAD_X * NUMTHREAD_Y));
+			if (all(child < ClusterSize.xyz)) {
+				ClusterAABB bounds = clusters[child.x + child.y * ClusterSize.x + child.z * ClusterSize.x * ClusterSize.y];
+				valid = valid && all(isfinite(bounds.minPoint.xyz)) && all(isfinite(bounds.maxPoint.xyz)) &&
+				        all(bounds.minPoint.xyz <= bounds.maxPoint.xyz);
+				groupMin = min(groupMin, bounds.minPoint.xyz);
+				groupMax = max(groupMax, bounds.maxPoint.xyz);
+			}
+		}
+		// Reducing validity with min disables rejection if any stored child is malformed.
+		partialGroupMin[groupIndex] = float4(groupMin, valid ? 1.0 : 0.0);
+		partialGroupMax[groupIndex] = groupMax;
+	}
+}
+
+bool LightDefinitelyMissesGroup(float3 position, float radiusSquared)
+{
+	float3 closest = max(partialGroupMin[0].xyz, min(position, partialGroupMax[0]));
+	float3 dist = closest - position;
+	float distanceSquared = dot(dist, dist);
+	// A failed or non-finite comparison cannot prove exclusion; tangency is inclusive.
+	return all(isfinite(position)) && isfinite(radiusSquared) && all(isfinite(dist)) &&
+	       isfinite(distanceSquared) && distanceSquared > radiusSquared;
+}
+
+void BuildCandidateMask(uint groupIndex, uint lightCount)
+{
+	if (groupIndex == 0) {
+		float4 groupMin = partialGroupMin[0];
+		float3 groupMax = partialGroupMax[0];
+		for (uint worker = 1; worker < BoundsWorkerCount; ++worker) {
+			groupMin = min(groupMin, partialGroupMin[worker]);
+			groupMax = max(groupMax, partialGroupMax[worker]);
+		}
+		partialGroupMin[0] = groupMin;
+		partialGroupMax[0] = groupMax;
+	}
+	GroupMemoryBarrierWithGroupSync();
+
+	if (groupIndex < lightCount) {
+		float4 lightVS = sharedLightsVS[groupIndex];
+		bool excluded = partialGroupMin[0].w != 0 && LightDefinitelyMissesGroup(lightVS.xyz, lightVS.w);
+#if defined(VR)
+		excluded = excluded && LightDefinitelyMissesGroup(sharedLightsVSRight[groupIndex], lightVS.w);
+#endif
+		if (!excluded)
+			InterlockedOr(candidateMask[groupIndex / CandidateWordBits], 1u << (groupIndex % CandidateWordBits));
+	}
+	GroupMemoryBarrierWithGroupSync();
+}
+
 bool LightIntersectsCluster(float3 position, float radiusSquared, ClusterAABB cluster)
 {
 	float3 closest = max(cluster.minPoint.xyz, min(position, cluster.maxPoint.xyz));
@@ -159,9 +228,11 @@ void InsertContactShadowCandidate(
 			preparedPointLightColours[groupIndex] = prepared;
 		}
 	}
-	// Partial edge groups must reach the barrier before inactive lanes leave.
+	ReduceClusterBounds(groupIndex, groupID);
 	GroupMemoryBarrierWithGroupSync();
+	BuildCandidateMask(groupIndex, lightCount);
 
+	// Inactive cluster lanes still participate in light loading, reduction and mask publication.
 	if (any(dispatchThreadId >= uint3(ClusterSize.x, ClusterSize.y, ClusterSize.z)))
 		return;
 
@@ -183,58 +254,65 @@ void InsertContactShadowCandidate(
 	const uint contactShadowParticleBudget = ContactShadowParams::ParticleBudget(ContactShadowParamsPacked);
 	const bool contactShadowsEnabled = ContactShadowFlagsPacked != 0 && contactShadowClusterBudget > 0;
 
-	for (uint i = 0; i < lightCount; i++) {
-		float4 lightVS = sharedLightsVS[i];
-		float radiusSquared = lightVS.w;
-		bool isVisible = false;
-		bool reachedVisibleLightLimit = false;
+	// Word and bit order retain original indices, including the visible-cap tie order.
+	const uint activeWordCount = (lightCount + CandidateWordBits - 1) / CandidateWordBits;
+	for (uint word = 0; word < activeWordCount && visibleLightCount < MAX_CLUSTER_LIGHTS; ++word) {
+		uint remaining = candidateMask[word];
+		while (remaining != 0) {
+			uint i = word * CandidateWordBits + firstbitlow(remaining);
+			remaining &= remaining - 1;
+			float4 lightVS = sharedLightsVS[i];
+			float radiusSquared = lightVS.w;
+			bool isVisible = false;
+			bool reachedVisibleLightLimit = false;
 
 #if defined(VR)
-		float3 positionVSLeft = lightVS.xyz;
-		float3 positionVSRight = sharedLightsVSRight[i];
+			float3 positionVSLeft = lightVS.xyz;
+			float3 positionVSRight = sharedLightsVSRight[i];
 
-		[branch] if (LightIntersectsCluster(positionVSLeft, radiusSquared, cluster) || LightIntersectsCluster(positionVSRight, radiusSquared, cluster))
-		{
-			isVisible = true;
+			[branch] if (LightIntersectsCluster(positionVSLeft, radiusSquared, cluster) || LightIntersectsCluster(positionVSRight, radiusSquared, cluster))
+			{
+				isVisible = true;
 #else
-		float3 positionVS = lightVS.xyz;
+			float3 positionVS = lightVS.xyz;
 
-		[branch] if (LightIntersectsCluster(positionVS, radiusSquared, cluster))
-		{
-			isVisible = true;
+			[branch] if (LightIntersectsCluster(positionVS, radiusSquared, cluster))
+			{
+				isVisible = true;
 #endif
-			lightIndexList[offset + visibleLightCount] = i;
-			visibleLightCount++;
-			if (visibleLightCount >= MAX_CLUSTER_LIGHTS)
-				reachedVisibleLightLimit = true;
-		}
-
-		[branch] if (contactShadowsEnabled && isVisible)
-		{
-			Light light = lights[i];
-			if (IsContactShadowEligible(light, ContactShadowFlagsPacked, contactShadowParticleBudget)) {
-#if defined(VR)
-				float contactShadowScore = max(GetContactShadowScore(light, positionVSLeft, cluster), GetContactShadowScore(light, positionVSRight, cluster));
-#else
-				float contactShadowScore = GetContactShadowScore(light, positionVS, cluster);
-#endif
-				InsertContactShadowCandidate(
-					i,
-					visibleLightCount - 1,
-					contactShadowScore,
-					(light.lightFlags & LightFlags::Particle) != 0,
-					contactShadowClusterBudget,
-					contactShadowParticleBudget,
-					contactShadowLightCount,
-					contactShadowParticleCount,
-					contactShadowLightIndices,
-					contactShadowLightScores,
-					contactShadowParticleSlots);
+				lightIndexList[offset + visibleLightCount] = i;
+				visibleLightCount++;
+				if (visibleLightCount >= MAX_CLUSTER_LIGHTS)
+					reachedVisibleLightLimit = true;
 			}
-		}
 
-		if (reachedVisibleLightLimit)
-			break;
+			[branch] if (contactShadowsEnabled && isVisible)
+			{
+				Light light = lights[i];
+				if (IsContactShadowEligible(light, ContactShadowFlagsPacked, contactShadowParticleBudget)) {
+#if defined(VR)
+					float contactShadowScore = max(GetContactShadowScore(light, positionVSLeft, cluster), GetContactShadowScore(light, positionVSRight, cluster));
+#else
+					float contactShadowScore = GetContactShadowScore(light, positionVS, cluster);
+#endif
+					InsertContactShadowCandidate(
+						i,
+						visibleLightCount - 1,
+						contactShadowScore,
+						(light.lightFlags & LightFlags::Particle) != 0,
+						contactShadowClusterBudget,
+						contactShadowParticleBudget,
+						contactShadowLightCount,
+						contactShadowParticleCount,
+						contactShadowLightIndices,
+						contactShadowLightScores,
+						contactShadowParticleSlots);
+				}
+			}
+
+			if (reachedVisibleLightLimit)
+				break;
+		}
 	}
 
 	LightGrid output = {

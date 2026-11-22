@@ -3389,6 +3389,13 @@ if(BUILD_CONTROLLER_TESTS)
     target_link_libraries(sharpener_bindings_test PRIVATE d3d11.lib)
     include("${PROJECT_SOURCE_DIR}/tests/d3d11_shader_test.cmake")
 
+    add_d3d_shader_test(
+        contact_shadow_membership_test
+        ContactShadowMembership
+        tests/contact_shadow_membership_test.cpp
+    )
+    target_compile_definitions(contact_shadow_membership_test PRIVATE NOMINMAX)
+
     add_controller_test(skin_wetness_test SkinWetness tests/skin_wetness_test.cpp)
     add_d3d_shader_test(skin_shader_test SkinShader tests/skin_shader_test.cpp)
     set_tests_properties(SkinShader PROPERTIES TIMEOUT 0)

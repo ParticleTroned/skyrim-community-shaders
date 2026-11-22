@@ -65,19 +65,26 @@ namespace
 		return Version{ *major, *minor, std::string(runtime) };
 	}
 
-	bool IsCompatibleLegacyUnifiedPreset(const PresetCompatibility::Evaluation& a_evaluation, const Version& a_current)
+	bool IsCompatibleLegacyPreset(const PresetCompatibility::Evaluation& a_evaluation, const Version& a_current)
 	{
-		// Older Unified presets use current loaders and defaults for added optional fields.
-		if (a_current.major != 3 || (a_current.minor != 20 && a_current.minor != 21) || a_current.runtime != "VR" ||
-			(a_evaluation.presetId != "csx-unified-performance" &&
-				a_evaluation.presetId != "csx-unified-balanced" &&
-				a_evaluation.presetId != "csx-unified-quality"))
+		// Older bundled presets use current loaders and defaults for added optional fields.
+		if (a_current.major != 3 || (a_current.minor != 20 && a_current.minor != 21) || a_current.runtime != "VR")
 			return false;
+		if (a_evaluation.presetId != "csx-unified-performance" &&
+			a_evaluation.presetId != "csx-unified-balanced" &&
+			a_evaluation.presetId != "csx-unified-quality") {
+			return a_current.minor == 21 && a_evaluation.settingsContractRevision == 34 &&
+			       a_evaluation.minimumVersion == "3.21" && a_evaluation.maximumVersionExclusive == "3.22" &&
+			       (a_evaluation.presetId == "csx-amd-performance" || a_evaluation.presetId == "csx-amd-balanced" ||
+					   a_evaluation.presetId == "csx-amd-quality" || a_evaluation.presetId == "csx-nvidia-performance" ||
+					   a_evaluation.presetId == "csx-nvidia-balanced" || a_evaluation.presetId == "csx-nvidia-quality" ||
+					   a_evaluation.presetId == "csx-nvidia-hoshipa-vr-stabilizer");
+		}
 		return (a_evaluation.settingsContractRevision == 8 &&
 				   a_evaluation.minimumVersion == "3.19" && a_evaluation.maximumVersionExclusive == "3.20") ||
 		       ((a_evaluation.settingsContractRevision >= 8 && a_evaluation.settingsContractRevision <= 15) &&
 				   a_evaluation.minimumVersion == "3.20" && a_evaluation.maximumVersionExclusive == "3.21") ||
-		       (a_current.minor == 21 && (a_evaluation.settingsContractRevision >= 15 && a_evaluation.settingsContractRevision <= 33) &&
+		       (a_current.minor == 21 && (a_evaluation.settingsContractRevision >= 15 && a_evaluation.settingsContractRevision <= 34) &&
 				   a_evaluation.minimumVersion == "3.21" &&
 				   a_evaluation.maximumVersionExclusive == "3.22");
 	}
@@ -194,7 +201,7 @@ PresetCompatibility::Evaluation PresetCompatibility::Evaluate(
 				current->runtime));
 	}
 
-	const bool compatibleLegacyPreset = IsCompatibleLegacyUnifiedPreset(evaluation, *current);
+	const bool compatibleLegacyPreset = IsCompatibleLegacyPreset(evaluation, *current);
 	if (evaluation.settingsContractRevision != kSettingsContractRevision && !compatibleLegacyPreset) {
 		return Reject(
 			std::move(evaluation),

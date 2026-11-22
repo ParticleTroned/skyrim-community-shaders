@@ -69,7 +69,8 @@ int main(int argc, char** argv)
 		const auto& marker = preset.at("Preset Compatibility");
 		assert(marker.at("contractVersion") == policy.at("presetCompatibility").at("contractVersion"));
 		assert(marker.at("target") == policy.at("presetCompatibility").at("target"));
-		assert(marker.at("settingsContract").at("revision") == PresetCompatibility::kSettingsContractRevision);
+		const auto revision = marker.at("settingsContract").at("revision").get<std::uint32_t>();
+		assert(revision == PresetCompatibility::kSettingsContractRevision || revision == 34);
 		std::ifstream metadataInput(entry.path() / "meta.ini");
 		assert(metadataInput.is_open());
 		std::size_t versionCount = 0;
@@ -90,6 +91,16 @@ int main(int argc, char** argv)
 			assert(!preset.contains(pointer));
 		}
 		assert(PresetCompatibility::Evaluate(preset, "CSX 3.21.0-VR").disposition == Disposition::kCompatible);
+		if (revision == 34) {
+			for (const auto invalidRevision : { 33u, PresetCompatibility::kSettingsContractRevision + 1 }) {
+				auto invalid = preset;
+				invalid["Preset Compatibility"]["settingsContract"]["revision"] = invalidRevision;
+				assert(!PresetCompatibility::Evaluate(invalid, "CSX 3.21.0-VR").ShouldApply());
+			}
+			auto invalid = preset;
+			invalid["Preset Compatibility"]["target"]["maximumVersionExclusive"] = "3.23";
+			assert(!PresetCompatibility::Evaluate(invalid, "CSX 3.21.0-VR").ShouldApply());
+		}
 		for (const auto label : { "CSX 3.20.0-VR", "CSX 3.22.0-VR", "CSX 3.21.0-SE", "CSX 3.21.0-AE" })
 			assert(!PresetCompatibility::Evaluate(preset, label).ShouldApply());
 		assert(preset.at("Version") == "CSX 3.21.0-VR");
@@ -112,6 +123,7 @@ int main(int argc, char** argv)
 		const auto preset = nlohmann::json::parse(input);
 		assert(preset.at("Adaptive Balance").at("globalProfile").at("grassPlacement").get<GrassPlacement::Settings>() == GrassPlacement::Settings{});
 		// Archived vendor presets retain the fingerprint of their source snapshot.
+		assert(preset.at("Preset Compatibility").at("settingsContract").at("revision") == PresetCompatibility::kSettingsContractRevision);
 		assert(preset.at("Preset Compatibility").at("presetVersion") == policy.at("packageVersion"));
 		assert(preset.at("Preset Compatibility").at("settingsContract").at("sourceTreeSha256") ==
 			   policy.at("runtimeSettingsContract").at("sourceTreeSha256"));

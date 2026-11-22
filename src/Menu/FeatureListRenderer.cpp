@@ -1540,8 +1540,6 @@ bool FeatureListRenderer::DrawMenuVisitor::RenderFeatureContentControls(Feature*
 
 void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, bool isDisabled, bool isLoaded, bool hasFailedMessage, bool sceneControlled)
 {
-	auto& themeSettings = globals::menu->GetSettings().Theme;
-
 	if (isDisabled) {
 		return;
 	} else {

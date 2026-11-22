@@ -421,7 +421,7 @@ struct AdaptiveBrightness : Feature
 		ContextProfileScope a_scope,
 		bool a_showAdvancedControls,
 		bool a_allowEdits);
-	void DrawPresetShortcut(ContextProfileScope a_scope);
+	void DrawPresetShortcut();
 	void DrawProfileSettings(
 		ProfileSettings& a_profile,
 		const char* a_sectionTitle = "Profile Values",

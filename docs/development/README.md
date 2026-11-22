@@ -74,6 +74,10 @@ recursive initialization once. It preserves branch/tag refs and dependency
 pins. Unresolved failures leave the new worktree in place, report an error
 and skip preset copying. `-NoSubmodules` bypasses initialization and recovery.
 
+Full validation enables runtime downloads so packaging checks receive
+verified payloads even after a DLL-only configuration. It reuses matching
+cached payloads and downloads missing inputs.
+
 Validation saves complete evidence locally. Public results state checks,
 outcomes, limitations, and source/build identities without machine-specific
 paths, usernames, or local evidence locations.

@@ -73,7 +73,7 @@ try {
     if ($cmakeVersion -match '^4\.3\.[01](?:-|$)') {
         throw "CMake 4.3.0/4.3.1 corrupts extracted declarations. Install CMake 4.3.5 or newer and select it on PATH."
     }
-    Invoke-ValidationStage "configure" $pwsh @("./tools/cmake.ps1", "--preset", "ALL", "-DBUILD_CONTROLLER_TESTS=ON", "-DBUILD_SHADER_TESTS=ON")
+    Invoke-ValidationStage "configure" $pwsh @("./tools/cmake.ps1", "--preset", "ALL", "-DBUILD_CONTROLLER_TESTS=ON", "-DBUILD_SHADER_TESTS=ON", "-DSKIP_RUNTIME_DOWNLOADS=OFF")
     Copy-Item -LiteralPath "build/ALL/CMakeCache.txt" -Destination (Join-Path $recordRoot "CMakeCache.txt")
     $ctestEntry = @(Get-Content -LiteralPath (Join-Path $recordRoot "CMakeCache.txt") | Where-Object { $_ -match '^CMAKE_CTEST_COMMAND:INTERNAL=' })
     if ($ctestEntry.Count -ne 1) { throw "The configured build did not identify its CTest executable." }

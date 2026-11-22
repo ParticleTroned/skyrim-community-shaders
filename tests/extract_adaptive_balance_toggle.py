@@ -35,7 +35,7 @@ def extract(root, output):
     state_header = (root / "src/State.h").read_text(encoding="utf-8-sig")
     output.mkdir(parents=True, exist_ok=True)
     (output / "adaptive_balance_travel_members.h").write_text(
-        between(header, "\tstd::atomic_bool locationTeleportPending", "\tstd::array<std::string, static_cast<std::size_t>(ContextProfileScope::Count)> contextPresetNames"), encoding="utf-8")
+        between(header, "\tstd::atomic_bool locationTeleportPending", "\tstd::string locationOverrideEditKey"), encoding="utf-8")
     (output / "adaptive_balance_travel_under_test.h").write_text(
         between(source, "\tconst char* GetCellEditorIDError(", "\tvoid DrawTableWrappedText(")
         + between(source, "const char* AdaptiveBrightness::GetLocationTeleportBlockReason()", "void AdaptiveBrightness::DrawPresets()"), encoding="utf-8")
@@ -50,7 +50,7 @@ def extract(root, output):
     (output / "adaptive_balance_members.h").write_text(
         between(header, "\tenum class Profile", "\tstruct LocationOverrideTarget")
         + between(header, "\tstruct Settings", "\tstruct alignas(16) VanillaPointLightData")
-        + between(header, "\tstruct EffectiveLinearLightingSettings", "\tstatic constexpr const char* kDefaultGlobalPresetName")
+        + between(header, "\tstruct EffectiveLinearLightingSettings", "\tstatic constexpr std::size_t kInvalidLocationOverrideIndex")
         + between(header, "\tmutable float smoothedWaterWindSpeed", "\n\tvirtual void DrawSettings()")
         + between(header, "\tvirtual bool SupportsPerformanceCostMeasurement()", "\n\tvirtual void LoadSettings").replace(" override", "")
         + between(header, "\tstruct ActiveProfileBlend", "\tProfile GetInteriorProfile()"), encoding="utf-8")

@@ -422,6 +422,7 @@ namespace
 	{
 		try {
 			document = Presets::ReadProfileDocument(path);
+			SettingsMigrations::MigrateAdaptiveBalanceRootLayer(document);
 			return true;
 		} catch (const std::exception& failure) {
 			error = failure.what();
@@ -1846,7 +1847,7 @@ void AdaptiveBrightness::DrawCurrentContextProfileControls(
 			SaveCurrentLocationOverride(*target);
 		ImGui::EndDisabled();
 		Util::AddTooltip("Add a profile for this scope to adjust Lighting, Color, Bloom and Water on top of the inherited values.", ImGuiHoveredFlags_AllowWhenDisabled);
-		DrawPresetShortcut(a_scope);
+		DrawPresetShortcut();
 		return;
 	}
 
@@ -1858,10 +1859,10 @@ void AdaptiveBrightness::DrawCurrentContextProfileControls(
 		a_allowEdits,
 		"Save Profile",
 		false);
-	DrawPresetShortcut(a_scope);
+	DrawPresetShortcut();
 }
 
-void AdaptiveBrightness::DrawPresetShortcut(ContextProfileScope a_scope)
+void AdaptiveBrightness::DrawPresetShortcut()
 {
 	if (ImGui::Button("Share Visuals")) {
 		MenuUI::SettingsPage::Select("AdaptiveBrightness", "presets");

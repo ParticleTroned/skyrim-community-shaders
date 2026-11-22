@@ -116,7 +116,7 @@ namespace globals
 	} stateStorage;
 	State* state = &stateStorage;
 }
-json AdaptiveBalancePresetUIStatus() { return json::object(); }
+json VisualsProfileUIStatus() { return { { "mode", 1 } }; }
 
 namespace MenuUI
 {
@@ -177,6 +177,7 @@ try {
 
 	PerformanceTuningRenderer::busy = ImGui::popupOpen = true;
 	require(Execute("ui_status", "VR", "layout").value("ok", false), "status inspects inventory despite hidden VR sections, active measurements and dialogs");
+	require(Execute("ui_status", "VR", "layout").at("visualsProfileUI") == VisualsProfileUIStatus(), "status includes the shared Visuals import/export state");
 	require(SettingsPage::selects == 0 && globals::menu->opens == 0, "status never queues navigation or opens the menu");
 	PerformanceTuningRenderer::busy = ImGui::popupOpen = false;
 	require(!Execute("select_tab", "VR", "layout").value("ok", false), "SE/AE rejects VR navigation");

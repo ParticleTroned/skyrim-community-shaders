@@ -18,6 +18,7 @@ namespace
 		bool initialized = false;
 		int loggerInitializations = 0;
 		int loggerReplacements = 0;
+		int resultsInitializations = 0;
 		int initCalls = 0;
 		int loadCalls = 0;
 		int poolAttempts = 0;
@@ -50,6 +51,20 @@ void InitializeLog()
 {
 	++fixture.loggerInitializations;
 	fixture.log.clear();
+}
+
+namespace MenuUI::PerformanceResultsPage
+{
+	struct Store
+	{};
+	Store& GetStore()
+	{
+		Check(fixture.loggerInitializations == 1, "The log path must be ready before performance history starts");
+		Check(!fixture.initialized, "Performance history must start before SKSE initializes the plugin");
+		++fixture.resultsInitializations;
+		static Store store;
+		return store;
+	}
 }
 
 namespace logger
@@ -161,6 +176,7 @@ void TestLoad(bool interfacePresent, bool poolSucceeds, bool loadResult)
 	fixture.loadResult = loadResult;
 	Check(SKSEPlugin_Load(&SKSE::loadInterface) == loadResult, "Plugin load failure must propagate");
 	Check(fixture.initCalls == 1 && fixture.loadCalls == 1, "Startup must initialize and load once");
+	Check(fixture.resultsInitializations == 1, "Performance history must initialize for every startup outcome");
 	Check(fixture.loggerInitializations == 1 && fixture.loggerReplacements == 0, "CommonLib must preserve CSX's logger");
 	const std::vector<std::string> expectedLog{
 		"Loaded CommunityShaders startup-test",

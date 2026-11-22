@@ -5403,6 +5403,11 @@ if(BUILD_CONTROLLER_TESTS)
         tests/vr_wand_beam_test.cpp
     )
     target_link_libraries(vr_wand_beam_test PRIVATE d3dcompiler.lib)
+    add_d3d_shader_test(
+        vr_menu_overlay_test
+        VRMenuOverlay
+        tests/vr_menu_overlay_test.cpp
+    )
     add_controller_test(
         vr_wand_cursor_filter_test
         VRWandCursorFilter

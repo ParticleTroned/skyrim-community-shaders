@@ -5,6 +5,8 @@
 #include "Features/Upscaling/VRSubmitInputFreshnessBoundary.h"
 #include "Features/VR.h"
 #include "Features/VR/InSceneOverlaySubmitPolicy.h"
+#include "Features/VR/MenuOverlayGeometry.h"
+#include "Features/VR/MenuOverlayShader.h"
 #include "Features/VR/OpenVRSubmitLeasePolicy.h"
 #include "Features/VR/VRRenderScaleFrameBoundaryPolicy.h"
 #include "Features/VR/WandBeamRenderer.h"
@@ -567,96 +569,6 @@ namespace
 		return WandBeamGeometry::Project(project(origin), project(endpoint), a_viewport,
 			a_targetWidth, a_targetHeight, WandBeamRenderer::RadiusPixels, a_beam);
 	}
-
-	constexpr char kSubmitCompositeCS[] = R"(
-cbuffer OverlayCompositeCB : register(b0)
-{
-	uint2 TargetSize;
-	uint2 DispatchOrigin;
-	uint2 DispatchSize;
-	uint2 Padding;
-	float4 QuadPixels01;
-	float4 QuadPixels23;
-	float4 QuadInvW;
-	float MenuMipLevel;
-	float3 Padding2;
-};
-
-Texture2D<float4> MenuTexture : register(t0);
-SamplerState MenuSampler : register(s0);
-RWTexture2D<float4> Target : register(u0);
-
-bool Barycentric(float2 p, float2 a, float2 b, float2 c, out float3 bary)
-{
-	float2 v0 = b - a;
-	float2 v1 = c - a;
-	float2 v2 = p - a;
-	float denom = v0.x * v1.y - v1.x * v0.y;
-	if (abs(denom) < 1e-5f) {
-		bary = 0.0f;
-		return false;
-	}
-
-	float invDenom = rcp(denom);
-	float u = (v2.x * v1.y - v1.x * v2.y) * invDenom;
-	float v = (v0.x * v2.y - v2.x * v0.y) * invDenom;
-	float w = 1.0f - u - v;
-	bary = float3(w, u, v);
-	return u >= 0.0f && v >= 0.0f && w >= 0.0f;
-}
-
-[numthreads(8, 8, 1)]
-void main(uint3 dispatchThreadID : SV_DispatchThreadID)
-{
-	if (dispatchThreadID.x >= DispatchSize.x || dispatchThreadID.y >= DispatchSize.y) {
-		return;
-	}
-
-	uint2 targetPixel = DispatchOrigin + dispatchThreadID.xy;
-	if (targetPixel.x >= TargetSize.x || targetPixel.y >= TargetSize.y) {
-		return;
-	}
-
-	float2 p = float2(targetPixel) + 0.5f;
-	float2 q0 = QuadPixels01.xy;
-	float2 q1 = QuadPixels01.zw;
-	float2 q2 = QuadPixels23.xy;
-	float2 q3 = QuadPixels23.zw;
-
-	float3 bary = 0.0f;
-	float2 uv = 0.0f;
-	if (Barycentric(p, q0, q1, q2, bary)) {
-		float invW = bary.x * QuadInvW.x + bary.y * QuadInvW.y + bary.z * QuadInvW.z;
-		if (abs(invW) < 1e-6f) {
-			return;
-		}
-		uv = (bary.x * float2(0.0f, 1.0f) * QuadInvW.x +
-		      bary.y * float2(0.0f, 0.0f) * QuadInvW.y +
-		      bary.z * float2(1.0f, 0.0f) * QuadInvW.z) / invW;
-	} else if (Barycentric(p, q0, q2, q3, bary)) {
-		float invW = bary.x * QuadInvW.x + bary.y * QuadInvW.z + bary.z * QuadInvW.w;
-		if (abs(invW) < 1e-6f) {
-			return;
-		}
-		uv = (bary.x * float2(0.0f, 1.0f) * QuadInvW.x +
-		      bary.y * float2(1.0f, 0.0f) * QuadInvW.z +
-		      bary.z * float2(1.0f, 1.0f) * QuadInvW.w) / invW;
-	} else {
-		return;
-	}
-
-	uv = saturate(uv);
-
-	float4 menuColor = MenuTexture.SampleLevel(MenuSampler, uv, MenuMipLevel);
-	menuColor.a = saturate(menuColor.a);
-	if (menuColor.a <= 0.001f) {
-		return;
-	}
-
-	float4 sceneColor = Target[targetPixel];
-	Target[targetPixel] = float4(lerp(sceneColor.rgb, menuColor.rgb, menuColor.a), sceneColor.a);
-}
-)";
 
 	constexpr char kCaptureIndicatorCompositeCS[] = R"(
 cbuffer CaptureIndicatorCB : register(b0)
@@ -2447,7 +2359,7 @@ void VR::InitInSceneResources()
 	Util::SetResourceName(temp.sampler.get(), "VR::InSceneOverlaySampler");
 
 	ID3DBlob* csBlob = nullptr;
-	if (FAILED(D3DCompile(kSubmitCompositeCS, sizeof(kSubmitCompositeCS) - 1, "VRSubmitMenuCompositeCS", nullptr, nullptr,
+	if (FAILED(D3DCompile(MenuOverlayGeometry::ShaderSource, sizeof(MenuOverlayGeometry::ShaderSource) - 1, "VRSubmitMenuCompositeCS", nullptr, nullptr,
 			"main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &csBlob, &errorBlob))) {
 		if (errorBlob) {
 			logger::error("VR submit menu composite CS compile error: {}", static_cast<char*>(errorBlob->GetBufferPointer()));
@@ -2469,7 +2381,7 @@ void VR::InitInSceneResources()
 
 	D3D11_BUFFER_DESC submitCompositeCBDesc = {};
 	submitCompositeCBDesc.Usage = D3D11_USAGE_DYNAMIC;
-	submitCompositeCBDesc.ByteWidth = sizeof(SubmitCompositeCB);
+	submitCompositeCBDesc.ByteWidth = sizeof(MenuOverlayGeometry::Constants);
 	submitCompositeCBDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 	submitCompositeCBDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 	if (FAILED(device->CreateBuffer(&submitCompositeCBDesc, nullptr, temp.submitCompositeCB.put()))) {
@@ -3165,71 +3077,28 @@ void VR::CompositeInSceneOverlaySubmitTexture(vr::EVREye eye, ID3D11Texture2D* t
 		XMFLOAT3(0.5f, -0.5f, 0.0f)
 	};
 
-	SubmitCompositeCB cbData{};
-	cbData.targetSize[0] = targetDesc.Width;
-	cbData.targetSize[1] = targetDesc.Height;
-
-	float minX = std::numeric_limits<float>::max();
-	float minY = std::numeric_limits<float>::max();
-	float maxX = std::numeric_limits<float>::lowest();
-	float maxY = std::numeric_limits<float>::lowest();
-	for (size_t i = 0; i < 4; ++i) {
+	std::array<MenuOverlayGeometry::Vertex, 4> quad{};
+	constexpr std::array<std::array<double, 2>, 4> uvs{ { { 0, 1 }, { 0, 0 }, { 1, 0 }, { 1, 1 } } };
+	for (size_t i = 0; i < quad.size(); ++i) {
 		const XMVECTOR local = XMVectorSet(vertices[i].x, vertices[i].y, vertices[i].z, 1.0f);
 		const XMVECTOR clip = XMVector4Transform(local, worldViewProjection);
-		const float w = XMVectorGetW(clip);
-		if (std::abs(w) < 1e-5f) {
-			return;
-		}
-		cbData.quadInvW[i] = 1.0f / w;
-
-		const float ndcX = XMVectorGetX(clip) / w;
-		const float ndcY = XMVectorGetY(clip) / w;
-		if (!std::isfinite(ndcX) || !std::isfinite(ndcY)) {
-			return;
-		}
-
-		const float pixelX = viewX + (ndcX * 0.5f + 0.5f) * viewW;
-		const float pixelY = viewY + (0.5f - ndcY * 0.5f) * viewH;
-		cbData.quadPixels[i * 2] = pixelX;
-		cbData.quadPixels[i * 2 + 1] = pixelY;
-		minX = std::min(minX, pixelX);
-		minY = std::min(minY, pixelY);
-		maxX = std::max(maxX, pixelX);
-		maxY = std::max(maxY, pixelY);
+		quad[i] = { XMVectorGetX(clip), XMVectorGetY(clip), XMVectorGetZ(clip), XMVectorGetW(clip), uvs[i][0], uvs[i][1] };
+	}
+	MenuOverlayGeometry::Constants cbData{};
+	float pixelsPerUVArea = 0.0f;
+	if (!MenuOverlayGeometry::Project(quad, { viewX, viewY, viewW, viewH }, targetDesc.Width, targetDesc.Height,
+			cbData, pixelsPerUVArea)) {
+		return;
 	}
 
-	// Select a mip from the actual projected quad footprint. The compute path
-	// has no implicit derivatives, so sampling mip zero aliases fine horizontal
-	// and vertical UI rules into the characteristic headset moire pattern.
-	float twiceScreenArea = 0.0f;
-	for (size_t i = 0; i < 4; ++i) {
-		const size_t next = (i + 1) % 4;
-		const float x0 = cbData.quadPixels[i * 2];
-		const float y0 = cbData.quadPixels[i * 2 + 1];
-		const float x1 = cbData.quadPixels[next * 2];
-		const float y1 = cbData.quadPixels[next * 2 + 1];
-		twiceScreenArea += x0 * y1 - y0 * x1;
-	}
-	const float screenArea = std::max(1.0f, std::abs(twiceScreenArea) * 0.5f);
+	// Compute sampling has no implicit derivatives. Use the retained UV area
+	// so clipping at the edge of an eye does not artificially blur the menu.
 	ID3D11Texture2D* sampledTexture = showOnController && menuControllerTexture ? menuControllerTexture.get() : menuTexture.get();
 	D3D11_TEXTURE2D_DESC sampledDesc{};
 	sampledTexture->GetDesc(&sampledDesc);
 	const float sourceArea = static_cast<float>(sampledDesc.Width) * static_cast<float>(sampledDesc.Height);
 	const float maxMip = sampledDesc.MipLevels > 0 ? static_cast<float>(sampledDesc.MipLevels - 1) : 0.0f;
-	cbData.menuMipLevel = std::clamp(0.5f * std::log2(sourceArea / screenArea), 0.0f, maxMip);
-
-	const int dispatchLeft = std::clamp(static_cast<int>(std::floor(minX)) - 1, 0, static_cast<int>(targetDesc.Width));
-	const int dispatchTop = std::clamp(static_cast<int>(std::floor(minY)) - 1, 0, static_cast<int>(targetDesc.Height));
-	const int dispatchRight = std::clamp(static_cast<int>(std::ceil(maxX)) + 1, 0, static_cast<int>(targetDesc.Width));
-	const int dispatchBottom = std::clamp(static_cast<int>(std::ceil(maxY)) + 1, 0, static_cast<int>(targetDesc.Height));
-	if (dispatchRight <= dispatchLeft || dispatchBottom <= dispatchTop) {
-		return;
-	}
-
-	cbData.dispatchOrigin[0] = static_cast<uint32_t>(dispatchLeft);
-	cbData.dispatchOrigin[1] = static_cast<uint32_t>(dispatchTop);
-	cbData.dispatchSize[0] = static_cast<uint32_t>(dispatchRight - dispatchLeft);
-	cbData.dispatchSize[1] = static_cast<uint32_t>(dispatchBottom - dispatchTop);
+	cbData.menuMipLevel = std::clamp(0.5f * std::log2(sourceArea / std::max(1.0f, pixelsPerUVArea)), 0.0f, maxMip);
 
 	D3D11_MAPPED_SUBRESOURCE mapped{};
 	if (FAILED(context->Map(inSceneResources.submitCompositeCB.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {

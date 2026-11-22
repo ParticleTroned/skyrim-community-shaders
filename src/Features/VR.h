@@ -836,19 +836,6 @@ public:
 		Matrix wvp;
 	};
 
-	struct alignas(16) SubmitCompositeCB
-	{
-		uint32_t targetSize[2];
-		uint32_t dispatchOrigin[2];
-		uint32_t dispatchSize[2];
-		uint32_t padding[2];
-		float quadPixels[8];
-		float quadInvW[4];
-		float menuMipLevel;
-		float padding2[3];
-	};
-	STATIC_ASSERT_ALIGNAS_16(SubmitCompositeCB);
-
 	struct alignas(16) SubmitIndicatorCB
 	{
 		uint32_t targetSize[2];

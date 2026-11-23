@@ -602,7 +602,7 @@ RWBuffer<uint> Output : register(u0);
 			}
 		}
 	}
-	void TestUpscaleDepthKernel()
+	void TestUpscaleDepthKernel(bool underwaterMask = false)
 	{
 		using D3D11ShaderTest::Check;
 		winrt::com_ptr<ID3D11Device> device;
@@ -638,19 +638,38 @@ RWBuffer<uint> Output : register(u0);
 		bufferDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 		Check(device->CreateBuffer(&bufferDesc, nullptr, staging.put()));
 		Util::SetResourceName(staging.get(), "ReverseZDepthTest::UpscaleDepthReadback");
-		const char* source = R"(
+		D3D11_SAMPLER_DESC samplerDesc{};
+		samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+		samplerDesc.AddressU = samplerDesc.AddressV = samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
+		winrt::com_ptr<ID3D11SamplerState> sampler;
+		Check(device->CreateSamplerState(&samplerDesc, sampler.put()));
+		Util::SetResourceName(sampler.get(), "ReverseZDepthTest::UpscaleDepthSampler");
+		const char* source = underwaterMask ? R"(
+#include "Upscaling/UnderwaterMaskUpscalePS.hlsl"
+RWBuffer<float> Output : register(u0);
+[numthreads(1, 1, 1)] void TestDepthKernel() {
+    Output[0] = SampleRawNearestDepth(jitter);
+})" :
+		                                      R"(
 #include "Upscaling/DepthRefractionUpscalePS.hlsl"
 RWBuffer<float> Output : register(u0);
 [numthreads(1, 1, 1)] void TestDepthKernel() {
     Output[0] = SampleNearestDepth3x3(float2(0.5, 0.5));
 })";
 		for (bool vr : { false, true }) {
+			if (underwaterMask && !vr)
+				continue;
 			for (bool reversed : { false, true }) {
 				std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" } };
 				if (vr)
 					defines.push_back({ "VR", "1" });
 				if (reversed)
 					defines.push_back({ "REVERSE_Z", "1" });
+				if (underwaterMask) {
+					defines.push_back({ "RAW_SCENE_DEPTH", "1" });
+					defines.push_back({ "NO_HMD_STENCIL_MASK", "1" });
+				}
 				defines.push_back({ nullptr, nullptr });
 				PackageIncludes includes{ "package/Shaders", "features/Upscaling/Shaders" };
 				winrt::com_ptr<ID3DBlob> code, errors, pixelCode;
@@ -669,15 +688,46 @@ RWBuffer<float> Output : register(u0);
 				Util::SetResourceName(shader.get(), "ReverseZDepthTest::UpscaleDepthKernel");
 				winrt::com_ptr<ID3D11ShaderReflection> reflection;
 				Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(reflection.put())));
-				D3D11ShaderTest::ConstantBuffer shared{ device.get(), reflection.get(), "SharedData::SharedData" };
-				shared.SetVariable("SharedData::BufferDim", std::array{ 3.0f, 3.0f, 1.0f / 3.0f, 1.0f / 3.0f });
-				for (unsigned nearest = 0; nearest < 9; ++nearest) {
+				D3D11ShaderTest::ConstantBuffer constants{ device.get(), reflection.get(), underwaterMask ? "JitterCB" : "SharedData::SharedData" };
+				if (!underwaterMask)
+					constants.SetVariable("SharedData::BufferDim", std::array{ 3.0f, 3.0f, 1.0f / 3.0f, 1.0f / 3.0f });
+				struct KernelCase
+				{
+					std::array<float, 2> uv;
+					unsigned narrowTexels, wideTexels;
+				};
+				// Bit N identifies texel N in row-major order after edge clamping.
+				constexpr std::array kernelCases{
+					KernelCase{ { 0.5f, 0.5f }, 0b110110000, 0b111111111 },
+					KernelCase{ { 0.0f, 0.0f }, 0b000000001, 0b000011011 },
+					KernelCase{ { 1.0f, 0.0f }, 0b000000100, 0b000100100 },
+					KernelCase{ { 0.0f, 1.0f }, 0b001000000, 0b011000000 },
+					KernelCase{ { 1.0f, 1.0f }, 0b100000000, 0b100000000 }
+				};
+				const std::array selectors{ 0.0f, 1.0f, 0.5f, std::nextafter(0.5f, 1.0f) };
+				const auto samples = underwaterMask ? kernelCases.size() * selectors.size() * 9 : 9;
+				for (std::size_t sample = 0; sample < samples; ++sample) {
+					const auto nearest = sample % 9;
+					const auto& kernelCase = kernelCases[sample / (selectors.size() * 9)];
+					const auto selector = selectors[(sample / 9) % selectors.size()];
+					const bool wide = !underwaterMask || selector > 0.5f;
+					if (underwaterMask) {
+						// Reuse the reflected buffer's float2 as the helper fixture's UV input.
+						constants.SetVariable("jitter", kernelCase.uv);
+						constants.SetVariable("useWideKernel", selector);
+					}
 					std::array<float, 9> depths;
-					depths.fill(reversed ? 0.1f : 0.9f);
-					const float expected = reversed ? 0.9f : 0.1f;
-					depths[nearest] = expected;
+					const float background = reversed ? 0.1f : 0.9f;
+					const float foreground = reversed ? 0.9f : 0.1f;
+					depths.fill(background);
+					depths[nearest] = foreground;
+					const auto footprint = wide ? kernelCase.wideTexels : kernelCase.narrowTexels;
+					const bool insideKernel = (footprint & (1u << nearest)) != 0;
+					const float expected = insideKernel ? foreground : background;
 					context->UpdateSubresource(texture.get(), 0, nullptr, depths.data(), 3 * sizeof(float), 0);
-					shared.Bind(context.get());
+					constants.Bind(context.get());
+					auto* rawSampler = sampler.get();
+					context->CSSetSamplers(0, 1, &rawSampler);
 					auto* sourceView = input.get();
 					auto* outputView = uav.get();
 					context->CSSetShaderResources(1, 1, &sourceView);
@@ -690,7 +740,7 @@ RWBuffer<float> Output : register(u0);
 					Check(context->Map(staging.get(), 0, D3D11_MAP_READ, 0, &mapped));
 					const float actual = *static_cast<const float*>(mapped.pData);
 					context->Unmap(staging.get(), 0);
-					Require(actual == expected, "Wide depth-upscale kernel selected the wrong surface");
+					Require(actual == expected, "Depth-upscale kernel selected the wrong surface");
 				}
 			}
 		}
@@ -1031,6 +1081,7 @@ int main()
 		TestUnderwaterGeometryDepth();
 		TestUnderwaterMaskInputs();
 		TestUpscaleDepthKernel();
+		TestUpscaleDepthKernel(true);
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';
 		return 1;

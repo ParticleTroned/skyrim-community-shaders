@@ -81,6 +81,21 @@ float SampleRawMinDepth3x3(float2 uv)
 
 	return FrameBuffer::NearerDepth(row0, FrameBuffer::NearerDepth(row1, row2));
 }
+
+float SampleRawNearestDepth(float2 uv)
+{
+	float depth;
+	// The kernel is uniform across the draw; branch before issuing its texture reads.
+	[branch] if (useWideKernel > 0.5f)
+	{
+		depth = SampleRawMinDepth3x3(uv);
+	}
+	else
+	{
+		depth = SampleRawMinDepth2x2(uv);
+	}
+	return depth;
+}
 #		endif
 
 #		if !defined(NO_HMD_STENCIL_MASK)
@@ -182,7 +197,7 @@ PS_OUTPUT main(PS_INPUT input)
 		// Sample either the current full-resolution upscaled depth or the
 		// pre-upscale dynamic scene depth with dynamic-resolution UVs.
 #		if defined(RAW_SCENE_DEPTH)
-		float depth = (useWideKernel > 0.5f) ? SampleRawMinDepth3x3(depthUV) : SampleRawMinDepth2x2(depthUV);
+		float depth = SampleRawNearestDepth(depthUV);
 #		else
 		float depth = SceneDepth.Load(int3(depthCoord, 0)).x;
 #		endif

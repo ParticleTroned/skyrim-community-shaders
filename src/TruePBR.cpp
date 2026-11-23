@@ -4,6 +4,7 @@
 #include "TruePBR/BSLightingShaderMaterialPBR.h"
 #include "TruePBR/BSLightingShaderMaterialPBRLandscape.h"
 
+#include "Features/DetailMaps.h"
 #include "Features/GrassLighting.h"
 #include "Features/InteriorSun.h"
 #include "Features/TerrainBlending.h"
@@ -761,6 +762,7 @@ void TruePBR::GenerateShaderPermutations(RE::BSShader* shader)
 	auto shaderCache = globals::shaderCache;
 	if (shader->shaderType == RE::BSShader::Type::Lighting) {
 		const bool categories = globals::features::upscaling.NeedsCharacterCategoryShaders();
+		const bool detailMaps = globals::features::detailMaps.ShouldPrecompileShaders();
 		const auto& terrain = globals::features::terrainBlending;
 		// Seam runtime activation happens after startup prewarming, so use the configured state here.
 		const bool landscapeSeams = loaded && settings.Enabled && terrain.loaded && terrain.settings.Enabled && terrain.settings.LandscapeSeams;
@@ -785,6 +787,10 @@ void TruePBR::GenerateShaderPermutations(RE::BSShader* shader)
 				shaderCache->PrewarmDeferredPixelShaders(*shader, pixelShaderDescriptor, categories, true);
 			else
 				std::ignore = shaderCache->GetPixelShader(*shader, pixelShaderDescriptor, SIE::ShaderCache::PixelShaderLookup::Precompile);
+			// PBR descriptors are generated separately from the engine's shader table.
+			if (detailMaps && DetailMapsPolicy::IsEligible(pixelShaderDescriptor, true))
+				shaderCache->PrewarmDeferredPixelShaders(*shader, pixelShaderDescriptor | DetailMapsPolicy::ShaderFlag,
+					categories && (pixelShaderDescriptor & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::Deferred)), true);
 		}
 	} else if (shader->shaderType == RE::BSShader::Type::Utility) {
 		for (auto descriptor : Permutations::GeneratePBRUtilityPixelPermutations())

@@ -1234,6 +1234,35 @@ class EffectStageWorkloadTests(unittest.TestCase):
 
 
 class LightingDetailMapWorkloadTests(unittest.TestCase):
+    def test_packaged_pbr_detail_variants_cover_both_depth_conventions(self) -> None:
+        import yaml
+        from hlslkit.compile_shaders import parse_shader_configs
+
+        for runtime in ("SE", "VR"):
+            for reverse_z in (False, True):
+                with self.subTest(runtime=runtime, reverse_z=reverse_z), tempfile.TemporaryDirectory() as temporary:
+                    filtered = BUILDER.filter_profile_defines(
+                        BUILDER.configs_for(REPO)[runtime], Path(temporary) / "filtered.yaml",
+                        yaml, BUILDER.SHIPPED_CACHE_PROFILE,
+                        feature_states={"DetailMaps": True, "TruePBR": True, "ReverseZ": True},
+                        reverse_z_enabled=reverse_z,
+                    )
+                    tasks = parse_shader_configs(str(filtered))
+                    BUILDER.compile_task_defines(tasks)
+                    pixels = {entry: defines for source, stage, entry, defines in tasks
+                              if source == "Lighting.hlsl" and stage == "PSHADER"}
+                    for descriptor in (0x4009, 0x4019, 0x4039, 0x104009, 0x104019, 0x104039):
+                        key = f"Lighting:Pixel:{descriptor:X}"
+                        self.assertIn(key, pixels)
+                        defines = pixels[key]
+                        names = {value.split("=", 1)[0] for value in defines}
+                        self.assertTrue({"VC", "TRUE_PBR", "DETAIL_MAPS"} <= names)
+                        self.assertEqual("DEFERRED" in names, bool(descriptor & 0x10))
+                        self.assertEqual("DO_ALPHA_TEST" in names, bool(descriptor & 0x100000))
+                        self.assertEqual("CHARACTER_CATEGORY" in names, bool(descriptor & 0x20))
+                        self.assertEqual([value for value in defines if value.split("=", 1)[0] == "REVERSE_Z"],
+                                         ["REVERSE_Z="] if reverse_z else [])
+
     def test_detail_maps_pairs_only_runtime_eligible_pixels(self) -> None:
         flag, excluded, techniques = BUILDER.lighting_detail_map_policy(REPO)
         self.assertEqual(flag, 1 << 14)

@@ -34,6 +34,8 @@ struct DetailMaps : Feature
 	void SetupResources() override;
 	void Reset() override;
 	void GenerateShaderPermutations(RE::BSShader* shader) override;
+	/** @brief Admits startup detail variants only when the feature and content directories are available. */
+	bool ShouldPrecompileShaders() const;
 	bool SupportsPerformanceCostMeasurement() const override { return true; }
 	bool IsPerformanceCostMeasurementEnabled() const override { return settings.Enabled; }
 	bool IsPerformanceCostMeasurementReady() const override { return !settings.Enabled || lastPendingShaders == 0; }

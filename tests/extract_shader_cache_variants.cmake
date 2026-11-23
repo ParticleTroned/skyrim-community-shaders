@@ -7,6 +7,9 @@ file(READ "${PROJECT_ROOT}/src/ShaderCache.h" _header)
 file(READ "${PROJECT_ROOT}/src/ShaderCache.cpp" _source)
 file(READ "${PROJECT_ROOT}/src/ShaderCacheSmartClear.cpp" _capture)
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling.cpp" _upscaling)
+file(READ "${PROJECT_ROOT}/src/State.cpp" _state)
+extract_between("${_state}" "case RE::BSShader::Type::Lighting:"
+    "case RE::BSShader::Type::Grass:" "shader_lighting_lookup.h")
 extract_between(
     "${_header}" "\tenum class ShaderClass" "\n}"
     "shader_task_declarations.h"

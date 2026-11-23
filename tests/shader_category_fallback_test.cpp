@@ -207,6 +207,11 @@ namespace globals
 	}
 	namespace features
 	{
+		struct DetailMaps
+		{
+			bool precompile = false;
+			bool ShouldPrecompileShaders() const { return precompile; }
+		} detailMaps;
 		struct VolumetricLighting
 		{
 			bool IsDepthDispatchRejected() const { return false; }
@@ -478,6 +483,7 @@ struct Fixture
 		state.currentShader = &shader;
 		native.shader = reinterpret_cast<ID3D11PixelShader*>(&native);
 		globals::features::terrainBlending = {};
+		globals::features::detailMaps = {};
 		TerrainSeams::GetInstance().enabled = false;
 		globals::features::reverseZ.active = false;
 		nativeTechniqueVertex = nullptr;
@@ -927,15 +933,28 @@ void TestPBRPrewarming()
 	constexpr uint32_t deferred = forward | static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::Deferred);
 	const auto flag = SIE::ShaderCache::GetCharacterCategoryFlag(RE::BSShader::Type::Lighting);
 	Permutations::pixelPermutations = { forward, deferred };
-	for (bool categories : { false, true }) {
+	for (unsigned configuration = 0; configuration < 8; ++configuration) {
 		Fixture f;
+		const bool categories = (configuration & 1) != 0;
+		const bool detail = (configuration & 2) != 0;
 		f.deferred.categories = categories;
+		globals::features::detailMaps.precompile = detail;
+		globals::features::reverseZ.active = (configuration & 4) != 0;
 		TruePBR feature;
 		feature.GenerateShaderPermutations(&f.shader);
 		std::set<uint32_t> expected{ forward, deferred };
 		if (categories)
 			expected.insert(deferred | flag);
+		if (detail) {
+			expected.insert(forward | DetailMapsPolicy::ShaderFlag);
+			expected.insert(deferred | DetailMapsPolicy::ShaderFlag);
+			if (categories)
+				expected.insert(deferred | DetailMapsPolicy::ShaderFlag | flag);
+		}
 		Require(f.cache.compilationSet.requests == expected);
+		Require(f.cache.compiles == 0);
+		for (const auto descriptor : expected)
+			Require(f.cache.compilationSet.precompiles.at(descriptor));
 		Require(f.deferred.captureReady && !f.state.deferredPixelShaderMissing);
 		f.cache.compilationSet.requests.clear();
 		f.shader.shaderType.value = RE::BSShader::Type::Effect;
@@ -1043,8 +1062,8 @@ void TestStartupLightingDescriptors()
 
 namespace DetailPrewarmFixture
 {
-	constexpr const char* SetsPath = ".";
-	constexpr const char* RulesPath = ".";
+	const char* SetsPath = ".";
+	const char* RulesPath = ".";
 	constexpr auto DetailFlag = DetailMapsPolicy::ShaderFlag;
 	bool IsDetailDescriptor(uint32_t descriptor, bool allowForward)
 	{
@@ -1052,16 +1071,30 @@ namespace DetailPrewarmFixture
 	}
 	struct DetailMaps
 	{
+		bool loaded = true;
 		struct
 		{
 			bool Enabled = true;
 		} settings;
+		bool IsEnabled() const { return loaded && settings.Enabled; }
+		bool ShouldPrecompileShaders() const;
 		void GenerateShaderPermutations(RE::BSShader* shader);
 	};
 #include "detail_prewarm.h"
 
 	void Test()
 	{
+		DetailMaps gate;
+		Require(gate.ShouldPrecompileShaders());
+		gate.loaded = false;
+		Require(!gate.ShouldPrecompileShaders());
+		gate.loaded = true;
+		SetsPath = "";
+		Require(!gate.ShouldPrecompileShaders());
+		SetsPath = ".";
+		RulesPath = "";
+		Require(!gate.ShouldPrecompileShaders());
+		RulesPath = ".";
 		for (bool enabled : { false, true }) {
 			for (bool categories : { false, true }) {
 				Fixture f;

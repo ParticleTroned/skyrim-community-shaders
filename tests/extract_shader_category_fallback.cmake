@@ -18,7 +18,7 @@ extract_between("${_state}" "case RE::BSShader::Type::Effect:"
 extract_between("${_header}" "enum class UtilityShaderFlags" "// Shader blocking data" "utility_flags.h")
 file(READ "${PROJECT_ROOT}/src/TruePBR.cpp" _pbr)
 file(READ "${PROJECT_ROOT}/src/Features/DetailMaps.cpp" _detail)
-extract_between("${_detail}" "void DetailMaps::GenerateShaderPermutations("
+extract_between("${_detail}" "bool DetailMaps::ShouldPrecompileShaders()"
     "DetailMaps::PassState::PassState(" "detail_prewarm.h")
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp" _character)
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterRendering.h" _character_header)

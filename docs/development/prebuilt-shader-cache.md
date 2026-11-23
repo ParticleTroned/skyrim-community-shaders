@@ -159,6 +159,10 @@ prewarm path, and rejects unsupported policy changes. These entries combine
 with forward/deferred rendering and category layouts. The shared inventory
 also includes unskinned hair/decal pixel variants for both SE/AE and VR.
 Captured provenance and vertex entries remain unchanged.
+When startup precompilation is enabled, it applies the Detail Maps eligibility policy
+to generated True PBR permutations when the feature and content directories
+are available. These combinations use the boot-selected depth convention,
+including Reverse Z. Background-only compilation retains its on-demand behavior.
 
 Both bundled profiles apply `PBR_GRASS=1` and the empty
 `GRASS_OPTIMIZATIONS` macro to RunGrass vertex and pixel stages only. Macro

@@ -369,13 +369,18 @@ int32_t DetailMaps::FindRule(RE::BSRenderPass* a_pass)
 	return it->second.rule;
 }
 
+bool DetailMaps::ShouldPrecompileShaders() const
+{
+	if (!IsEnabled())
+		return false;
+	std::error_code error;
+	return std::filesystem::is_directory(std::filesystem::path(SetsPath), error) &&
+	       std::filesystem::is_directory(std::filesystem::path(RulesPath), error);
+}
+
 void DetailMaps::GenerateShaderPermutations(RE::BSShader* shader)
 {
-	if (!settings.Enabled || shader->shaderType != RE::BSShader::Type::Lighting)
-		return;
-	std::error_code error;
-	if (!std::filesystem::is_directory(std::filesystem::path(SetsPath), error) ||
-		!std::filesystem::is_directory(std::filesystem::path(RulesPath), error))
+	if (shader->shaderType != RE::BSShader::Type::Lighting || !ShouldPrecompileShaders())
 		return;
 	const bool categories = globals::features::upscaling.NeedsCharacterCategoryShaders();
 	for (const auto& entry : shader->pixelShaders) {

@@ -1,3 +1,4 @@
+#include "Features/DetailMapsPolicy.h"
 #include "Features/Upscaling/NeuralRendering/CharacterSettings.h"
 #include "ShaderCompilationEstimate.h"
 #include "Utils/ShaderTrackingKeyCache.h"
@@ -232,16 +233,27 @@ namespace globals
 		bool IsDeveloperMode() const { return developer; }
 		uint64_t definesGeneration = 0;
 		uint64_t GetShaderDefinesGeneration() const { return definesGeneration; }
-		void ModifyShaderLookup(const RE::BSShader&, uint32_t&, uint32_t&) {}
+		void ModifyShaderLookup(const RE::BSShader&, uint32_t&, uint32_t&);
 	} stateStorage;
 	struct Deferred
 	{
 		unsigned clears = 0;
+		bool deferredPass = false;
 		void ClearShaderCache() { ++clears; }
 	} deferredStorage;
 	State* state = &stateStorage;
 	Deferred* deferred = &deferredStorage;
 	SIE::ShaderCache* shaderCache = nullptr;
+
+	void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint32_t& a_vertexDescriptor, uint32_t& a_pixelDescriptor)
+	{
+		constexpr bool a_forceDeferred = false;
+		switch (a_shader.shaderType.get()) {
+#include "shader_lighting_lookup.h"
+		default:
+			break;
+		}
+	}
 }
 
 namespace SIE
@@ -281,6 +293,11 @@ struct Upscaling
 namespace globals::features
 {
 	Upscaling upscaling;
+	struct DetailMaps
+	{
+		bool precompile = false;
+		bool ShouldPrecompileShaders() const { return precompile; }
+	} detailMaps;
 	struct TerrainBlending
 	{
 		bool loaded = true;
@@ -773,6 +790,50 @@ namespace
 		}
 	}
 
+	void TestPBRDetailPrewarming()
+	{
+		for (bool detail : { false, true }) {
+			for (bool categories : { false, true }) {
+				ShaderCache cache;
+				globals::shaderCache = &cache;
+				globals::features::detailMaps.precompile = detail;
+				auto& upscaling = globals::features::upscaling;
+				upscaling.settings.neuralRenderingEnabled = categories;
+				upscaling.settings.neuralCharacterRenderingEnabled = categories;
+				upscaling.settings.neuralCharacterVisualIsolationEnabled = categories;
+				RE::BSShader shader;
+				TruePBR pbr;
+				pbr.GenerateShaderPermutations(&shader);
+				const auto& queue = cache.compilationSet.availableTasks;
+				const auto total = cache.compilationSet.totalTasks.load();
+				pbr.GenerateShaderPermutations(&shader);
+				Require(cache.compilationSet.totalTasks == total && queue.size() == total);
+				const auto category = ShaderCache::GetCharacterCategoryFlag(RE::BSShader::Lighting);
+				for (uint32_t descriptor : { 0x4009u, 0x4019u, 0x104009u, 0x104019u }) {
+					Require(queue.contains({ ShaderClass::Pixel, shader, descriptor }) == detail);
+					Require(queue.contains({ ShaderClass::Pixel, shader, descriptor & ~DetailMapsPolicy::ShaderFlag }));
+					Require(queue.contains({ ShaderClass::Pixel, shader, descriptor | category }) ==
+							(detail && categories && (descriptor & 0x10u)));
+				}
+				size_t detailTasks = 0;
+				for (const auto& task : queue) {
+					const auto descriptor = static_cast<uint32_t>(task.GetId());
+					if (descriptor & DetailMapsPolicy::ShaderFlag) {
+						++detailTasks;
+						Require(detail && task.IsPrecompile());
+						Require(DetailMapsPolicy::IsEligible(descriptor & ~DetailMapsPolicy::ShaderFlag, true));
+					}
+				}
+				Require(detailTasks == (detail ? (categories ? 60u : 40u) : 0u));
+				cache.SetBackgroundCompilation(true);
+				pbr.GenerateShaderPermutations(&shader);
+				Require(cache.compilationSet.availableTasks.empty());
+			}
+		}
+		globals::features::detailMaps.precompile = false;
+		globals::shaderCache = nullptr;
+	}
+
 	void TestStageAndTypeIdentity()
 	{
 		ShaderCache cache;
@@ -817,6 +878,7 @@ int main()
 		TestCategoryVariantIdentity();
 		TestCategoryPrewarm();
 		TestPBRBackgroundAdmission();
+		TestPBRDetailPrewarming();
 		std::cout << "Shader cache variant checks passed\n";
 		return 0;
 	} catch (const std::exception& error) {

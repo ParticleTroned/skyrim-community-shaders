@@ -179,9 +179,16 @@ struct PS_OUTPUT
 #if defined(CLOUD_SHADOWS) && defined(CLOUDS) && !defined(DEFERRED)
 	float4 CloudShadows: SV_Target3;
 #endif
+#if defined(REVERSE_Z) && defined(CLOUDS)
+	float Depth: SV_Depth;
+#endif
 };
 
 #ifdef PSHADER
+#	if defined(REVERSE_Z) && defined(CLOUDS)
+#		include "Common/SkyDepth.hlsli"
+#	endif
+
 SamplerState SampBaseSampler : register(s0);
 SamplerState SampBlendSampler : register(s1);
 SamplerState SampNoiseGradSampler : register(s2);
@@ -374,6 +381,11 @@ PS_OUTPUT main(PS_INPUT input)
 	if (depth < input.Position.z)
 		psout.Color.w = 0;
 
+#	endif
+
+#	if defined(REVERSE_Z) && defined(CLOUDS)
+	// The cloud dome crosses the camera plane; clip-z bias can produce near-plane depth at its clipped edges.
+	psout.Depth = SkyDepth::CloudPixelDepth(input.Position.z, eyeIndex);
 #	endif
 
 	return psout;

@@ -5,6 +5,7 @@
 #include "Diagnostics/PerformanceCostExperiments.h"
 #include "Features/VRDepthCullingTemporal.h"
 #include "Globals.h"
+#include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
@@ -528,11 +529,29 @@ bool ReverseZ::IsEnabledAtStartup() const
 {
 	return settings.EnableReverseZBuffer && (!globals::state || !globals::state->IsFeatureDisabled("ReverseZ"));
 }
-void ReverseZ::SetEnabledAtStartup(bool enabled)
+bool ReverseZ::SetEnabledAtStartup(bool enabled, std::string* error)
 {
+	if (error)
+		error->clear();
+	const auto reject = [error](const char* reason) {
+		if (error)
+			*error = reason;
+		if (globals::menu)
+			globals::menu->ReportSettingsSaveResult(false, reason);
+		return false;
+	};
+	if (!loaded)
+		return reject("Reverse Z was not changed because its feature package is unavailable. Restore the package and restart the game.");
+	if (settings.EnableReverseZBuffer == enabled && (!globals::state || !globals::state->GetDisabledFeatures().contains("ReverseZ")))
+		return true;
+	if (globals::menu && !globals::menu->PrepareSettingsMutation())
+		return reject("Reverse Z was not changed because the saved settings baseline could not be preserved.");
 	settings.EnableReverseZBuffer = enabled;
 	if (globals::state)
 		globals::state->GetDisabledFeatures().erase("ReverseZ");
+	if (globals::menu)
+		globals::menu->RequestSettingsDirtyCheck();
+	return true;
 }
 bool ReverseZ::HasPendingBootChange() const
 {

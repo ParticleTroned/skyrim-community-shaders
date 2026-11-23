@@ -15,6 +15,43 @@ from skylighting_settings_test import block
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def dirty_menu_fixture():
+    menu = (ROOT / "src/Menu.cpp").read_text(encoding="utf-8")
+    fixture = r'''
+#include <functional>
+#include <set>
+#include <nlohmann/json.hpp>
+using json = nlohmann::json;
+struct Menu {
+    std::function<json()> capture;
+    json settingsDirtyBaseline;
+    bool settingsDirtyBaselineInitialized = false;
+    bool settingsDirty = false, settingsDirtyCheckRequested = false;
+    bool settingsSaveMessageIsError = false, snapshotAvailable = true;
+    std::set<std::string> dirtySettingsSections;
+    std::string settingsSaveMessage;
+    bool CaptureCurrentSettingsSnapshot(json& value) {
+        if (!snapshotAvailable) return false;
+        value = capture();
+        return true;
+    }
+    bool EnsureSettingsDirtyBaseline();
+    bool PrepareSettingsMutation() { return EnsureSettingsDirtyBaseline(); }
+    void RequestSettingsDirtyCheck() { settingsDirtyCheckRequested = true; }
+    void ResetSettingsDirtyState();
+    void ReportSettingsSaveResult(bool, std::string);
+    void ClearSettingsSaveResult() { settingsSaveMessage.clear(); settingsSaveMessageIsError = false; }
+    void UpdateDirtySettingsSections(const json&) {}
+    void UpdateSettingsDirtyState();
+    void DrawDisableAtBootSettings();
+} menu;
+namespace globals { Menu* menu = &::menu; }
+'''
+    return fixture + "\n".join(block(menu, signature) for signature in (
+        "bool Menu::EnsureSettingsDirtyBaseline()", "void Menu::ResetSettingsDirtyState()",
+        "void Menu::ReportSettingsSaveResult(", "void Menu::UpdateSettingsDirtyState()"))
+
+
 class ReverseZInitializationTests(unittest.TestCase):
     def test_viewport_hooks_with_reverse_z_disabled(self):
         from grass_draw_lifecycle_test import compile_fixture
@@ -147,6 +184,7 @@ struct State {
 } stateStorage;
 State* state = &stateStorage;
 }
+DIRTY_MENU
 namespace ImGui {
 unsigned controls = 0;
 unsigned failures = 0;
@@ -188,15 +226,23 @@ SETTINGS;
     uint64_t failureGeneration = 0;
     bool IsActive() const { return activeThisBoot; }
     bool IsEnabledAtStartup() const;
-    void SetEnabledAtStartup(bool);
+    bool SetEnabledAtStartup(bool, std::string* = nullptr);
+    void SaveSettings(json&);
     bool HasPendingBootChange() const;
     void RestoreDefaultSettings();
     void DrawSettings();
 };
+SERIALIZATION
 METHODS
 int main() {
     static_assert(!ReverseZ::Settings{}.EnableReverseZBuffer);
     ReverseZ feature;
+    menu.capture = [&] {
+        json value;
+        if (feature.loaded) feature.SaveSettings(value["Reverse Z"]);
+        value["Disable at Boot"] = globals::state->disabled;
+        return value;
+    };
     const auto draw = [&](bool expectedRestart) {
         const auto controls = ImGui::controls;
         const auto restarts = Util::Text::restarts;
@@ -212,15 +258,24 @@ int main() {
     assert(Util::tooltip.find("restart") != std::string::npos);
     ImGui::edit = true;
     draw(true);
+    menu.UpdateSettingsDirtyState();
+    assert(menu.settingsDirty);
     assert(!feature.activeThisBoot && !feature.requestedThisBoot);
     draw(true);
     ImGui::edit = false;
     draw(false);
+    menu.UpdateSettingsDirtyState();
+    assert(!menu.settingsDirty);
     feature.requestedThisBoot = feature.activeThisBoot = feature.settings.EnableReverseZBuffer = true;
+    menu.ResetSettingsDirtyState();
     draw(false);
     ImGui::edit = false;
     draw(true);
+    menu.UpdateSettingsDirtyState();
+    assert(menu.settingsDirty);
     assert(feature.activeThisBoot && feature.requestedThisBoot);
+    menu.ResetSettingsDirtyState();
+    assert(!menu.settingsDirty && feature.HasPendingBootChange());
     ImGui::edit = true;
     draw(false);
     feature.RestoreDefaultSettings();
@@ -252,6 +307,34 @@ int main() {
     draw(true);
     assert(feature.IsEnabledAtStartup() && !globals::state->disabled.contains("ReverseZ"));
     assert(!feature.IsActive());
+    menu.ResetSettingsDirtyState();
+    menu.snapshotAvailable = false;
+    std::string error = "stale error";
+    assert(feature.SetEnabledAtStartup(true, &error) && error.empty());
+    assert(!menu.settingsDirtyCheckRequested && !menu.settingsDirtyBaselineInitialized);
+    assert(!feature.SetEnabledAtStartup(false, &error) && !error.empty());
+    assert(feature.IsEnabledAtStartup() && menu.settingsSaveMessageIsError);
+    menu.snapshotAvailable = true;
+    assert(feature.SetEnabledAtStartup(false, &error) && error.empty());
+    menu.UpdateSettingsDirtyState();
+    assert(menu.settingsDirty && !feature.IsActive());
+    menu.ResetSettingsDirtyState();
+    feature.loaded = false;
+    assert(!feature.SetEnabledAtStartup(true, &error) && !error.empty());
+    assert(!feature.IsEnabledAtStartup() && !menu.settingsDirtyCheckRequested);
+    feature.loaded = true;
+    feature.settings.EnableReverseZBuffer = true;
+    globals::state->disabled["ReverseZ"] = true;
+    menu.snapshotAvailable = false;
+    assert(!feature.SetEnabledAtStartup(true, &error));
+    assert(feature.settings.EnableReverseZBuffer && globals::state->disabled.at("ReverseZ"));
+    menu.snapshotAvailable = true;
+    assert(feature.SetEnabledAtStartup(true, &error) && error.empty());
+    menu.UpdateSettingsDirtyState();
+    assert(menu.settingsDirty && !globals::state->disabled.contains("ReverseZ"));
+    globals::menu = nullptr;
+    feature.SetEnabledAtStartup(true);
+    assert(feature.IsEnabledAtStartup());
     globals::state = nullptr;
     const auto controls = ImGui::controls;
     feature.DrawSettings();
@@ -259,11 +342,13 @@ int main() {
 }
 '''
         driver = driver.replace("SETTINGS", block(header, "struct Settings"))
+        driver = driver.replace("SERIALIZATION", "NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ReverseZ::Settings, EnableReverseZBuffer)")
+        driver = driver.replace("DIRTY_MENU", dirty_menu_fixture())
         driver = driver.replace("METHODS", "\n".join(block(source, signature) for signature in (
             "bool ReverseZ::HasPendingBootChange() const", "void ReverseZ::RestoreDefaultSettings()",
-            "bool ReverseZ::IsEnabledAtStartup() const", "void ReverseZ::SetEnabledAtStartup(bool",
+            "bool ReverseZ::IsEnabledAtStartup() const", "bool ReverseZ::SetEnabledAtStartup(bool", "void ReverseZ::SaveSettings(json&",
             "void ReverseZ::DrawSettings()")))
-        result = compile_fixture(driver)
+        result = compile_fixture(driver, include=os.environ["CSX_JSON_INCLUDE"])
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_startup_checkboxes_use_enabled_state(self):
@@ -296,11 +381,12 @@ struct State {
 } storage;
 State* state = &storage;
 }
+DIRTY_MENU
 struct ReverseZ : Feature {
     struct { bool EnableReverseZBuffer = false; } settings;
-    bool active = false;
+    bool active = false, loaded = true;
     bool IsEnabledAtStartup() const;
-    void SetEnabledAtStartup(bool);
+    bool SetEnabledAtStartup(bool, std::string* = nullptr);
     std::string GetShortName() override { return "ReverseZ"; }
 };
 namespace globals::features { ReverseZ reverseZ; }
@@ -327,13 +413,17 @@ bool Checkbox(const char* name, bool* value) {
     return true;
 }
 }
-struct Menu { void DrawDisableAtBootSettings(); } menu;
 METHODS
 int main() {
     clouds.name = "CloudShadows";
     grass.name = "GrassCollision";
     hidden.name = "Hidden";
     hidden.hidden = true;
+    menu.capture = [&] {
+        json value;
+        value["Reverse Z"] = globals::features::reverseZ.IsEnabledAtStartup();
+        return value;
+    };
     globals::state->disabled[clouds.name] = true;
     menu.DrawDisableAtBootSettings();
     assert(!Util::Widgets::shown.at(clouds.name));
@@ -350,7 +440,11 @@ int main() {
     Util::Widgets::edit = { "ReverseZ", true };
     menu.DrawDisableAtBootSettings();
     assert(reverse.settings.EnableReverseZBuffer && !reverse.active);
+    menu.UpdateSettingsDirtyState();
+    assert(menu.settingsDirty);
     reverse.SetEnabledAtStartup(false);
+    menu.UpdateSettingsDirtyState();
+    assert(!menu.settingsDirty);
     menu.DrawDisableAtBootSettings();
     assert(!Util::Widgets::shown.at("ReverseZ"));
     reverse.settings.EnableReverseZBuffer = true;
@@ -364,8 +458,8 @@ int main() {
 '''
         methods = block(menu, "void Menu::DrawDisableAtBootSettings()")
         methods += block(source, "bool ReverseZ::IsEnabledAtStartup() const")
-        methods += block(source, "void ReverseZ::SetEnabledAtStartup(bool")
-        result = compile_fixture(driver.replace("METHODS", methods))
+        methods += block(source, "bool ReverseZ::SetEnabledAtStartup(bool")
+        result = compile_fixture(driver.replace("DIRTY_MENU", dirty_menu_fixture()).replace("METHODS", methods), include=os.environ["CSX_JSON_INCLUDE"])
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_failure_diagnostics_schema(self):
@@ -380,6 +474,75 @@ int main() {
         self.assertNotIn('status["restartRequired"]', action)
         self.assertIn("feature.SetEnabledAtStartup(", action)
         self.assertIn("Reverse Z defaults off.", descriptor["description"])
+        self.assertIn("unsaved", descriptor["inputSchema"]["properties"]["reverseZEnabled"]["description"])
+        self.assertIn("rejected", descriptor["inputSchema"]["properties"]["reverseZEnabled"]["description"])
+
+    def test_startup_mutation_dispatch_reports_rejection(self):
+        from grass_draw_lifecycle_test import compile_fixture
+
+        bridge = (ROOT / "src/Api/FeatureDevBenchBridge.cpp").read_text(encoding="utf-8")
+        driver = r'''
+#include <cassert>
+#include <functional>
+#include <string>
+#include <string_view>
+#include <nlohmann/json.hpp>
+using json = nlohmann::json;
+struct Feature {
+    bool accepted = true, requested = false;
+    unsigned calls = 0;
+    bool SetEnabledAtStartup(bool value, std::string* error) {
+        ++calls;
+        if (!accepted) { *error = "Settings baseline unavailable"; return false; }
+        requested = value;
+        return true;
+    }
+    json GetDiagnostics() const { return {{"requested", requested}}; }
+};
+namespace globals::features { Feature reverseZ; }
+struct Service {
+    json MakeEnvelope(const json&, bool ok) { return {{"ok", ok}}; }
+    json MakeError(const json&, std::string_view code, std::string_view message,
+        std::string_view, bool, std::string_view = {}) {
+        return {{"ok", false}, {"error", {{"code", code}, {"message", message}}}};
+    }
+} service;
+Service& Foundation() { return service; }
+bool dispatchAvailable = true;
+json OnMain(std::function<json()> run) {
+    return dispatchAvailable ? run() : json{{"error", "Dispatcher unavailable"}};
+}
+json Run(const json& args) {
+    const auto action = args.at("action").get<std::string>();
+    ACTION
+    return {};
+}
+int main() {
+    auto& feature = globals::features::reverseZ;
+    json args{{"action", "reverse_z"}};
+    assert(Run(args).at("ok") == true && feature.calls == 0);
+    args["reverseZEnabled"] = true;
+    auto result = Run(args);
+    assert(result.at("ok") == true && result.at("result").at("requested") == true);
+    feature.accepted = false;
+    args["reverseZEnabled"] = false;
+    result = Run(args);
+    assert(result.at("ok") == false && feature.requested);
+    assert(result.at("error").at("message") == "Settings baseline unavailable");
+    args["reverseZEnabled"] = "invalid";
+    result = Run(args);
+    assert(result.at("ok") == false && feature.calls == 2);
+    assert(result.at("error").at("code") == "invalid_settings");
+    args["reverseZEnabled"] = false;
+    dispatchAvailable = false;
+    result = Run(args);
+    assert(result.at("ok") == false && feature.calls == 2);
+    assert(result.at("error").at("message") == "Dispatcher unavailable");
+}
+'''
+        driver = driver.replace("ACTION", block(bridge, 'if (action == "reverse_z")'))
+        result = compile_fixture(driver, include=os.environ["CSX_JSON_INCLUDE"])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_activation_rejects_pre_activation_shader_publication(self):
         from grass_draw_lifecycle_test import compile_fixture, publication_generation_methods

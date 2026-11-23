@@ -1046,7 +1046,7 @@ int main() {
     return compile_fixture(driver, devbench)
 
 
-def compile_fixture(driver: str, devbench: bool = False) -> subprocess.CompletedProcess:
+def compile_fixture(driver: str, devbench: bool = False, include: str | None = None) -> subprocess.CompletedProcess:
     compiler = os.environ.get("CXX") or shutil.which("cl")
     if not compiler:
         raise RuntimeError("Run in the MSVC developer environment")
@@ -1060,6 +1060,8 @@ def compile_fixture(driver: str, devbench: bool = False) -> subprocess.Completed
                    str(cpp), "/Fe:" + str(executable)]
         if devbench:
             command.append("/DDEVBENCH_BRIDGE_ENABLED")
+        if include:
+            command.append("/I" + include)
         result = subprocess.run(command, cwd=directory, capture_output=True, text=True, timeout=60)
         if result.returncode:
             raise RuntimeError(result.stdout + result.stderr)

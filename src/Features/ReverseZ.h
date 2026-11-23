@@ -35,8 +35,8 @@ struct ReverseZ : Feature
 		return "Changing Reverse Z requires a restart. Change it in the feature UI or Settings > Startup, save settings and restart the game. This tile shows your selected startup setting.";
 	}
 	bool IsPerformanceToggleEnabled() const override { return IsEnabledAtStartup(); }
-	/** Set the shared startup/UI depth choice and clear its legacy load gate. */
-	void SetEnabledAtStartup(bool enabled);
+	/** Track the next-boot choice as unsaved; return false with an optional error if unavailable. */
+	bool SetEnabledAtStartup(bool enabled, std::string* error = nullptr);
 	void LoadSettings(json&) override;
 	void SaveSettings(json&) override;
 	void RestoreDefaultSettings() override;

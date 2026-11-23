@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -54,25 +55,27 @@ public:
 	static const char* GetComparisonEnvironmentError();
 	/** @brief Shared scene/weather ownership check for reversible feature controls. */
 	static const char* GetComparisonFeatureBlockReason(Feature* feature);
+#endif
 	/** Starts one surfaced feature's closed-menu cost comparison. */
-	static nlohmann::json StartDevBenchFeatureCostMeasurement(
+	static nlohmann::json StartApiFeatureCostMeasurement(
 		std::string_view a_featureShortName);
 	/** Captures all instrumented features together without changing feature settings. */
-	static nlohmann::json StartDevBenchQuickScan(bool batch = false, bool recordFpsVR = false);
+	static nlohmann::json StartApiQuickScan(bool batch = false, bool recordFpsVR = false);
 	/** Measures each enabled runtime feature using the shared on/off protocol. */
-	static nlohmann::json StartDevBenchFeatureCostBatch();
+	static nlohmann::json StartApiFeatureCostBatch();
 	/** Changes a runtime toggle, retaining its prior enabled configuration. */
-	static nlohmann::json SetDevBenchFeatureEnabled(
+	static nlohmann::json SetApiFeatureEnabled(
 		std::string_view a_featureShortName, bool a_enabled);
 	/** Starts a hardware-specific Upscaling cost sweep relative to None. */
-	static nlohmann::json StartDevBenchUpscalingCostSweep(
+	static nlohmann::json StartApiUpscalingCostSweep(
 		std::string_view a_matrix = "auto",
 		std::string_view a_dlssPreset = {});
 	/** Returns sweep results and a bounded page of raw timing diagnostics. */
-	static nlohmann::json GetDevBenchMeasurementStatus(
+	static nlohmann::json GetApiMeasurementStatus(
 		std::uint64_t a_traceAfterSequence = 0,
 		std::size_t a_maximumTraceSamples = 128);
+	/** Returns the current saved run identity on the runtime main thread. */
+	static std::string GetApiMeasurementRunId();
 	/** Cancels DevBench-owned measurement work and restores its original state. */
-	static nlohmann::json CancelDevBenchMeasurements();
-#endif
+	static nlohmann::json CancelApiMeasurements();
 };

@@ -427,7 +427,6 @@ namespace
 		}
 	}
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	const char* GetUpscalingCostSweepMatrixName(UpscalingCostSweepMatrix matrix)
 	{
 		switch (matrix) {
@@ -439,6 +438,7 @@ namespace
 		}
 	}
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 	std::string_view GetUpscalingCostSweepTraceCaseId()
 	{
 		const auto& sweep = g_upscalingCostSweep;
@@ -453,12 +453,11 @@ namespace
 		return sweep.cases.back().id;
 	}
 
+#endif
 	json GetDLSSPresetChoicesJson()
 	{
 		return json::array({ "J", "K", "L", "M", "F", "E" });
 	}
-
-#endif
 
 	double GetFeatureCostRestartCooldownRemaining(double currentTime)
 	{
@@ -470,7 +469,6 @@ namespace
 		g_costMeasurementRestartAllowedTime = currentTime + kFeatureCostRestartCooldownSeconds;
 	}
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	struct UpscalingCostSweepReadiness
 	{
 		bool idle = false;
@@ -528,8 +526,6 @@ namespace
 		       (!fidelityFX.HasRuntimeUpscalerSupportCheckResult() ||
 				   fidelityFX.IsRuntimeUpscalerSupportConfirmed());
 	}
-
-#endif
 
 	void SyncFeatureCostVanityCameraSuppression()
 	{
@@ -1671,7 +1667,6 @@ namespace
 		}
 	}
 
-#ifdef DEVBENCH_BRIDGE_ENABLED
 	const char* GetQualityModeId(std::uint32_t qualityMode)
 	{
 		switch (qualityMode) {
@@ -1788,8 +1783,6 @@ namespace
 		}
 		return cases;
 	}
-
-#endif
 
 	bool IsUpscalingCostSweepStateSelected(const json& profile)
 	{
@@ -2945,6 +2938,7 @@ namespace
 		};
 	}
 
+#endif
 	json FeatureCostMeasurementStatusJson(
 		std::string_view shortName,
 		const FeatureCostMeasurementState& state,
@@ -2962,7 +2956,7 @@ namespace
 		};
 	}
 
-	json BuildDevBenchMeasurementStatus(std::uint64_t traceAfterSequence, std::size_t maximumTraceSamples)
+	json BuildMeasurementStatus([[maybe_unused]] std::uint64_t traceAfterSequence, [[maybe_unused]] std::size_t maximumTraceSamples)
 	{
 		const double currentTime = ImGui::GetTime();
 		const FeatureCostMeasurementState* activeMeasurement = nullptr;
@@ -3014,6 +3008,7 @@ namespace
 								   FindFeatureByShortName(activeFeature), currentTime) :
 		                       json(nullptr);
 
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		json latestTiming = nullptr;
 		if (!g_featureCostTrace.empty()) {
 			const auto& sample = g_featureCostTrace.back();
@@ -3031,6 +3026,7 @@ namespace
 			AppendTimingSource(latestTiming, sample);
 		}
 
+#endif
 		const bool sweepKnown = g_upscalingCostSweep.phase != UpscalingCostSweepPhase::Idle;
 		const bool sweepRunning = IsUpscalingCostSweepRunning();
 		const bool nvidiaSweep = sweepKnown &&
@@ -3102,14 +3098,15 @@ namespace
 			{ "restoreWaitMs", kFeatureCostRestoreWaitSeconds * 1000.0 },
 			{ "postRunCooldownMs", kFeatureCostRestartCooldownSeconds * 1000.0 },
 		};
+#ifdef DEVBENCH_BRIDGE_ENABLED
 		response["latestTiming"] = std::move(latestTiming);
 		response["trace"] = FeatureCostTraceJson(traceAfterSequence, maximumTraceSamples);
+#endif
 		response["results"] = std::move(results);
 		response["featureResults"] = std::move(featureResults);
 		response["availableFeatureCosts"] = std::move(availableFeatureCosts);
 		return response;
 	}
-#endif
 
 }
 
@@ -3768,7 +3765,9 @@ const char* PerformanceTuningRenderer::GetComparisonFeatureBlockReason(Feature* 
 	return GetFeatureToggleBlockReason(feature);
 }
 
-nlohmann::json PerformanceTuningRenderer::StartDevBenchFeatureCostMeasurement(
+#endif
+
+nlohmann::json PerformanceTuningRenderer::StartApiFeatureCostMeasurement(
 	std::string_view a_featureShortName)
 {
 	const double currentTime = ImGui::GetTime();
@@ -3779,7 +3778,7 @@ nlohmann::json PerformanceTuningRenderer::StartDevBenchFeatureCostMeasurement(
 	};
 	const auto reject = [&](const char* errorCode) {
 		response["errorCode"] = errorCode;
-		response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+		response["status"] = BuildMeasurementStatus(0, 128);
 		return response;
 	};
 	if (a_featureShortName.empty())
@@ -3818,31 +3817,31 @@ nlohmann::json PerformanceTuningRenderer::StartDevBenchFeatureCostMeasurement(
 
 	SyncFeatureCostVanityCameraSuppression();
 	response["accepted"] = true;
-	response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+	response["status"] = BuildMeasurementStatus(0, 128);
 	return response;
 }
 
-nlohmann::json PerformanceTuningRenderer::StartDevBenchQuickScan(bool batch, bool recordFpsVR)
+nlohmann::json PerformanceTuningRenderer::StartApiQuickScan(bool batch, bool recordFpsVR)
 {
 	const auto* error = StartQuickScan(true, batch, recordFpsVR);
 	json response = { { "action", batch ? "start_quick_scan_batch" : "start_quick_scan" }, { "accepted", error == nullptr } };
 	if (error)
 		response["errorCode"] = error;
-	response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+	response["status"] = BuildMeasurementStatus(0, 128);
 	return response;
 }
 
-nlohmann::json PerformanceTuningRenderer::StartDevBenchFeatureCostBatch()
+nlohmann::json PerformanceTuningRenderer::StartApiFeatureCostBatch()
 {
 	const char* error = StartFeatureCostBatch(true);
 	json response = { { "action", "start_feature_costs" }, { "accepted", error == nullptr } };
 	if (error)
 		response["errorCode"] = error;
-	response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+	response["status"] = BuildMeasurementStatus(0, 128);
 	return response;
 }
 
-nlohmann::json PerformanceTuningRenderer::SetDevBenchFeatureEnabled(std::string_view a_featureShortName, bool a_enabled)
+nlohmann::json PerformanceTuningRenderer::SetApiFeatureEnabled(std::string_view a_featureShortName, bool a_enabled)
 {
 	json response = { { "action", "set_feature_enabled" }, { "accepted", false }, { "feature", a_featureShortName } };
 	auto* feature = FindFeatureByShortName(a_featureShortName);
@@ -3858,11 +3857,11 @@ nlohmann::json PerformanceTuningRenderer::SetDevBenchFeatureEnabled(std::string_
 		response["errorCode"] = "feature_toggle_failed";
 	else
 		response["accepted"] = true;
-	response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+	response["status"] = BuildMeasurementStatus(0, 128);
 	return response;
 }
 
-nlohmann::json PerformanceTuningRenderer::StartDevBenchUpscalingCostSweep(
+nlohmann::json PerformanceTuningRenderer::StartApiUpscalingCostSweep(
 	std::string_view a_matrix,
 	std::string_view a_dlssPreset)
 {
@@ -3875,13 +3874,13 @@ nlohmann::json PerformanceTuningRenderer::StartDevBenchUpscalingCostSweep(
 	if (a_matrix != "auto" && a_matrix != "nvidia" && a_matrix != "amd") {
 		response["errorCode"] = "invalid_matrix";
 		response["supportedMatrices"] = json::array({ "auto", "nvidia", "amd" });
-		response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+		response["status"] = BuildMeasurementStatus(0, 128);
 		return response;
 	}
 	const auto readiness = CaptureUpscalingCostSweepReadiness(currentTime);
 	if (const char* errorCode = GetUpscalingCostSweepReadinessError(readiness)) {
 		response["errorCode"] = errorCode;
-		response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+		response["status"] = BuildMeasurementStatus(0, 128);
 		return response;
 	}
 
@@ -3892,29 +3891,29 @@ nlohmann::json PerformanceTuningRenderer::StartDevBenchUpscalingCostSweep(
 	if (a_matrix == "amd" || (a_matrix == "auto" && amdAdapter)) {
 		if (!amdAdapter) {
 			response["errorCode"] = "amd_adapter_required";
-			response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+			response["status"] = BuildMeasurementStatus(0, 128);
 			return response;
 		}
 		if (!fsr4Available) {
 			response["errorCode"] = "fsr4_unavailable";
-			response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+			response["status"] = BuildMeasurementStatus(0, 128);
 			return response;
 		}
 		matrix = UpscalingCostSweepMatrix::Amd;
 	} else {
 		if (!Upscaling::fidelityFX.IsNvidiaAdapterDetected()) {
 			response["errorCode"] = "nvidia_adapter_required";
-			response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+			response["status"] = BuildMeasurementStatus(0, 128);
 			return response;
 		}
 		if (!Upscaling::streamline.featureCheckComplete) {
 			response["errorCode"] = "dlss_capability_pending";
-			response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+			response["status"] = BuildMeasurementStatus(0, 128);
 			return response;
 		}
 		if (!Upscaling::streamline.featureDLSS) {
 			response["errorCode"] = "dlss_unavailable";
-			response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+			response["status"] = BuildMeasurementStatus(0, 128);
 			return response;
 		}
 	}
@@ -3926,18 +3925,18 @@ nlohmann::json PerformanceTuningRenderer::StartDevBenchUpscalingCostSweep(
 			response["prompt"] = "Choose one DLSS profile for the sweep (J, K, L, M, F, or E).";
 			response["allowedDlssPresets"] = GetDLSSPresetChoicesJson();
 			response["matrix"] = "nvidia";
-			response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+			response["status"] = BuildMeasurementStatus(0, 128);
 			return response;
 		}
 		if (!Upscaling::TryParseDLSSPresetName(a_dlssPreset, dlssPreset)) {
 			response["errorCode"] = "invalid_dlss_preset";
 			response["allowedDlssPresets"] = GetDLSSPresetChoicesJson();
-			response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+			response["status"] = BuildMeasurementStatus(0, 128);
 			return response;
 		}
 	} else if (!a_dlssPreset.empty()) {
 		response["errorCode"] = "dlss_preset_not_applicable";
-		response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+		response["status"] = BuildMeasurementStatus(0, 128);
 		return response;
 	}
 
@@ -3980,24 +3979,29 @@ nlohmann::json PerformanceTuningRenderer::StartDevBenchUpscalingCostSweep(
 				"The first Upscaling measurement could not start.");
 		}
 		response["errorCode"] = "measurement_start_failed";
-		response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+		response["status"] = BuildMeasurementStatus(0, 128);
 		return response;
 	}
 
 	SyncFeatureCostVanityCameraSuppression();
 	response["accepted"] = true;
-	response["status"] = BuildDevBenchMeasurementStatus(0, 128);
+	response["status"] = BuildMeasurementStatus(0, 128);
 	return response;
 }
 
-nlohmann::json PerformanceTuningRenderer::GetDevBenchMeasurementStatus(
+nlohmann::json PerformanceTuningRenderer::GetApiMeasurementStatus(
 	std::uint64_t a_traceAfterSequence,
 	std::size_t a_maximumTraceSamples)
 {
-	return BuildDevBenchMeasurementStatus(a_traceAfterSequence, a_maximumTraceSamples);
+	return BuildMeasurementStatus(a_traceAfterSequence, a_maximumTraceSamples);
 }
 
-nlohmann::json PerformanceTuningRenderer::CancelDevBenchMeasurements()
+std::string PerformanceTuningRenderer::GetApiMeasurementRunId()
+{
+	return g_savedRun.is_object() ? g_savedRun.value("id", std::string{}) : std::string{};
+}
+
+nlohmann::json PerformanceTuningRenderer::CancelApiMeasurements()
 {
 	const double currentTime = ImGui::GetTime();
 	bool cancelled = false;
@@ -4010,8 +4014,6 @@ nlohmann::json PerformanceTuningRenderer::CancelDevBenchMeasurements()
 	return {
 		{ "action", "cancel" },
 		{ "accepted", cancelled },
-		{ "status", BuildDevBenchMeasurementStatus(0, 128) },
+		{ "status", BuildMeasurementStatus(0, 128) },
 	};
 }
-
-#endif

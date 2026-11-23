@@ -10,6 +10,8 @@ namespace CSX::ProfilerAPI
 	inline constexpr std::uint32_t SchemaRevision = 2;
 	inline constexpr std::uint32_t SourceServiceMinor = 2;
 	inline constexpr std::uint32_t SourceSchemaRevision = 3;
+	inline constexpr std::uint32_t QualityServiceMinor = 3;
+	inline constexpr std::uint32_t QualitySchemaRevision = 4;
 
 	enum class Status : std::uint32_t
 	{
@@ -186,5 +188,23 @@ namespace CSX::ProfilerAPI
 		/** CPU catalog indices are independent of the paired and bounded catalogs. */
 		Status (*GetCpuTimerDescriptor)(const void* context, std::uint32_t index, TimerDescriptor001* output) = nullptr;
 		Status (*GetCpuHistorySample)(const void* context, std::uint32_t timerIndex, std::uint32_t sampleIndex, float* outputMs) = nullptr;
+	};
+
+	/** Existing capture validity counters; querying them never creates GPU work. */
+	struct CaptureQuality001
+	{
+		std::uint32_t structSize = sizeof(CaptureQuality001);
+		std::uint32_t maximumTimersPerFrame = 0;
+		std::uint32_t invalidGpuFrames = 0;
+		std::uint32_t invalidCpuFrames = 0;
+	};
+
+	/** Additive 1.3 interface preserving the complete 1.2 prefix. */
+	struct Interface003
+	{
+		Interface002 sources;
+		Status (*GetCaptureQuality)(const void* context, std::uint64_t captureId, CaptureQuality001* output) = nullptr;
+		/** Read the latest bounded session, including kNone; independent of continuous profiling. */
+		Status (*GetCurrentCapture)(const void* context, CaptureProgress001* output) = nullptr;
 	};
 }

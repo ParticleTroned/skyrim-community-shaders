@@ -6250,6 +6250,16 @@ if(BUILD_CONTROLLER_TESTS)
         PROPERTIES LABELS "ControllerTests"
     )
 
+    add_controller_test(api_performance_contract_test ApiPerformanceContract tests/api_performance_contract_test.cpp)
+    target_include_directories(
+        api_performance_contract_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    target_link_libraries(
+        api_performance_contract_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+
     add_executable(
         api_profiler_contract_test
         EXCLUDE_FROM_ALL

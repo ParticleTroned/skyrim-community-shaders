@@ -168,18 +168,18 @@ namespace
 								   traceAfterSequence,
 								   maximumTraceSamples]() -> json {
 			if (action == "start_quick_scan" || action == "start_quick_scan_batch")
-				return PerformanceTuningRenderer::StartDevBenchQuickScan(action == "start_quick_scan_batch", recordFpsVR);
+				return PerformanceTuningRenderer::StartApiQuickScan(action == "start_quick_scan_batch", recordFpsVR);
 			if (action == "start_feature_cost")
-				return PerformanceTuningRenderer::StartDevBenchFeatureCostMeasurement(featureShortName);
+				return PerformanceTuningRenderer::StartApiFeatureCostMeasurement(featureShortName);
 			if (action == "start_feature_costs")
-				return PerformanceTuningRenderer::StartDevBenchFeatureCostBatch();
+				return PerformanceTuningRenderer::StartApiFeatureCostBatch();
 			if (action == "set_feature_enabled")
-				return PerformanceTuningRenderer::SetDevBenchFeatureEnabled(featureShortName, enabled);
+				return PerformanceTuningRenderer::SetApiFeatureEnabled(featureShortName, enabled);
 			if (action == "start_upscaling_sweep")
-				return PerformanceTuningRenderer::StartDevBenchUpscalingCostSweep(matrix, dlssPreset);
+				return PerformanceTuningRenderer::StartApiUpscalingCostSweep(matrix, dlssPreset);
 			if (action == "cancel")
-				return PerformanceTuningRenderer::CancelDevBenchMeasurements();
-			return PerformanceTuningRenderer::GetDevBenchMeasurementStatus(
+				return PerformanceTuningRenderer::CancelApiMeasurements();
+			return PerformanceTuningRenderer::GetApiMeasurementStatus(
 				traceAfterSequence,
 				maximumTraceSamples);
 		});

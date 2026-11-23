@@ -288,3 +288,35 @@ pwsh ./tools/clean-git-temporary-objects.ps1 -Apply
 The cleanup refuses to run while Git-related processes exist and validates that
 every target remains inside the common Git object directory. It does not run
 `git gc`, remove branches, or touch build and shader caches.
+
+## Production performance API
+
+Production builds expose `csx.performance` 1.0 through the public registry
+in `include/VRAPI/CSserviceapi.h`. `CSperformanceapi.h` defines its bounded
+JSON transport. Requests require `contractMajor: 1`, `clientId`, `commandId`
+and `action`; `expectedBuildId` can pin the loaded producer. Reuse a command
+ID only for an identical mutation retry. Receipts have bounded retention.
+Status requests are fresh and do not enter the command journal.
+
+The service forwards quick scans, three-scan batches, feature comparisons,
+upscaling sweeps and saved-result exports to the existing UI controllers.
+An export requires an explicit destination directory. Only the initiating
+client can cancel its measurement, and ownership is tied to its saved run
+identity. Starts and feature changes reject an active bounded profiler capture. Poll `status` for progress and
+`results_status` for asynchronous export completion; acceptance is not
+completion. Calls before menu initialization fail without changing state.
+
+For external profiling, `csx.profiler` 1.3 preserves the earlier ABI prefixes
+and adds access to existing invalid CPU/GPU frame counts and the current
+bounded-session state. Continuous profiling is separate from a bounded
+capture; use `GetCurrentCapture` to test capture admission. Consumers must
+check these alongside capture completion. Enabling/disabling the profiler
+or clearing history is refused while a bounded capture is running.
+
+Build production comparisons with `DEVBENCH_BRIDGE=OFF` and
+`TRACY_SUPPORT=OFF`. The performance interface reports instrumentation flags
+so an external adapter can reject instrumented producers. Registry discovery
+and the new API add no update hook, timer slots, trace buffers or periodic
+work. Requested scans and screenshots retain their normal measurement cost.
+The optional DevBench performance profile is built in the DevBench repository;
+CSX does not embed its transport, orchestration or polling.

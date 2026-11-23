@@ -252,6 +252,8 @@ namespace
 				return Status::kWrongThread;
 			if (!globals::profiler)
 				return Status::kUnavailable;
+			if (globals::profiler->GetBoundedCaptureProgress().state == Profiler::CaptureSessionState::Running)
+				return Status::kBusy;
 			globals::profiler->SetUserEnabled(a_enabled);
 			return Status::kSuccess;
 		}
@@ -415,6 +417,35 @@ namespace
 		return ServiceFrom(a_context)->GetCapture(a_captureId, *a_output);
 	}
 
+	Status GetCurrentCapture(const void* context, CaptureProgress001* output)
+	{
+		if (!context || !output)
+			return Status::kInvalidArgument;
+		if (output->structSize < sizeof(*output))
+			return Status::kStructureTooSmall;
+		if (!CSX::Api::IsRuntimeMainThread())
+			return Status::kWrongThread;
+		if (!globals::profiler)
+			return Status::kUnavailable;
+		FillProgress(globals::profiler->GetBoundedCaptureProgress(), *output);
+		return Status::kSuccess;
+	}
+
+	Status GetCaptureQuality(const void* context, std::uint64_t captureId, CSX::ProfilerAPI::CaptureQuality001* output)
+	{
+		if (!context || !output)
+			return Status::kInvalidArgument;
+		if (output->structSize < sizeof(*output))
+			return Status::kStructureTooSmall;
+		CaptureProgress001 progress;
+		const auto status = ServiceFrom(context)->GetCapture(captureId, progress);
+		if (status != Status::kSuccess)
+			return status;
+		const auto quality = globals::profiler->GetBoundedCaptureProgress();
+		*output = { sizeof(*output), Profiler::kMaxTimers, quality.invalidGpuFrames, quality.invalidCpuFrames };
+		return Status::kSuccess;
+	}
+
 	Status CancelCapture(const void* a_context, std::uint64_t a_captureId, CaptureProgress001* a_output)
 	{
 		if (!a_context || !a_output)
@@ -508,6 +539,21 @@ namespace CSX::Api
 			});
 			if (sourceStatus != ServiceAPI::Status::kSuccess && sourceStatus != ServiceAPI::Status::kAlreadyRegistered)
 				logger::error("Failed to register independent CPU profiler API ({})", static_cast<std::uint32_t>(sourceStatus));
+			static const ProfilerAPI::Interface003 qualityInterface = [] {
+				ProfilerAPI::Interface003 result;
+				result.sources = sourceInterface;
+				result.sources.paired.structSize = sizeof(result);
+				result.sources.paired.minor = ProfilerAPI::QualityServiceMinor;
+				result.sources.paired.schemaRevision = ProfilerAPI::QualitySchemaRevision;
+				result.GetCaptureQuality = ::GetCaptureQuality;
+				result.GetCurrentCapture = ::GetCurrentCapture;
+				return result;
+			}();
+			const auto qualityStatus = GetProcessServiceRegistry().Register({ ProfilerAPI::ServiceName, ProfilerAPI::ServiceMajor, ProfilerAPI::QualityServiceMinor, ProfilerAPI::QualitySchemaRevision,
+				ServiceAPI::kCapabilityInspection | ServiceAPI::kCapabilityRuntimeMutation | ServiceAPI::kCapabilityAsynchronousOperations,
+				&qualityInterface });
+			if (qualityStatus != ServiceAPI::Status::kSuccess)
+				logger::error("Failed to register profiler quality API ({})", static_cast<std::uint32_t>(qualityStatus));
 		});
 	}
 

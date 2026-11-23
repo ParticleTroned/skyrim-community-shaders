@@ -25,6 +25,10 @@ int main()
 		static_assert(std::is_standard_layout_v<CaptureProgress001>);
 		static_assert(std::is_standard_layout_v<Interface001>);
 		static_assert(std::is_standard_layout_v<Interface002>);
+		static_assert(std::is_standard_layout_v<Interface003>);
+		static_assert(offsetof(Interface003, sources) == 0);
+		static_assert(offsetof(Interface003, GetCaptureQuality) == sizeof(Interface002));
+		static_assert(offsetof(Interface003, GetCurrentCapture) == sizeof(Interface002) + sizeof(void*));
 		static_assert(std::is_standard_layout_v<CpuSnapshot001>);
 		static_assert(offsetof(Interface002, paired) == 0);
 		static_assert(offsetof(Interface002, RequestCapture) == sizeof(Interface001));

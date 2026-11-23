@@ -20,7 +20,7 @@ extract_between("${source}" "using FeatureCostMoments"
 extract_between("${source}" "bool IsFeatureCostMeasurementActive"
     "bool IsAnyFeatureCostMeasurementActive" "measurement_active.h")
 extract_between("${source}" "double GetFeatureCostRestartCooldownRemaining"
-    "\n#ifdef DEVBENCH_BRIDGE_ENABLED\n\tstruct UpscalingCostSweepReadiness" "measurement_cooldown.h")
+    "\n\tstruct UpscalingCostSweepReadiness" "measurement_cooldown.h")
 extract_between("${source}" "bool IsValidFeatureCostTiming"
     "void ResetFeatureCostTrace" "measurement_validity.h")
 extract_between("${source}" "void AddFeatureCostMoment"
@@ -28,7 +28,7 @@ extract_between("${source}" "void AddFeatureCostMoment"
 extract_between("${source}" "void ResolveFlatFeatureCostSamples"
     "RE::FormID GetMeasurementCellId" "measurement_samples.h")
 extract_between("${source}" "void ApplyFeatureCostMeasurementTestState"
-    "\n#ifdef DEVBENCH_BRIDGE_ENABLED\n\tconst char* GetQualityModeId" "measurement_phases.h")
+    "\n\tconst char* GetQualityModeId" "measurement_phases.h")
 
 
 extract_between("${source}" "const char* GetFeatureCostPhaseName"
@@ -40,7 +40,7 @@ extract_between("${source}" "#ifdef DEVBENCH_BRIDGE_ENABLED\n\tstatic std::deque
 extract_between("${source}" "void ResetFeatureCostTrace"
     "void AddFeatureCostMoment" "measurement_trace_helpers.h")
 extract_between("${source}" "json FeatureCostMeasurementStatusJson"
-    "json BuildDevBenchMeasurementStatus" "measurement_status.h")
+    "json BuildMeasurementStatus" "measurement_status.h")
 
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling.h" upscaling)
 extract_between("${upscaling}" "double GetPerformanceCostMeasurementSettleSeconds"

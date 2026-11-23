@@ -66,8 +66,15 @@ namespace MenuUI::PerformanceResultsPage
 			ContextLine(context, "cellName", "Scene");
 			ContextLine(context, "gameHour", "Game hour");
 			ContextLine(record, "elapsedSeconds", "Duration (seconds)");
-			if (context.contains("build") && context.at("build").is_object())
+			if (context.contains("build") && context.at("build").is_object()) {
 				ContextLine(context.at("build"), "buildIdShort", "CSX build");
+				ContextLine(context.at("build"), "sourceCommit", "Source commit");
+				ContextLine(context.at("build"), "sourceDirty", "Modified source");
+			}
+			if (record.contains("fpsVR")) {
+				ContextLine(record.at("fpsVR"), "status", "fpsVR");
+				ContextLine(record.at("fpsVR"), "reason", "fpsVR note");
+			}
 		}
 
 		void Number(const nlohmann::json& value)
@@ -188,6 +195,17 @@ namespace MenuUI::PerformanceResultsPage
 				store.Refresh();
 			if (view.unsaved && ImGui::Button("Retry saving results"))
 				store.Retry();
+			if (view.sessionRuns) {
+				if (ImGui::Button("Open session HTML")) {
+					std::string error;
+					if (!Util::OpenInShell(std::filesystem::u8path(view.sessionReport), error))
+						PageNotice(error, NoticeKind::Error);
+				}
+				ImGui::SameLine();
+				if (ImGui::Button("Export session HTML..."))
+					store.Export({}, {}, "html", {}, true);
+				ImGui::TextWrapped("%zu measurements from this game session. Each run retains its own settings and scene details.", view.sessionRuns);
+			}
 		}
 		if (view.history->empty() && !view.busy)
 			ImGui::TextDisabled("No saved measurements yet.");
@@ -209,9 +227,12 @@ namespace MenuUI::PerformanceResultsPage
 				args.value("format", std::string("both")), std::filesystem::u8path(args.value("directory", std::string{})));
 		else if (action == "retry_results")
 			store.Retry();
+		else if (action == "export_session")
+			store.Export({}, {}, "html", std::filesystem::u8path(args.value("directory", std::string{})), true);
 		const auto view = store.Snapshot();
 		nlohmann::json status{ { "accepted", true }, { "busy", view.busy }, { "history", *view.history }, { "error", view.error },
 			{ "message", view.message }, { "unsaved", view.unsaved }, { "folder", Util::PathToUtf8(store.Folder()) },
+			{ "sessionRuns", view.sessionRuns }, { "sessionReport", view.sessionReport },
 			{ "first", view.first ? *view.first : nlohmann::json(nullptr) }, { "second", view.second ? *view.second : nlohmann::json(nullptr) } };
 		if (view.first && view.second)
 			status["comparison"] = PerformanceResults::Compare(*view.first, *view.second);

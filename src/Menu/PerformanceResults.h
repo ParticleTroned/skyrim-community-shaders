@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace PerformanceResults
 {
@@ -25,6 +26,8 @@ namespace PerformanceResults
 	Json Compare(const Json& first, const Json& second);
 	/** Self-contained offline report, including settings and optional run comparison. */
 	std::string Html(const Json& record, const Json* comparison = nullptr);
+	/** Combined report with independent settings and context for every run. */
+	std::string HtmlSession(const Json& records);
 	/** Spreadsheet-safe metric rows with context and optional comparison differences. */
 	std::string Csv(const Json& record, const Json* comparison = nullptr);
 
@@ -35,6 +38,8 @@ namespace PerformanceResults
 		std::string message, error;
 		bool busy = false;
 		std::size_t unsaved = 0;
+		std::size_t sessionRuns = 0;
+		std::string sessionReport;
 	};
 
 	/** Owns disk work. A measurement lease excludes all worker jobs without waiting for I/O. */
@@ -50,11 +55,12 @@ namespace PerformanceResults
 		bool TryPause();
 		bool Busy() const;
 		void Resume();
-		void Save(Json record);
+		/** Optional worker finalizer attaches external measurements before saving/exporting. */
+		void Save(Json record, std::function<void(Json&)> finalize = {});
 		void Refresh();
 		void Load(std::string id, bool comparison);
 		/** Empty destination invokes the desktop folder picker, initially at Folder(). */
-		void Export(std::string id, std::string comparisonId, std::string format, std::filesystem::path destination = {});
+		void Export(std::string id, std::string comparisonId, std::string format, std::filesystem::path destination = {}, bool session = false);
 		void Retry();
 		View Snapshot() const;
 		const std::filesystem::path& Folder() const { return folder; }
@@ -65,7 +71,10 @@ namespace PerformanceResults
 		Json Read(const std::string& id) const;
 		void WriteRecord(const Json& record);
 		void UpdateHistory(const Json& record);
+		Json SessionRecords() const;
 		std::filesystem::path folder, logPath;
+		const std::string sessionId = NewId();
+		std::vector<Json> sessionEntries;
 		Writer writer;
 		FolderPicker picker;
 		mutable std::mutex mutex;

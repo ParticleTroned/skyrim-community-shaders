@@ -3999,9 +3999,13 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE nlohmann_json::nlohmann_json
     )
     add_controller_test(performance_results_test PerformanceResults tests/performance_results_test.cpp)
+    target_compile_definitions(
+        performance_results_test
+        PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN
+    )
     target_sources(
         performance_results_test
-        PRIVATE src/Menu/PerformanceResults.cpp
+        PRIVATE src/Menu/PerformanceResults.cpp src/Menu/PerformanceFpsVR.cpp
     )
     target_link_libraries(
         performance_results_test

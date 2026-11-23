@@ -58,7 +58,7 @@ public:
 	static nlohmann::json StartDevBenchFeatureCostMeasurement(
 		std::string_view a_featureShortName);
 	/** Captures all instrumented features together without changing feature settings. */
-	static nlohmann::json StartDevBenchQuickScan();
+	static nlohmann::json StartDevBenchQuickScan(bool batch = false, bool recordFpsVR = false);
 	/** Measures each enabled runtime feature using the shared on/off protocol. */
 	static nlohmann::json StartDevBenchFeatureCostBatch();
 	/** Changes a runtime toggle, retaining its prior enabled configuration. */

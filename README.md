@@ -12,6 +12,47 @@ Community Shaders Expanded (CSX) restores (and extends) Particle Lights function
 
 This fork inherits the original GPL-3.0-or-later license with the Modding Exception and Linking Exception (see below).
 
+## Repeatable performance scans
+
+In **Performance Tuning > Quick scan all features**, select **3 scans +
+automatic CSV**. CSX closes the menu, waits for five seconds of rendering
+readiness, then captures three 300-frame scans with at least ten seconds
+between them. Readiness settling occurs within each gap and can extend it.
+Keep the scene and headset still. The menu shortcut cancels the batch;
+completed repeats and the reason for interruption remain in the saved run.
+Scans use your current feature settings without changing them.
+Completed repeats are checkpointed during the gaps; result-file activity
+must finish before the next scan settles and captures.
+
+One CSV and its JSON record are saved automatically under
+`<SKSE log folder>/CSX/Performance`. **Saved results** can open that folder.
+Exports include the compiled source commit, Build ID, modified-source flag,
+repeat number, settings and UTC capture markers. The profiler reports
+instrumented feature self-times, not the saving from disabling a feature.
+
+In VR, **Include fpsVR when running** optionally uses `fpsVRcmd.exe` from
+the already-running fpsVR installation. It needs neither DevBench nor a
+keyboard shortcut and does not launch fpsVR. CSX verifies advancing raw
+CSV samples before scanning, keeps an existing recording running, and
+stops only a recording it started. If fpsVR is unavailable or its recording
+cannot be verified, the profiler scans continue and record the omission.
+
+With this option selected, CSX also saves a combined HTML report. It matches
+the raw fpsVR CSV to each scan using SteamVR system time, preserving the
+original CSV. The report separates whole-frame CPU/GPU mean, median, p95
+and p99 from profiler self-times. The matched window uses the latest
+completed compositor timestamps at capture request and resolution. Its
+boundaries are approximate and include profiler query completion latency.
+Missing coverage or a clock reset produces an explicit omission rather
+than a guessed match. Saving and matching run after measurement.
+
+CSX also updates a **session HTML** after each finished measurement. It
+combines that game's runs in one report, including runs from different
+saves or settings. Each run has expandable feature settings, scene and
+hardware details, and build information. Use **Saved results > Open
+session HTML** or **Export session HTML...**. Starting a new game process
+creates a new session report; previous reports remain on disk.
+
 ## Installing a CSX release
 
 Download the single `CSX_AIO-*.7z` asset from the

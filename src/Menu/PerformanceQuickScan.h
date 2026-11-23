@@ -13,6 +13,8 @@ namespace PerformanceQuickScan
 	inline constexpr double kSettleSeconds = 5.0;
 	inline constexpr double kMaximumSeconds = 30.0;
 	inline constexpr std::uint32_t kCaptureFrames = 300;
+	inline constexpr std::uint32_t kBatchScans = 3;
+	inline constexpr double kBatchGapSeconds = 10.0;
 
 	/** Global switches are observed every update, including changes made by hotkeys. */
 	struct RenderConfiguration
@@ -29,6 +31,7 @@ namespace PerformanceQuickScan
 		Idle,
 		AwaitingMenuClose,
 		Settling,
+		BetweenScans,
 		Capturing,
 		Complete,
 		Failed,
@@ -49,14 +52,28 @@ namespace PerformanceQuickScan
 		Phase phase = Phase::Idle;
 		double started = 0.0;
 		double readySince = 0.0;
+		std::uint32_t scanIndex = 1;
+		std::uint32_t scanCount = 1;
 		RenderConfiguration renderConfiguration;
 
-		bool Active() const { return phase == Phase::AwaitingMenuClose || phase == Phase::Settling || phase == Phase::Capturing; }
-		void Begin(double now, bool menuOpen, RenderConfiguration configuration = {})
+		bool Active() const { return phase == Phase::AwaitingMenuClose || phase == Phase::Settling || phase == Phase::BetweenScans || phase == Phase::Capturing; }
+		void Begin(double now, bool menuOpen, RenderConfiguration configuration = {}, bool batch = false)
 		{
 			started = readySince = now;
+			scanIndex = 1;
+			scanCount = batch ? kBatchScans : 1;
 			renderConfiguration = configuration;
 			phase = menuOpen ? Phase::AwaitingMenuClose : Phase::Settling;
+		}
+		/** Retain measurement ownership while the next scan settles inside its gap. */
+		bool Advance(double now)
+		{
+			if (phase != Phase::Complete || scanIndex >= scanCount)
+				return false;
+			++scanIndex;
+			started = readySince = now;
+			phase = Phase::BetweenScans;
+			return true;
 		}
 		void MenuClosed(double now)
 		{
@@ -75,11 +92,11 @@ namespace PerformanceQuickScan
 				return Action::TimedOut;
 			if (phase == Phase::Capturing)
 				return ready ? Action::Wait : Action::Interrupted;
-			if (phase != Phase::Settling)
+			if (phase != Phase::Settling && phase != Phase::BetweenScans)
 				return Action::Wait;
 			if (!ready)
 				readySince = now;
-			else if (now - readySince >= kSettleSeconds)
+			else if (now - readySince >= kSettleSeconds && (phase != Phase::BetweenScans || now - started >= kBatchGapSeconds))
 				return Action::StartCapture;
 			return Action::Wait;
 		}

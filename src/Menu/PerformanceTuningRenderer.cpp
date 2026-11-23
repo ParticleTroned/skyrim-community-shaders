@@ -3,6 +3,7 @@
 #include "Menu/FeatureListRenderer.h"
 #include "Menu/SettingsPage.h"
 #include "Menu/SettingsSearch.h"
+#include "PerformanceFpsVR.h"
 #include "PerformancePage.h"
 #include "PerformanceResultsUI.h"
 #include <cstring>
@@ -43,6 +44,7 @@
 #include "Utils/RuntimeToggle.h"
 #include "Utils/UI.h"
 #include "Utils/VanityCamera.h"
+#include "Utils/WinApi.h"
 
 namespace
 {
@@ -297,6 +299,7 @@ namespace
 		PerformanceQuickScan::Controller controller;
 		bool devBenchOwned = false;
 		bool reopenMenu = false;
+		bool fpsVrPrepared = false;
 		PerformanceQuickScan::CaptureOwnership<Profiler> capture;
 		RE::FormID cell = 0;
 		std::uint64_t captureId = 0;
@@ -307,11 +310,15 @@ namespace
 		std::uint32_t cpuRefusals = 0;
 		double captureSeconds = 0.0;
 		double captureStarted = 0.0;
+		std::string captureRequestedUtc, captureResolvedUtc;
+		double startSteamVrSeconds = 0, endSteamVrSeconds = 0;
+		std::uint64_t steamVrEpoch = 0;
 		json settings;
 		std::vector<QuickScanRow> rows;
 		std::string failure;
 	};
 	static QuickScanState g_quickScan;
+	static std::shared_ptr<PerformanceFpsVR::Session> g_scanFpsVR;
 
 	void CaptureProfilerStateForPerformanceTuning()
 	{
@@ -1127,6 +1134,8 @@ namespace
 			return "awaiting_menu_close";
 		case Settling:
 			return "settling";
+		case BetweenScans:
+			return "between_scans";
 		case Capturing:
 			return "capturing";
 		case Complete:
@@ -1149,6 +1158,12 @@ namespace
 				{ "cpuMs", row.cpuMs ? json(*row.cpuMs) : json(nullptr) } });
 		}
 		return { { "phase", QuickScanPhaseName() }, { "active", g_quickScan.controller.Active() },
+			{ "scanIndex", g_quickScan.controller.scanIndex }, { "scanCount", g_quickScan.controller.scanCount },
+			{ "gapSeconds", PerformanceQuickScan::kBatchGapSeconds },
+			{ "captureRequestedUtc", g_quickScan.captureRequestedUtc.empty() ? json(nullptr) : json(g_quickScan.captureRequestedUtc) },
+			{ "captureResolvedUtc", g_quickScan.captureResolvedUtc.empty() ? json(nullptr) : json(g_quickScan.captureResolvedUtc) },
+			{ "windowSemantics", "latest_completed_compositor_timestamps_at_request_and_resolution_including_query_latency" },
+			{ "startSteamVrSeconds", g_quickScan.startSteamVrSeconds }, { "endSteamVrSeconds", g_quickScan.endSteamVrSeconds },
 			{ "captureId", g_quickScan.captureId }, { "requestedFrames", PerformanceQuickScan::kCaptureFrames },
 			{ "renderConfiguration", { { "shadersEnabled", g_quickScan.controller.renderConfiguration.shadersEnabled },
 										 { "shaderEnableRequested", g_quickScan.controller.renderConfiguration.shadersRequested },
@@ -1173,10 +1188,31 @@ namespace
 			scan.rows.clear();
 		if (!g_savedRun.is_null() && g_savedRun["kind"] == "quick_scan") {
 			g_savedRun["capture"] = QuickScanStatus();
+			g_savedRun["captures"].push_back(g_savedRun["capture"]);
+			auto sampling = g_savedRun["capture"];
+			sampling.erase("results");
 			for (const auto& row : scan.rows) {
-				g_savedRun["results"].push_back({ { "id", row.feature }, { "label", row.label }, { "coverage", row.coverage },
+				g_savedRun["results"].push_back({ { "id", scan.controller.scanCount == 1 ? row.feature : fmt::format("{}:{}", scan.controller.scanIndex, row.feature) },
+					{ "label", row.label }, { "scanIndex", scan.controller.scanIndex }, { "sampling", sampling }, { "coverage", row.coverage },
 					{ "metrics", { { "gpu", { { "unit", "ms" }, { "value", row.gpuMs ? json(*row.gpuMs) : json(nullptr) } } },
 									 { "cpu", { { "unit", "ms" }, { "value", row.cpuMs ? json(*row.cpuMs) : json(nullptr) } } } } } });
+			}
+			if (phase != PerformanceQuickScan::Phase::Complete)
+				g_savedRun["results"].push_back({ { "id", fmt::format("{}:failed", scan.controller.scanIndex) },
+					{ "label", "Incomplete scan" }, { "scanIndex", scan.controller.scanIndex }, { "sampling", sampling }, { "failure", scan.failure },
+					{ "metrics", { { "gpu", { { "unit", "ms" }, { "value", nullptr } } }, { "cpu", { { "unit", "ms" }, { "value", nullptr } } } } } });
+			if (phase == PerformanceQuickScan::Phase::Complete && scan.controller.Advance(ImGui::GetTime())) {
+				g_savedRun["elapsedSeconds"] = std::max(0.0, ImGui::GetTime() - g_savedRunStart);
+				auto& store = MenuUI::PerformanceResultsPage::GetStore();
+				store.Save(g_savedRun);
+				store.Resume();
+				scan.rows.clear();
+				scan.captureId = scan.resolvedFrames = scan.invalidGpuFrames = scan.invalidCpuFrames = 0;
+				scan.captureSeconds = 0;
+				scan.captureRequestedUtc.clear();
+				scan.captureResolvedUtc.clear();
+				scan.startSteamVrSeconds = scan.endSteamVrSeconds = 0;
+				return;
 			}
 			FinishSavedRun(QuickScanPhaseName(), scan.failure);
 		}
@@ -1185,7 +1221,7 @@ namespace
 			globals::menu->OpenMenu();
 	}
 
-	const char* StartQuickScan(bool devBenchOwned)
+	const char* StartQuickScan(bool devBenchOwned, bool batch = false, bool recordFpsVR = false)
 	try {
 		if (const auto* error = GetFeatureCostStartError(ImGui::GetTime()))
 			return error;
@@ -1209,8 +1245,18 @@ namespace
 			return "results_busy";
 		}
 		RestoreProfilerStateAfterPerformanceTuning();
-		pending.controller.Begin(ImGui::GetTime(), pending.reopenMenu, CaptureQuickScanRenderConfiguration());
+		pending.controller.Begin(ImGui::GetTime(), pending.reopenMenu, CaptureQuickScanRenderConfiguration(), batch);
+		g_savedRun["scanCount"] = pending.controller.scanCount;
+		g_savedRun["automaticCsv"] = batch || recordFpsVR;
+		g_savedRun["captures"] = json::array();
 		g_quickScan = std::move(pending);
+		if (recordFpsVR && globals::game::isVR) {
+			const auto documents = Util::GetDocumentsPath();
+			g_scanFpsVR = std::make_shared<PerformanceFpsVR::Session>(documents ? *documents / L"fpsVR" / L"CSV" : std::filesystem::path{});
+			g_savedRun["fpsVR"] = { { "status", "pending" }, { "scans", json::array() } };
+		} else if (recordFpsVR) {
+			g_savedRun["fpsVR"] = { { "status", "omitted" }, { "reason", "fpsVR requires the VR runtime." }, { "scans", json::array() } };
+		}
 		if (g_quickScan.reopenMenu)
 			globals::menu->CloseMenu();
 		return nullptr;
@@ -1227,6 +1273,10 @@ namespace
 
 	bool QuickScanReady()
 	{
+		if (MenuUI::PerformanceResultsPage::GetStore().Busy())
+			return false;
+		if (g_scanFpsVR && !g_scanFpsVR->Prepared())
+			return false;
 		if ((globals::game::ui && globals::game::ui->GameIsPaused()) ||
 			(globals::shaderCache && globals::shaderCache->IsCompiling()) ||
 			!globals::features::upscaling.IsPerformanceCostMeasurementReady())
@@ -1278,6 +1328,15 @@ namespace
 			return;
 		}
 		auto* profiler = globals::profiler;
+		if (g_scanFpsVR && !scan.fpsVrPrepared) {
+			if (!g_scanFpsVR->Prepared()) {
+				if (now - scan.controller.started >= PerformanceQuickScan::kMaximumSeconds)
+					FinishQuickScan(Failed, "fpsVR preparation timed out.");
+				return;
+			}
+			scan.fpsVrPrepared = true;
+			scan.controller.started = scan.controller.readySince = now;
+		}
 		const auto action = scan.controller.Poll(now, QuickScanReady(), CaptureQuickScanRenderConfiguration());
 		if (action == ConfigurationChanged) {
 			FinishQuickScan(Failed, "Shader settings changed during the quick scan.");
@@ -1288,6 +1347,8 @@ namespace
 			return;
 		}
 		if (action == StartCapture) {
+			if (!MenuUI::PerformanceResultsPage::GetStore().TryPause())
+				return;
 			if (profiler->GetBoundedCaptureProgress().state == Profiler::CaptureSessionState::Running) {
 				FinishQuickScan(Failed, "Another profiler capture is active.");
 				return;
@@ -1304,6 +1365,14 @@ namespace
 			scan.gpuRefusals = profiler->GetSlotRefusals();
 			scan.cpuRefusals = profiler->GetCpuSlotRefusals();
 			scan.captureStarted = now;
+			scan.captureRequestedUtc = PerformanceResults::Timestamp();
+			if (g_scanFpsVR) {
+				const auto timing = ProfilingRenderer::CaptureFrameTimingSummary(false);
+				if (timing.vrTiming && !timing.vrSamples.empty()) {
+					scan.startSteamVrSeconds = timing.vrSamples.back().systemTime;
+					scan.steamVrEpoch = timing.vrTimingEpoch;
+				}
+			}
 			scan.controller.phase = Capturing;
 		}
 		if (scan.controller.phase != Capturing)
@@ -1327,6 +1396,12 @@ namespace
 			return;
 		}
 		if (progress.state == Profiler::CaptureSessionState::Completed) {
+			scan.captureResolvedUtc = PerformanceResults::Timestamp();
+			if (g_scanFpsVR) {
+				const auto timing = ProfilingRenderer::CaptureFrameTimingSummary(false);
+				if (timing.vrTiming && timing.vrTimingEpoch == scan.steamVrEpoch && !timing.vrSamples.empty())
+					scan.endSteamVrSeconds = timing.vrSamples.back().systemTime;
+			}
 			const auto* timers = profiler->GetBoundedCaptureResults(scan.captureId);
 			if (!timers || progress.resolvedFrames != PerformanceQuickScan::kCaptureFrames ||
 				CaptureQuickScanSettings() != scan.settings) {
@@ -2727,7 +2802,12 @@ namespace
 		g_savedRun["finished"] = PerformanceResults::Timestamp();
 		g_savedRun["elapsedSeconds"] = std::max(0.0, ImGui::GetTime() - g_savedRunStart);
 		auto& store = MenuUI::PerformanceResultsPage::GetStore();
-		store.Save(std::move(g_savedRun));
+		if (g_scanFpsVR && g_savedRun["kind"] == "quick_scan") {
+			auto session = std::exchange(g_scanFpsVR, {});
+			session->RequestFinish();
+			store.Save(std::move(g_savedRun), [session = std::move(session)](json& record) { session->Finish(record); });
+		} else
+			store.Save(std::move(g_savedRun));
 		g_savedRun = nullptr;
 		store.Resume();
 	}
@@ -3111,16 +3191,33 @@ namespace
 		MenuUI::SectionHeading("Quick scan", "Instrumented CPU/GPU self times, not on/off savings. Existing on/off comparisons are unchanged. Keep the scene still. The menu closes; CSX waits five seconds, then captures 300 frames for all instrumented features.");
 		{
 			auto disabled = Util::DisableGuard(PerformanceTuningRenderer::HasActiveMeasurements() || MenuUI::PerformanceResultsPage::GetStore().Busy());
+			static bool recordFpsVR = false;
+			if (globals::game::isVR) {
+				ImGui::Checkbox("Include fpsVR when running", &recordFpsVR);
+				Util::AddTooltip("Uses the running fpsVR installation's recording command. Existing recordings are left running. If recording cannot be verified, scans continue without fpsVR. Matched whole-frame timings and a combined HTML report are saved automatically; the fpsVR CSV is unchanged.");
+			}
 			if (ImGui::Button("Start quick scan")) {
-				const char* error = StartQuickScan(false);
+				const char* error = StartQuickScan(false, false, recordFpsVR);
 				g_featureCostUiMessage = error ? fmt::format("Quick scan could not start: {}", error) : "";
 			}
 			Util::AddTooltip("Keep the scene and headset still. The menu closes, waits five seconds and captures 300 frames for all instrumented features, then reopens with results.");
+			ImGui::SameLine();
+			if (ImGui::Button("3 scans + automatic CSV")) {
+				const char* error = StartQuickScan(false, true, recordFpsVR);
+				g_featureCostUiMessage = error ? fmt::format("Scan batch could not start: {}", error) : "";
+			}
+			Util::AddTooltip("Capture three scans with ten-second gaps. Readiness settling occurs during each gap; delays extend the gap. CSV and JSON are saved beside the saved results, including commit, Build ID and capture times. Keep the scene and headset still throughout.");
 		}
 		if (!g_featureCostUiMessage.empty())
 			MenuUI::PageNotice(g_featureCostUiMessage, MenuUI::NoticeKind::Error);
 		if (!g_quickScan.failure.empty())
 			MenuUI::PageNotice(g_quickScan.failure, MenuUI::NoticeKind::Error);
+		if (g_quickScan.controller.scanCount > 1 && !g_quickScan.controller.Active()) {
+			const auto saved = MenuUI::PerformanceResultsPage::GetStore().Snapshot();
+			MenuUI::PageNotice(saved.busy ? "Saving batch CSV and JSON..." : saved.error.empty() ? "Batch results saved. Open Saved results to view or locate the CSV." :
+																								   saved.error,
+				saved.error.empty() ? MenuUI::NoticeKind::Information : MenuUI::NoticeKind::Error);
+		}
 		if (g_quickScan.controller.phase != PerformanceQuickScan::Phase::Complete)
 			return;
 		ImGui::Text("Captured %u frames in %.1f seconds after settling.", g_quickScan.resolvedFrames, g_quickScan.captureSeconds);
@@ -3460,9 +3557,13 @@ void PerformanceTuningRenderer::RenderClosedMenuMeasurementOverlay()
 	if (g_quickScan.controller.Active()) {
 		const bool capturing = g_quickScan.controller.phase == PerformanceQuickScan::Phase::Capturing;
 		remainingSeconds = capturing ? 0.0 : std::max(0.0, PerformanceQuickScan::kSettleSeconds - (currentTime - g_quickScan.controller.readySince));
+		if (g_quickScan.controller.phase == PerformanceQuickScan::Phase::BetweenScans)
+			remainingSeconds = std::max(remainingSeconds, PerformanceQuickScan::kBatchGapSeconds - (currentTime - g_quickScan.controller.started));
 		caseProgress = capturing ? static_cast<float>(g_quickScan.resolvedFrames) / PerformanceQuickScan::kCaptureFrames : 0.0f;
 	}
 	float progress = caseProgress;
+	if (g_quickScan.controller.Active())
+		progress = (g_quickScan.controller.scanIndex - 1 + caseProgress) / g_quickScan.controller.scanCount;
 	if (g_featureCostBatch.active && !g_featureCostBatch.features.empty()) {
 		const std::size_t completed = g_featureCostBatch.nextFeatureIndex - (activeState ? 1 : 0);
 		progress = static_cast<float>((static_cast<double>(completed) + caseProgress) / static_cast<double>(g_featureCostBatch.features.size()));
@@ -3498,7 +3599,9 @@ void PerformanceTuningRenderer::RenderClosedMenuMeasurementOverlay()
 		ImGuiWindowFlags_NoInputs;
 	if (ImGui::Begin("ActualFeatureCostProgress", nullptr, flags)) {
 		if (g_quickScan.controller.Active()) {
-			ImGui::TextUnformatted(g_quickScan.controller.phase == PerformanceQuickScan::Phase::Capturing ? "Quick scan: capturing all instrumented features" : "Quick scan: settling");
+			ImGui::Text("Quick scan %u / %u: %s", g_quickScan.controller.scanIndex, g_quickScan.controller.scanCount,
+				g_quickScan.controller.phase == PerformanceQuickScan::Phase::Capturing ? "capturing" : g_quickScan.controller.phase == PerformanceQuickScan::Phase::BetweenScans ? "gap / settling" :
+																																												   "settling");
 			ImGui::Text("%u / %u frames", g_quickScan.resolvedFrames, PerformanceQuickScan::kCaptureFrames);
 		} else if (sweepRunning) {
 			if (g_upscalingCostSweep.phase == UpscalingCostSweepPhase::RestoringOriginal) {
@@ -3719,10 +3822,10 @@ nlohmann::json PerformanceTuningRenderer::StartDevBenchFeatureCostMeasurement(
 	return response;
 }
 
-nlohmann::json PerformanceTuningRenderer::StartDevBenchQuickScan()
+nlohmann::json PerformanceTuningRenderer::StartDevBenchQuickScan(bool batch, bool recordFpsVR)
 {
-	const auto* error = StartQuickScan(true);
-	json response = { { "action", "start_quick_scan" }, { "accepted", error == nullptr } };
+	const auto* error = StartQuickScan(true, batch, recordFpsVR);
+	json response = { { "action", batch ? "start_quick_scan_batch" : "start_quick_scan" }, { "accepted", error == nullptr } };
 	if (error)
 		response["errorCode"] = error;
 	response["status"] = BuildDevBenchMeasurementStatus(0, 128);

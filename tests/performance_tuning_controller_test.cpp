@@ -154,6 +154,22 @@ namespace
 		Require(!scan.Active() && scan.Poll(50.0, true) == Action::Wait, "cancelled scans must not restart");
 		scan.Begin(60.0, false);
 		Require(scan.Poll(65.0, true) == Action::StartCapture, "already closed menus must work without a close notification");
+		scan.Begin(0, false, original, true);
+		Require(scan.scanCount == 3 && scan.scanIndex == 1, "a batch must start with three scans");
+		for (unsigned next = 2; next <= 3; ++next) {
+			scan.phase = Phase::Complete;
+			Require(scan.Advance(next * 20) && scan.Active() && scan.scanIndex == next, "gaps must retain the batch's ownership");
+			Require(scan.Poll(next * 20 + 9.9, true, original) == Action::Wait, "no capture before the ten-second gap");
+			Require(scan.Poll(next * 20 + 10, true, original) == Action::StartCapture, "settling must fit within the ten-second gap");
+			Require(scan.Poll(next * 20 + 10, false, original) == Action::Wait, "unready rendering extends the gap");
+			Require(scan.Poll(next * 20 + 14.9, true, original) == Action::Wait, "readiness must remain stable for five seconds");
+			Require(scan.Poll(next * 20 + 15, true, original) == Action::StartCapture, "extended gaps must resume when ready");
+		}
+		scan.phase = Phase::Complete;
+		Require(!scan.Advance(100) && !scan.Active(), "three successful scans must terminate without another gap");
+		scan.Begin(0, false, original, true);
+		scan.phase = Phase::Cancelled;
+		Require(!scan.Advance(1) && scan.Poll(20, true, original) == Action::Wait, "cancellation must not restart a batch");
 
 		const Util::FeatureProfiling::View view{ "Example", "Example" };
 		std::vector<Timer> timers{ { "Example::Pass" }, { "Example::Other" }, { "ExampleExtra::Unrelated" } };

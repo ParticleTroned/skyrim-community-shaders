@@ -37,11 +37,14 @@ foreach(_schema_contract IN ITEMS
     "refresh_results"
     "load_result"
     "export_result"
+    "export_session"
     "retry_results"
     "resultId"
     "comparisonId"
     "directory"
     "start_quick_scan"
+    "start_quick_scan_batch"
+    "recordFpsVR"
     "invalidGpuFrames"
     "invalidCpuFrames"
     "renderConfiguration"
@@ -102,7 +105,7 @@ foreach(_index RANGE 0 ${_action_last})
     )
     list(APPEND _registered_actions "${_action}")
 endforeach()
-foreach(_required_action IN ITEMS start_quick_scan start_feature_costs set_feature_enabled
+foreach(_required_action IN ITEMS start_quick_scan start_quick_scan_batch start_feature_costs set_feature_enabled
     included_features select_included_feature restore_included_features save_included_features
     visuals_status select_visuals_profile clear_visuals_profile restore_visuals_profile
     import_visuals_profile export_visuals_profile import_profile export_profile)
@@ -197,7 +200,7 @@ foreach(_bridge_contract IN ITEMS
     "PerformanceTuningRenderer::GetDevBenchMeasurementStatus("
     "PerformanceTuningRenderer::CancelDevBenchMeasurements()"
     "PerformanceTuningRenderer::StartDevBenchFeatureCostBatch()"
-    "PerformanceTuningRenderer::StartDevBenchQuickScan()"
+    "PerformanceTuningRenderer::StartDevBenchQuickScan(action == \"start_quick_scan_batch\", recordFpsVR)"
     "PerformanceTuningRenderer::SetDevBenchFeatureEnabled(featureShortName, enabled)"
 )
     string(FIND "${_bridge}" "${_bridge_contract}" _bridge_position)

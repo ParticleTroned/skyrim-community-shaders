@@ -199,4 +199,8 @@ namespace Util
 	{
 		return GetKnownFolderPath(FOLDERID_Videos);
 	}
+	std::optional<std::filesystem::path> GetDocumentsPath()
+	{
+		return GetKnownFolderPath(FOLDERID_Documents);
+	}
 }  // namespace Util

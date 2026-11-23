@@ -30,4 +30,6 @@ namespace Util
 	/** Windows user-owned capture roots; unavailable only when shell discovery fails. */
 	std::optional<std::filesystem::path> GetPicturesPath();
 	std::optional<std::filesystem::path> GetVideosPath();
+	/** User Documents folder, including Windows folder redirection. */
+	std::optional<std::filesystem::path> GetDocumentsPath();
 }  // namespace Util

@@ -12240,6 +12240,7 @@ shaders:
               common_defines:
                   - CLOUD_SHADOWS
                   - CS_HAIR
+                  - CS_SKIN
                   - ADAPTIVE_BALANCE
                   - D3DCOMPILE_DEBUG
                   - D3DCOMPILE_SKIP_OPTIMIZATION
@@ -14283,6 +14284,7 @@ shaders:
               common_defines:
                   - CLOUD_SHADOWS
                   - CS_HAIR
+                  - CS_SKIN
                   - ADAPTIVE_BALANCE
                   - D3DCOMPILE_DEBUG
                   - D3DCOMPILE_SKIP_OPTIMIZATION

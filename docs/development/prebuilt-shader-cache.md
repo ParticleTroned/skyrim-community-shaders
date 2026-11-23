@@ -92,6 +92,11 @@ Nested captured defines are retained without adding duplicate profile
 entries. Profile-owned macros replace captured values and source scopes;
 top-level define metadata alone does not supply compiler inputs.
 
+Lighting vertex and pixel stages include `CS_SKIN` when Skin is loaded,
+with an empty macro value in packaged compiler tasks. The validation YAML
+must list it in both compiler-consumed stage lists. Profiles that disable
+Skin remove it; other shader families do not receive it.
+
 `SE` names the shared desktop shader cache for both Special Edition and
 Anniversary Edition. AE uses the SE permutation inventory and cache slot; VR
 uses its own inventory and `VR` compile state. Shared HLSL/include changes

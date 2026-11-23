@@ -12231,6 +12231,7 @@ shaders:
                   - ADAPTIVE_BALANCE
                   - CLOUD_SHADOWS
                   - CS_HAIR
+                  - CS_SKIN
                   - D3DCOMPILE_DEBUG
                   - D3DCOMPILE_SKIP_OPTIMIZATION
                   - DYNAMIC_CUBEMAPS
@@ -13669,6 +13670,7 @@ shaders:
                   - ADAPTIVE_BALANCE
                   - CLOUD_SHADOWS
                   - CS_HAIR
+                  - CS_SKIN
                   - D3DCOMPILE_DEBUG
                   - D3DCOMPILE_SKIP_OPTIMIZATION
                   - DYNAMIC_CUBEMAPS

@@ -297,6 +297,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
             "CLOUD_SHADOWS",
             "CS_EDITOR",
             "CS_HAIR",
+            "CS_SKIN",
             "D3DCOMPILE_DEBUG",
             "D3DCOMPILE_SKIP_OPTIMIZATION",
             "VANILLA_FRESNEL",
@@ -686,6 +687,38 @@ class ShaderCachePackagingTests(unittest.TestCase):
         BUILDER.append_missing_defines(nested, ("UNIFIED_WATER", "OTHER=1", "NEW", "NEW"))
         self.assertEqual(nested, [["UNIFIED_WATER", ["OTHER=1"]], "NEW"])
 
+    def test_skin_define_reaches_lighting_compiler_tasks(self) -> None:
+        import yaml
+        from hlslkit.compile_shaders import parse_shader_configs
+
+        def check_tasks(tasks, enabled, prepared=False):
+            lighting_stages = set()
+            for source, stage, entry, defines in tasks:
+                skin = [value for value in defines if value.partition("=")[0] == "CS_SKIN"]
+                expected = int(source == "Lighting.hlsl" and enabled)
+                self.assertEqual(len(skin), expected, (source, stage, entry))
+                if prepared and expected:
+                    self.assertEqual(skin, ["CS_SKIN="], (source, stage, entry))
+                if source == "Lighting.hlsl":
+                    lighting_stages.add(stage)
+            self.assertEqual(lighting_stages, {"PSHADER", "VSHADER"})
+
+        for runtime, captured in BUILDER.configs_for(REPO).items():
+            with self.subTest(runtime=runtime, profile="validation"):
+                check_tasks(parse_shader_configs(str(captured)), True)
+            for profile in BUILDER.CACHE_PROFILES.values():
+                if runtime not in profile.supported_runtimes:
+                    continue
+                with self.subTest(runtime=runtime, profile=profile.name), tempfile.TemporaryDirectory() as temporary:
+                    enabled = "Skin" not in profile.disabled_features
+                    filtered = BUILDER.filter_profile_defines(
+                        captured, Path(temporary) / "filtered.yaml", yaml, profile,
+                        feature_states={"Skin": enabled},
+                    )
+                    tasks = parse_shader_configs(str(filtered))
+                    BUILDER.compile_task_defines(tasks)
+                    check_tasks(tasks, enabled, prepared=True)
+
     def test_bundled_grass_defines_match_native_factory_without_leaking(self) -> None:
         for profile in (BUILDER.SHIPPED_CACHE_PROFILE, BUILDER.PATKA_CACHE_PROFILE):
             with self.subTest(profile=profile.name):
@@ -920,6 +953,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
                     "ExtendedTranslucency",
                     "GrassCollision",
                     "HairSpecular",
+                    "Skin",
                     "HorizonFix",
                     "LinearLighting",
                     "PerformanceOverlay",
@@ -939,6 +973,7 @@ class ShaderCachePackagingTests(unittest.TestCase):
                     "CLOUD_SHADOWS",
                     "CS_EDITOR",
                     "CS_HAIR",
+                    "CS_SKIN",
                     "EXTENDED_TRANSLUCENCY",
                     "GRASS_COLLISION",
                     "HORIZON_FIX",

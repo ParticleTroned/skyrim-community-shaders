@@ -23,6 +23,7 @@ contradict this policy.
 -   **Graphics safety:** Name every new D3D11 resource with the existing `Util::SetResourceName` path and use RAII for graphics and ImGui state.
 -   **Validation:** Test in proportion to risk, record exact evidence, and never claim validation that did not run.
 -   **Git safety:** Create direct commits locally before pushing. Use the requested GitHub merge method for PRs, then synchronize the local destination branch. Never force-push or rebase shared branches. Preserve user changes, build outputs, and shader caches.
+-   **Linear main-VR history:** Never create or introduce merge commits on `main-VR`. Prepare linear history before integration so publishing does not require a later history rewrite.
 
 ## Code Review Rules
 
@@ -362,10 +363,18 @@ to its attribution in commit messages, PR descriptions, and write-ups:
 
 -   CSX public releases publish only the complete `CSX_AIO-*.7z` installer. Keep split core, feature and cache packages as internal workflow artifacts. Release notes must describe CSX's bundled features and built-in systems; never inherit upstream Nexus upload destinations. Follow [the CSX distribution contract](docs/development/csx-release-distribution.md).
 -   Never push directly to, force-push, or rebase shared branches such as `main`, `main-VR`, `dev`, or `hotfix/*` without explicit user direction. Use `--force-with-lease` only when rewriting an owned feature branch is necessary and authorized.
+-   Keep `main-VR` linear during local integration and publication. Do not
+    create a merge commit or fast-forward it to new history containing merge
+    commits. Prepare changes on a feature branch and use a linear
+    fast-forward or squash commit for authorized local integration. For PRs,
+    use an authorized GitHub squash or rebase method. Before an authorized
+    push, fetch `origin/main-VR` and verify that
+    `pwsh ./tools/git.ps1 rev-list --merges origin/main-VR..main-VR`
+    returns no commits. Do not defer this check until push rejection.
 -   For direct commits to this repository, create the commit locally and
     update the matching local destination branch before an authorized push.
-    Integrate work from another branch or linked worktree by merge or
-    fast-forward first. Never leave the local destination branch behind a
+    Integrate work from another branch or linked worktree first, respecting
+    the destination's history rules. Never leave the local branch behind a
     direct remote update. Verify local and remote commit IDs afterward.
     A request to commit locally does not authorize a push.
 -   Publish PRs through the normal GitHub workflow. Use the user's requested
@@ -375,8 +384,14 @@ to its attribution in commit messages, PR descriptions, and write-ups:
     does not govern normal PR merges or user-authorized contributions to an
     existing PR in another repository; follow that PR's workflow instead.
 -   Do not manually create `v*` release tags or hand-edit the CMake project version; release automation owns them.
--   Synchronize upstream histories by merge rather than cherry-picking individual commits. Preserve VR-specific behavior during conflict resolution and verify upstream ancestry after the merge.
--   Do not squash upstream-sync PRs when the merge ancestry is itself part of the synchronization contract.
+-   Preserve upstream merge ancestry on a dedicated integration branch that
+    permits merge commits. Preserve VR-specific behavior during conflict
+    resolution and verify upstream ancestry there. Integration into `main-VR`
+    must still follow its linear-history rule.
+-   Do not squash upstream-sync PRs when merge ancestry is part of the
+    synchronization contract and the destination permits merge commits. If
+    that contract conflicts with `main-VR`'s linear-history rule, resolve the
+    destination or integration method before changing `main-VR`.
 
 ## Maintaining these instructions
 

@@ -1565,11 +1565,28 @@ public:
 			VRPresentationStretchTelemetryPolicy::StretchReason::Unattributed;
 	};
 
+	/// Identity of a coherent presented vendor pair retained across fallback frames.
+	struct VRRenderScaleStereoPresentationProof
+	{
+		uint64_t transitionEpoch = 0;
+		uintptr_t deviceIdentity = 0;
+		uint64_t resourceRevision = 0;
+		uint32_t contractGeneration = 0;
+		UpscaleMethod method = UpscaleMethod::kNONE;
+		uint32_t inputWidth = 0;
+		uint32_t inputHeight = 0;
+		uint32_t outputWidth = 0;
+		uint32_t outputHeight = 0;
+		bool valid = false;
+
+		bool operator==(const VRRenderScaleStereoPresentationProof&) const = default;
+	};
+
 	struct VRRenderScalePresentationSnapshot
 	{
 		std::array<VRRenderScalePresentationEyeSnapshot, 2> eyes{};
 		// A queued replacement must retain stereo proof across fallback eye updates.
-		std::array<VRRenderScalePresentationEyeSnapshot, 2> lastBothEyesVendorEyes{};
+		VRRenderScaleStereoPresentationProof lastVendorStereoProof{};
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		// Preserve the last coherent vendor pair when an asynchronous status read
 		// lands between the two eye publications of the next compositor cycle.

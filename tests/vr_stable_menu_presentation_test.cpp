@@ -12,10 +12,11 @@ struct Upscaling
 	enum class UpscaleMethod
 	{
 		kNONE,
+		kTAA,
 		kFSR,
 		kDLSS
 	};
-	enum class VRRenderScaleBackendKind
+	enum class VRRenderScaleBackendKind : uint8_t
 	{
 		None,
 		FSRHost,
@@ -45,6 +46,8 @@ namespace
 	using Eye = Upscaling::VRRenderScalePresentationEyeSnapshot;
 	using Presentation = Upscaling::VRRenderScalePresentationSnapshot;
 	using Profile = Upscaling::VRRenderScaleProfileSnapshot;
+	using Proof = Upscaling::VRRenderScaleStereoPresentationProof;
+	static_assert(sizeof(Proof) < sizeof(std::array<Eye, 2>));
 	constexpr uintptr_t kDeviceIdentity = 0x1234;
 	constexpr uint64_t kResourceRevision = 9;
 
@@ -76,6 +79,7 @@ namespace
 	{
 		using VRRenderScalePresentationPath = Path;
 		using VRRenderScaleBackendKind = Upscaling::VRRenderScaleBackendKind;
+		using VRRenderScaleStereoPresentationProof = Proof;
 		presentation.eyes[index] = eye;
 #include "vr_stable_menu_observation_under_test.h"
 	}
@@ -237,6 +241,7 @@ namespace
 		if (!MenuAdmitted(stable, presentation))
 			return false;
 #ifdef DEVBENCH_BRIDGE_ENABLED
+		const auto proof = presentation.lastVendorStereoProof;
 		if (presentation.lastCoherentVendorEyes[0].valid ||
 			presentation.lastCoherentVendorEyes[1].valid)
 			return false;
@@ -254,10 +259,8 @@ namespace
 		vendor.compositorCycleToken = 52;
 		Observe(presentation, 1, vendor);
 		Observe(presentation, 0, vendor);
-		for (const auto& eye : presentation.lastBothEyesVendorEyes) {
-			if (eye.frame != vendor.frame || eye.vendorBackend != vendor.vendorBackend)
-				return false;
-		}
+		if (presentation.lastVendorStereoProof != proof)
+			return false;
 		for (const auto& eye : presentation.lastCoherentVendorEyes) {
 			if (eye.frame != attributed.frame || eye.vendorBackend != attributed.vendorBackend)
 				return false;
@@ -301,6 +304,99 @@ namespace
 		invalid.compositorCycleToken = 0;
 		return rejected(invalid);
 	}
+
+	bool RefreshesChangedStereoIdentity()
+	{
+		for (unsigned firstEye : { 0u, 1u }) {
+			for (unsigned field = 0; field < 9; ++field) {
+				const Profile stable{};
+				Presentation presentation{};
+				const auto vendor = VendorEye(100, 50, stable);
+				Observe(presentation, firstEye, vendor);
+				Observe(presentation, 1u - firstEye, vendor);
+				auto next = stable;
+				auto device = kDeviceIdentity;
+				auto revision = kResourceRevision;
+				switch (field) {
+				case 0:
+					++next.transitionEpoch;
+					break;
+				case 1:
+					++next.contractGeneration;
+					break;
+				case 2:
+					next.method = Upscaling::UpscaleMethod::kDLSS;
+					break;
+				case 3:
+					++next.renderEyeWidth;
+					break;
+				case 4:
+					++next.renderEyeHeight;
+					break;
+				case 5:
+					++next.displayEyeWidth;
+					break;
+				case 6:
+					++next.displayEyeHeight;
+					break;
+				case 7:
+					++device;
+					break;
+				case 8:
+					++revision;
+					break;
+				}
+				auto nextVendor = VendorEye(101, 51, next);
+				nextVendor.deviceIdentity = device;
+				nextVendor.resourceRevision = revision;
+				Observe(presentation, firstEye, nextVendor);
+				if (!MenuAdmitted(stable, presentation) || MenuAdmitted(next, presentation, device, revision))
+					return false;
+				Observe(presentation, 1u - firstEye, nextVendor);
+				if (MenuAdmitted(stable, presentation) || !MenuAdmitted(next, presentation, device, revision))
+					return false;
+
+				const auto proof = presentation.lastVendorStereoProof;
+				++nextVendor.frame;
+				++nextVendor.compositorCycleToken;
+				++nextVendor.vendorDispatchFrame;
+				++nextVendor.vendorDispatchSerial;
+				Observe(presentation, firstEye, nextVendor);
+				Observe(presentation, 1u - firstEye, nextVendor);
+				if (presentation.lastVendorStereoProof != proof || !MenuAdmitted(next, presentation, device, revision))
+					return false;
+			}
+		}
+		return true;
+	}
+
+	bool RejectsMalformedPairAfterValidProof()
+	{
+		const Profile stable{};
+		for (unsigned field = 0; field < 3; ++field) {
+			Presentation presentation{};
+			const auto vendor = VendorEye(100, 50, stable);
+			Observe(presentation, 0, vendor);
+			Observe(presentation, 1, vendor);
+			auto invalid = VendorEye(101, 51, stable);
+			if (field == 0)
+				invalid.frame = 0;
+			else if (field == 1)
+				++invalid.expectedInputWidth;
+			else
+				++invalid.expectedInputHeight;
+			Observe(presentation, 0, invalid);
+			Observe(presentation, 1, invalid);
+			if (MenuAdmitted(stable, presentation))
+				return false;
+			const auto recovered = VendorEye(102, 52, stable);
+			Observe(presentation, 0, recovered);
+			Observe(presentation, 1, recovered);
+			if (!MenuAdmitted(stable, presentation))
+				return false;
+		}
+		return true;
+	}
 }
 
 int main()
@@ -320,5 +416,11 @@ int main()
 		std::puts("VR menu continuity depends on optional vendor diagnostics");
 		return 1;
 	}
+	if (!RefreshesChangedStereoIdentity() || !RejectsMalformedPairAfterValidProof()) {
+		std::puts("VR menu retained stale or malformed stereo proof");
+		return 1;
+	}
+	std::printf("VR stereo proof: %zu bytes instead of %zu; continuity and identity checks passed\n",
+		sizeof(Proof), sizeof(std::array<Eye, 2>));
 	return 0;
 }

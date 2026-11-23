@@ -1735,7 +1735,7 @@ namespace
 		uintptr_t a_deviceIdentity,
 		uint64_t a_resourceRevision)
 	{
-		const auto& eyes = a_presentation.lastBothEyesVendorEyes;
+		const auto& proof = a_presentation.lastVendorStereoProof;
 		if (!a_stable.valid ||
 			!a_stable.active ||
 			a_stable.transitionEpoch == 0 ||
@@ -1747,33 +1747,21 @@ namespace
 			a_deviceIdentity == 0 || a_resourceRevision == 0 ||
 			(a_stable.method != Upscaling::UpscaleMethod::kDLSS &&
 				a_stable.method != Upscaling::UpscaleMethod::kFSR) ||
-			eyes[0].compositorCycleToken == 0 || eyes[0].frame == 0) {
+			!proof.valid) {
 			return false;
 		}
 
 		// Generation identity and the packet's strong resource ownership are the
 		// durability proof. An age gate would recreate fixed-frame menu gaps.
-		for (const auto& eye : eyes) {
-			if (!eye.valid ||
-				eye.path !=
-					Upscaling::VRRenderScalePresentationPath::VendorEvaluated ||
-				eye.frame != eyes[0].frame ||
-				eye.compositorCycleToken != eyes[0].compositorCycleToken ||
-				eye.transitionEpoch != a_stable.transitionEpoch ||
-				eye.contractGeneration != a_stable.contractGeneration ||
-				eye.deviceIdentity != a_deviceIdentity ||
-				eye.resourceRevision != a_resourceRevision ||
-				eye.method != a_stable.method ||
-				eye.inputWidth != a_stable.renderEyeWidth ||
-				eye.inputHeight != a_stable.renderEyeHeight ||
-				eye.expectedInputWidth != a_stable.renderEyeWidth ||
-				eye.expectedInputHeight != a_stable.renderEyeHeight ||
-				eye.outputWidth != a_stable.displayEyeWidth ||
-				eye.outputHeight != a_stable.displayEyeHeight) {
-				return false;
-			}
-		}
-		return true;
+		return proof.transitionEpoch == a_stable.transitionEpoch &&
+		       proof.contractGeneration == a_stable.contractGeneration &&
+		       proof.deviceIdentity == a_deviceIdentity &&
+		       proof.resourceRevision == a_resourceRevision &&
+		       proof.method == a_stable.method &&
+		       proof.inputWidth == a_stable.renderEyeWidth &&
+		       proof.inputHeight == a_stable.renderEyeHeight &&
+		       proof.outputWidth == a_stable.displayEyeWidth &&
+		       proof.outputHeight == a_stable.displayEyeHeight;
 	}
 
 	bool IsBufferedVRFpsStabilizerDoorHandoff(
@@ -37443,8 +37431,23 @@ void Upscaling::RecordVRRenderScalePresentationObservation(
 			left.resourceRevision == right.resourceRevision;
 		// Release observations omit DevBench backend labels; accepted stereo
 		// presentation and resource identity still prove menu continuity.
-		if (coherentVendorPair && left.path == VRRenderScalePresentationPath::VendorEvaluated)
-			presentation.lastBothEyesVendorEyes = presentation.eyes;
+		if (coherentVendorPair && left.path == VRRenderScalePresentationPath::VendorEvaluated) {
+			const VRRenderScaleStereoPresentationProof proof{
+				.transitionEpoch = left.transitionEpoch,
+				.deviceIdentity = left.deviceIdentity,
+				.resourceRevision = left.resourceRevision,
+				.contractGeneration = left.contractGeneration,
+				.method = left.method,
+				.inputWidth = left.inputWidth,
+				.inputHeight = left.inputHeight,
+				.outputWidth = left.outputWidth,
+				.outputHeight = left.outputHeight,
+				.valid = left.frame != 0 && left.inputWidth == left.expectedInputWidth &&
+				         left.inputHeight == left.expectedInputHeight,
+			};
+			if (presentation.lastVendorStereoProof != proof)
+				presentation.lastVendorStereoProof = proof;
+		}
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (coherentVendorPair && left.vendorBackend != VRRenderScaleBackendKind::None)
 			presentation.lastCoherentVendorEyes = presentation.eyes;

@@ -206,6 +206,8 @@ class ShaderCompileIdentityTests(unittest.TestCase):
                 # The preserved capture predates SnowCover's three shader families.
                 if source in {"Lighting.hlsl", "RunGrass.hlsl", "DistantTree.hlsl"}:
                     defines.append("SNOW_COVER=")
+                if source == "Lighting.hlsl":
+                    defines.append("CS_SKIN=")
                 captured_config = {"shaders": [{"file": source, "configs": {stages[stage]: {
                     "entries": [{"entry": f"{family}:{stage}:{descriptor}", "defines": defines}],
                 }}}]}
@@ -305,7 +307,7 @@ class ShaderCompileIdentityTests(unittest.TestCase):
                 descriptor = request["descriptor"]
                 expected = compile_task_defines([(
                     "Lighting.hlsl", "PSHADER", "Lighting:Pixel:" + descriptor,
-                    [*fixture["commonDefines"], *request["defines"], "PSHADER=", "VR="],
+                    [*fixture["commonDefines"], *request["defines"], "PSHADER=", "VR=", "CS_SKIN="],
                 )])
                 with self.subTest(descriptor=descriptor):
                     for key, macros in expected.items():

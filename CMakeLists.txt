@@ -6214,6 +6214,18 @@ if(BUILD_CONTROLLER_TESTS)
         PROPERTIES LABELS "ControllerTests"
     )
 
+    add_test(
+        NAME ShaderCacheDepthVariants
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/shader_cache_depth_variants_test.py"
+            "$<TARGET_FILE:shader_cache_pack_test>"
+    )
+    set_tests_properties(
+        ShaderCacheDepthVariants
+        PROPERTIES LABELS "ControllerTests"
+    )
+
     add_executable(
         api_weather_service_policy_test
         EXCLUDE_FROM_ALL

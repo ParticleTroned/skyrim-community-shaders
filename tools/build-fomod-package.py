@@ -398,7 +398,8 @@ def validate_cache_source(
         )
 
     inventory = SHADER_CACHE_CONTRACT.PackagedCompatibilityInventory(
-        SHADER_CACHE_CONTRACT.REPO, pack_manifest.get("compatibilityVariants"), pack_manifest.get("standaloneInputs", {})
+        SHADER_CACHE_CONTRACT.REPO, pack_manifest.get("compatibilityVariants"), pack_manifest.get("standaloneInputs", {}),
+        pack_manifest.get("depthVariants"),
     )
     pack_stats = {
         name: SHADER_CACHE_CONTRACT.validate_shader_pack(

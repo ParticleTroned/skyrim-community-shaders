@@ -124,6 +124,22 @@ participates in cache identity. Enabled permutations retain the runtime's
 distinct Utility macro value. A cache compiled for the opposite boot setting
 misses across most shader families and causes a large first-use compilation.
 
+Use `--both-depth-conventions` to bundle Reverse Z off and on in one managed
+cache. With the default shipped profile this compiles all four combinations of
+Reverse Z and Horizon Fix, including the True PBR + Detail Maps permutations
+and standalone shaders for each depth setting. For example:
+
+```powershell
+& $cachePython tools/build-shader-cache.py --runtime VR --both-depth-conventions --package
+```
+
+This option is mutually exclusive with `--reverse-z` and `--no-reverse-z`.
+It retains the selected profile's feature exclusions; `--no-include-horizon-fix`
+still limits coverage to Horizon Fix off. It runs the full compiler workload
+for each depth setting, increasing generation time and cache size. Runtime
+selection continues to use the existing exact compile identities. Other
+feature inputs must match the installed configuration for a cache hit.
+
 The builder removes the five debug-profile defines itself. Do not replace that
 filter with hlslkit's `--strip-debug-defines`: the pinned implementation also
 injects `D3DCOMPILE_AVOID_FLOW_CONTROL`, which does not match the default
@@ -410,7 +426,8 @@ This compiles HLSL but does not build the C++ plugin. The builder:
 1. assembles the release shader tree in an isolated temporary directory;
 2. applies the selected cache profile (`shipped` by default);
 3. compiles standard and Horizon Fix inputs for each shipped runtime, and one
-   input for named profiles, with pinned hlslkit;
+   input for named profiles, with pinned hlslkit; repeats these inputs for both
+   depth settings when `--both-depth-conventions` is selected;
 4. remaps runtime ImageSpace directories;
 5. writes a temporary `Manifest.json` from source, recursive includes, global
    ABI, and enabled feature ABI contracts;
@@ -664,6 +681,19 @@ different bytecode. Additional contents may
 coexist; each visible optimized record must still match a declared variant's
 canonical identity. Record metadata is compared byte for byte, as on an exact
 runtime hit.
+
+New builds also record `depthVariants` membership in `PackManifest.json`.
+Archive and FOMOD validation check that every declared condition has its
+records, that both depth settings cover the same engine and standalone shader
+inventory, and that compile identities differ between depth settings for both
+Horizon states. Coverage must account for every original optimized record;
+later runtime appends may add records outside that immutable baseline.
+Each depth setting independently passes the Horizon compatibility checks.
+The builder also requires matching loaded feature ABI state across conditions.
+The merger rejects conflicting bytecode for an identical exact key and checks
+the complete matrix before writing packs. It only publishes after all requested
+conditions validate. Older single-depth packs without this optional coverage
+metadata remain supported.
 
 `tools/shader_bytecode.py` supplies the same structural and stage checks for
 loose compiler output and visible optimized archive/FOMOD records. Replaced
@@ -974,6 +1004,7 @@ that has `tools/shader-cache-requirements.txt` installed:
 ```powershell
 python -B tests/shader_compile_identity_test.py build/ALL/Release/shader_compile_identity_test.exe
 python -B tests/shader_cache_packaging_test.py
+python -B tests/shader_cache_depth_variants_test.py
 python -B tests/shader_cache_pack_builder_test.py build/ALL/Release/shader_cache_pack_test.exe
 ```
 

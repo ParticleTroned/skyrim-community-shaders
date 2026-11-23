@@ -117,6 +117,7 @@ jobs:
                   found=false
                   for test_file in \
                     tests/shader_cache_packaging_test.py \
+                    tests/shader_cache_depth_variants_test.py \
                     tests/shader_compile_identity_test.py \
                     tests/fomod_package_test.py \
                     tests/release_worker_test.py \

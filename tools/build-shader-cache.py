@@ -577,6 +577,21 @@ def valid_pack_set_id(value: object) -> bool:
     )
 
 
+def validate_depth_variants(value: object, compatibility_variants: list[str]) -> dict:
+    """Validate optional build-time coverage without changing runtime record keys."""
+    if not isinstance(value, dict) or not value or not set(value) <= {"off", "on"}:
+        raise SystemExit("managed cache has invalid depth variants")
+    for depth, variants in value.items():
+        if not isinstance(variants, dict) or set(variants) != set(compatibility_variants):
+            raise SystemExit(f"managed cache depth {depth} has incomplete compatibility coverage")
+        for name, keys in variants.items():
+            if (not isinstance(keys, list) or not keys or
+                    any(not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key) for key in keys) or
+                    keys != sorted(set(keys))):
+                raise SystemExit(f"managed cache depth {depth}/{name} has invalid record identities")
+    return value
+
+
 def validate_pack_manifest_contract(
     pack_manifest: object,
     expected_runtime: str,
@@ -584,6 +599,7 @@ def validate_pack_manifest_contract(
     *,
     expected_shader_cache_abi: str | None = None,
     required_compatibility_variants: tuple[str, ...] = (),
+    required_depth_modes: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Validate the canonical manifest/file contract used by all packagers."""
     if not isinstance(pack_manifest, dict):
@@ -636,6 +652,9 @@ def validate_pack_manifest_contract(
         raise SystemExit("managed pack manifest disagrees with Info.ini ShaderCacheABI")
     if not set(required_compatibility_variants).issubset(variants):
         raise SystemExit("managed pack manifest is missing required compatibility variants")
+    depths = validate_depth_variants(pack_manifest["depthVariants"], variants) if "depthVariants" in pack_manifest else {}
+    if not set(required_depth_modes).issubset(depths):
+        raise SystemExit("managed pack manifest is missing required depth variants")
 
     if set(pack_stats) != set(PACK_FILE_NAMES):
         raise SystemExit("managed pack validation requires exactly four fixed pack files")
@@ -646,6 +665,8 @@ def validate_pack_manifest_contract(
     developer_count = manifest_count(
         pack_manifest.get("developerRecordCount"), "developerRecordCount"
     )
+    if depths and len({key for coverage in depths.values() for keys in coverage.values() for key in keys}) != optimized_count:
+        raise SystemExit("managed cache depth coverage disagrees with its optimized record baseline")
     manifest_files = pack_manifest.get("files")
     if not isinstance(manifest_files, dict) or set(manifest_files) != set(
         PACK_FILE_NAMES
@@ -793,7 +814,8 @@ def shader_pack_record_identity(
 class PackagedCompatibilityInventory:
     """Verify exported record identities and the coverage of declared variants."""
 
-    def __init__(self, source_root: Path, declared_variants: list[str], standalone_inputs: dict | None = None) -> None:
+    def __init__(self, source_root: Path, declared_variants: list[str], standalone_inputs: dict | None = None,
+                 depth_variants: dict | None = None) -> None:
         variants = compatibility_variant_manifest(source_root)
         if (
             not isinstance(declared_variants, list)
@@ -803,6 +825,7 @@ class PackagedCompatibilityInventory:
             raise SystemExit("packaged cache declares an unknown compatibility variant")
         self.variants = {name: variants[name] for name in declared_variants}
         self.standalone_inputs = standalone_shader_cache.validate_pack_inputs(standalone_inputs if standalone_inputs is not None else {})
+        self.depth_variants = validate_depth_variants(depth_variants, declared_variants) if depth_variants is not None else {}
         self.records: dict[str, dict[str, tuple[str, str, str | None, bytes]]] = {}
 
     def inspector(self, file_name: str) -> Callable[[str, str, str, bytes], None]:
@@ -853,10 +876,71 @@ class PackagedCompatibilityInventory:
             generation = int(pack_stats[name]["generation"])
             if generation == newest or (generation != 0 and generation + 1 == newest):
                 visible.update(self.records.get(name, {}))
+        identities = {
+            exact: self.identify(logical, exact, metadata, error)
+            for exact, (logical, metadata, error, _) in visible.items()
+        }
+        self.validate_coverage(visible, identities, require_all_standalone=True)
+        if self.depth_variants:
+            self.validate_depth_coverage(visible, identities)
+
+    def validate_depth_coverage(self, visible: dict, identities: dict) -> None:
+        by_hash = {sha256_hex(exact): exact for exact in visible}
+        engine_inputs = {}
+        helper_inputs = {}
+        helper_paths = {}
+        covered = set()
+        for depth, variants in self.depth_variants.items():
+            selected = {}
+            matching_keys = {name: set() for name in variants}
+            for name, keys in variants.items():
+                for key in keys:
+                    if key not in by_hash:
+                        raise SystemExit(f"managed cache is missing a declared depth record: {depth}/{name}/{key}")
+                    exact = by_hash[key]
+                    matching, _ = identities[exact]
+                    if name not in matching:
+                        raise SystemExit(f"managed cache depth record has the wrong compatibility identity: {depth}/{name}")
+                    selected[exact] = visible[exact]
+                    covered.add(exact)
+                    for compatible in matching:
+                        matching_keys[compatible].add(key)
+            if any(set(keys) != matching_keys[name] for name, keys in variants.items()):
+                raise SystemExit(f"managed cache depth {depth} has incomplete compatibility record membership")
+            coverage = self.validate_coverage(selected, identities, require_all_standalone=False)
+            engine = {}
+            helpers = {}
+            for name, artifacts in coverage.items():
+                for relative, contents in artifacts.items():
+                    if task := self.standalone_inputs.get(relative):
+                        if name == "default":
+                            helpers.setdefault((task["source"], task["profile"]), set()).add(relative)
+                    else:
+                        engine[name, relative] = set(contents)
+            if not engine:
+                raise SystemExit(f"managed cache depth {depth} has no engine shader records")
+            engine_inputs[depth] = engine
+            helper_inputs[depth] = {key: len(paths) for key, paths in helpers.items()}
+            helper_paths[depth] = {path for paths in helpers.values() for path in paths}
+        if set(engine_inputs) == {"off", "on"}:
+            standard, reverse = engine_inputs["off"], engine_inputs["on"]
+            if standard.keys() != reverse.keys() or helper_inputs["off"] != helper_inputs["on"]:
+                raise SystemExit("managed cache depth variants disagree on shader inventory")
+            if any(standard[path] & reverse[path] for path in standard):
+                raise SystemExit("managed cache depth variants reuse an unchanged engine compile identity")
+            if helper_paths["off"] & helper_paths["on"]:
+                raise SystemExit("managed cache depth variants reuse an unchanged standalone compile identity")
+        # Appended runtime records need not belong to the immutable build inventory.
+        if missing := self.standalone_inputs.keys() - {
+            visible[exact][0].split("|", 1)[0] for exact in covered
+        }:
+            raise SystemExit(f"standalone inputs lack depth coverage: {sorted(missing)[:5]}")
+
+    def validate_coverage(self, visible: dict, identities: dict, *, require_all_standalone: bool) -> dict:
         coverage: dict[str, dict[str, dict[str, bytes]]] = {name: {} for name in self.variants}
         exclusive = set()
-        for exact, (logical, metadata, bytecode_error, digest) in visible.items():
-            matching, (relative, content) = self.identify(logical, exact, metadata, bytecode_error)
+        for exact, (_, _, _, digest) in visible.items():
+            matching, (relative, content) = identities[exact]
             for name in matching:
                 coverage[name].setdefault(relative, {})[content] = digest
             if len(matching) == 1:
@@ -864,7 +948,7 @@ class PackagedCompatibilityInventory:
         default = coverage.get("default", {})
         if not default:
             raise SystemExit("packaged cache has no default shader records")
-        if missing := self.standalone_inputs.keys() - default.keys():
+        if require_all_standalone and (missing := self.standalone_inputs.keys() - default.keys()):
             raise SystemExit(f"standalone pack inventory has no shader records: {sorted(missing)[:5]}")
         for name, artifacts in coverage.items():
             if artifacts.keys() != default.keys() or (len(coverage) > 1 and name not in exclusive):
@@ -890,6 +974,7 @@ class PackagedCompatibilityInventory:
                     changed |= any(contents[content] != default[relative][content] for content in shared)
             if name != "default" and not changed:
                 raise SystemExit(f"packaged cache compatibility variant has no changed shader bytecode: {name}")
+        return coverage
 
 
 def write_shader_pack(
@@ -954,15 +1039,38 @@ def build_managed_shader_packs(
     horizon_cache: Path | None,
     runtime: str,
     shader_cache_abi: str,
+    *,
+    depth_inputs: dict[str, tuple[Path, Path | None]] | None = None,
 ) -> dict[str, int]:
     variants = compatibility_variant_manifest(source_root)
     records: dict[str, dict[str, Any]] = {}
     standalone_inputs: dict[str, dict] = {}
     variant_counts: dict[str, int] = {}
-    inputs = [("standard", standard_cache, False)]
-    if horizon_cache is not None:
-        inputs.append(("horizon-fix", horizon_cache, True))
-    for variant_name, cache_dir, horizon_enabled in inputs:
+    declared_variants = ["default", *(["legacy-horizon-fix"] if horizon_cache is not None else [])]
+    inputs = []
+    depth_coverage: dict[str, dict[str, set[str]]] = {}
+    if depth_inputs is not None:
+        if not depth_inputs or not set(depth_inputs) <= {"off", "on"} or next(iter(depth_inputs.values())) != (standard_cache, horizon_cache):
+            raise SystemExit("invalid depth cache inputs or primary output")
+        for depth, (standard, horizon) in depth_inputs.items():
+            if (horizon is None) != (horizon_cache is None):
+                raise SystemExit("depth caches must cover the same Horizon Fix states")
+            suffix = f"-reverse-z-{depth}" if len(depth_inputs) > 1 else ""
+            inputs.append(("standard" + suffix, standard, False, depth))
+            if horizon is not None:
+                inputs.append(("horizon-fix" + suffix, horizon, True, depth))
+            depth_coverage[depth] = {name: set() for name in declared_variants}
+    else:
+        inputs.append(("standard", standard_cache, False, None))
+        if horizon_cache is not None:
+            inputs.append(("horizon-fix", horizon_cache, True, None))
+    parent = standard_cache.parent.resolve()
+    paths = [path.resolve() for _, path, _, _ in inputs]
+    if len(set(paths)) != len(paths) or any(path.parent != parent for path in paths):
+        raise SystemExit("cache inputs must be distinct sibling staging directories")
+    if any(path.is_symlink() or getattr(path, "is_junction", lambda: False)() for _, path, _, _ in inputs):
+        raise SystemExit("cache inputs must not be links or junctions")
+    for variant_name, cache_dir, horizon_enabled, depth in inputs:
         manifest = read_cache_manifest_entries(cache_dir, f"{runtime}/{variant_name}")
         variant_inputs = read_standalone_pack_inputs(cache_dir)
         for relative, task in variant_inputs.items():
@@ -994,6 +1102,9 @@ def build_managed_shader_packs(
                     "bytecode": bytecode,
                 },
             )
+            if depth is not None:
+                name = "legacy-horizon-fix" if horizon_enabled else "default"
+                depth_coverage[depth][name].add(sha256_hex(exact_key))
             count += 1
         variant_counts[variant_name] = count
 
@@ -1015,14 +1126,6 @@ def build_managed_shader_packs(
         "Developer.A.csxpack": (2, 1, []),
         "Developer.B.csxpack": (2, 0, []),
     }
-    for file_name, (lane, generation, entries) in pack_files.items():
-        write_shader_pack(
-            standard_cache / file_name,
-            lane,
-            generation,
-            entries,
-            pack_set_id,
-        )
     pack_manifest = {
         "schema": "csx.shader-cache.pack-manifest",
         "schemaVersion": PACK_MANIFEST_SCHEMA_VERSION,
@@ -1034,10 +1137,7 @@ def build_managed_shader_packs(
         "shaderCacheABI": shader_cache_abi,
         "optimizedRecordCount": len(ordered),
         "developerRecordCount": 0,
-        "compatibilityVariants": [
-            "default",
-            *(["legacy-horizon-fix"] if horizon_cache is not None else []),
-        ],
+        "compatibilityVariants": declared_variants,
         "files": {
             file_name: {
                 "lane": lane,
@@ -1049,6 +1149,24 @@ def build_managed_shader_packs(
     }
     if standalone_inputs:
         pack_manifest["standaloneInputs"] = standalone_inputs
+    pack_stats = {
+        name: {"lane": lane, "generation": generation, "recordCount": len(entries), "packSetId": pack_set_id}
+        for name, (lane, generation, entries) in pack_files.items()
+    }
+    if depth_coverage:
+        pack_manifest["depthVariants"] = {
+            depth: {name: sorted(keys) for name, keys in coverage.items()}
+            for depth, coverage in depth_coverage.items()
+        }
+        inventory = PackagedCompatibilityInventory(source_root, declared_variants, standalone_inputs,
+                                                   pack_manifest["depthVariants"])
+        inspect = inventory.inspector("Optimized.A.csxpack")
+        for record in ordered:
+            inspect(record["logicalKey"], record["exactKey"], record["metadata"], record["bytecode"])
+        inventory.validate(pack_stats)
+    validate_pack_manifest_contract(pack_manifest, runtime, pack_stats)
+    for file_name, (lane, generation, entries) in pack_files.items():
+        write_shader_pack(standard_cache / file_name, lane, generation, entries, pack_set_id)
     (standard_cache / PACK_MANIFEST_FILE_NAME).write_text(
         json.dumps(pack_manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -1061,8 +1179,11 @@ def build_managed_shader_packs(
         if not any(directory.iterdir()):
             directory.rmdir()
     (standard_cache / MANIFEST_FILE_NAME).unlink(missing_ok=True)
-    if horizon_cache is not None:
-        shutil.rmtree(horizon_cache)
+    for _, cache_dir, _, _ in inputs:
+        if cache_dir != standard_cache:
+            if cache_dir.resolve().parent != parent or cache_dir.is_symlink() or getattr(cache_dir, "is_junction", lambda: False)():
+                raise SystemExit("cache staging path changed before cleanup")
+            shutil.rmtree(cache_dir)
     print(
         f"{runtime}: packed {len(ordered)} unique optimized records from "
         + ", ".join(f"{count} {name} blobs" for name, count in variant_counts.items())
@@ -2848,6 +2969,7 @@ def validate_cache_archive(
     plugin_version: str,
     *,
     horizon_variants: bool | None = None,
+    required_depth_modes: tuple[str, ...] = (),
     source_root: Path = REPO,
 ) -> None:
     """Verify the raw runtime archive preserves one complete managed cache."""
@@ -2957,7 +3079,8 @@ def validate_cache_archive(
             raise SystemExit(f"packaged {runtime} cache pack manifest must be an object")
         pack_set_id = pack_manifest.get("packSetId")
         inventory = PackagedCompatibilityInventory(
-            source_root, pack_manifest.get("compatibilityVariants"), pack_manifest.get("standaloneInputs", {})
+            source_root, pack_manifest.get("compatibilityVariants"), pack_manifest.get("standaloneInputs", {}),
+            pack_manifest.get("depthVariants"),
         )
         pack_stats = {
             name: validate_shader_pack(
@@ -2972,6 +3095,7 @@ def validate_cache_archive(
                 runtime,
                 pack_stats,
                 expected_shader_cache_abi=archived_shader_abi,
+                required_depth_modes=required_depth_modes,
                 required_compatibility_variants=(
                     ("default", "legacy-horizon-fix")
                     if horizon_variants
@@ -2998,6 +3122,7 @@ def prepare_cache_archive(
     profile: CacheProfile = SHIPPED_CACHE_PROFILE,
     source_root: Path = REPO,
     include_horizon_fix: bool = True,
+    required_depth_modes: tuple[str, ...] = (),
 ) -> Path:
     """Create a validated candidate archive without changing published output."""
     variants = cache_variants_for(profile)
@@ -3031,6 +3156,7 @@ def prepare_cache_archive(
         runtime,
         plugin_version,
         horizon_variants=horizon_variants,
+        required_depth_modes=required_depth_modes,
         source_root=source_root,
     )
     print(
@@ -3119,7 +3245,7 @@ def validate_horizon_variant_delta(
     )
 
 
-def build_runtime(
+def compile_runtime_depth(
     source_root: Path,
     stage: Path,
     workspace: Path,
@@ -3132,15 +3258,13 @@ def build_runtime(
     yaml: Any,
     write_manifest: Callable[..., int],
     profile: CacheProfile,
+    shader_cache_abi: str,
     distribution_profile: DistributionProfile | None = None,
     include_horizon_fix: bool = True,
     reverse_z_enabled: bool = False,
-) -> tuple[Path, dict[str, int], int]:
+    cache_suffix: str = "",
+) -> dict[str, tuple[Path, int, int, dict[str, bool]]]:
     runtime_root = workspace / runtime
-    shader_contract = shader_contract_identity(
-        source_root, DEFAULT_SHADER_CONTRACT_FILES
-    )
-    shader_cache_abi = sha256_bytes(canonical_bytes(shader_contract))
     variants = compile_variants_for(profile, include_horizon_fix)
     compatibility_variants = compatibility_variant_manifest(source_root)
     has_horizon_variant = HORIZON_FIX_CACHE_VARIANT in variants
@@ -3149,7 +3273,7 @@ def build_runtime(
 
     build_results: dict[str, tuple[Path, int, int, dict[str, bool]]] = {}
     for variant in variants:
-        cache_dir = runtime_root / variant.directory
+        cache_dir = runtime_root / (variant.directory + cache_suffix)
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         additional_excluded_defines = frozenset()
@@ -3197,9 +3321,11 @@ def build_runtime(
             enabled_overrides=enabled_overrides,
         )
         feature_states = read_feature_states(cache_dir)
+        if reverse_z_enabled and not feature_states.get("ReverseZ", False):
+            raise SystemExit("Reverse Z cache requested, but its feature is not loaded in the profile")
         filtered_config = filter_profile_defines(
             config_path,
-            workspace / f"config-{runtime}-{variant.name}.yaml",
+            workspace / f"config-{runtime}-{variant.name}{cache_suffix}.yaml",
             yaml,
             profile,
             feature_states=feature_states,
@@ -3281,22 +3407,64 @@ def build_runtime(
             horizon_states,
             runtime=runtime,
         )
-    build_managed_shader_packs(
-        source_root,
-        build_results["standard"][0],
-        build_results["horizon-fix"][0] if has_horizon_variant else None,
-        runtime,
-        shader_cache_abi,
-    )
+    return build_results
 
-    section_counts = {result[2] for result in build_results.values()}
+
+def build_runtime(
+    source_root: Path,
+    stage: Path,
+    workspace: Path,
+    runtime: str,
+    config_path: Path,
+    plugin_version: str,
+    jobs: int,
+    fxc: str,
+    compiler: tuple[str, ...],
+    yaml: Any,
+    write_manifest: Callable[..., int],
+    profile: CacheProfile,
+    distribution_profile: DistributionProfile | None = None,
+    include_horizon_fix: bool = True,
+    reverse_z_enabled: bool = False,
+    both_depth_conventions: bool = False,
+) -> tuple[Path, dict[str, int], int]:
+    if both_depth_conventions and reverse_z_enabled:
+        raise SystemExit("select both depth conventions or one Reverse Z setting, not both")
+    shader_cache_abi = sha256_bytes(canonical_bytes(shader_contract_identity(source_root, DEFAULT_SHADER_CONTRACT_FILES)))
+    depth_inputs = {}
+    section_counts = set()
+    feature_states = None
+    global_states = set()
+    blob_counts = {}
+    for reverse in ((False, True) if both_depth_conventions else (reverse_z_enabled,)):
+        depth = "on" if reverse else "off"
+        print(f"{runtime}: compiling Reverse Z {depth} inputs")
+        results = compile_runtime_depth(
+            source_root, stage, workspace, runtime, config_path, plugin_version,
+            jobs, fxc, compiler, yaml, write_manifest, profile, shader_cache_abi,
+            distribution_profile, include_horizon_fix, reverse,
+            cache_suffix="-ReverseZ" if both_depth_conventions and reverse else "",
+        )
+        states = {name: result[3] for name, result in results.items()}
+        if feature_states is not None and states != feature_states:
+            raise SystemExit("depth caches disagree on loaded feature states")
+        feature_states = states
+        global_states.update(shader_cache_global_state(result[0], runtime, shader_cache_abi) for result in results.values())
+        if len(global_states) != 1:
+            raise SystemExit("cache variants disagree on loaded feature shader ABI state")
+        depth_inputs[depth] = (results["standard"][0], results["horizon-fix"][0] if "horizon-fix" in results else None)
+        section_counts.update(result[2] for result in results.values())
+        blob_counts.update({
+            (f"{name}-reverse-z-{depth}" if both_depth_conventions else name): result[1]
+            for name, result in results.items()
+        })
+
     if len(section_counts) != 1:
         raise SystemExit("shader-cache variants contain different feature counts")
-    blob_counts = {
-        variant_name: result[1]
-        for variant_name, result in build_results.items()
-    }
-    return runtime_root, blob_counts, section_counts.pop()
+    standard_cache, horizon_cache = next(iter(depth_inputs.values()))
+    build_managed_shader_packs(source_root, standard_cache, horizon_cache, runtime, shader_cache_abi,
+                               depth_inputs=depth_inputs)
+    return workspace / runtime, blob_counts, section_counts.pop()
 
 
 def main() -> int:
@@ -3323,11 +3491,17 @@ def main() -> int:
         default=True,
         help="Include Horizon Fix compatibility cache records (default: included).",
     )
-    parser.add_argument(
+    depth_options = parser.add_mutually_exclusive_group()
+    depth_options.add_argument(
         "--reverse-z",
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Compile Reverse Z on permutations (default: off for every cache profile).",
+    )
+    depth_options.add_argument(
+        "--both-depth-conventions",
+        action="store_true",
+        help="Bundle Reverse Z off/on records in one cache, including each selected Horizon Fix state.",
     )
     parser.add_argument(
         "--source-root",
@@ -3396,7 +3570,7 @@ def main() -> int:
     profile = CACHE_PROFILES[args.profile]
     validate_cache_profile(profile, runtimes)
     print(f"cache profile: {profile.display_name} ({profile.name})")
-    print(f"Reverse Z compile setting: {'on' if args.reverse_z else 'off'}")
+    print(f"Reverse Z compile setting: {'off and on' if args.both_depth_conventions else 'on' if args.reverse_z else 'off'}")
     configs = configs_for(source_root)
     for runtime in runtimes:
         config_path = configs[runtime]
@@ -3488,6 +3662,7 @@ def main() -> int:
                 distribution_profile=distribution_profile,
                 include_horizon_fix=args.include_horizon_fix,
                 reverse_z_enabled=args.reverse_z,
+                both_depth_conventions=args.both_depth_conventions,
             )
             archive_candidate = None
             if args.package:
@@ -3502,6 +3677,7 @@ def main() -> int:
                     profile=profile,
                     source_root=source_root,
                     include_horizon_fix=args.include_horizon_fix,
+                    required_depth_modes=("off", "on") if args.both_depth_conventions else ("on" if args.reverse_z else "off",),
                 )
             prepared.append(
                 (

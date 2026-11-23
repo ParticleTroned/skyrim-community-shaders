@@ -49,6 +49,18 @@ try {
 	} cleanup{ root };
 	std::filesystem::create_directories(root);
 	{
+		const Json settings{ { "imageSpaceTint", { { "enabled", true }, { "amount", 0.5 }, { "color", { 0.5, 0.6, 0.4 } } } } };
+		const Json tintSchemas{ { "AdaptiveBrightness", settings } };
+		LookPack tintPack;
+		tintPack.id = "Tint-look";
+		tintPack.baseline["AdaptiveBrightness"] = SelectDomain("AdaptiveBrightness", settings, SettingsDomain::Appearance);
+		Require(tintPack.baseline["AdaptiveBrightness"] == settings, "Image-space tint belongs to appearance profiles");
+		std::string error;
+		Require(WriteLookPack(root, tintPack, tintSchemas, error), "Image-space tint profile exports");
+		const auto restored = ReadLookPack(root, tintPack.id, tintSchemas);
+		Require(restored.IsCompatible() && restored.baseline["AdaptiveBrightness"] == settings, "Image-space tint survives profile export and import");
+	}
+	{
 		const Json settings{ { "EnableSkin", false }, { "EnableSkinDetail", true }, { "UseSSS", true },
 			{ "F0", .0278f }, { "BaseColorMultiplier", 1.f }, { "SSSAmount", .8f }, { "WetResponse", .7f },
 			{ "WetParams", { 512.f, .7f, 10.f, 4.f } }, { "FutureField", 9 } };

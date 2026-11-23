@@ -16,6 +16,7 @@
 #include "AdaptiveBalanceGodraySettings.h"
 #include "Bloom.h"
 #include "Buffer.h"
+#include "ImageSpaceTint.h"
 #include "LinearLighting.h"
 #include "SharedLighting.h"
 #include "WaterAppearance.h"
@@ -47,7 +48,7 @@ struct AdaptiveBrightness : Feature
 	virtual inline std::string GetShortName() override { return std::string(kFeatureShortName); }
 	virtual inline std::string GetDisplayName() override { return std::string(kFeatureDisplayName); }
 	virtual inline std::string_view GetShaderDefineName() override { return "ADAPTIVE_BALANCE"; }
-	std::string_view GetShaderCacheAbiVersion() override { return "3"; }
+	std::string_view GetShaderCacheAbiVersion() override { return "4"; }
 	virtual bool HasShaderDefine(RE::BSShader::Type a_shaderType) override
 	{
 		return a_shaderType == RE::BSShader::Type::Lighting ||
@@ -66,6 +67,7 @@ struct AdaptiveBrightness : Feature
 				"Separate interior, dungeon, and dwelling profiles",
 				"Hierarchical worldspace, region, city, location, and cell profiles with COC codes",
 				"Unified global and per-profile Lighting, Color, Bloom, Water, and wind adjustment layers",
+				"Optional global image-space tint amount and colour override",
 				"Global scene and underwater depth of field with independent underwater fog blur correction" }
 		};
 	}
@@ -193,6 +195,7 @@ struct AdaptiveBrightness : Feature
 		float transitionHours = 1.0f;
 		ProfileSettings globalProfile = ProfileSettings::GlobalDefaults();
 		AdaptiveBalanceDepthOfField::Settings depthOfField;
+		ImageSpaceTint::Settings imageSpaceTint;
 		std::array<ProfileSettings, kProfileCount> profiles{};
 		std::vector<LocationOverride> locationOverrides;
 	} settings;
@@ -230,10 +233,15 @@ struct AdaptiveBrightness : Feature
 		float moonReflectionStrength;
 		float pointLightCurvePadding[2];
 		AdaptiveBalanceAppearanceSettings appearance;
+		float3 imageSpaceTintColor;
+		// Negative amount preserves the engine's current weather/interior tint.
+		float imageSpaceTintAmount;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
-	static_assert(sizeof(PerFrameData) == 464);
+	static_assert(sizeof(PerFrameData) == 480);
 	static_assert(offsetof(PerFrameData, appearance) == 112);
+	static_assert(offsetof(PerFrameData, imageSpaceTintColor) == 464);
+	static_assert(offsetof(PerFrameData, imageSpaceTintAmount) == 476);
 	static_assert(offsetof(PerFrameData, skySaturation) == 32);
 	static_assert(offsetof(PerFrameData, ambientMult) == 36);
 	static_assert(offsetof(PerFrameData, contrast) == 40);

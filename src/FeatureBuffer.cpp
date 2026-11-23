@@ -138,7 +138,7 @@ namespace
 	static_assert(sizeof(TerrainVariationSettingsCB) == 16);
 	static_assert(sizeof(IBLSettingsCB) == 48);
 	static_assert(sizeof(ExtendedTranslucencySettingsCB) == 16);
-	static_assert(sizeof(AdaptiveBalanceSettingsCB) == 464);
+	static_assert(sizeof(AdaptiveBalanceSettingsCB) == 480);
 	static_assert(offsetof(AdaptiveBalanceSettingsCB, appearance) == 112);
 	static_assert(offsetof(AdaptiveBalanceSettingsCB, skySaturation) == 32);
 	static_assert(offsetof(AdaptiveBalanceSettingsCB, ambientMult) == 36);

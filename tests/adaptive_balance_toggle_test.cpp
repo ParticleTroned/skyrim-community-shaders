@@ -5,6 +5,7 @@
 #include "Features/AdaptiveBalanceDepthOfField.h"
 #include "Features/AdaptiveBalanceGodraySettings.h"
 #include "Features/GrassPlacementSettings.h"
+#include "Features/ImageSpaceTint.h"
 #include "Features/WetternessLightingPolicy.h"
 #include "SettingsMigrations.h"
 #include <algorithm>
@@ -1760,8 +1761,84 @@ void CheckWeatherWindClamping()
 	sky->currentWeather = originalWeather;
 }
 
+void CheckImageSpaceTint()
+{
+	AdaptiveBrightness balance;
+	assert(balance.GetCommonBufferData().imageSpaceTintAmount == -1.0f);
+	const auto defaults = json::object().get<ImageSpaceTint::Settings>();
+	assert(!defaults.enabled && defaults.amount == 0.5f);
+	const auto schema = ImageSpaceTint::Schema();
+	assert(schema.at("type") == "object" && schema.at("additionalProperties") == false && schema.at("minProperties") == 1);
+	const auto& properties = schema.at("properties");
+	assert(properties.is_object() && properties.size() == 3 && properties.at("enabled").at("default") == defaults.enabled);
+	assert(properties.at("amount").at("minimum") == 0 && properties.at("amount").at("maximum") == 1 && properties.at("amount").at("default") == defaults.amount);
+	const auto& colorSchema = properties.at("color");
+	assert(colorSchema.at("type") == "array" && colorSchema.at("minItems") == 3 && colorSchema.at("maxItems") == 3);
+	assert(colorSchema.at("default") == json(defaults.color) && colorSchema.at("items").at("minimum") == 0 && colorSchema.at("items").at("maximum") == 1);
+	auto edited = defaults;
+	assert(ImageSpaceTint::ApplyUpdate({ { "amount", 0.25 }, { "color", { 0.2, 0.6, 0.4 } } }, edited).empty());
+	assert(!edited.enabled && edited.amount == 0.25f && edited.color[0] == 0.2f);
+	assert(ImageSpaceTint::ApplyUpdate({ { "enabled", true } }, edited).empty());
+	assert(edited.enabled && edited.amount == 0.25f && edited.color[1] == 0.6f);
+	const json before = edited;
+	assert(!ImageSpaceTint::ApplyUpdate({ { "enabled", false }, { "amount", 2.0 } }, edited).empty());
+	assert(json(edited) == before);
+	assert(!ImageSpaceTint::ApplyUpdate({ { "amount", 0.5 }, { "color", { 0, 1 } } }, edited).empty());
+	assert(json(edited) == before);
+	auto& tint = balance.settings.imageSpaceTint;
+	tint = { true, 0.5f, { 127.0f / 255, 148.0f / 255, 115.0f / 255 } };
+	const auto saved = json(tint).get<ImageSpaceTint::Settings>();
+	assert(saved.enabled && saved.amount == tint.amount && saved.color == tint.color);
+	const auto data = balance.GetCommonBufferData();
+	assert(data.imageSpaceTintAmount == tint.amount && data.imageSpaceTintColor.x == tint.color[0]);
+	assert(data.imageSpaceTintColor.y == tint.color[1] && data.imageSpaceTintColor.z == tint.color[2]);
+	for (bool enabled : { false, true }) {
+		balance.settings.enabled = enabled;
+		assert(balance.GetCommonBufferData().imageSpaceTintAmount == (enabled ? 0.5f : -1.0f));
+	}
+	balance.performanceCostMeasurementEnabled = false;
+	assert(balance.GetCommonBufferData().imageSpaceTintAmount == -1.0f);
+	balance.performanceCostMeasurementEnabled = true;
+	tint.enabled = false;
+	assert(balance.GetCommonBufferData().imageSpaceTintAmount == -1.0f);
+	tint.enabled = true;
+	balance.loaded = false;
+	assert(balance.GetCommonBufferData().imageSpaceTintAmount == -1.0f);
+	balance.loaded = true;
+	globals::state->menuOpen = true;
+	assert(balance.GetCommonBufferData().imageSpaceTintAmount == -1.0f);
+	globals::state->menuOpen = false;
+	RE::PlayerCharacter::GetSingleton()->hasCell = false;
+	assert(balance.GetCommonBufferData().imageSpaceTintAmount == -1.0f);
+	RE::PlayerCharacter::GetSingleton()->hasCell = true;
+	assert(balance.GetCommonBufferData().imageSpaceTintAmount == 0.5f && json(tint) == json(saved));
+	tint.amount = std::numeric_limits<float>::quiet_NaN();
+	tint.color = { -1, 2, std::numeric_limits<float>::infinity() };
+	const auto safe = balance.GetCommonBufferData();
+	assert(safe.imageSpaceTintAmount == 0.5f && safe.imageSpaceTintColor.x == 0 && safe.imageSpaceTintColor.y == 1 && safe.imageSpaceTintColor.z == 1);
+	for (uint32_t pattern : { 0x7fc00000u, 0x7f800001u, 0x7f800000u, 0xff800000u }) {
+		volatile uint32_t bits = pattern;
+		const float invalid = std::bit_cast<float>(static_cast<uint32_t>(bits));
+		tint.amount = invalid;
+		tint.color = { invalid, invalid, invalid };
+		const auto upload = balance.GetCommonBufferData();
+		assert(upload.imageSpaceTintAmount == 0.5f);
+		assert(upload.imageSpaceTintColor.x == 1 && upload.imageSpaceTintColor.y == 1 && upload.imageSpaceTintColor.z == 1);
+		assert(!ValidateAdaptiveBalanceVisuals({ { "imageSpaceTint", { { "amount", invalid } } } }).empty());
+		assert(!ValidateAdaptiveBalanceVisuals({ { "imageSpaceTint", { { "color", { invalid, 0, 1 } } } } }).empty());
+	}
+	for (const auto& update : { json{ { "enabled", true } }, json{ { "amount", 0 } }, json{ { "amount", 1 } }, json{ { "color", { 0, 0.5, 1 } } } })
+		assert(ValidateAdaptiveBalanceVisuals({ { "imageSpaceTint", update } }).empty());
+	for (const auto& update : { json::object(), json{ { "enabled", 1 } }, json{ { "amount", -1 } }, json{ { "amount", 1.1 } },
+			 json{ { "amount", std::numeric_limits<double>::infinity() } }, json{ { "amount", nullptr } },
+			 json{ { "color", { 1, 1 } } }, json{ { "color", { 1, 1, 1, 1 } } }, json{ { "color", { 0, 2, 1 } } },
+			 json{ { "color", { true, 0, 1 } } }, json{ { "unknown", 1 } } })
+		assert(!ValidateAdaptiveBalanceVisuals({ { "imageSpaceTint", update } }).empty());
+}
+
 int main()
 {
+	CheckImageSpaceTint();
 	CheckPerWeatherProfiles();
 	CheckWeatherWindClamping();
 	CheckEditableBloomPresets();

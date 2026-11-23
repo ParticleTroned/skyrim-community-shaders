@@ -223,7 +223,12 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 
 	float blendedLuminance = Color::RGBToLuminance(blendedColor);
-	float3 tintedColor = Cinematic.w * lerp(lerp(blendedLuminance, blendedColor, Cinematic.x), blendedLuminance * Tint.xyz, Tint.w).xyz;
+	float4 tint = Tint;
+#		if defined(ADAPTIVE_BALANCE)
+	if (SharedData::adaptiveBalanceSettings.imageSpaceTintAmount >= 0.0)
+		tint = float4(SharedData::adaptiveBalanceSettings.imageSpaceTintColor, SharedData::adaptiveBalanceSettings.imageSpaceTintAmount);
+#		endif
+	float3 tintedColor = Cinematic.w * lerp(lerp(blendedLuminance, blendedColor, Cinematic.x), blendedLuminance * tint.xyz, tint.w).xyz;
 	float3 contrastedColor = lerp(avgValue.x, tintedColor, Cinematic.z);
 
 	// Contrast modified to fix crushed shadows

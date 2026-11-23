@@ -151,14 +151,15 @@ namespace
 			auto* balance = feature->reflection->GetVariableByName("SharedData::adaptiveBalanceSettings");
 			D3D11_SHADER_VARIABLE_DESC desc{};
 			Check(balance->GetDesc(&desc));
-			Require(desc.Size == 464, "Adaptive Balance buffer size changed");
+			Require(desc.Size == 480, "Adaptive Balance buffer size changed");
 			for (auto [name, offset] : { std::pair{ "contrast", 40u }, std::pair{ "saturation", 44u },
 					 std::pair{ "cloudBrightness", 48u }, std::pair{ "cloudSaturation", 52u },
 					 std::pair{ "fogIntensity", 56u }, std::pair{ "sunGlareIntensity", 60u },
 					 std::pair{ "useAmbientEffectLighting", 64u }, std::pair{ "skyStaticTransparency", 68u },
 					 std::pair{ "effectBrightness", 72u }, std::pair{ "skyStaticBrightness", 76u },
 					 std::pair{ "pointLightSaturation", 80u }, std::pair{ "fireIntensity", 84u },
-					 std::pair{ "fireSaturation", 88u }, std::pair{ "fireCurve", 92u }, std::pair{ "pointLightCurve", 96u }, std::pair{ "appearance", 112u } }) {
+					 std::pair{ "fireSaturation", 88u }, std::pair{ "fireCurve", 92u }, std::pair{ "pointLightCurve", 96u }, std::pair{ "appearance", 112u },
+					 std::pair{ "imageSpaceTintColor", 464u }, std::pair{ "imageSpaceTintAmount", 476u } }) {
 				D3D11_SHADER_TYPE_DESC member{};
 				Check(balance->GetType()->GetMemberTypeByName(name)->GetDesc(&member));
 				Require(member.Offset == offset, "Adaptive Balance buffer layout differs from C++");
@@ -1527,7 +1528,7 @@ namespace
 			frame->SetVariable("FrameBuffer::DynamicResolutionParams2", Pixel{ 1, 1, 1, 1 });
 		}
 
-		Pixel Draw(bool linear, float contrast, float saturation, float authoredContrast = 1, Pixel fade = {}, bool dark = false, bool alternateTonemap = false)
+		Pixel Draw(bool linear, float contrast, float saturation, float authoredContrast = 1, Pixel fade = {}, bool dark = false, bool alternateTonemap = false, Pixel nativeTint = {}, Pixel overrideTint = { 1, 1, 1, -1 })
 		{
 			context->ClearState();
 			scene.Set(context, dark ? Pixel{ 0.05f, 0.04f, 0.03f, 1 } : Pixel{ 0.4f, 0.2f, 0.1f, 1 });
@@ -1536,9 +1537,12 @@ namespace
 			feature->SetMember("SharedData::linearLightingSettings", "enableLinearLighting", uint32_t(linear));
 			feature->SetMember("SharedData::adaptiveBalanceSettings", "contrast", contrast);
 			feature->SetMember("SharedData::adaptiveBalanceSettings", "saturation", saturation);
+			feature->SetMember("SharedData::adaptiveBalanceSettings", "imageSpaceTintColor", float3{ overrideTint[0], overrideTint[1], overrideTint[2] });
+			feature->SetMember("SharedData::adaptiveBalanceSettings", "imageSpaceTintAmount", overrideTint[3]);
 			feature->Bind(context, D3D11ShaderTest::Stage::Pixel);
 			geometry->SetVariable("Param", Pixel{ 1, 1, float(alternateTonemap), 0 });
 			geometry->SetVariable("Cinematic", Pixel{ 1, 0, authoredContrast, 1 });
+			geometry->SetVariable("Tint", nativeTint);
 			geometry->SetVariable("Fade", fade);
 			geometry->Bind(context, D3D11ShaderTest::Stage::Pixel);
 			frame->Bind(context, D3D11ShaderTest::Stage::Pixel);
@@ -1593,6 +1597,24 @@ namespace
 				}
 			}
 		}
+	}
+
+	void VerifyTint(ID3D11Device* device, ID3D11DeviceContext* context, bool vr, bool fade)
+	{
+		BlendFixture baseline(device, context, vr, false, fade);
+		BlendFixture graded(device, context, vr, true, fade);
+		const Pixel authored{ 127.0f / 255, 148.0f / 255, 115.0f / 255, 0.5f };
+		for (bool linear : { false, true })
+			for (bool alternateTonemap : { false, true })
+				for (float amount : { -1.0f, 0.0f, 0.5f, 1.0f })
+					for (const Pixel color : { Pixel{ 1, 1, 1, 0 }, Pixel{ 0, 0, 0, 0 }, Pixel{ 0.2f, 0.7f, 0.4f, 0 } }) {
+						const Pixel overrideTint{ color[0], color[1], color[2], amount };
+						const Pixel fading{ 0.1f, 0.3f, 0.2f, 0.4f };
+						const auto expected = baseline.Draw(linear, 1, 1, 1, fading, false, alternateTonemap, amount < 0 ? authored : overrideTint);
+						const auto actual = graded.Draw(linear, 1, 1, 1, fading, false, alternateTonemap, authored, overrideTint);
+						for (size_t c = 0; c < 4; ++c)
+							Require(Close(actual[c], expected[c]), "Tint override differs from native TNAM tint or changes fade/alpha");
+					}
 	}
 }
 
@@ -1655,10 +1677,12 @@ int main(int argc, char** argv)
 			appearanceSamples += VerifyMoonAppearance(device.Get(), context.Get(), vr);
 			emissiveSamples += VerifyEmissive(device.Get(), context.Get(), vr);
 			fireSamples += VerifyFireModes(device.Get(), context.Get(), vr);
-			for (bool fade : { false, true })
+			for (bool fade : { false, true }) {
 				VerifyBlend(device.Get(), context.Get(), vr, fade);
+				VerifyTint(device.Get(), context.Get(), vr, fade);
+			}
 		}
-		std::cout << "288 color samples, 384 HDR blend draws, and " << lightSamples
+		std::cout << "288 color samples, 384 HDR blend draws, 384 image-space tint draws, and " << lightSamples
 				  << " light samples, " << fireSamples << " fire samples, " << appearanceSamples << " appearance samples, and " << emissiveSamples << " emissive samples passed on WARP (SE/AE and VR).\n";
 		return 0;
 	} catch (const std::exception& error) {

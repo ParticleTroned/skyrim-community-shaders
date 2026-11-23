@@ -137,6 +137,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	transitionHours,
 	globalProfile,
 	depthOfField,
+	imageSpaceTint,
 	profiles,
 	locationOverrides)
 
@@ -576,6 +577,7 @@ namespace
 		a_settings.moonReflectionStrength = Util::ClampFinite(a_settings.moonReflectionStrength,
 			AdaptiveBrightness::kMoonReflectionStrengthMin, AdaptiveBrightness::kMoonReflectionStrengthMax, AdaptiveBrightness::kMoonReflectionStrengthDefault);
 		AdaptiveBalanceDepthOfField::SanitizeSettings(a_settings.depthOfField);
+		ImageSpaceTint::Sanitize(a_settings.imageSpaceTint);
 		ClampProfileSettings(a_settings.globalProfile);
 		a_settings.globalProfile.waterWind.overrideEnabled = true;
 		NormalizeExteriorTimeSettings(a_settings);
@@ -1451,6 +1453,15 @@ void AdaptiveBrightness::DrawProfileControls(
 		break;
 	case 1:
 		DrawColorSettings(a_profile);
+		if (a_globalLayer) {
+			auto& tint = settings.imageSpaceTint;
+			MenuUI::SectionHeading("Image-space tint", "Override Skyrim's image-space tint colour and amount across all weathers and interiors. Turn this off to use the original tint. Zero amount removes tinting.");
+			Util::Widgets::Checkbox("Override Tint", &tint.enabled);
+			const auto tintDisabled = Util::DisableGuard(!tint.enabled);
+			Util::Widgets::SliderFloat("Tint Amount", &tint.amount, ImageSpaceTint::kMinimum, ImageSpaceTint::kMaximum, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			Util::Widgets::ColorEdit3("Tint Colour", tint.color.data());
+			ImageSpaceTint::Sanitize(tint);
+		}
 		break;
 	case 2:
 		DrawBloomSettings(a_profile, a_showAdvancedControls, a_globalLayer);
@@ -3451,6 +3462,13 @@ AdaptiveBrightness::PerFrameData AdaptiveBrightness::GetCommonBufferData() const
 	data.fireSaturation = effectiveSettings.fireSaturation;
 	data.fireCurve = effectiveSettings.fireCurve;
 	data.appearance = effectiveSettings.appearance;
+	data.imageSpaceTintAmount = ImageSpaceTint::kNativeAmount;
+	if (settings.imageSpaceTint.enabled && IsRuntimeEnabled()) {
+		auto tint = settings.imageSpaceTint;
+		ImageSpaceTint::Sanitize(tint);
+		data.imageSpaceTintColor = { tint.color[0], tint.color[1], tint.color[2] };
+		data.imageSpaceTintAmount = tint.amount;
+	}
 	AdaptiveBalanceAppearance::PreparePointLightColors(data.appearance,
 		!CSX::Diagnostics::PerformanceCosts::ReferenceEnabled(CSX::Diagnostics::PerformanceCosts::Point::PointLightComposition));
 	data.linearPointLightMult = effectiveSettings.linearPointLightMult;

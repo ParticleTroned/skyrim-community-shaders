@@ -424,6 +424,8 @@ namespace SharedData
 		float moonReflectionStrength;
 		float2 padding;
 		AdaptiveBalanceAppearanceSettings appearance;
+		float3 imageSpaceTintColor;
+		float imageSpaceTintAmount;
 	};
 
 	struct LinearLightingSettings

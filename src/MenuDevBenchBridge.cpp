@@ -471,6 +471,11 @@ namespace
 			{ "parallaxStrength", 0.0, 2.0 },
 			{ "parallaxQuality", 4.0, 64.0 } } };
 		for (const auto& [name, value] : a_visuals.items()) {
+			if (name == "imageSpaceTint") {
+				if (auto error = ImageSpaceTint::ValidateUpdate(value); !error.empty())
+					return error;
+				continue;
+			}
 			if (name == "bloom") {
 				if (auto error = AdaptiveBalanceBloomControls::Validate(value); !error.empty())
 					return error;
@@ -579,6 +584,7 @@ namespace
 		configured["volumetricClarity"] = balance.settings.volumetricClarity;
 		configured["godrays"] = balance.settings.godrays;
 		configured["moonReflectionStrength"] = balance.settings.moonReflectionStrength;
+		configured["imageSpaceTint"] = balance.settings.imageSpaceTint;
 		auto effective = waterFields(balance.GetEffectiveWaterAppearanceSettings());
 		const auto lighting = balance.GetEffectiveSharedLightingSettings();
 		effective["skySaturation"] = lighting.skySaturation;
@@ -607,6 +613,10 @@ namespace
 		effective["volumetricClarity"] = balance.GetEffectiveVolumetricClarity();
 		effective["godrays"] = { { "exterior", balance.GetEffectiveGodrayProfile(false) }, { "interior", balance.GetEffectiveGodrayProfile(true) } };
 		effective["moonReflectionStrength"] = balance.GetEffectiveMoonReflectionStrength();
+		auto tint = balance.settings.imageSpaceTint;
+		ImageSpaceTint::Sanitize(tint);
+		tint.enabled = balance.IsRuntimeEnabled() && tint.enabled;
+		effective["imageSpaceTint"] = tint;
 		return { { "global", std::move(configured) }, { "effective", std::move(effective) } };
 	}
 
@@ -1559,7 +1569,13 @@ namespace
 					updated.merge_patch(visuals.at("godrays"));
 					godrays = updated.get<AdaptiveBalanceGodray::Profiles>();
 				}
+				auto tint = balance.settings.imageSpaceTint;
+				if (visuals.contains("imageSpaceTint")) {
+					if (auto error = ImageSpaceTint::ApplyUpdate(visuals.at("imageSpaceTint"), tint); !error.empty())
+						return { { "error", error }, { "action", action } };
+				}
 				balance.settings.godrays = godrays;
+				balance.settings.imageSpaceTint = tint;
 				balance.settings.globalProfile = profile;
 				balance.settings.bloomEnabled = visuals.value("bloomEnabled", balance.settings.bloomEnabled);
 				balance.settings.useAmbientEffectLighting = visuals.value("useAmbientEffectLighting", balance.settings.useAmbientEffectLighting);
@@ -1942,6 +1958,9 @@ namespace MenuDevBenchBridge
 				{ "type", "object" }, { "description", "Main-thread context at the DevBench call, independently framed from the asynchronous grass and profiler samples. Unavailable scene values are omitted." }
 			};
 			document["inputSchema"]["properties"]["visuals"]["properties"]["appearance"] = BuildAdaptiveBalanceAppearanceSchema();
+			document["inputSchema"]["properties"]["visuals"]["properties"]["imageSpaceTint"] = ImageSpaceTint::Schema();
+			document["description"] = document["description"].get<std::string>() +
+			                          " set_adaptive_balance_visuals accepts imageSpaceTint {enabled, amount, color:[r,g,b]} for Visuals > Global > Colour. This replaces native TNAM tint at the HDR blend on SE/AE/VR without modifying image-space records. Amount 0 removes tint; disabled preserves the native weather/interior tint. Values stage without saving or enabling Visuals; status.adaptiveBalanceVisuals.global/effective.imageSpaceTint reports configured and runtime-gated controls.";
 			document["inputSchema"]["properties"]["visuals"]["properties"]["bloom"] = AdaptiveBalanceBloomControls::Schema();
 			document["inputSchema"]["properties"]["visuals"]["properties"]["bloomEnabled"] = {
 				{ "type", "boolean" }, { "description", "Independently bypass bloom enhancement while retaining every layer and editable preset. Default true; Visuals must also be enabled." }
@@ -1979,6 +1998,8 @@ namespace MenuDevBenchBridge
 				{ "properties", { { "global", { { "type", "object" }, { "properties", json::object() } } },
 									{ "effective", { { "type", "object" }, { "properties", json::object() } } } } }
 			};
+			for (const auto* layer : { "global", "effective" })
+				visualsStatus["properties"][layer]["properties"]["imageSpaceTint"] = document["inputSchema"]["properties"]["visuals"]["properties"]["imageSpaceTint"];
 			const json claritySchema = {
 				{ "type", "number" }, { "minimum", AdaptiveBalanceGodray::kClarityMin }, { "maximum", AdaptiveBalanceGodray::kClarityMax },
 				{ "default", AdaptiveBalanceGodray::kClarityDefault },

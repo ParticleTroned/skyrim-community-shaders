@@ -303,6 +303,24 @@ to its attribution in commit messages, PR descriptions, and write-ups:
 
 ## Repository tooling
 
+-   For production CSX profiling, performance tuning, save loading and
+    screenshots, use the standalone DevBench **performance profile**.
+    In the DevBench repository, configure with
+    `xmake f --performance_profile=y -m releasedbg`, then run
+    `xmake build devbench`. The default full DevBench build does not select
+    this profile. Keep CSX built with `DEVBENCH_BRIDGE=OFF` and
+    `TRACY_SUPPORT=OFF`; do not enable its developer bridge merely to
+    access these controls. DevBench supplies the transport and save loader;
+    CSX supplies the on-demand public APIs. Require `csx.performance` 1.0,
+    `csx.profiler` 1.3 (including `GetCurrentCapture`) and
+    `csx.screenshot` 1.0, and verify the advertised DevBench profile and
+    CSX instrumentation flags before selecting compatible controls.
+    Preserve compile-time diagnostic isolation and unchanged idle render
+    paths; requested captures and polling still have a cost. Build success
+    does not establish in-game compatibility or measured frame-time parity.
+    Follow the [production API guide](docs/development/tooling.md#production-performance-api)
+    and retain the maintained protocols' capability and authorization checks.
+
 -   For requested Tracy recordings, the agent owns starting and verifying
     the matching Tracy MCP server; do not hand routine server startup back
     to the user. Reuse a healthy compatible instance. Read the local

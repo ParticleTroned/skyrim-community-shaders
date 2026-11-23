@@ -455,6 +455,15 @@
     "SubsurfaceScatteringAmount": 1.0
   },
   "Adaptive Balance": {
+    "imageSpaceTint": {
+      "enabled": false,
+      "amount": 0.5,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
     "godrayFinalBrightness": 1.0,
     "volumetricClarity": 0.0,
     "depthOfField": {

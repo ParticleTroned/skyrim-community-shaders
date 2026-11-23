@@ -2045,7 +2045,10 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_adaptive_presets_under_test.h"
             "${_settings_ui_dir}/settings_results_under_test.h"
     )
-    target_sources(settings_ui_test PRIVATE src/Menu/PerformanceResults.cpp)
+    target_sources(
+        settings_ui_test
+        PRIVATE src/Menu/PerformanceResults.cpp src/PresetCompatibility.cpp
+    )
     target_include_directories(settings_ui_test PRIVATE "${_settings_ui_dir}")
     find_package(fmt CONFIG REQUIRED)
     target_link_libraries(

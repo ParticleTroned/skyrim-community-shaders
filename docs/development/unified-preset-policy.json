@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.11.22.3",
+    "packageVersion": "d2026.11.23.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -15,11 +15,11 @@
     "tierOrder": ["Performance", "Balanced", "Quality"],
     "baseTemplate": {
         "path": "docs/development/unified-preset-templates/Base.SettingsUser.json",
-        "sha256": "BB8E22A76814D1D76E2B490AC9D3FC684A5ED6EA24A694E55A0363FCC28FE5EC"
+        "sha256": "F4A3DECC2ED2C44055F4FCABD1AD3B539E986791CF6783630FF72DE4F393B22B"
     },
     "runtimeSettingsContract": {
         "revision": 36,
-        "sourceTreeSha256": "2698EB7A8CDAFE9585AF43F1CD4514E3C84B08368214D98094A2BB16171CD98C",
+        "sourceTreeSha256": "58D2370D5BA7E032A521266EF7E8CC32126A3553A3012830321E8390548A4CF7",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -34,6 +34,7 @@
                 "src/Features/FoveatedCommon.h",
                 "src/Features/GrassOptimizations/GrassPolicy.h",
                 "src/Features/GrassPlacementSettings.h",
+                "src/Features/ImageSpaceTint.h",
                 "src/Features/LightLimitFix/ShadowCullingPolicy.h",
                 "src/Features/SeasonalWeatherConfig.cpp",
                 "src/Features/SeasonalWeatherConfig.h",
@@ -116,6 +117,7 @@
             "src/Features/HorizonFix.h",
             "src/Features/IBL.cpp",
             "src/Features/IBL.h",
+            "src/Features/ImageSpaceTint.h",
             "src/Features/InteriorSun.cpp",
             "src/Features/InteriorSun.h",
             "src/Features/InverseSquareLighting.cpp",
@@ -234,6 +236,7 @@
         ["Advanced"],
         ["CSX Editor"],
         ["Adaptive Balance", "depthOfField"],
+        ["Adaptive Balance", "imageSpaceTint"],
         ["General"],
         ["Menu"],
         ["Performance Overlay"],
@@ -811,6 +814,10 @@
             ["Volumetric Lighting", "GodrayShaftIntensity"]
         ],
         "requiredValues": [
+            {
+                "path": ["Adaptive Balance", "imageSpaceTint"],
+                "value": { "enabled": false, "amount": 0.5, "color": [1.0, 1.0, 1.0] }
+            },
             { "path": ["Menu", "HideOverviewTabs"], "value": false },
             {
                 "path": ["Adaptive Balance", "globalProfile", "appearance", "moonCurve"],

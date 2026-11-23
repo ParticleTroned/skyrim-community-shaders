@@ -1,4 +1,5 @@
 #include "Features/GrassPlacementSettings.h"
+#include "Features/ImageSpaceTint.h"
 #include "Features/LightLimitFix/ShadowCullingPolicy.h"
 #include "Features/SeasonalWeatherConfig.h"
 #include "PresetCompatibility.h"
@@ -122,6 +123,7 @@ int main(int argc, char** argv)
 		assert(input.is_open());
 		const auto preset = nlohmann::json::parse(input);
 		assert(preset.at("Adaptive Balance").at("globalProfile").at("grassPlacement").get<GrassPlacement::Settings>() == GrassPlacement::Settings{});
+		assert(preset.at("Adaptive Balance").at("imageSpaceTint") == nlohmann::json(ImageSpaceTint::Settings{}));
 		// Archived vendor presets retain the fingerprint of their source snapshot.
 		assert(preset.at("Preset Compatibility").at("settingsContract").at("revision") == PresetCompatibility::kSettingsContractRevision);
 		assert(preset.at("Preset Compatibility").at("presetVersion") == policy.at("packageVersion"));
@@ -162,6 +164,56 @@ int main(int argc, char** argv)
 	assert(compatible.disposition == Disposition::kCompatible);
 	assert(compatible.ShouldApply());
 	assert(compatible.presetId == "csx-unified-balanced");
+
+	// The shipped 3.20.1 preset used revision 14 and a 3.20-to-3.21 range.
+	auto legacyUser = CompatiblePreset();
+	legacyUser["Version"] = "CSX 3.20.1-VR";
+	auto& legacyMarker = legacyUser["Preset Compatibility"];
+	legacyMarker["presetVersion"] = "d2026.10.15.1";
+	legacyMarker["settingsContract"]["revision"] = 14u;
+	legacyMarker["target"]["minimumVersion"] = "3.20";
+	legacyMarker["target"]["maximumVersionExclusive"] = "3.21";
+	legacyUser["Adaptive Balance"] = { { "enabled", false }, { "globalProfile", { { "brightness", 0.73 } } } };
+	legacyUser["Unavailable Feature"] = { { "enabled", false }, { "customValue", 0 } };
+	const auto originalUser = legacyUser;
+	std::string saveError;
+	assert(PresetCompatibility::Evaluate(legacyUser, "CSX 3.21.0-VR").ShouldApply());
+	assert(PresetCompatibility::PrepareUserSave(legacyUser, "CSX 3.21.0-VR", false, saveError));
+	assert(legacyUser == originalUser && saveError.empty());
+	assert(PresetCompatibility::PrepareUserSave(legacyUser, "CSX 3.21.0-VR", true, saveError));
+	auto expectedUser = originalUser;
+	expectedUser.erase("Preset Compatibility");
+	expectedUser["Version"] = "CSX 3.21.0-VR";
+	assert(legacyUser == expectedUser);
+	assert(PresetCompatibility::Evaluate(legacyUser, "CSX 3.21.0-VR").disposition == Disposition::kUnmarked);
+	assert(PresetCompatibility::PrepareUserSave(legacyUser, "CSX 3.21.0-VR", true, saveError));
+	assert(legacyUser == expectedUser);
+	auto unmarkedLegacy = originalUser;
+	unmarkedLegacy.erase("Preset Compatibility");
+	assert(PresetCompatibility::PrepareUserSave(unmarkedLegacy, "CSX 3.21.0-VR", true, saveError));
+	assert(unmarkedLegacy == expectedUser);
+	for (const auto runtime : { "CSX 3.21.0-SE", "CSX 3.21.0-AE", "CSX 3.22.0-VR" }) {
+		auto rejectedUser = originalUser;
+		assert(!PresetCompatibility::PrepareUserSave(rejectedUser, runtime, true, saveError));
+		assert(rejectedUser == originalUser && !saveError.empty());
+	}
+	auto futureUser = CompatiblePreset();
+	futureUser["Preset Compatibility"]["settingsContract"]["revision"] = PresetCompatibility::kSettingsContractRevision + 1;
+	const auto beforeFutureSave = futureUser;
+	assert(!PresetCompatibility::PrepareUserSave(futureUser, "CSX 3.21.0-VR", true, saveError));
+	assert(futureUser == beforeFutureSave && !saveError.empty());
+	auto malformedUser = nlohmann::json::array();
+	assert(!PresetCompatibility::PrepareUserSave(malformedUser, "CSX 3.21.0-VR", true, saveError));
+	assert(malformedUser.is_array() && !saveError.empty());
+	for (const bool fullSave : { false, true }) {
+		for (const auto& invalidMarker : { nlohmann::json(nullptr), nlohmann::json::array(), nlohmann::json::object() }) {
+			auto invalidUser = originalUser;
+			invalidUser["Preset Compatibility"] = invalidMarker;
+			const auto beforeInvalidSave = invalidUser;
+			assert(!PresetCompatibility::PrepareUserSave(invalidUser, "CSX 3.21.0-VR", fullSave, saveError));
+			assert(invalidUser == beforeInvalidSave && !saveError.empty());
+		}
+	}
 
 	const auto older = PresetCompatibility::Evaluate(CompatiblePreset(), "CSX 3.18-VR");
 	assert(older.disposition == Disposition::kRejected);

@@ -79,7 +79,7 @@
   "Preset Compatibility": {
     "contractVersion": 1,
     "presetId": "csx-unified-quality",
-    "presetVersion": "d2026.11.22.3",
+    "presetVersion": "d2026.11.23.1",
     "target": {
       "runtime": "VR",
       "minimumVersion": "3.21",
@@ -87,7 +87,7 @@
     },
     "settingsContract": {
       "revision": 36,
-      "sourceTreeSha256": "2698EB7A8CDAFE9585AF43F1CD4514E3C84B08368214D98094A2BB16171CD98C"
+      "sourceTreeSha256": "58D2370D5BA7E032A521266EF7E8CC32126A3553A3012830321E8390548A4CF7"
     }
   },
   "Upscaling": {
@@ -469,6 +469,15 @@
     "SubsurfaceScatteringAmount": 1.0
   },
   "Adaptive Balance": {
+    "imageSpaceTint": {
+      "enabled": false,
+      "amount": 0.5,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
     "godrayFinalBrightness": 1.0,
     "volumetricClarity": 0.0,
     "depthOfField": {

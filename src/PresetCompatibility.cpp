@@ -235,6 +235,31 @@ PresetCompatibility::Evaluation PresetCompatibility::Evaluate(
 	return evaluation;
 }
 
+bool PresetCompatibility::PrepareUserSave(
+	nlohmann::json& a_settings,
+	std::string_view a_currentVersionLabel,
+	bool a_fullSave,
+	std::string& o_error)
+{
+	o_error.clear();
+	if (!a_settings.is_object()) {
+		o_error = "Saved settings must be a JSON object.";
+		return false;
+	}
+	const auto evaluation = Evaluate(a_settings, a_currentVersionLabel);
+	if (!evaluation.ShouldApply()) {
+		o_error = evaluation.message;
+		return false;
+	}
+	if (a_fullSave) {
+		// A full save belongs to the user; a distributed preset's version gate
+		// must not keep restricting a configuration serialized by this build.
+		a_settings.erase(std::string(kSettingsKey));
+		a_settings["Version"] = a_currentVersionLabel;
+	}
+	return true;
+}
+
 void PresetCompatibility::Publish(Evaluation a_evaluation)
 {
 	std::scoped_lock lock(g_evaluationMutex);

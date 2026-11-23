@@ -14,6 +14,7 @@
 #include "Menu/SettingsNavigation.h"
 #include "Menu/SettingsPage.h"
 #include "Menu/SettingsSearch.h"
+#include "PresetCompatibility.h"
 #include "Utils/FeatureProfiling.h"
 #include "Utils/NumericEntry.h"
 #include "Utils/StringUtils.h"
@@ -136,7 +137,7 @@ namespace globals
 		std::optional<nlohmann::json> mutationBaseline;
 		bool PrepareSettingsMutation();
 		bool IsSettingsSaveMessageError() const { return messageError; }
-		std::string GetSettingsSaveMessage() const { return message; }
+		const std::string& GetSettingsSaveMessage() const { return message; }
 		bool HasUnsavedSettings() const { return dirty; }
 		std::unordered_map<std::string, nlohmann::json> savedFeatures;
 		bool HasUnsavedFeatureSettings(const std::string& name) const { return savedFeatures.contains(name); }
@@ -872,6 +873,17 @@ void key(ImGuiKey keyCode, const std::function<void()>& draw)
 int main()
 {
 	try {
+		{
+			using Action = MenuUI::GlobalSettingsAction;
+			const std::string defaultHelp = MenuUI::GetGlobalSettingsActionHelp(Action::Save);
+			for (const bool success : { false, true }) {
+				globals::menu->ReportSettingsSaveResult(success, "Settings save result: preserve 100% of the user's values.");
+				require(MenuUI::GetGlobalSettingsActionHelp(Action::Save) == globals::menuStorage.message.c_str(),
+					"save feedback borrows persistent menu storage instead of a temporary string");
+			}
+			globals::menu->ClearSettingsSaveResult();
+			require(MenuUI::GetGlobalSettingsActionHelp(Action::Save) == defaultHelp, "cleared feedback restores the save action help");
+		}
 		FeatureSettingsSaveTest::Run(require);
 		{
 			RenderDoc capture;

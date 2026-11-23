@@ -1856,6 +1856,9 @@ bool State::Save(ConfigMode a_configMode, Feature* a_feature)
 
 	std::string writeError;
 	try {
+		if (a_configMode == ConfigMode::USER &&
+			!PresetCompatibility::PrepareUserSave(settings, Plugin::VERSION_LABEL, !a_feature, writeError))
+			return reportFailure(writeError, "Settings were not saved: " + writeError);
 		if (a_configMode == ConfigMode::USER && !Presets::LookProfiles::Get().PrepareSave(settings, writeError, a_feature))
 			return reportFailure(writeError, writeError);
 	} catch (const std::exception& error) {
@@ -1868,6 +1871,7 @@ bool State::Save(ConfigMode a_configMode, Feature* a_feature)
 	}
 
 	if (a_configMode == ConfigMode::USER) {
+		PresetCompatibility::Publish(PresetCompatibility::Evaluate(settings, Plugin::VERSION_LABEL));
 		std::vector<std::string> postSaveFailures;
 		for (auto* feature : Feature::GetFeatureList()) {
 			if (!feature->loaded || (a_feature && feature != a_feature))
@@ -1910,7 +1914,8 @@ bool State::Save(ConfigMode a_configMode, Feature* a_feature)
 				globals::menu->ResetSettingsDirtyState();
 			globals::menu->ReportSettingsSaveResult(
 				true,
-				std::format("Settings saved successfully to {}.", configName));
+				a_feature ? std::format("{} settings saved successfully to {}.", a_feature->GetDisplayName(), configName) :
+							std::format("Settings saved successfully to {}.", configName));
 		}
 	}
 

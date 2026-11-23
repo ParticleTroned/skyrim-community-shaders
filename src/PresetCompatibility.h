@@ -39,6 +39,9 @@ namespace PresetCompatibility
 	/** Evaluates optional preset metadata without modifying the settings document. */
 	Evaluation Evaluate(const nlohmann::json& a_settings, std::string_view a_currentVersionLabel);
 
+	/** Validate the saved document and retire preset-only metadata on a full user save. */
+	bool PrepareUserSave(nlohmann::json& a_settings, std::string_view a_currentVersionLabel, bool a_fullSave, std::string& o_error);
+
 	/** Publishes the last SettingsUser compatibility decision for diagnostics. */
 	void Publish(Evaluation a_evaluation);
 

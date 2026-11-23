@@ -4078,6 +4078,18 @@ if(BUILD_CONTROLLER_TESTS)
         VRVendorRelatchPolicy
         tests/vr_vendor_relatch_policy_test.cpp
     )
+    add_test(
+        NAME VRStabilizerReentry
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/vr_stabilizer_reentry_test.py"
+    )
+    set_tests_properties(
+        VRStabilizerReentry
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+    )
     set(_dlss_provider_reuse_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/dlss-provider-reuse"
     )

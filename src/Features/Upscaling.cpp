@@ -1003,6 +1003,33 @@ namespace
 	std::atomic_uint64_t g_vrLoadingTransitionSerial{ 0 };
 	std::atomic_bool g_vrLoadingTransitionSerialOpen{ false };
 	std::mutex g_vrLoadingTransitionSerialMutex;
+
+	/** Allow synchronous recreation queries to borrow this thread's existing serial lock. */
+	class ScopedVRLoadingSerialReadOwner
+	{
+	public:
+		explicit ScopedVRLoadingSerialReadOwner(const std::unique_lock<std::mutex>& a_owner) noexcept :
+			previousOwner(std::exchange(currentOwner, std::addressof(a_owner)))
+		{}
+
+		~ScopedVRLoadingSerialReadOwner() { currentOwner = previousOwner; }
+		ScopedVRLoadingSerialReadOwner(const ScopedVRLoadingSerialReadOwner&) = delete;
+		ScopedVRLoadingSerialReadOwner& operator=(const ScopedVRLoadingSerialReadOwner&) = delete;
+
+		/** Acquire normal query ownership unless recreation already owns the same mutex here. */
+		static std::unique_lock<std::mutex> LockForQuery()
+		{
+			std::unique_lock lock(g_vrLoadingTransitionSerialMutex, std::defer_lock);
+			if (!currentOwner || currentOwner->mutex() != &g_vrLoadingTransitionSerialMutex || !currentOwner->owns_lock())
+				lock.lock();
+			return lock;
+		}
+
+	private:
+		static inline thread_local const std::unique_lock<std::mutex>* currentOwner = nullptr;
+		const std::unique_lock<std::mutex>* previousOwner;
+	};
+
 	// Serialize loading owner changes with the Stabilizer profile handoff.
 	std::mutex g_vrStabilizerSyncHandoffMutex;
 	// The serial mutex owns these tuples. Frame atomics expose their status.
@@ -6336,7 +6363,7 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 
 		VRVendorRelatchPolicy::StabilizerSyncOwner observed;
 		{
-			const std::scoped_lock serialLock(g_vrLoadingTransitionSerialMutex);
+			const auto serialLock = ScopedVRLoadingSerialReadOwner::LockForQuery();
 			if (g_vrLoadingTransitionSerialOpen.load(std::memory_order_relaxed))
 				return std::nullopt;
 			observed = GetVRFpsStabilizerSyncOwnerLocked();
@@ -6348,7 +6375,7 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		const uint32_t worldFrame = a_state->lastCompletedWorldRenderFrame;
 		const uint32_t frame = a_state->frameCount;
 
-		std::unique_lock serialLock(g_vrLoadingTransitionSerialMutex);
+		auto serialLock = ScopedVRLoadingSerialReadOwner::LockForQuery();
 		const auto current = GetVRFpsStabilizerSyncOwnerLocked();
 		if (!VRVendorRelatchPolicy::MatchesStabilizerSyncDiscovery(
 				observed.close, observed.edge, current.close, current.edge,
@@ -6396,7 +6423,8 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 				frame >= observed.close.frame &&
 				frame - observed.close.frame >= kVRFpsStabilizerIdentitySyncFallbackFrames,
 		});
-		serialLock.unlock();
+		if (serialLock.owns_lock())
+			serialLock.unlock();
 		if (observedNewDestination) {
 			logger::debug(
 				"[Upscaling] VR FPS Stabilizer Sync observed destination cell {:08X} after source {:08X}.",
@@ -6420,7 +6448,7 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 
 	bool HasTerminalVRFpsStabilizerFallbackForCurrentLoad()
 	{
-		const std::scoped_lock serialLock(g_vrLoadingTransitionSerialMutex);
+		const auto serialLock = ScopedVRLoadingSerialReadOwner::LockForQuery();
 		if (g_vrLoadingTransitionSerialOpen.load(std::memory_order_relaxed))
 			return false;
 		const auto outcome = GetVRFpsStabilizerSyncOutcomeLocked(GetVRFpsStabilizerSyncOwnerLocked());
@@ -6450,7 +6478,7 @@ Optional: select FOV + TAA for further performance savings (not compatible with 
 		const auto owner = GetReadyVRFpsStabilizerSyncOwner(globals::state);
 		if (!owner)
 			return false;
-		const std::scoped_lock serialLock(g_vrLoadingTransitionSerialMutex);
+		const auto serialLock = ScopedVRLoadingSerialReadOwner::LockForQuery();
 		return !GetVRFpsStabilizerSyncOutcomeLocked(*owner);
 	}
 
@@ -26859,6 +26887,17 @@ namespace
 		bool recoverySetupCompleted = false;
 		std::unique_lock<std::mutex> loadingGateLock{};
 		std::unique_lock<std::mutex> loadingSerialLock{};
+		// Clear the borrowed owner before its lock is released or destroyed.
+		std::optional<ScopedVRLoadingSerialReadOwner> loadingSerialReadOwner{};
+
+		void ReleaseLoadingBoundaryOwnership() noexcept
+		{
+			loadingSerialReadOwner.reset();
+			if (loadingSerialLock.owns_lock())
+				loadingSerialLock.unlock();
+			if (loadingGateLock.owns_lock())
+				loadingGateLock.unlock();
+		}
 	};
 
 	void CaptureVREngineTargetGenerationPreparation(void* a_context)
@@ -26880,6 +26919,7 @@ namespace
 			g_vrLoadingMenuGateReconciliationMutex);
 		context->loadingSerialLock = std::unique_lock<std::mutex>(
 			g_vrLoadingTransitionSerialMutex);
+		context->loadingSerialReadOwner.emplace(context->loadingSerialLock);
 		if (g_vrLoadingTransitionSerialOpen.load(std::memory_order_relaxed) ||
 			IsLoadingMenuContextActive()) {
 			throw std::runtime_error(
@@ -32716,12 +32756,6 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 				.releaseDeferredTargetsForRelief =
 					releasedDeferredTargetsForRelief
 			};
-			auto releaseLoadingBoundaryOwnership = [&]() noexcept {
-				if (engineTargetCheckpoint.loadingSerialLock.owns_lock())
-					engineTargetCheckpoint.loadingSerialLock.unlock();
-				if (engineTargetCheckpoint.loadingGateLock.owns_lock())
-					engineTargetCheckpoint.loadingGateLock.unlock();
-			};
 			bool commonTargetOfferRecorded = false;
 			auto recordCommonTargetOffer = [&]() {
 				if (commonTargetOfferRecorded)
@@ -32814,7 +32848,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 						ReconcileVREngineTargetGenerationCheckpoint,
 						std::addressof(engineTargetCheckpoint),
 						std::addressof(engineTargetCreateEntered));
-				releaseLoadingBoundaryOwnership();
+				engineTargetCheckpoint.ReleaseLoadingBoundaryOwnership();
 				physicalMutationBoundaryEntered =
 					physicalMutationBoundaryEntered ||
 					engineTargetCheckpoint.physicalBoundaryEntered;
@@ -32830,7 +32864,7 @@ bool Upscaling::ApplyPendingPerfModeRenderTargetRecreate(const char* a_caller)
 					state->GetCompletedRenderTargetResourcePublicationGeneration() >
 						resourcePublicationGenerationBeforeRecreate;
 			} catch (...) {
-				releaseLoadingBoundaryOwnership();
+				engineTargetCheckpoint.ReleaseLoadingBoundaryOwnership();
 				physicalMutationBoundaryEntered =
 					physicalMutationBoundaryEntered ||
 					engineTargetCheckpoint.physicalBoundaryEntered;

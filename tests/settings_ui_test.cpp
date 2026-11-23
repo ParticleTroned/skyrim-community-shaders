@@ -1250,6 +1250,9 @@ int main()
 					require(!page["tabs"][0]["showTab"].get<bool>(), "hidden Overview is absent from the visible tab inventory");
 			require(MenuUI::SettingsPage::Navigate("DirectSettings", "second"), "explicit detail navigation remains available");
 			frame(direct);
+			require(MenuUI::SettingsPage::Selected("DirectSettings") == "second", "the previous active tab cannot overwrite a requested detail");
+			frame(direct);
+			require(MenuUI::SettingsPage::Selected("DirectSettings") == "second", "the requested detail survives ImGui's deferred tab selection");
 			require(MenuUI::SettingsPage::Open("DirectSettings") && MenuUI::SettingsPage::Selected("DirectSettings") == "second", "reopening retains the session detail tab");
 			require(MenuUI::SettingsPage::Select("DirectSettings", "overview"), "legacy Overview routes remain usable");
 			frame(direct);
@@ -1649,6 +1652,7 @@ int main()
 		ProfilingRenderer::eligible = true;
 		for (const auto* tool : { "Performance", "PerformancePresets", "Profiling", "PerformanceTuning", "PerformanceOverlay" }) {
 			int bodyDraws = 0;
+			require(MenuUI::SettingsPage::Select(tool, MenuUI::SettingsNavigation::PerformanceSection(tool).data()), "tool fixture selects its native content independently of remembered navigation");
 			auto drawTool = [&] { FeatureListRenderer::RenderPerformancePage(tool, [&] { ++bodyDraws; }); };
 			for (int i = 0; i < 3; ++i) frame(drawTool);
 			require(MenuUI::SettingsPage::Selected(tool) == MenuUI::SettingsNavigation::PerformanceSection(tool) && bodyDraws > 0, "each tool opens its native content without another overview");

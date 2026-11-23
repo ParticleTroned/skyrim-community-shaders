@@ -66,6 +66,7 @@ float4 main(uint instance : SV_InstanceID) : COLOR0 {
 	{
 		ComPtr<ID3D11Device> device;
 		ComPtr<ID3D11DeviceContext> context;
+		SkyShader::ContextCache contextCache;
 		ComPtr<ID3D11Texture2D> depth;
 		ComPtr<ID3D11ShaderResourceView> depthView;
 		ComPtr<ID3D11Buffer> result, staging;
@@ -190,7 +191,7 @@ struct Vertex { float4 color : COLOR0; };
 			auto* stream = output.Get();
 			context->SOSetTargets(1, &stream, &offset);
 			{
-				SkyShader::ScopedBindings bindings(context.Get(), depthView.Get());
+				SkyShader::ScopedBindings bindings(contextCache, context.Get(), depthView.Get());
 				context->DrawInstanced(1, stereo ? 2 : 1, 0, 0);
 			}
 			context->SOSetTargets(0, nullptr, nullptr);
@@ -224,7 +225,7 @@ struct Vertex { float4 color : COLOR0; };
 			auto* oldView = depthView.Get();
 			context->VSSetShaderResources(17, 1, &oldView);
 			{
-				SkyShader::ScopedBindings bindings(context.Get(), nullptr);
+				SkyShader::ScopedBindings bindings(contextCache, context.Get(), nullptr);
 				ComPtr<ID3D11ShaderResourceView> bound;
 				context->VSGetShaderResources(17, 1, &bound);
 				Require(!bound, "Unavailable scene depth must be unbound");
@@ -244,7 +245,7 @@ struct Vertex { float4 color : COLOR0; };
 				"Glare must restore the SRV and exact CB range");
 			extended->VSSetConstantBuffers1(4, 1, &previousRaw, &first, &count);
 			{
-				SkyShader::ScopedBindings bindings(context.Get(), nullptr, frameRaw, false);
+				SkyShader::ScopedBindings bindings(contextCache, context.Get(), nullptr, frameRaw, false);
 				ComPtr<ID3D11ShaderResourceView> boundDepth;
 				context->VSGetShaderResources(17, 1, &boundDepth);
 				Require(boundDepth.Get() == oldView, "Sky ordering must leave sun-glare depth bindings untouched");
@@ -268,7 +269,7 @@ struct Vertex { float4 color : COLOR0; };
 				"Sky ordering must restore the previous projection constants and range");
 			context->ClearState();
 			{
-				SkyShader::ScopedBindings bindings(context.Get(), nullptr, frameRaw, false);
+				SkyShader::ScopedBindings bindings(contextCache, context.Get(), nullptr, frameRaw, false);
 			}
 			restoredPermutation.Reset();
 			context->VSGetConstantBuffers(4, 1, &restoredPermutation);
@@ -284,14 +285,14 @@ struct Vertex { float4 color : COLOR0; };
 			context->PSSetConstantBuffers(12, 1, &frameRaw);
 			context->OMSetRenderTargets(0, nullptr, dsv.Get());
 			{
-				SkyShader::ScopedBindings bindings(context.Get(), depthView.Get());
+				SkyShader::ScopedBindings bindings(contextCache, context.Get(), depthView.Get());
 				ComPtr<ID3D11ShaderResourceView> bound;
 				context->VSGetShaderResources(17, 1, &bound);
 				Require(!bound, "A depth attachment must never also be bound as a visibility SRV");
 			}
 			context->ClearState();
 			{
-				SkyShader::ScopedBindings bindings(context.Get(), depthView.Get());
+				SkyShader::ScopedBindings bindings(contextCache, context.Get(), depthView.Get());
 				ComPtr<ID3D11ShaderResourceView> bound;
 				context->VSGetShaderResources(17, 1, &bound);
 				Require(!bound, "Missing frame constants must disable depth filtering");
@@ -303,10 +304,79 @@ struct Vertex { float4 color : COLOR0; };
 			context->PSSetConstantBuffers(12, 1, &frameRaw);
 			context->OMSetRenderTargets(0, nullptr, dsv.Get());
 			{
-				SkyShader::ScopedBindings bindings(context.Get(), depthView.Get());
+				SkyShader::ScopedBindings bindings(contextCache, context.Get(), depthView.Get());
 				ComPtr<ID3D11ShaderResourceView> bound;
 				context->VSGetShaderResources(17, 1, &bound);
 				Require(bound.Get() == depthView.Get(), "Read-only depth must remain available for visibility");
+			}
+			context->ClearState();
+		}
+
+		void CheckCachedBindings()
+		{
+			ComPtr<ID3D11DeviceContext1> extended;
+			Check(context.As(&extended));
+			ComPtr<ID3D11DeviceContext> otherContext;
+			Check(device->CreateDeferredContext(0, &otherContext));
+			Util::SetResourceName(otherContext.Get(), "SunGlareTest::OtherContext");
+			Require(contextCache.GetExtended(context.Get()) == extended.Get() &&
+						contextCache.GetExtended(context.Get()) == extended.Get(),
+				"Repeated lookups must retain the matching extended context");
+			Require(Util::SameIdentity(contextCache.GetExtended(otherContext.Get()), otherContext.Get()),
+				"Context changes must replace the cached interface");
+			Require(!contextCache.GetExtended(nullptr) && !contextCache.GetExtended(nullptr),
+				"Clearing the cache must discard the resolved interface");
+
+			D3D11_BUFFER_DESC desc{};
+			desc.ByteWidth = 1024;
+			desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+			ComPtr<ID3D11Buffer> frame, previous;
+			Check(device->CreateBuffer(&desc, nullptr, &frame));
+			Check(device->CreateBuffer(&desc, nullptr, &previous));
+			Util::SetResourceName(frame.Get(), "SunGlareTest::CachedFrame");
+			Util::SetResourceName(previous.Get(), "SunGlareTest::CachedPrevious");
+			auto* frameRaw = frame.Get();
+			const auto checkBinding = [&](UINT slot, ID3D11Buffer* expected, UINT first, UINT count) {
+				ComPtr<ID3D11Buffer> bound;
+				UINT boundFirst = 0, boundCount = 0;
+				extended->VSGetConstantBuffers1(slot, 1, &bound, &boundFirst, &boundCount);
+				Require(bound.Get() == expected && boundFirst == first && boundCount == count,
+					"Bindings must preserve buffer identity and exact range");
+			};
+			constexpr UINT wholeBuffer = D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT;
+			for (const auto range : { std::array<UINT, 2>{ 16, 16 }, { 32, 16 }, { 16, 32 }, { 0, wholeBuffer } }) {
+				for (bool sameBuffer : { false, true }) {
+					for (bool mutate : { false, true }) {
+						context->ClearState();
+						auto* saved = sameBuffer ? frameRaw : previous.Get();
+						const UINT frameFirst = range[1] == wholeBuffer ? 0 : 16;
+						const UINT frameCount = range[1] == wholeBuffer ? wholeBuffer : 16;
+						extended->PSSetConstantBuffers1(12, 1, &frameRaw, &frameFirst, &frameCount);
+						extended->VSSetConstantBuffers1(12, 1, &saved, &range[0], &range[1]);
+						extended->VSSetConstantBuffers1(4, 1, &saved, &range[0], &range[1]);
+						auto* oldDepth = depthView.Get();
+						context->VSSetShaderResources(17, 1, &oldDepth);
+						{
+							SkyShader::ScopedBindings bindings(contextCache, context.Get(), oldDepth, frameRaw);
+							checkBinding(12, frameRaw, frameFirst, frameCount);
+							checkBinding(4, frameRaw, 0, wholeBuffer);
+							if (mutate) {
+								ID3D11Buffer* emptyBuffer = nullptr;
+								ID3D11ShaderResourceView* emptyDepth = nullptr;
+								context->VSSetConstantBuffers(12, 1, &emptyBuffer);
+								context->VSSetConstantBuffers(4, 1, &emptyBuffer);
+								context->VSSetShaderResources(17, 1, &emptyDepth);
+							}
+							Require(Util::SameIdentity(contextCache.GetExtended(otherContext.Get()), otherContext.Get()),
+								"A scope must retain its context when the cache changes");
+						}
+						checkBinding(12, saved, range[0], range[1]);
+						checkBinding(4, saved, range[0], range[1]);
+						ComPtr<ID3D11ShaderResourceView> restored;
+						context->VSGetShaderResources(17, 1, &restored);
+						Require(restored.Get() == oldDepth, "An unchanged entry depth binding must still be restored");
+					}
+				}
 			}
 			context->ClearState();
 		}
@@ -319,6 +389,7 @@ int main()
 		std::filesystem::current_path("package/Shaders");
 		Fixture fixture;
 		fixture.CheckBindings();
+		fixture.CheckCachedBindings();
 		unsigned checks = 0;
 		for (unsigned mode : { 0u, 1u, 2u })
 			for (bool reverse : { false, true }) {

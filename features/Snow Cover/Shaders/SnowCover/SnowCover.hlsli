@@ -107,6 +107,24 @@ namespace SnowCover
 		return melt * SharedData::snowCoverSettings.FireMeltStrength;
 	}
 
+	/// Zero-initialize once per surface position; reuse only at that position.
+	struct FireMeltSample
+	{
+		float amount;
+		bool valid;
+	};
+
+	/// Samples current fires lazily, independently of historical fire footprints.
+	float GetFireMelt(float3 p, inout FireMeltSample cachedMelt)
+	{
+		[branch] if (!cachedMelt.valid)
+		{
+			cachedMelt.amount = GetFireMelt(p);
+			cachedMelt.valid = true;
+		}
+		return cachedMelt.amount;
+	}
+
 	struct CoverageInputs
 	{
 		float3 position;
@@ -321,9 +339,9 @@ namespace SnowCover
 #	endif
 
 #	if !defined(BASIC_SNOW_COVER)
-	float ApplySnowBase(float3 worldNormal, inout float2 uv, out bool alt, float disp, float3 p, float skylight, float waterDist, float viewDist, float lift, float environment)
+	float ApplySnowBase(float3 worldNormal, inout float2 uv, out bool alt, float disp, CoverageInputs footprint, float viewDist, inout FireMeltSample fireMelt)
 	{
-		CoverageInputs footprint = GetSurfaceFootprint(worldNormal, disp, p, skylight, waterDist, viewDist, lift, environment);
+		float3 p = footprint.position;
 		float weatherRange = footprint.weatherRange;
 #		if (CSX_PERF_REFERENCE_FLAGS & CSX_PERF_SNOW_WEATHER_RANGE)
 		weatherRange = GetWeatherRange(p, viewDist);
@@ -333,7 +351,7 @@ namespace SnowCover
 		float3 state = float3(SharedData::snowCoverSettings.TimeSnowing, SharedData::snowCoverSettings.SnowingDensity, SharedData::snowCoverSettings.SeasonalAltitude);
 		float mult = GetCoverage(footprint, state, 0);
 		[branch] if (mult > 0)
-			mult *= 1 - GetFireMelt(p);
+			mult *= 1 - GetFireMelt(p, fireMelt);
 		if (mult <= 0) {
 			alt = false;
 			return 0;
@@ -363,10 +381,10 @@ namespace SnowCover
 	}
 
 #		if defined(TRUE_PBR)
-	float ApplySnowPBR(inout MaterialProperties material, inout float3 worldNormal, float disp, float3 p, float skylight, float waterDist, float viewDist, float2 uv, float lift, float environment)
+	float ApplySnowPBR(inout MaterialProperties material, inout float3 worldNormal, float disp, CoverageInputs footprint, float viewDist, float2 uv, inout FireMeltSample fireMelt)
 	{
 		bool alt;
-		float mult = ApplySnowBase(worldNormal, uv, alt, disp, p, skylight, waterDist, viewDist, lift, environment);
+		float mult = ApplySnowBase(worldNormal, uv, alt, disp, footprint, viewDist, fireMelt);
 		if (mult <= 0)
 			return mult;
 		float3 albedo;
@@ -405,10 +423,10 @@ namespace SnowCover
 	}
 #		else
 
-	float ApplySnow(inout MaterialProperties material, inout float3 worldNormal, float disp, float3 p, float skylight, float waterDist, float viewDist, float2 uv, float lift, float environment)
+	float ApplySnow(inout MaterialProperties material, inout float3 worldNormal, float disp, CoverageInputs footprint, float viewDist, float2 uv, inout FireMeltSample fireMelt)
 	{
 		bool alt;
-		float mult = ApplySnowBase(worldNormal, uv, alt, disp, p, skylight, waterDist, viewDist, lift, environment);
+		float mult = ApplySnowBase(worldNormal, uv, alt, disp, footprint, viewDist, fireMelt);
 		if (mult <= 0.0)
 			return 0;
 		float3 albedo;

@@ -3,9 +3,11 @@
 #include "Utils/ComIdentity.h"
 #include "Utils/ManualDeviceContextState.h"
 
+#include <algorithm>
 #include <array>
 #include <bitset>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <utility>
@@ -136,6 +138,39 @@ namespace FurRendering
 		const View* last = nullptr;
 	};
 
+	namespace detail
+	{
+		// Captured SRVs retain immutable resources for this one binding transaction.
+		class DepthInputCache
+		{
+		public:
+			explicit DepthInputCache(IUnknown* a_depth) : depth(a_depth) {}
+			std::optional<bool> Aliases(ID3D11ShaderResourceView* input)
+			{
+				const auto address = reinterpret_cast<std::uintptr_t>(input);
+				auto& entry = entries[((address >> 4) ^ (address >> 11)) % entries.size()];
+				if (entry.input == input)
+					return entry.aliases;
+				winrt::com_ptr<ID3D11Resource> resource;
+				input->GetResource(resource.put());
+				const auto identity = Util::GetComIdentity(resource.get());
+				if (!identity)
+					return std::nullopt;
+				entry = { input, identity.Get() == depth };
+				return entry.aliases;
+			}
+
+		private:
+			struct Entry
+			{
+				ID3D11ShaderResourceView* input = nullptr;
+				bool aliases = false;
+			};
+			IUnknown* depth;
+			std::array<Entry, 64> entries{};
+		};
+	}
+
 	/** Owns native writable depth and aliased inputs for a prepass with stencil writes disabled. */
 	class ScopedDepthWrite
 	{
@@ -154,6 +189,7 @@ namespace FurRendering
 			for (UINT i = 0; i < bindings->targets.values.size(); ++i)
 				if (bindings->targets.values[i])
 					bindings->targetCount = i + 1;
+			detail::DepthInputCache inputs(view->resource.Get());
 			for (size_t stage = 0; stage < accesses.size(); ++stage) {
 				auto& saved = bindings->stages[stage];
 				(context->*accesses[stage].get)(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, saved.resources.Put());
@@ -161,27 +197,27 @@ namespace FurRendering
 					auto* input = saved.resources.values[slot];
 					if (!input)
 						continue;
-					winrt::com_ptr<ID3D11Resource> resource;
-					input->GetResource(resource.put());
-					const auto identity = Util::GetComIdentity(resource.get());
-					if (!identity) {
+					const auto aliases = inputs.Aliases(input);
+					if (!aliases) {
 						status = E_NOINTERFACE;
 						bindings.reset();
 						return;
 					}
-					if (identity == view->resource)
+					if (*aliases) {
 						saved.aliases.set(slot);
+						saved.firstAlias = (std::min)(saved.firstAlias, UINT(slot));
+						saved.aliasEnd = UINT(slot + 1);
+					}
 				}
 			}
 			for (size_t stage = 0; stage < accesses.size(); ++stage) {
 				const auto& saved = bindings->stages[stage];
 				if (saved.aliases.none())
 					continue;
-				auto next = saved.resources.values;
-				for (size_t slot = 0; slot < next.size(); ++slot)
-					if (saved.aliases[slot])
-						next[slot] = nullptr;
-				(context->*accesses[stage].set)(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, next.data());
+				std::array<ID3D11ShaderResourceView*, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT> next;
+				for (UINT slot = saved.firstAlias; slot < saved.aliasEnd; ++slot)
+					next[slot - saved.firstAlias] = saved.aliases[slot] ? nullptr : saved.resources.values[slot];
+				(context->*accesses[stage].set)(saved.firstAlias, saved.aliasEnd - saved.firstAlias, next.data());
 			}
 			Bind(view->writable.get());
 		}
@@ -191,6 +227,7 @@ namespace FurRendering
 			if (!bindings)
 				return;
 			Bind(previous.get());
+			// Draw hooks may change other inputs; restore the entire affected stage.
 			for (size_t stage = 0; stage < accesses.size(); ++stage)
 				if (bindings->stages[stage].aliases.any())
 					(context->*accesses[stage].set)(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, bindings->stages[stage].resources.Data());
@@ -218,6 +255,7 @@ namespace FurRendering
 		{
 			Util::detail::StateReferences<ID3D11ShaderResourceView, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT> resources;
 			std::bitset<D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT> aliases;
+			UINT firstAlias = D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, aliasEnd = 0;
 		};
 		struct Bindings
 		{

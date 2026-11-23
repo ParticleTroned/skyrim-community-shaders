@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <format>
+#include <initializer_list>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -201,8 +202,52 @@ void Require(bool condition, const char* message)
 		throw std::runtime_error(message);
 }
 
+void CheckWeatherListCache()
+{
+	using namespace Util::WeatherFilter;
+	CachedList cache;
+	Require(!cache.Update({}, All) && cache.Get().empty(), "Empty catalog created matches");
+	RE::TESWeather rain{ { { 4 } }, "rain" }, mixed{ { { 6 } }, "mixed" }, snow{ { { 8 } }, "snow" }, unknown{ { { 128 } }, "unknown" };
+	std::vector<RE::TESWeather*> catalog{ &rain, &mixed, &snow, &unknown, nullptr };
+	auto expect = [&](std::initializer_list<RE::TESWeather*> expected, const char* message) {
+		Require(std::ranges::equal(cache.Get(), expected), message);
+	};
+	Require(cache.Update(catalog, 4), "Late catalog population was not detected");
+	expect({ &rain, &mixed }, "Cached rain matches lost catalog order or multi-flag records");
+	const auto* cachedStorage = cache.Get().data();
+	Require(!cache.Update(catalog, 4) && cache.Get().data() == cachedStorage, "Unchanged matches were rebuilt");
+	Require(!cache.Update(catalog, 6), "An equivalent filter rebuilt the matching sequence");
+
+	snow.data.flags.value = 4;
+	Require(cache.Update(catalog, 4), "An in-place category change did not add a matching record");
+	expect({ &rain, &mixed, &snow }, "New category match was not inserted in catalog order");
+	rain.data.flags.value = 8;
+	Require(cache.Update(catalog, 4), "An in-place category change did not remove a matching record");
+	expect({ &mixed, &snow }, "Stale category match was retained");
+	catalog[1] = &rain;
+	Require(cache.Update(catalog, 4), "Same-size catalog replacement was not detected");
+	expect({ &snow }, "Replaced catalog entry was retained");
+
+	Require(cache.Update(catalog, Unclassified), "Category selection did not refresh matches");
+	expect({ &unknown }, "Unknown-only flags or null catalog entries were mishandled");
+	catalog = { &rain, &mixed, &snow };
+	Require(cache.Update(catalog, All), "All filter did not refresh matches");
+	std::swap(catalog[0], catalog[2]);
+	Require(cache.Update(catalog, All), "In-place catalog reordering was not detected");
+	expect({ &snow, &mixed, &rain }, "Cached order differs from the catalog");
+	catalog.pop_back();
+	Require(cache.Update(catalog, All), "Catalog removal was not detected");
+	expect({ &snow, &mixed }, "Removed catalog record was retained");
+	catalog.push_back(&unknown);
+	Require(cache.Update(catalog, All), "Catalog growth was not detected");
+	expect({ &snow, &mixed, &unknown }, "Added catalog record was omitted");
+	Require(cache.Update(catalog, 0) && cache.Get().empty(), "Empty filter retained matches");
+	Require(!cache.Update({}, All), "Equivalent empty catalog rebuilt matches");
+}
+
 int main()
 {
+	CheckWeatherListCache();
 	using Util::WeatherFilter::Matches;
 	Require(Matches(4, 4) && Matches(6, 4) && !Matches(8, 4), "Rain matching lost multi-flag semantics");
 	Require(Matches(0, 64) && Matches(128, 64) && !Matches(132, 64), "None must include unknown-only flags");

@@ -500,7 +500,8 @@ namespace MenuUI
 					// Native arrows and right-clicks select tabs without activating the tab item.
 					const bool nativeSelection = tabBar->NextSelectedTabId == tabId || (active && queuedTab == tabId) ||
 					                             (active && !restoreSelection && tabBar->SelectedTabId != retainedTab && ImGui::TabBarFindTabByID(tabBar, retainedTab));
-					if ((active && !cardOnlySelection) || (cardOnlySelection && (ImGui::IsItemActivated() || ImGui::IsItemClicked(ImGuiMouseButton_Right) || nativeSelection))) {
+					// ImGui can retain the previous active tab while applying SetSelected.
+					if ((active && !cardOnlySelection && (!restoreSelection || requested == id)) || (cardOnlySelection && (ImGui::IsItemActivated() || ImGui::IsItemClicked(ImGuiMouseButton_Right) || nativeSelection))) {
 						if (state.selected != id) {
 							if (!Select(a_id, id))
 								rejectedSelection = true;

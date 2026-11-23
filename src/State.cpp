@@ -623,7 +623,7 @@ void State::Draw(bool isCompute)
 			auto* depth = sceneDepthValid && globals::game::renderer ?
 			                  reinterpret_cast<ID3D11ShaderResourceView*>(globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV) :
 			                  nullptr;
-			skyShaderBindings.emplace(context, depth, globals::features::reverseZ.IsActive() ? permutationCB->CB() : nullptr, isSunGlare);
+			skyShaderBindings.emplace(skyShaderContextCache, context, depth, globals::features::reverseZ.IsActive() ? permutationCB->CB() : nullptr, isSunGlare);
 		}
 	}
 }

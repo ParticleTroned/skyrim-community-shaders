@@ -1,7 +1,10 @@
 #include "Features/GrassPlacementPolicy.h"
 #include "Utils/LocationLayers.h"
+#include <array>
+#include <atomic>
 #include <iostream>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <vector>
 
@@ -11,9 +14,182 @@ static void Require(bool condition, const char* message)
 		throw std::runtime_error(message);
 }
 
+namespace PlacementRuntimeTest
+{
+	using namespace GrassPlacement;
+	using VertexBuffer = int;
+	struct Shape
+	{
+		struct Bound
+		{
+			float radius = 10;
+		} worldBound;
+	};
+	struct ShapeState
+	{
+		bool translationOnly = true;
+		std::string model;
+		Envelope bound;
+		std::vector<VertexBuffer*> buffers;
+	};
+	struct GroupState
+	{
+		Shape* owner = nullptr;
+		History history;
+		std::optional<float> offset;
+		std::optional<CellKey> sourceCell, cell;
+	};
+#include "grass_placement_cell_profile.h"
+	struct Runtime
+	{
+		std::mutex mutex;
+		std::atomic_bool tracking{ true }, failed{ false };
+		bool enabled = true;
+		uint32_t frame = 1, interior = 0;
+		float padding = 0;
+		struct Configuration
+		{
+			Settings global;
+			std::map<std::string, Layer> rules;
+			uint64_t revision = 0;
+			bool active = false;
+		} configuration;
+		std::map<Shape*, ShapeState> shapes;
+		std::map<VertexBuffer*, GroupState> groups;
+		std::map<CellKey, CellProfile> cells;
+		std::vector<const Layer*> interiorLayers;
+	};
+	using Configuration = Runtime::Configuration;
+	constexpr size_t kMaximumCells = 16384;
+	constexpr size_t kMaximumShapes = 4096;
+	namespace globals::features
+	{
+		struct Balance
+		{
+			struct Profile
+			{
+				Settings grassPlacement;
+			};
+			struct Rule
+			{
+				std::string key;
+				Profile profile;
+				bool layered = true;
+			};
+			struct Configuration
+			{
+				Profile globalProfile;
+				std::vector<Rule> locationOverrides;
+			} settings;
+			uint64_t revision = 1;
+			uint64_t GetGrassPlacementRevision() const { return revision; }
+		} adaptiveBrightness;
+	}
+	Runtime& Get()
+	{
+		static Runtime runtime;
+		return runtime;
+	}
+	bool IsAvailable() { return !Get().failed; }
+	void Fail(const char*, const std::exception&) { Get().failed = true; }
+#include "grass_placement_cells.h"
+#include "grass_placement_invalidation.h"
+
+#include "grass_placement_configuration.h"
+#include "grass_placement_model.h"
+#include "grass_placement_offsets.h"
+	void CheckCachedPlacement()
+	{
+		auto& runtime = Get();
+		VertexBuffer buffer{};
+		auto& group = runtime.groups[&buffer];
+		Shape shape;
+		group.owner = &shape;
+		runtime.shapes[&shape].model = "grass\\leaf.nif";
+		runtime.configuration.global = { -2.f, { { "grass\\leaf.nif", -3.f } } };
+		Require(GetOffsets(&buffer) == std::array{ -5.f, -5.f }, "First placement resolution failed");
+		Require(group.offset == -5, "Resolved placement was not retained");
+		runtime.configuration.global.verticalOffset = -6;
+		++runtime.frame;
+		Require(GetOffsets(&buffer) == std::array{ -5.f, -5.f }, "Unpublished settings bypassed cached placement");
+		InvalidateOffsets(runtime);
+		Require(GetOffsets(&buffer) == std::array{ -5.f, -5.f }, "Invalidation changed placement inside a frame");
+		++runtime.frame;
+		Require(GetOffsets(&buffer) == std::array{ -9.f, -5.f }, "Publication lost the previous rendered offset");
+		runtime.enabled = false;
+		++runtime.frame;
+		Require(GetOffsets(&buffer) == std::array{ 0.f, -9.f }, "Disable did not retire the visible offset");
+		runtime.enabled = true;
+		++runtime.frame;
+		Require(GetOffsets(&buffer) == std::array{ -9.f, 0.f }, "Reenable lost motion history");
+		runtime.configuration.rules["cell"] = { { 4, {} } };
+		group.sourceCell = CellKey{ 1, 2 };
+		AssignCell(runtime, group);
+		auto& profile = runtime.cells[*group.cell];
+		Require(!profile.SetLayers({}), "An unruled cell must not invalidate resolved placement");
+		Require(profile.SetLayers({ &runtime.configuration.rules.at("cell") }), "New cell rules must invalidate resolved placement");
+		++runtime.frame;
+		Require(GetOffsets(&buffer) == std::array{ -5.f, -9.f }, "Cell reassignment reused the old offset");
+		AssignCell(runtime, group);
+		Require(group.offset == -5, "Unchanged cell unnecessarily discarded cached placement");
+		Require(!profile.SetLayers({ &runtime.configuration.rules.at("cell") }), "Unchanged cell layers unnecessarily invalidated resolved placement");
+		Require(profile.SetLayers({}), "Removing cell layers must invalidate resolved placement");
+		InvalidateOffsets(runtime);
+		++runtime.frame;
+		Require(GetOffsets(&buffer) == std::array{ -9.f, -5.f }, "Removing cell rules retained the old placement");
+		group.sourceCell.reset();
+		AssignCell(runtime, group);
+		runtime.frame += 2;
+		Require(GetOffsets(&buffer) == std::array{ -9.f, -9.f }, "Cell removal or an invisible-frame gap retained stale placement");
+		runtime.configuration.global = {};
+		InvalidateOffsets(runtime);
+		++runtime.frame;
+		Require(GetOffsets(&buffer) == std::array{ 0.f, -9.f } && group.offset.has_value(), "Zero offsets must be cacheable");
+		runtime.failed = true;
+		Require(GetOffsets(&buffer) == std::array{ 0.f, 0.f }, "Failed tracking must return neutral offsets");
+	}
+
+	void CheckPublicationInvalidation()
+	{
+		auto& runtime = Get();
+		runtime.failed = false;
+		runtime.groups.clear();
+		runtime.shapes.clear();
+		runtime.cells.clear();
+		runtime.configuration = {};
+		runtime.frame = 100;
+		auto& balance = globals::features::adaptiveBrightness;
+		balance.settings.globalProfile.grassPlacement = { 1.f, { { "grass\\a.nif", 2.f }, { "grass\\b.nif", 5.f } } };
+		Require(PublishConfiguration(runtime), "Initial placement configuration was not published");
+		Shape shape;
+		VertexBuffer buffer{};
+		auto& group = runtime.groups[&buffer];
+		group.owner = &shape;
+		runtime.shapes[&shape].buffers.push_back(&buffer);
+		RecordModel(&shape, "Meshes/Grass/A.nif");
+		Require(GetOffsets(&buffer) == std::array{ 3.f, 3.f }, "Published model correction was not resolved");
+		RecordModel(&shape, "grass\\a.NIF");
+		Require(group.offset == 3 && !PublishConfiguration(runtime), "Unchanged model or configuration discarded cached placement");
+		RecordModel(&shape, "grass/b.nif");
+		Require(!group.offset && GetOffsets(&buffer) == std::array{ 3.f, 3.f }, "Model changes must invalidate targets without changing the current frame");
+		++runtime.frame;
+		Require(GetOffsets(&buffer) == std::array{ 6.f, 3.f }, "Model replacement retained stale placement");
+		balance.settings.globalProfile.grassPlacement.verticalOffset = -1;
+		++balance.revision;
+		Require(PublishConfiguration(runtime) && !group.offset, "Configuration publication did not invalidate cached targets");
+		Require(GetOffsets(&buffer) == std::array{ 6.f, 3.f }, "Publication changed an already rendered frame");
+		++runtime.frame;
+		Require(GetOffsets(&buffer) == std::array{ 4.f, 6.f }, "Published configuration did not retain the previous offset");
+		runtime.groups.clear();
+		runtime.shapes.clear();
+	}
+}
+
 int main()
 {
 	using namespace GrassPlacement;
+	PlacementRuntimeTest::CheckCachedPlacement();
+	PlacementRuntimeTest::CheckPublicationInvalidation();
 	Require(ModelKey("Meshes/Grass/AspenLeaves.NIF") == "grass\\aspenleaves.nif", "Mesh identity normalization");
 	for (const auto* path : { "../leaf.nif", "c:\\leaf.nif", "\\leaf.nif", "grass//leaf.nif", "grass/./leaf.nif", "leaf.dds", "grass/leaf?.nif", "grass /leaf.nif", "grass./leaf.nif" })
 		Require(ModelKey(path).empty(), "Unsafe model path accepted");

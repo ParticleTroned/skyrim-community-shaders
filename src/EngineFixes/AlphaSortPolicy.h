@@ -8,6 +8,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <new>
+#include <utility>
 
 namespace AlphaSort
 {
@@ -39,7 +42,113 @@ namespace AlphaSort
 		return static_cast<float>(std::clamp(key, -limit, limit));
 	}
 
-	/** Stable descending finite-key sort; bounded small-list work, otherwise four linear walks.
+	namespace detail
+	{
+		inline constexpr std::size_t kMaximumCachedPasses = 65536;
+
+		inline std::uint32_t DescendingKey(float value) noexcept
+		{
+			// Equal signed zeros must retain their native submission order.
+			const auto bits = std::bit_cast<std::uint32_t>(value == 0 ? 0.0f : value);
+			return ~(bits ^ (bits & 0x80000000u ? 0xFFFFFFFFu : 0x80000000u));
+		}
+
+		template <class Pass, class Key>
+		void RadixSort(Pass*& head, Key key) noexcept
+		{
+			struct Bucket
+			{
+				Pass* head{};
+				Pass* tail{};
+			};
+			for (unsigned shift = 0; shift < 32; shift += 8) {
+				std::array<Bucket, 256> buckets{};
+				for (auto* pass = head; pass;) {
+					auto* next = pass->passGroupNext;
+					auto& bucket = buckets[(key(pass) >> shift) & 0xFFu];
+					if (bucket.tail)
+						bucket.tail->passGroupNext = pass;
+					else
+						bucket.head = pass;
+					bucket.tail = pass;
+					pass = next;
+				}
+				Pass** link = &head;
+				for (const auto& bucket : buckets) {
+					if (!bucket.head)
+						continue;
+					*link = bucket.head;
+					link = &bucket.tail->passGroupNext;
+				}
+				*link = nullptr;
+			}
+		}
+
+		template <class Pass>
+		struct Scratch
+		{
+			struct Entry
+			{
+				Entry* passGroupNext;
+				Pass* pass;
+				std::uint32_t key;
+			};
+			std::unique_ptr<Entry[]> entries;
+			std::size_t capacity = 0;
+		};
+
+		template <class Pass>
+		Scratch<Pass>& GetScratch() noexcept
+		{
+			static thread_local Scratch<Pass> scratch;
+			return scratch;
+		}
+
+		template <class Pass, class Key>
+		bool SortCached(Pass*& head, Key key) noexcept
+		{
+			std::size_t count = 0;
+			auto* remaining = head;
+			while (remaining && count < kMaximumCachedPasses) {
+				++count;
+				remaining = remaining->passGroupNext;
+			}
+			if (remaining)
+				return false;
+			// Bound retained scratch; oversized queues keep the allocation-free sort.
+			auto& scratch = GetScratch<Pass>();
+			using Entry = typename Scratch<Pass>::Entry;
+			if (!scratch.entries || scratch.capacity < count) {
+				const auto capacity = std::bit_ceil(count);
+				std::unique_ptr<Entry[]> replacement(new (std::nothrow) Entry[capacity]);
+				if (!replacement)
+					return false;
+				scratch.entries = std::move(replacement);
+				scratch.capacity = capacity;
+			}
+			const auto capacity = scratch.capacity;
+			// A nested key callback must never borrow the enclosing sort's live entries.
+			auto entries = std::move(scratch.entries);
+			auto* pass = head;
+			for (std::size_t i = 0; i < count; ++i, pass = pass->passGroupNext)
+				entries[i] = { i + 1 < count ? &entries[i + 1] : nullptr, pass, DescendingKey(key(pass)) };
+			auto* ordered = entries.get();
+			RadixSort(ordered, [](const Entry* entry) { return entry->key; });
+			Pass** link = &head;
+			for (auto* entry = ordered; entry; entry = entry->passGroupNext) {
+				*link = entry->pass;
+				link = &entry->pass->passGroupNext;
+			}
+			*link = nullptr;
+			if (!scratch.entries || capacity >= scratch.capacity) {
+				scratch.entries = std::move(entries);
+				scratch.capacity = capacity;
+			}
+			return true;
+		}
+	}
+
+	/** Stable descending finite-key sort; bounded small-list work, otherwise linear radix sorting.
 	 * The caller owns an acyclic list and keeps keys unchanged throughout sorting.
 	 */
 	template <class Pass, class Key>
@@ -77,35 +186,7 @@ namespace AlphaSort
 			entries[count - 1].pass->passGroupNext = nullptr;
 			return;
 		}
-		struct Bucket
-		{
-			Pass* head{};
-			Pass* tail{};
-		};
-		for (unsigned shift = 0; shift < 32; shift += 8) {
-			std::array<Bucket, 256> buckets{};
-			for (auto* pass = head; pass;) {
-				auto* next = pass->passGroupNext;
-				const float value = key(pass);
-				// Canonicalize signed zero so equal depths retain native submission order.
-				const auto bits = std::bit_cast<std::uint32_t>(value == 0 ? 0.0f : value);
-				const auto ordered = bits ^ (bits & 0x80000000u ? 0xFFFFFFFFu : 0x80000000u);
-				auto& bucket = buckets[(~ordered >> shift) & 0xFFu];
-				if (bucket.tail)
-					bucket.tail->passGroupNext = pass;
-				else
-					bucket.head = pass;
-				bucket.tail = pass;
-				pass = next;
-			}
-			Pass** link = &head;
-			for (const auto& bucket : buckets) {
-				if (!bucket.head)
-					continue;
-				*link = bucket.head;
-				link = &bucket.tail->passGroupNext;
-			}
-			*link = nullptr;
-		}
+		if (!detail::SortCached(head, key))
+			detail::RadixSort(head, [&](Pass* pass) { return detail::DescendingKey(key(pass)); });
 	}
 }

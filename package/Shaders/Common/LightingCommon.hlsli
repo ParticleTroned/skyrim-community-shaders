@@ -86,6 +86,7 @@ struct MaterialProperties
 	float FuzzRoughness;
 	float3 FuzzColor;
 	float3 DirectSpecularEnergyCompensation;
+	float3 TransmissionProfile;
 #	endif
 #else
 	float Roughness;

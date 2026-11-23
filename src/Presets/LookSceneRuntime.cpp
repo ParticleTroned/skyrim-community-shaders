@@ -11,16 +11,36 @@
 #include "WeatherManager.h"
 #include "WeatherVariableRegistry.h"
 #include <chrono>
+#include <map>
 #include <set>
+#include <utility>
 
 namespace Presets::LookSceneRuntime
 {
 	namespace
 	{
+		struct PreparedFeature
+		{
+			Json values;
+			bool flattened = false;
+			/** Prepare fields only after the caller's runtime eligibility checks. */
+			const Json& Fields()
+			{
+				if (!flattened) {
+					values = values.flatten();
+					flattened = true;
+				}
+				return values;
+			}
+		};
+		using PreparedFields = std::map<std::string, PreparedFeature>;
 		std::map<std::string, Json> layers;
 		std::map<std::string, bool> periodicContexts;
 		std::optional<LookSceneContext> lastContext;
-		Json manifest = Json::object(), saved = Json::object(), previous = Json::object(), transitionFrom = Json::object();
+		Json manifest = Json::object(), saved = Json::object(), transitionFrom = Json::object();
+		PreparedFields previousFields;
+		// Every saved field keeps its parsed address until profile restoration completes.
+		std::map<std::string, Json::json_pointer, std::less<>> fieldAddresses;
 		std::set<std::string> features;
 		Json previousLocations = Json::object();
 		uint32_t lastFrame = ~uint32_t{ 0 };
@@ -31,6 +51,18 @@ namespace Presets::LookSceneRuntime
 		unsigned suspended = 0;
 		std::string failure;
 
+		const Json::json_pointer& FieldAddress(const std::string& path)
+		{
+			return fieldAddresses.try_emplace(path, path).first->second;
+		}
+
+		PreparedFields PrepareFields(Json resolved)
+		{
+			PreparedFields fields;
+			for (auto& [name, values] : resolved.items()) fields.emplace(name, PreparedFeature{ std::move(values) });
+			return fields;
+		}
+
 		void Restore()
 		{
 			const auto interior = Util::IsInterior() ? SceneSettingsManager::GetSingleton()->ExportLookLayer() : Json::object();
@@ -40,13 +72,13 @@ namespace Presets::LookSceneRuntime
 					continue;
 				Json settings;
 				feature->SaveSettings(settings);
-				for (const auto& [path, value] : fields.items()) settings[Json::json_pointer(path)] = value;
+				for (const auto& [path, value] : fields.items()) settings[fieldAddresses.at(path)] = value;
 				if (interior.contains(name) && !SceneSettingsManager::GetSingleton()->IsFeaturePaused(name))
 					OverlayScene(settings, interior[name]);
 				feature->LoadSettings(settings);
 			}
 			saved = Json::object();
-			previous = Json::object();
+			previousFields.clear();
 			previousLocations = Json::object();
 		}
 
@@ -83,7 +115,7 @@ namespace Presets::LookSceneRuntime
 			return context;
 		}
 
-		void Apply(const Json& base, const Json& resolved, bool weatherOnly = false)
+		void Apply(const Json& base, PreparedFields& fields, bool weatherOnly = false)
 		{
 			if (weatherOnly && std::ranges::none_of(features, [](const auto& name) { return WeatherManager::GetSingleton()->HasActiveVariablesForFeature(name); }))
 				return;
@@ -101,16 +133,15 @@ namespace Presets::LookSceneRuntime
 					auto candidate = current;
 					if (saved.contains(name))
 						for (const auto& [path, value] : saved[name].items()) {
-							const Json::json_pointer address(path);
+							const auto& address = fieldAddresses.at(path);
 							candidate[address] = base[name].contains(address) ? base[name][address] : value;
 						}
 					Json nextSaved = Json::object();
-					if (resolved.contains(name) && !SceneSettingsManager::GetSingleton()->IsFeaturePaused(name)) {
-						const auto flattened = resolved[name].flatten();
-						for (const auto& [path, value] : flattened.items()) {
+					if (const auto found = fields.find(name); found != fields.end() && !SceneSettingsManager::GetSingleton()->IsFeaturePaused(name)) {
+						for (const auto& [path, value] : found->second.Fields().items()) {
 							if (path.empty() || value.is_null())
 								continue;
-							const Json::json_pointer address(path);
+							const auto& address = FieldAddress(path);
 							if (!base[name].contains(address))
 								continue;
 							nextSaved[path] = authoredBase[name][address];
@@ -159,6 +190,7 @@ namespace Presets::LookSceneRuntime
 	void Use(const LookPack* pack)
 	{
 		Restore();
+		fieldAddresses.clear();
 		layers.clear();
 		const auto contextKey = [](const std::string& key) {
 			if (!key.starts_with("Weather/") && !key.starts_with("Locations/"))
@@ -190,7 +222,7 @@ namespace Presets::LookSceneRuntime
 	void OverlayBase(const std::string& feature, Json& settings)
 	{
 		if (const auto found = saved.find(feature); found != saved.end())
-			for (const auto& [path, value] : found->items()) settings[Json::json_pointer(path)] = value;
+			for (const auto& [path, value] : found->items()) settings[fieldAddresses.at(path)] = value;
 	}
 	bool Controls(const std::string& feature, const std::string& root)
 	{
@@ -220,8 +252,8 @@ namespace Presets::LookSceneRuntime
 				lastContext.reset();
 				return;
 			}
-			if (!resolveDue && !previous.empty()) {
-				Apply(cachedBase, previous, true);
+			if (!resolveDue && !previousFields.empty()) {
+				Apply(cachedBase, previousFields, true);
 				return;
 			}
 			lastTick = now;
@@ -229,7 +261,7 @@ namespace Presets::LookSceneRuntime
 			const auto duration = manifest.value("locationTransitionSeconds", 5.f);
 			const auto sinceTransition = globals::state->timer - transitionStart;
 			if (lastContext && *lastContext == context && (sinceTransition < 0 || sinceTransition >= duration)) {
-				Apply(cachedBase, previous, true);
+				Apply(cachedBase, previousFields, true);
 				return;
 			}
 			Json base = Json::object();
@@ -260,9 +292,11 @@ namespace Presets::LookSceneRuntime
 				locations = BlendSceneLayers(locationBase, transitionFrom, locations, std::lerp(progress, smooth, manifest.value("transitionEase", 1.f)));
 			}
 			OverlayScene(resolved, locations);
-			Apply(base, resolved);
+			auto fields = PrepareFields(std::move(resolved));
+			Apply(base, fields);
 			previousLocations = std::move(locations);
-			previous = std::move(resolved);
+			// Weather reapplication consumes prepared fields until the next context resolution.
+			previousFields = std::move(fields);
 			lastContext = context;
 		} catch (const std::exception& error) {
 			failure = error.what();

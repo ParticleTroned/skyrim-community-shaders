@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include "ShaderPackageIncludes.h"
 #include "Utils/ShaderInclude.h"
 #include "d3d11_shader_test.h"
 
@@ -30,6 +31,32 @@ namespace
 
 	using D3D11ShaderTest::Check;
 	using D3D11ShaderTest::ConstantBuffer;
+
+	void CheckReceiverShaders(bool vr)
+	{
+		for (bool composite : { false, true }) {
+			auto includes = PackageIncludes::AllFeatures(".");
+			std::vector<D3D_SHADER_MACRO> defines{
+				{ composite ? "COMPUTESHADER" : "PSHADER", "" }, { "SKYLIGHTING", "" }
+			};
+			if (vr) {
+				defines.push_back({ "VR", "" });
+				if (composite)
+					defines.push_back({ "FRAMEBUFFER", "" });
+			}
+			defines.push_back({ nullptr, nullptr });
+			ComPtr<ID3DBlob> bytecode, errors;
+			const auto compiled = D3DCompileFromFile(
+				composite ? L"package/Shaders/DeferredCompositeCS.hlsl" : L"package/Shaders/Lighting.hlsl",
+				defines.data(), &includes, "main", composite ? "cs_5_0" : "ps_5_0",
+				D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+				0, bytecode.GetAddressOf(), errors.GetAddressOf());
+			if (errors)
+				std::cerr << static_cast<const char*>(errors->GetBufferPointer());
+			Check(compiled);
+		}
+		std::cout << (vr ? "VR" : "SE/AE") << " roof receiver shaders compiled without warnings\n";
+	}
 
 	struct ShaderIncludes : ID3DInclude
 	{
@@ -589,6 +616,8 @@ namespace
 int main(int argc, char** argv)
 {
 	try {
+		CheckReceiverShaders(false);
+		CheckReceiverShaders(true);
 		ComPtr<ID3D11Device> device;
 		ComPtr<ID3D11DeviceContext> context;
 		Check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,

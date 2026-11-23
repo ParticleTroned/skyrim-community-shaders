@@ -138,6 +138,20 @@ namespace Skylighting
 		return saturate(dot(probeOffset, normalWS) * rsqrt(max(dot(probeOffset, probeOffset), EPSILON_WEIGHT_SUM))) + MIN_TANGENT_WEIGHT;
 	}
 
+#	if defined(SKYLIGHTING_COVERAGE)
+	/// Avoids roof classification when rejection cannot change the probe's weight.
+	float GetRoofAdjustedTangentWeight(float tangentWeight, bool receiverCovered, uint3 probeIndex,
+		float3 positionMS, float3 probeOffset, float3 cellSize, float roofDepth)
+	{
+		[branch] if (receiverCovered && tangentWeight != MIN_TANGENT_WEIGHT)
+		{
+			if (RoofCoverage::ProbeIsAboveRoof(probeIndex, positionMS + probeOffset * cellSize, roofDepth))
+				tangentWeight = MIN_TANGENT_WEIGHT;
+		}
+		return tangentWeight;
+	}
+#	endif
+
 	sh2 Sample(float3 positionMS, float3 normalWS)
 	{
 		const SharedData::SkylightingSettings params = SharedData::skylightingSettings;
@@ -183,11 +197,8 @@ namespace Skylighting
 					uint3 cellTexID = offset == 0 ? lowerProbe : upperProbe;
 					float tangentWeight = GetProbeTangentWeight(probeOffset, normalWS);
 #	if defined(SKYLIGHTING_COVERAGE)
-					[branch] if (receiverCovered)
-					{
-						if (RoofCoverage::ProbeIsAboveRoof(cellTexID, positionMS + probeOffset * cellSize, roofDepth))
-							tangentWeight = MIN_TANGENT_WEIGHT;
-					}
+					tangentWeight = GetRoofAdjustedTangentWeight(tangentWeight, receiverCovered, cellTexID,
+						positionMS, probeOffset, cellSize, roofDepth);
 #	endif
 					float3 trilinearWeights = 1 - abs(probeOffset);
 					float w = trilinearWeights.x * trilinearWeights.y * trilinearWeights.z * tangentWeight;
@@ -257,11 +268,8 @@ namespace Skylighting
 								uint3 cellTexID = cellOffset == 0 ? lowerProbe : upperProbe;
 								float tangentWeight = GetProbeTangentWeight(probeOffset, normalWS);
 #		if defined(SKYLIGHTING_COVERAGE)
-								[branch] if (receiverCovered)
-								{
-									if (RoofCoverage::ProbeIsAboveRoof(cellTexID, positionMS + probeOffset * cellSize, roofDepth))
-										tangentWeight = MIN_TANGENT_WEIGHT;
-								}
+								tangentWeight = GetRoofAdjustedTangentWeight(tangentWeight, receiverCovered, cellTexID,
+									positionMS, probeOffset, cellSize, roofDepth);
 #		endif
 								float shWeight = triWeight * tangentWeight;
 

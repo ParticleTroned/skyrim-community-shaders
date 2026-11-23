@@ -619,6 +619,7 @@ public:
 	}
 
 private:
+	SkyShader::ContextCache skyShaderContextCache;
 	std::optional<SkyShader::ScopedBindings> skyShaderBindings;
 	/** Uses current world samples or the no-water sentinel for the shared upload. */
 	void UpdateWaterData(SharedDataCB& a_data, bool a_inWorld);

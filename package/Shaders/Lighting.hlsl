@@ -3710,6 +3710,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			if (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SnowRooftop)
 				rooftopLift = SnowCover::GetRooftopLift(input.ModelPosition.z, snowSkyVisibility);
 #		endif
+			float snowViewDist = length(viewPosition.xyz);
+			SnowCover::CoverageInputs footprint = SnowCover::GetSurfaceFootprint(snowNormal, disp,
+				adjustedWorldPos, snowOcclusion, input.WorldPosition.z - waterHeight,
+				snowViewDist, rooftopLift, snowEnvironment);
+			SnowCover::FireMeltSample fireMelt = (SnowCover::FireMeltSample)0;
 #		if defined(WETTERNESS) && !defined(SKIN) && !defined(HAIR) && !defined(SKINNED)
 			[branch] if (SharedData::snowMeltSettings.enabled && CS_WETNESS_SETTINGS.EnableWetnessEffects && !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::NoSnowMelt))
 			{
@@ -3717,17 +3722,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if !defined(TRUE_PBR)
 				dryRoughness = 1.0 - saturate(material.Glossiness);
 #			endif
-				SnowCover::CoverageInputs footprint = SnowCover::GetSurfaceFootprint(snowNormal, disp,
-					adjustedWorldPos, snowOcclusion, input.WorldPosition.z - waterHeight,
-					length(viewPosition.xyz), rooftopLift, snowEnvironment);
 				snowMeltWetness = Wetterness::GetSnowMeltWetness(footprint,
-					Wetterness::GetSurfaceDryingWeights(saturate(material.BaseColor), dryRoughness));
+					Wetterness::GetSurfaceDryingWeights(saturate(material.BaseColor), dryRoughness), fireMelt);
 			}
 #		endif
 #		if defined(TRUE_PBR)
-			snowFactor = SnowCover::ApplySnowPBR(material, snowNormal, disp, adjustedWorldPos, snowOcclusion, input.WorldPosition.z - waterHeight, length(viewPosition.xyz), uv - uvOriginal, rooftopLift, snowEnvironment);
+			snowFactor = SnowCover::ApplySnowPBR(material, snowNormal, disp, footprint, snowViewDist, uv - uvOriginal, fireMelt);
 #		else
-			snowFactor = SnowCover::ApplySnow(material, snowNormal, disp, adjustedWorldPos, snowOcclusion, input.WorldPosition.z - waterHeight, length(viewPosition.xyz), uv - uvOriginal, rooftopLift, snowEnvironment);
+			snowFactor = SnowCover::ApplySnow(material, snowNormal, disp, footprint, snowViewDist, uv - uvOriginal, fireMelt);
 #		endif
 #		if defined(MODELSPACENORMALS) && !defined(SKINNED)
 			float3 snowCoverageGradient = FrameBuffer::ViewToWorld(-float3(ddx_fine(snowFactor), ddy_fine(snowFactor), 0), false, eyeIndex);
@@ -4156,6 +4158,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 		// Parallax moves the pattern; original gradients keep its filtering footprint stable.
 		Glints::PrecomputeGlints(glintNoise, glintUV, uvOriginal_ddx, uvOriginal_ddy, material.GlintScreenSpaceScale, material.GlintCache);
+	}
+#	endif
+
+#	if defined(CS_SKIN_SHADING)
+	[branch] if (skinEnabled && skinData.sssParams.w > 0 && skinData.sssParams.x > 0)
+	{
+		// Thickness and SSS width are shared by every direct light on this pixel.
+		material.TransmissionProfile = Skin::SSSSTransmittanceProfile(0, skinData.sssParams.y, material.Thickness);
 	}
 #	endif
 

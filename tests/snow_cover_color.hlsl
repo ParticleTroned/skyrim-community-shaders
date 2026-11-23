@@ -35,11 +35,13 @@ ColorOutput main(float4 position : SV_Position)
 	if (route == 0) {
 		MaterialProperties material = (MaterialProperties)0;
 		float3 normal = float3(0, 0, 1);
+		SnowCover::CoverageInputs footprint = SnowCover::GetSurfaceFootprint(normal, 0, 0, 1, 100, 0, 0, 1);
+		SnowCover::FireMeltSample fireMelt = (SnowCover::FireMeltSample)0;
 #if defined(TRUE_PBR)
-		SnowCover::ApplySnowPBR(material, normal, 0, 0, 1, 100, 0, 0, 0, 1);
+		SnowCover::ApplySnowPBR(material, normal, 0, footprint, 0, 0, fireMelt);
 		actual = material.BaseColor * Color::PBRLightingScale;
 #else
-		SnowCover::ApplySnow(material, normal, 0, 0, 1, 100, 0, 0, 0, 1);
+		SnowCover::ApplySnow(material, normal, 0, footprint, 0, 0, fireMelt);
 		actual = material.BaseColor;
 #endif
 	} else {
@@ -81,12 +83,13 @@ float4 ObjectFadeCoverage(float4 position : SV_Position) : SV_Target0
 {
 	float viewDist = floor(position.x) * 200;
 	SnowCover::CoverageInputs footprint = SnowCover::GetSurfaceFootprint(float3(0, 0, 1), 0, 0, 1, 100, viewDist, 0, 1);
+	SnowCover::FireMeltSample fireMelt = (SnowCover::FireMeltSample)0;
 	MaterialProperties material = (MaterialProperties)0;
 	float3 normal = float3(0, 0, 1);
 #if defined(TRUE_PBR)
-	float coverage = SnowCover::ApplySnowPBR(material, normal, 0, 0, 1, 100, viewDist, 0, 0, 1);
+	float coverage = SnowCover::ApplySnowPBR(material, normal, 0, footprint, viewDist, 0, fireMelt);
 #else
-	float coverage = SnowCover::ApplySnow(material, normal, 0, 0, 1, 100, viewDist, 0, 0, 1);
+	float coverage = SnowCover::ApplySnow(material, normal, 0, footprint, viewDist, 0, fireMelt);
 #endif
 	return float4(footprint.scale, SnowCover::GetCoverage(footprint, 0, 0), coverage, 1);
 }
@@ -109,7 +112,9 @@ ColorOutput FoliageMaterial(float4 position : SV_Position)
 	material.F0 = 0.04;
 	material.GlintLogMicrofacetDensity = SnowCover::DisabledGlintDensity;
 	float3 normal = float3(0, 0, 1);
-	SnowCover::ApplySnowPBR(material, normal, 0, 0, 1, 100, 0, 0, 0, CoatingCoverage);
+	SnowCover::CoverageInputs footprint = SnowCover::GetSurfaceFootprint(normal, 0, 0, 1, 100, 0, 0, CoatingCoverage);
+	SnowCover::FireMeltSample fireMelt = (SnowCover::FireMeltSample)0;
+	SnowCover::ApplySnowPBR(material, normal, 0, footprint, 0, 0, fireMelt);
 #	if defined(WETTERNESS)
 	float porosity = 1;
 	ApplyWetnessDarkening(material, porosity, float3(0, 0, 100), 0, true, 1, 0.5, 1, 1);

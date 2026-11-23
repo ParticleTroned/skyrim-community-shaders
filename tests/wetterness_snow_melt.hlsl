@@ -16,10 +16,18 @@ RWStructuredBuffer<float4> Results : register(u0);
 	footprint.weatherUpness = 1;
 	footprint.foliage = id.x == 3;
 	float3 weights = id.x == 6 ? float3(1, 0, 0) : (id.x == 7 ? float3(0, 1, 0) : float3(0, 0, 1));
+	float reuseError = 0;
 #ifdef SNOW_MELT_REFERENCE
 	float2 wetness = WetternessReference::GetSnowMeltWetness(footprint, weights);
+#elif defined(SNOW_MELT_SHARED_FIRE)
+	SnowCover::FireMeltSample fireMelt = (SnowCover::FireMeltSample)0;
+	if (id.x & 1u)
+		SnowCover::GetFireMelt(footprint.position, fireMelt);
+	float2 wetness = Wetterness::GetSnowMeltWetness(footprint, weights, fireMelt);
+	// Later consumers must see current fires even when melt history exits early.
+	reuseError = abs(SnowCover::GetFireMelt(footprint.position, fireMelt) - SnowCover::GetFireMelt(footprint.position));
 #else
 	float2 wetness = Wetterness::GetSnowMeltWetness(footprint, weights);
 #endif
-	Results[id.x] = float4(wetness, WetternessDrying::Remaining(24, 24), footprint.weatherRange);
+	Results[id.x] = float4(wetness, WetternessDrying::Remaining(24, 24) + reuseError, footprint.weatherRange);
 }

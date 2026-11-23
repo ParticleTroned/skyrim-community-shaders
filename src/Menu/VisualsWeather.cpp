@@ -120,8 +120,9 @@ namespace MenuUI
 	{
 		static uint32_t filter = Util::WeatherFilter::All;
 		static RE::TESWeather* selected = nullptr;
-		static std::vector<RE::TESWeather*> matches;
+		static Util::WeatherFilter::CachedList weatherList;
 		static ActionFeedback feedback;
+		bool selectionChanged = false;
 		SectionHeading("Weather adjustments", "Choose a category, then select a weather to edit its Visuals adjustments. Apply and save to that entry, or copy its Visuals adjustments to every weather in the displayed category.");
 		{
 			float categoryWidth = 0;
@@ -144,14 +145,12 @@ namespace MenuUI
 			if (ImGui::Button("Select Current Weather")) {
 				filter = Util::WeatherFilter::All;
 				selected = sky->currentWeather;
+				selectionChanged = true;
 			}
 		}
-		matches.clear();
-		for (auto* weather : WeatherPicker::GetWeatherCatalog()) {
-			if (Util::WeatherFilter::Matches(weather->data.flags.underlying(), filter))
-				matches.push_back(weather);
-		}
-		if (std::ranges::find(matches, selected) == matches.end())
+		const bool matchesChanged = weatherList.Update(WeatherPicker::GetWeatherCatalog(), filter);
+		const auto matches = weatherList.Get();
+		if ((matchesChanged || selectionChanged) && std::ranges::find(matches, selected) == matches.end())
 			selected = nullptr;
 		ImGui::Text("%zu matching weathers", matches.size());
 		if (ImGui::BeginListBox("##VisualsWeatherList", { -1, ImGui::GetTextLineHeightWithSpacing() * 8 })) {

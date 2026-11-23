@@ -3,6 +3,7 @@
 #include <array>
 #include <bit>
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
 #include <numeric>
 #include <optional>
@@ -10,6 +11,24 @@
 #include <source_location>
 #include <stdexcept>
 #include <vector>
+
+namespace
+{
+	bool failArrayAllocation = false;
+	std::size_t arrayAllocations = 0;
+}
+
+void* operator new[](std::size_t size)
+{
+	if (failArrayAllocation)
+		throw std::bad_alloc{};
+	++arrayAllocations;
+	if (auto* memory = std::malloc(size ? size : 1))
+		return memory;
+	throw std::bad_alloc{};
+}
+void operator delete[](void* memory) noexcept { std::free(memory); }
+void operator delete[](void* memory, std::size_t) noexcept { std::free(memory); }
 
 namespace
 {
@@ -78,7 +97,7 @@ namespace
 	void CheckFloatOrdering()
 	{
 		std::mt19937 random(74);
-		for (const std::size_t count : { 2u, 17u, 31u, 32u, 33u, 64u, 10000u }) {
+		for (const std::size_t count : { 2u, 17u, 31u, 32u, 33u, 64u, 10000u, 65536u, 65537u }) {
 			std::vector<Pass> passes(count);
 			std::vector<Pass*> expected;
 			for (std::size_t i = 0; i < count; ++i) {
@@ -93,13 +112,127 @@ namespace
 			auto* head = passes.data();
 			std::size_t evaluations = 0;
 			AlphaSort::Sort(head, [&](auto* pass) { ++evaluations; return pass->radius; });
-			Check(evaluations <= 4 * count);
+			Check(evaluations == (count <= AlphaSort::detail::kMaximumCachedPasses ? count : 4 * count));
 			for (auto* pass : expected) {
 				Check(head == pass);
 				head = head->passGroupNext;
 			}
 			Check(head == nullptr);
 		}
+	}
+
+	void CheckScratchFailureAndReuse()
+	{
+		std::array<Pass, 128> passes{};
+		const auto reset = [&](float direction) {
+			for (std::size_t i = 0; i < passes.size(); ++i)
+				passes[i] = { i + 1 < passes.size() ? &passes[i + 1] : nullptr, {}, direction * float(i), i };
+		};
+		const auto verify = [&](Pass* head, bool descending) {
+			for (std::size_t i = 0; i < passes.size(); ++i) {
+				Check(head == &passes[descending ? passes.size() - 1 - i : i]);
+				head = head->passGroupNext;
+			}
+			Check(!head);
+		};
+		std::size_t evaluations = 0;
+		const auto key = [&](const Pass* pass) { ++evaluations; return pass->radius; };
+		reset(1);
+		auto* head = passes.data();
+		failArrayAllocation = true;
+		AlphaSort::Sort(head, key);
+		failArrayAllocation = false;
+		Check(evaluations == 4 * passes.size());
+		verify(head, true);
+		reset(1);
+		head = passes.data();
+		evaluations = 0;
+		AlphaSort::Sort(head, key);
+		Check(evaluations == passes.size());
+		verify(head, true);
+		const auto allocations = arrayAllocations;
+		reset(-1);
+		head = passes.data();
+		evaluations = 0;
+		failArrayAllocation = true;
+		AlphaSort::Sort(head, key);
+		failArrayAllocation = false;
+		Check(evaluations == passes.size() && arrayAllocations == allocations);
+		verify(head, false);
+
+		std::array<Pass, 257> larger{};
+		const auto resetLarger = [&] {
+			for (std::size_t i = 0; i < larger.size(); ++i)
+				larger[i] = { i + 1 < larger.size() ? &larger[i + 1] : nullptr, {}, float(i), i };
+		};
+		const auto verifyLarger = [&](Pass* sorted) {
+			for (std::size_t i = larger.size(); i > 0; --i) {
+				Check(sorted == &larger[i - 1]);
+				sorted = sorted->passGroupNext;
+			}
+			Check(!sorted);
+		};
+		resetLarger();
+		auto* largerHead = larger.data();
+		evaluations = 0;
+		failArrayAllocation = true;
+		AlphaSort::Sort(largerHead, key);
+		failArrayAllocation = false;
+		Check(evaluations == 4 * larger.size() && arrayAllocations == allocations);
+		verifyLarger(largerHead);
+		reset(1);
+		head = passes.data();
+		evaluations = 0;
+		failArrayAllocation = true;
+		AlphaSort::Sort(head, key);
+		failArrayAllocation = false;
+		Check(evaluations == passes.size() && arrayAllocations == allocations);
+		verify(head, true);
+
+		reset(1);
+		head = passes.data();
+		std::array<Pass, 64> nested{};
+		for (std::size_t i = 0; i < nested.size(); ++i)
+			nested[i] = { i + 1 < nested.size() ? &nested[i + 1] : nullptr, {}, float(i), i };
+		bool invoked = false;
+		AlphaSort::Sort(head, [&](const Pass* pass) {
+			if (!invoked) {
+				invoked = true;
+				auto* inner = nested.data();
+				AlphaSort::Sort(inner, [](const Pass* value) { return value->radius; });
+				for (std::size_t i = nested.size(); i > 0; --i) {
+					Check(inner == &nested[i - 1]);
+					inner = inner->passGroupNext;
+				}
+				Check(!inner);
+			}
+			return pass->radius;
+		});
+		verify(head, true);
+
+		reset(1);
+		head = passes.data();
+		resetLarger();
+		invoked = false;
+		AlphaSort::Sort(head, [&](const Pass* pass) {
+			if (!invoked) {
+				invoked = true;
+				auto* inner = larger.data();
+				AlphaSort::Sort(inner, key);
+				verifyLarger(inner);
+			}
+			return pass->radius;
+		});
+		verify(head, true);
+		const auto grownAllocations = arrayAllocations;
+		resetLarger();
+		largerHead = larger.data();
+		evaluations = 0;
+		failArrayAllocation = true;
+		AlphaSort::Sort(largerHead, key);
+		failArrayAllocation = false;
+		Check(evaluations == larger.size() && arrayAllocations == grownAllocations);
+		verifyLarger(largerHead);
 	}
 
 	struct Invocation
@@ -356,6 +489,7 @@ namespace
 int main(int argc, char**)
 {
 	try {
+		CheckScratchFailureAndReuse();
 		CheckPolicy();
 		CheckFloatOrdering();
 		CheckNativeABI();

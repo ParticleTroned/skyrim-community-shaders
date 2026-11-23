@@ -2221,6 +2221,32 @@ if(BUILD_CONTROLLER_TESTS)
     )
 
     add_controller_test(grass_placement_test GrassPlacement tests/grass_placement_test.cpp)
+    set(_grass_placement_dir "${CMAKE_CURRENT_BINARY_DIR}/grass-placement-test")
+    set(_grass_placement_sources
+        "${_grass_placement_dir}/grass_placement_cell_profile.h"
+        "${_grass_placement_dir}/grass_placement_invalidation.h"
+        "${_grass_placement_dir}/grass_placement_cells.h"
+        "${_grass_placement_dir}/grass_placement_configuration.h"
+        "${_grass_placement_dir}/grass_placement_model.h"
+        "${_grass_placement_dir}/grass_placement_offsets.h"
+    )
+    add_custom_command(
+        OUTPUT ${_grass_placement_sources}
+        COMMAND
+            ${CMAKE_COMMAND} "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_grass_placement_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_grass_placement.cmake"
+        DEPENDS
+            src/Features/GrassPlacement.cpp
+            tests/extract_grass_placement.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    target_sources(grass_placement_test PRIVATE ${_grass_placement_sources})
+    target_include_directories(
+        grass_placement_test
+        PRIVATE "${_grass_placement_dir}"
+    )
     target_link_libraries(
         grass_placement_test
         PRIVATE nlohmann_json::nlohmann_json

@@ -52,6 +52,7 @@ namespace GrassPlacement
 			RE::NiPoint3 center{};
 			Envelope bound;
 			History history;
+			std::optional<float> offset;
 			std::optional<CellKey> sourceCell, cell;
 		};
 		struct CellProfile
@@ -59,6 +60,13 @@ namespace GrassPlacement
 			uint32_t cell = 0, location = 0, world = 0, users = 0;
 			bool attached = false;
 			std::vector<const Layer*> layers;
+			bool SetLayers(std::vector<const Layer*> next)
+			{
+				if (layers == next)
+					return false;
+				layers = std::move(next);
+				return true;
+			}
 		};
 		struct Configuration
 		{
@@ -103,6 +111,10 @@ namespace GrassPlacement
 			static Runtime value;
 			return value;
 		}
+		void InvalidateOffsets(Runtime& runtime)
+		{
+			for (auto& [buffer, group] : runtime.groups) group.offset.reset();
+		}
 		void Fail(const char* operation, const std::exception& error)
 		{
 			if (!Get().failed.exchange(true))
@@ -132,6 +144,7 @@ namespace GrassPlacement
 			if (cell)
 				++GetCell(runtime, *cell).users;
 			group.cell = cell;
+			group.offset.reset();
 		}
 		std::vector<const Layer*> LayersForCell(const Configuration& configuration, const RE::TESObjectCELL* cell)
 		{
@@ -163,6 +176,7 @@ namespace GrassPlacement
 			for (auto& [key, cell] : runtime.cells) cell.layers.clear();
 			runtime.interiorLayers.clear();
 			runtime.configuration = std::move(next);
+			InvalidateOffsets(runtime);
 			return true;
 		}
 		ShapeState& GetShape(Runtime& runtime, Shape* shape)
@@ -299,6 +313,7 @@ namespace GrassPlacement
 				runtime.cells.clear();
 				for (auto& [buffer, group] : runtime.groups) {
 					group.history = {};
+					group.offset.reset();
 					group.cell.reset();
 					AssignCell(runtime, group);
 				}
@@ -310,9 +325,10 @@ namespace GrassPlacement
 					for (auto& [buffer, group] : runtime.groups) AssignCell(runtime, group);
 				runtime.interiorLayers = LayersForCell(runtime.configuration, tes ? tes->interiorCell : nullptr);
 				for (auto& [key, profile] : runtime.cells)
-					profile.layers = LayersForCell(runtime.configuration, RE::TESForm::LookupByID<RE::TESObjectCELL>(profile.cell));
+					profile.SetLayers(LayersForCell(runtime.configuration, RE::TESForm::LookupByID<RE::TESObjectCELL>(profile.cell)));
 			}
 			for (auto& [key, cell] : runtime.cells) cell.attached = false;
+			bool cellLayersChanged = false;
 			if (active && !runtime.configuration.rules.empty() && tes && !tes->interiorCell && tes->gridCells) {
 				const auto length = tes->gridCells->length;
 				for (uint32_t x = 0; x < length; ++x)
@@ -327,7 +343,7 @@ namespace GrassPlacement
 						const auto* location = cell->GetLocation();
 						const uint32_t locationID = location ? location->GetFormID() : 0;
 						if (profile.cell != cell->GetFormID() || profile.location != locationID || profile.world != worldID) {
-							profile.layers = LayersForCell(runtime.configuration, cell);
+							cellLayersChanged |= profile.SetLayers(LayersForCell(runtime.configuration, cell));
 							profile.cell = cell->GetFormID();
 							profile.location = locationID;
 							profile.world = worldID;
@@ -336,6 +352,8 @@ namespace GrassPlacement
 					}
 			}
 			std::erase_if(runtime.cells, [](const auto& entry) { return !entry.second.users && !entry.second.attached; });
+			if (cellLayersChanged)
+				InvalidateOffsets(runtime);
 			return runtime.boundsDirty;
 		}
 	}
@@ -361,7 +379,13 @@ namespace GrassPlacement
 		auto& runtime = Get();
 		std::scoped_lock lock(runtime.mutex);
 		auto& source = GetShape(runtime, shape);
-		source.model = path ? ModelKey(path) : std::string{};
+		auto model = path ? ModelKey(path) : std::string{};
+		if (source.model != model) {
+			source.model = std::move(model);
+			for (auto* buffer : source.buffers)
+				if (auto found = runtime.groups.find(buffer); found != runtime.groups.end() && found->second.owner == shape)
+					found->second.offset.reset();
+		}
 		PadShape(runtime, shape, source);
 	} catch (const std::exception& error) {
 		Fail("model tracking", error);
@@ -467,11 +491,15 @@ namespace GrassPlacement
 		if (source == runtime.shapes.end() || !source->second.translationOnly)
 			return {};
 		if (group.history.frame != runtime.frame) {
-			std::span<const Layer* const> layers = runtime.interiorLayers;
-			if (!runtime.interior && group.cell)
-				if (const auto cell = runtime.cells.find(*group.cell); cell != runtime.cells.end())
-					layers = cell->second.layers;
-			group.history.Update(runtime.frame, runtime.enabled ? Resolve(runtime.configuration.global, layers, source->second.model) : 0);
+			if (runtime.enabled && !group.offset) {
+				std::span<const Layer* const> layers = runtime.interiorLayers;
+				if (!runtime.interior && group.cell)
+					if (const auto cell = runtime.cells.find(*group.cell); cell != runtime.cells.end())
+						layers = cell->second.layers;
+				group.offset = Resolve(runtime.configuration.global, layers, source->second.model);
+			}
+			// Cached placement still advances motion history once per visible frame.
+			group.history.Update(runtime.frame, runtime.enabled ? *group.offset : 0);
 		}
 		return { group.history.current, group.history.previous };
 	}

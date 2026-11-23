@@ -127,6 +127,51 @@ try {
 	DirectX::ScratchImage failedComposite;
 	Require(!ComposeFramedStereo({ &invalidEye, &invalidEye }, projections, transforms, {}, vr::Eye_Left, vr::ColorSpace_Linear, { 16, 9 }, false, failedComposite), "invalid source format accepted");
 	Require(failedComposite.GetPixelsSize() == 0, "failed composition retained its output allocation before fallback");
+	const auto requireDominantColor = [](const DirectX::XMFLOAT4& pixel) {
+		Require(std::abs(pixel.x - 64.0f / 255.0f) < 1e-6f && std::abs(pixel.y - 128.0f / 255.0f) < 1e-6f &&
+					std::abs(pixel.z - 192.0f / 255.0f) < 1e-6f && pixel.w == 1.0f,
+			"dominant-only output changed the source colour or alpha");
+	};
+	const std::array<std::array<float, 4>, 2> shallowProjections{ { { -1, 1, -0.25f, 0.25f }, { -1, 1, -0.25f, 0.25f } } };
+	for (const auto dominant : { vr::Eye_Left, vr::Eye_Right }) {
+		const size_t otherIndex = dominant == vr::Eye_Left ? 1u : 0u;
+		auto unusedOther = images;
+		unusedOther[otherIndex] = &invalidEye;
+		for (const bool native : { false, true }) {
+			DirectX::ScratchImage singleEye;
+			Require(ComposeFramedStereo(unusedOther, shallowProjections, transforms, {}, dominant, vr::ColorSpace_Linear, { 32, 18 }, native, singleEye),
+				"fully dominant output attempted to convert an unused eye");
+			const auto* outputImage = singleEye.GetImage(0, 0, 0);
+			Require(outputImage && outputImage->width == (native ? 3840u : 32u) && outputImage->height == (native ? 2160u : 18u),
+				"skipping an unused eye changed output dimensions");
+			for (size_t y = 0; y < outputImage->height; ++y) {
+				const auto* row = reinterpret_cast<const DirectX::XMFLOAT4*>(outputImage->pixels + y * outputImage->rowPitch);
+				for (size_t x = 0; x < outputImage->width; ++x)
+					requireDominantColor(row[x]);
+			}
+		}
+		DirectX::ScratchImage needsOther;
+		Require(!ComposeFramedStereo(unusedOther, projections, transforms, {}, dominant, vr::ColorSpace_Linear, { 32, 18 }, false, needsOther),
+			"feathered output must still convert the other eye");
+		Require(needsOther.GetPixelsSize() == 0, "failed other-eye conversion published a partial composite");
+		auto gapProjections = projections;
+		gapProjections[otherIndex] = { -2, 2, -1, 1 };
+		auto differentEyes = images;
+		differentEyes[otherIndex] = floatEye.GetImage(0, 0, 0);
+		DirectX::ScratchImage coveredGap;
+		Require(ComposeFramedStereo(differentEyes, gapProjections, transforms, {}, dominant, vr::ColorSpace_Linear, { 32, 18 }, false, coveredGap),
+			"the other eye must fill dominant-eye coverage gaps");
+		const auto* gapImage = coveredGap.GetImage(0, 0, 0);
+		Require(gapImage && gapImage->width == 32 && gapImage->height == 18, "gap composition changed output dimensions");
+		const auto* gapRow = reinterpret_cast<const DirectX::XMFLOAT4*>(gapImage->pixels + (gapImage->height / 2) * gapImage->rowPitch);
+		requireDominantColor(gapRow[gapImage->width / 2]);
+		for (const size_t x : { size_t{ 0 }, gapImage->width - 1 })
+			Require(gapRow[x].x == 0.5f && gapRow[x].y == 0.5f && gapRow[x].z == 0.5f && gapRow[x].w == 0.75f,
+				"coverage gaps did not preserve the other eye's colour and alpha");
+		Require(!ComposeFramedStereo(unusedOther, gapProjections, transforms, {}, dominant, vr::ColorSpace_Linear, { 32, 18 }, false, needsOther),
+			"coverage gaps must still require the other-eye conversion");
+		Require(needsOther.GetPixelsSize() == 0, "missing other-eye pixels published a partial composite");
+	}
 	for (const bool native : { false, true }) {
 		for (const size_t invalidSize : { size_t{ 0 }, size_t{ 16385 }, std::numeric_limits<size_t>::max() }) {
 			for (size_t eyeIndex = 0; eyeIndex < images.size(); ++eyeIndex) {

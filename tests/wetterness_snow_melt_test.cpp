@@ -59,7 +59,7 @@ namespace
 		}
 	}
 
-	void CheckMelt(ID3D11Device* device, ID3D11DeviceContext* context, bool vr, bool pbr, uint32_t referenceFlags)
+	void CheckMelt(ID3D11Device* device, ID3D11DeviceContext* context, bool vr, bool pbr, uint32_t referenceFlags, bool sharedFire)
 	{
 		PackageIncludes includes("package/Shaders", "features/Wetterness/Shaders", "features/Snow Cover/Shaders", "tests");
 		std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "WETTERNESS", "1" }, { "SNOW_COVER", "1" } };
@@ -69,6 +69,8 @@ namespace
 			defines.push_back({ "TRUE_PBR", "1" });
 		const auto referenceFlagsText = std::to_string(referenceFlags);
 		defines.push_back({ "CSX_PERF_REFERENCE_FLAGS", referenceFlagsText.c_str() });
+		if (sharedFire)
+			defines.push_back({ "SNOW_MELT_SHARED_FIRE", "1" });
 		defines.push_back({ nullptr, nullptr });
 		ComPtr<ID3DBlob> bytecode, errors;
 		const auto result = D3DCompileFromFile(L"tests/wetterness_snow_melt.hlsl", defines.data(), &includes,
@@ -104,6 +106,7 @@ namespace
 		Check(reflection->GetDesc(&candidateDesc));
 		Check(referenceReflection->GetDesc(&referenceDesc));
 		std::cout << "Snowmelt VR=" << vr << " PBR=" << pbr << " flags=" << referenceFlags
+				  << " sharedFire=" << sharedFire
 				  << ": instructions " << candidateDesc.InstructionCount << "/" << referenceDesc.InstructionCount
 				  << ", temps " << candidateDesc.TempRegisterCount << "/" << referenceDesc.TempRegisterCount
 				  << ", arrays " << candidateDesc.TempArrayCount << "/" << referenceDesc.TempArrayCount << std::endl;
@@ -156,7 +159,7 @@ namespace
 			const auto expected = dispatch(referenceShader.Get());
 			for (size_t i = 0; i < actual.size(); ++i)
 				for (size_t channel = 0; channel < actual[i].size(); ++channel)
-					Require(std::abs(actual[i][channel] - expected[i][channel]) < 1e-6f, "Direct reads changed melt integration");
+					Require(std::abs(actual[i][channel] - expected[i][channel]) < 1e-6f, "Snowmelt preparation changed integration");
 			return actual;
 		};
 		const auto setDryingAges = [](WetternessSnowMelt::PerFrame& data) {
@@ -349,7 +352,8 @@ int main()
 		for (bool vr : { false, true })
 			for (bool pbr : { false, true })
 				for (uint32_t referenceFlags : { 0u, weatherReference })
-					CheckMelt(device.Get(), context.Get(), vr, pbr, referenceFlags);
+					for (bool sharedFire : { false, true })
+						CheckMelt(device.Get(), context.Get(), vr, pbr, referenceFlags, sharedFire);
 		std::cout << "PASS: local snowmelt, material drying, fire footprints and finite retirement\n";
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

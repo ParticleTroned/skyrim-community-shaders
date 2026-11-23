@@ -40,7 +40,8 @@ namespace Wetterness
 		return wetness;
 	}
 
-	float2 GetSnowMeltWetness(SnowCover::CoverageInputs footprint, float3 materialWeights)
+	/// Shares the current fire sample with snow rendering without changing history.
+	float2 GetSnowMeltWetness(SnowCover::CoverageInputs footprint, float3 materialWeights, inout SnowCover::FireMeltSample fireMelt)
 	{
 		float2 wetness = 0;
 		uint count = min(SharedData::snowMeltSettings.count, 32u);
@@ -51,7 +52,7 @@ namespace Wetterness
 			{
 				float3 current = float3(SharedData::snowCoverSettings.TimeSnowing,
 					SharedData::snowCoverSettings.SnowingDensity, SharedData::snowCoverSettings.SeasonalAltitude);
-				float covered = SnowCover::GetCoverage(footprint, current, SnowCover::GetFireMelt(footprint.position));
+				float covered = SnowCover::GetCoverage(footprint, current, SnowCover::GetFireMelt(footprint.position, fireMelt));
 				[branch] if (covered < 1.0)
 				{
 					float3 previousState = SharedData::snowMeltSettings.states[0].xyz;
@@ -92,6 +93,12 @@ namespace Wetterness
 			}
 		}
 		return wetness;
+	}
+
+	float2 GetSnowMeltWetness(SnowCover::CoverageInputs footprint, float3 materialWeights)
+	{
+		SnowCover::FireMeltSample fireMelt = (SnowCover::FireMeltSample)0;
+		return GetSnowMeltWetness(footprint, materialWeights, fireMelt);
 	}
 }
 #endif

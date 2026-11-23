@@ -1342,6 +1342,7 @@ namespace
 		// Store the dominant eye first and retain a compact feather weight per
 		// output pixel. Processing eyes sequentially avoids holding two full-size
 		// RGBA32F conversions at once.
+		bool needsOtherEye = false;
 		for (std::size_t y = 0; y < outputImage->height; ++y) {
 			auto* outputRow = reinterpret_cast<DirectX::XMFLOAT4*>(outputImage->pixels + y * outputImage->rowPitch);
 			const float tangentY = frameTop -
@@ -1378,13 +1379,19 @@ namespace
 					outputRow[x] = dominantColor;
 					dominantWeights[y * outputImage->width + x] = static_cast<uint8_t>(
 						std::lround(dominantWeight * 254.0f) + 1);
+					needsOtherEye |= dominantWeights[y * outputImage->width + x] != 255;
 				} else {
 					outputRow[x] = { 0.0f, 0.0f, 0.0f, 1.0f };
+					needsOtherEye = true;
 				}
 			}
 		}
 
 		linearEye.Release();
+		if (!needsOtherEye) {
+			a_output = std::move(composite);
+			return true;
+		}
 		const std::size_t otherIndex = 1u - dominantIndex;
 		if (!ConvertCaptureToLinearFloat(*a_eyeImages[otherIndex], a_colorSpace, linearEye)) {
 			return false;

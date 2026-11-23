@@ -80,6 +80,7 @@ namespace Util
 }
 struct WeatherManager
 {
+	bool active = true;
 	struct Current
 	{
 		RE::Form* currentWeather = nullptr;
@@ -92,7 +93,7 @@ struct WeatherManager
 		return &manager;
 	}
 	Current GetCurrentWeathers() { return {}; }
-	bool HasActiveVariablesForFeature(const std::string&) const { return true; }
+	bool HasActiveVariablesForFeature(const std::string&) const { return active; }
 };
 struct SceneSettingsManager
 {
@@ -110,22 +111,27 @@ struct Feature
 {
 	static std::vector<std::string> GetLoadedFeatureNames() { return { "Skin", "SubsurfaceScattering", "GrassLighting", "TerrainHelper" }; }
 	Json settings = { { "MinDiffuseVisibility", 1.f } };
+	std::string name;
+	unsigned loads = 0;
 	bool loaded = true, throwNext = false;
-	static Feature* FindFeatureByShortName(const std::string&)
+	static Feature* FindFeatureByShortName(const std::string& name)
 	{
-		static Feature feature;
+		static std::map<std::string, Feature> registry;
+		auto& feature = registry[name];
+		feature.name = name;
 		return &feature;
 	}
 	void SaveSettings(Json& value) { value = settings; }
 	void SaveBaseSettings(Json& value)
 	{
 		value = settings;
-		if (Util::interior)
+		if (Util::interior && name == "Skylighting")
 			value["MinDiffuseVisibility"] = 1.f;
-		Presets::LookSceneRuntime::OverlayBase("Skylighting", value);
+		Presets::LookSceneRuntime::OverlayBase(name, value);
 	}
 	void LoadSettings(Json& value)
 	{
+		++loads;
 		settings = value;
 		if (throwNext) {
 			throwNext = false;
@@ -144,6 +150,120 @@ void Require(bool value, const char* message)
 {
 	if (!value)
 		throw std::runtime_error(message);
+}
+
+void CheckPreparationGates()
+{
+	using namespace Presets::LookSceneRuntime;
+	auto* feature = Feature::FindFeatureByShortName("Skylighting");
+	Presets::LookPack pack;
+	pack.scenes["TimeOfDay/Day"] = { { "Skylighting", { { "MinDiffuseVisibility", 3.f } } } };
+	SceneSettingsManager::GetSingleton()->paused = true;
+	Use(&pack);
+	++globals::state->frameCount;
+	Update();
+	Require(!previousFields.at("Skylighting").flattened && fieldAddresses.empty(), "Paused features must not flatten or parse their fields");
+	SceneSettingsManager::GetSingleton()->paused = false;
+	WeatherManager::GetSingleton()->active = false;
+	lastTick = std::chrono::steady_clock::now();
+	++globals::state->frameCount;
+	Update();
+	Require(!previousFields.at("Skylighting").flattened && fieldAddresses.empty(), "Inactive weather reapplication must not prepare fields");
+	WeatherManager::GetSingleton()->active = true;
+	feature->loaded = false;
+	lastTick = std::chrono::steady_clock::now();
+	++globals::state->frameCount;
+	Update();
+	Require(!previousFields.at("Skylighting").flattened && fieldAddresses.empty(), "Unloaded features must not prepare fields");
+	feature->loaded = true;
+	lastTick = std::chrono::steady_clock::now();
+	++globals::state->frameCount;
+	Update();
+	Require(previousFields.at("Skylighting").flattened && feature->settings["MinDiffuseVisibility"] == 3.f,
+		"Eligible cached features must prepare and apply their retained values");
+	Use(nullptr);
+}
+
+void CheckPreparedFields()
+{
+	using namespace Presets::LookSceneRuntime;
+	Util::interior = false;
+	auto* feature = Feature::FindFeatureByShortName("Skylighting");
+	const Json authored = { { "MinDiffuseVisibility", 1.f }, { "a/b", { { "~value", 2.f } } },
+		{ "vector", Json::array({ 3.f, 4.f }) }, { "untouched", true } };
+	feature->settings = authored;
+	Presets::LookPack pack;
+	pack.scenes["TimeOfDay/Day"] = { { "Skylighting", { { "MinDiffuseVisibility", 3.f },
+														  { "a/b", { { "~value", 6.f } } }, { "vector", Json::array({ 7.f, 8.f }) } } } };
+	pack.scenes["TimeOfDay/Night"] = { { "Skylighting", { { "MinDiffuseVisibility", 5.f } } } };
+	Use(&pack);
+	++globals::state->frameCount;
+	Update();
+	Require(feature->settings["a/b"]["~value"] == 6.f && feature->settings["vector"][1] == 8.f,
+		"Prepared fields must preserve JSON escaping and array indices");
+	const auto* address = &FieldAddress("/a~1b/~0value");
+	const auto addressCount = fieldAddresses.size();
+	const auto loads = feature->loads;
+	lastTick = std::chrono::steady_clock::now();
+	++globals::state->frameCount;
+	Update();
+	Require(feature->loads == loads && &FieldAddress("/a~1b/~0value") == address && fieldAddresses.size() == addressCount,
+		"Unchanged cached application must reuse field paths without reloading settings");
+	feature->settings["a/b"]["~value"] = 20.f;
+	feature->settings["vector"][0] = 30.f;
+	feature->settings["untouched"] = false;
+	lastTick = std::chrono::steady_clock::now();
+	++globals::state->frameCount;
+	Update();
+	Require(feature->settings["a/b"]["~value"] == 6.f && feature->settings["vector"][0] == 7.f && !feature->settings["untouched"].get<bool>(),
+		"Cached reapplication must restore controlled fields and preserve unrelated edits");
+	Json exported = feature->settings;
+	OverlayBase("Skylighting", exported);
+	Require(exported["a/b"] == authored["a/b"] && exported["vector"] == authored["vector"],
+		"Base exports must use authored values for prepared field paths");
+	SceneSettingsManager::GetSingleton()->paused = true;
+	lastTick = std::chrono::steady_clock::now();
+	++globals::state->frameCount;
+	Update();
+	Require(feature->settings["a/b"] == authored["a/b"] && !Controls("Skylighting"), "Pausing must release cached ownership");
+	SceneSettingsManager::GetSingleton()->paused = false;
+	lastTick = std::chrono::steady_clock::now();
+	++globals::state->frameCount;
+	Update();
+	Require(feature->settings["a/b"]["~value"] == 6.f && Controls("Skylighting", "vector"), "Resuming must reapply cached fields");
+	globals::game::calendarStorage.hour.value = 22;
+	lastTick = {};
+	++globals::state->frameCount;
+	Update();
+	Require(feature->settings["MinDiffuseVisibility"] == 5.f && feature->settings["vector"] == authored["vector"] && !Controls("Skylighting", "vector"),
+		"Context changes must replace prepared fields and release absent paths");
+	Use(nullptr);
+	Require(fieldAddresses.empty() && feature->settings["a/b"] == authored["a/b"], "Profile replacement must restore values before clearing parsed paths");
+	globals::game::calendarStorage.hour.value = 12;
+	feature->settings = authored;
+	auto* water = Feature::FindFeatureByShortName("Water");
+	water->settings = { { "Value", 10.f } };
+	pack.scenes.clear();
+	pack.scenes["TimeOfDay/Day"] = { { "Skylighting", { { "MinDiffuseVisibility", 3.f } } }, { "Water", { { "Value", 20.f } } } };
+	Use(&pack);
+	++globals::state->frameCount;
+	Update();
+	Require(feature->settings["MinDiffuseVisibility"] == 3.f && water->settings["Value"] == 20.f, "Multi-feature prepared application failed");
+	WeatherManager::GetSingleton()->active = false;
+	feature->settings["MinDiffuseVisibility"] = 7.f;
+	lastTick = std::chrono::steady_clock::now();
+	++globals::state->frameCount;
+	Update();
+	Require(feature->settings["MinDiffuseVisibility"] == 7.f, "Features without active weather variables must retain the cached-apply gate");
+	WeatherManager::GetSingleton()->active = true;
+	water->settings["Value"] = 50.f;
+	water->throwNext = true;
+	lastTick = std::chrono::steady_clock::now();
+	++globals::state->frameCount;
+	Update();
+	Require(!Error().empty() && feature->settings == authored && water->settings["Value"] == 10.f && !Controls("Skylighting") && !Controls("Water"),
+		"Cached partial failure must roll back all features and restore authored ownership");
+	Use(nullptr);
 }
 int main()
 try {
@@ -212,6 +332,8 @@ try {
 	Require(feature->settings["MinDiffuseVisibility"] == 4.f && exported["MinDiffuseVisibility"] == 1.f, "indoor place rules keep exterior authoring separate");
 	Use(nullptr);
 	Require(feature->settings["MinDiffuseVisibility"] == 2.f, "clearing place restores interior layer");
+	CheckPreparedFields();
+	CheckPreparationGates();
 	std::cout << "Visuals scene transaction and restoration tests passed\n";
 	return 0;
 } catch (const std::exception& error) {

@@ -6,17 +6,43 @@
 
 namespace SkyShader
 {
+	/** Retains one render-thread context and its optional D3D11.1 interface, including unsupported results. */
+	class ContextCache
+	{
+	public:
+		/** Reuses resolved interface support, retries transient failures, and clears on null. */
+		[[nodiscard]] ID3D11DeviceContext1* GetExtended(ID3D11DeviceContext* a_context) noexcept
+		{
+			if (context.get() != a_context) {
+				context1 = nullptr;
+				context.copy_from(a_context);
+				if (context) {
+					const auto result = context->QueryInterface(IID_PPV_ARGS(context1.put()));
+					if (FAILED(result)) {
+						context1 = nullptr;
+						if (result != E_NOINTERFACE)
+							context = nullptr;
+					}
+				}
+			}
+			return context1.get();
+		}
+
+	private:
+		winrt::com_ptr<ID3D11DeviceContext> context;
+		winrt::com_ptr<ID3D11DeviceContext1> context1;
+	};
+
 	/** @brief Scope sky vertex constants and optional sun-glare depth without disturbing native bindings. */
 	class ScopedBindings
 	{
 	public:
-		ScopedBindings(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_depth,
+		ScopedBindings(ContextCache& a_cache, ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_depth,
 			ID3D11Buffer* a_permutation = nullptr, bool a_bindDepth = true) :
 			depthBound(a_bindDepth), permutationBound(a_permutation != nullptr)
 		{
 			context.copy_from(a_context);
-			if (FAILED(context->QueryInterface(IID_PPV_ARGS(context1.put()))))
-				context1 = nullptr;
+			context1.copy_from(a_cache.GetExtended(a_context));
 			if (depthBound)
 				context->VSGetShaderResources(17, 1, previousDepth.put());
 			winrt::com_ptr<ID3D11Buffer> frame;
@@ -50,23 +76,29 @@ namespace SkyShader
 				}
 			}
 			auto* buffer = frame.get();
-			if (context1)
-				context1->VSSetConstantBuffers1(12, 1, &buffer, &frameFirst, &frameCount);
-			else
+			if (context1) {
+				if (buffer != previousFrame.get() || frameFirst != previousFirst || frameCount != previousCount)
+					context1->VSSetConstantBuffers1(12, 1, &buffer, &frameFirst, &frameCount);
+			} else {
+				// Without range queries, retain the whole-buffer setter's native behavior.
 				context->VSSetConstantBuffers(12, 1, &buffer);
-			if (depthBound)
+			}
+			if (depthBound && a_depth != previousDepth.get())
 				context->VSSetShaderResources(17, 1, &a_depth);
 			if (permutationBound) {
 				if (context1)
 					context1->VSGetConstantBuffers1(4, 1, previousPermutation.put(), &previousPermutationFirst, &previousPermutationCount);
 				else
 					context->VSGetConstantBuffers(4, 1, previousPermutation.put());
-				context->VSSetConstantBuffers(4, 1, &a_permutation);
+				if (!context1 || previousPermutation.get() != a_permutation ||
+					previousPermutationFirst != 0 || previousPermutationCount != D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT)
+					context->VSSetConstantBuffers(4, 1, &a_permutation);
 			}
 		}
 
 		~ScopedBindings()
 		{
+			// Draw work can change a slot even when its entry binding already matched.
 			if (depthBound) {
 				auto* depth = previousDepth.get();
 				context->VSSetShaderResources(17, 1, &depth);

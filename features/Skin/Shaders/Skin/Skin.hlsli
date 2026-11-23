@@ -57,7 +57,8 @@ namespace Skin
 
 	// [Jorge Jimenez, Diego Gutierrez 2015, "Separable Subsurface Scattering"]
 	// https://www.iryoku.com/separable-sss/
-	float3 SSSSTransmittance(float translucency, float sssWidth, float3 worldNormal, float3 light, float d)
+	/// Evaluates the light-independent thickness profile for direct transmission.
+	float3 SSSSTransmittanceProfile(float translucency, float sssWidth, float d)
 	{
 		float scale = 8.25 * (1.0 - translucency) / max(sssWidth, 1e-4f);
 		d = scale * abs(d);
@@ -69,7 +70,7 @@ namespace Skin
 		                 float3(0.358, 0.004, 0.0) * exp(dd / 1.99) +
 		                 float3(0.078, 0.0, 0.0) * exp(dd / 7.41);
 
-		return profile * saturate(0.3 + dot(light, -worldNormal));
+		return profile;
 	}
 
 	// Filament-style compensation using a fit to the F = 1 integral of D_GGX * Vis_SmithJointApprox.
@@ -142,7 +143,7 @@ namespace Skin
 		SharedData::SkinData skinData = GetSkinData();
 		[branch] if (skinData.sssParams.w > 0 && skinData.sssParams.x > 0)
 		{
-			float3 transmitted = SSSSTransmittance(0, skinData.sssParams.y, N, L, material.Thickness) * skinData.sssParams.x;
+			float3 transmitted = (material.TransmissionProfile * saturate(0.3 + dot(L, -N))) * skinData.sssParams.x;
 			lightingOutput.transmission = min(transmitted * context.lightColor * context.softShadow * material.BaseColor, context.lightColor);
 		}
 	}

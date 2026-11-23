@@ -9,26 +9,10 @@
 
 using std::uint32_t;
 using std::uint64_t;
-struct ID3D11Device
-{};
-struct ID3D11Resource
-{};
-struct ID3D11ShaderResourceView
-{};
-struct ID3D11UnorderedAccessView
-{};
-struct ID3D11DeviceContext
-{
-	uint32_t clearedSRVs = 0, clearedUAVs = 0;
-	void CSSetShaderResources(uint32_t start, uint32_t count, ID3D11ShaderResourceView* const* views)
-	{
-		clearedSRVs += start == 0 && count == 1 && views && !*views;
-	}
-	void CSSetUnorderedAccessViews(uint32_t start, uint32_t count, ID3D11UnorderedAccessView* const* views, const uint32_t* counts)
-	{
-		clearedUAVs += start == 0 && count == 1 && views && !*views && !counts;
-	}
-};
+struct ID3D11Device {};
+struct ID3D11DeviceContext {};
+struct ID3D11Resource {};
+struct ID3D11ShaderResourceView {};
 namespace winrt
 {
 	template <class T>
@@ -49,10 +33,7 @@ namespace winrt
 }
 namespace globals
 {
-	struct State
-	{
-		uint32_t frameCount = 1;
-	} stateStorage;
+	struct State { uint32_t frameCount = 1; } stateStorage;
 	State* state = &stateStorage;
 }
 namespace globals::d3d
@@ -69,36 +50,6 @@ namespace globals::game
 
 namespace NeuralRendering
 {
-	struct FramebufferTransaction
-	{
-		struct EyeRegion
-		{
-			ID3D11Resource* target = nullptr;
-			uint32_t subresource = 0, baseOffsetX = 0;
-			ComputeSubrect output, compute;
-		};
-		std::array<EyeRegion, 2> regions{};
-		uint32_t calls = 0, active = 0, eyes = 0, width = 0, height = 0;
-		bool succeeds = true;
-		uint32_t publications = 0;
-		bool viewsClearedAtPublication = false;
-		bool Commit(bool completePair)
-		{
-			++publications;
-			viewsClearedAtPublication = globals::d3d::context->clearedSRVs == 1 && globals::d3d::context->clearedUAVs == 1;
-			return completePair && succeeds;
-		}
-		bool PrepareRegions(const std::array<EyeRegion, 2>& values, uint32_t mask, uint32_t count, uint32_t w, uint32_t h)
-		{
-			++calls;
-			regions = values;
-			active = mask;
-			eyes = count;
-			width = w;
-			height = h;
-			return succeeds;
-		}
-	};
 	struct RendererApplyArgs
 	{
 		ID3D11Device* device = globals::d3d::device;
@@ -211,7 +162,6 @@ struct Upscaling
 	{
 		uint64_t policy = 1;
 		uint32_t neuralCharacterCropMode = 0;
-		bool neuralRenderingBatchedStereo = true;
 	} settings;
 	uint32_t resets = 0, composites = 0, outputTargets = 0;
 	bool targetsSucceed = true;
@@ -242,19 +192,12 @@ namespace
 
 	bool finalizeSucceeds = true;
 	uint32_t finalizeCalls = 0;
-	std::optional<uint32_t> finalizedEmptyMask;
-	bool FinalizePreparedNeuralStereoInputs(Upscaling& upscaling, std::array<Upscaling::NeuralCenterDispatchResult, 2>& results,
-		std::array<NeuralRendering::RendererApplyArgs, 2>& args, uint64_t* settingsKey = nullptr)
+	bool FinalizePreparedNeuralStereoInputs(Upscaling& upscaling, std::array<Upscaling::NeuralCenterDispatchResult, 2>&,
+		std::array<NeuralRendering::RendererApplyArgs, 2>&, uint64_t* settingsKey = nullptr)
 	{
 		++finalizeCalls;
 		if (settingsKey)
 			*settingsKey = upscaling.settings.policy;
-		if (finalizedEmptyMask) {
-			for (uint32_t eye = 0; eye < (globals::game::isVR ? 2u : 1u); ++eye) {
-				results[eye].bypassed = (*finalizedEmptyMask & (1u << eye)) != 0;
-				args[eye].computeSubrect = results[eye].bypassed ? NeuralRendering::ComputeSubrect{} : NeuralRendering::ComputeSubrect{ 4, 5, 6, 7 };
-			}
-		}
 		return finalizeSucceeds;
 	}
 	uint32_t settingsKeyReads = 0;
@@ -263,12 +206,10 @@ namespace
 		++settingsKeyReads;
 		return settings.policy + (includeCropMode ? settings.neuralCharacterCropMode : 0);
 	}
-	// clang-format off
 #include "neural_stereo_output_targets_under_test.h"
 #include "neural_finalized_dispatch_under_test.h"
 #include "neural_empty_dispatch_under_test.h"
 #include "neural_final_ldr_plan_under_test.h"
-	// clang-format on
 	void Require(bool value)
 	{
 		if (!value)
@@ -310,17 +251,16 @@ namespace
 					args[0].colorInput = &replacementResource;
 					upscaling.arrangement = NeuralRendering::PipelineArrangement::NeuralThenDlss;
 					Require(plan->Args()[0].frameId == 1 && plan->Args()[0].sourceWorldFrame == 1 && plan->Args()[0].generation == 1 &&
-							plan->Args()[0].computeSubrect == NeuralRendering::ComputeSubrect{ 4, 5, 6, 7 } && plan->Args()[0].viewportCrop.IsIdentity() &&
-							plan->Args()[0].colorInput == &originalResource);
+						plan->Args()[0].computeSubrect == NeuralRendering::ComputeSubrect{ 4, 5, 6, 7 } && plan->Args()[0].viewportCrop.IsIdentity() &&
+						plan->Args()[0].colorInput == &originalResource);
 					Require(plan->WillEvaluate() == (empty != all));
-					Require(plan->ActiveEyeMask() == (all & ~empty));
 					auto movedPlan = std::move(*plan);
 					Require(!plan->Evaluate().pairApplied && backend.entries == 0 && upscaling.resets == 1);
 					*plan = std::move(movedPlan);
 					Require(!movedPlan.Evaluate().pairApplied && backend.entries == 0 && upscaling.resets == 2);
 					const auto evaluation = plan->Evaluate();
 					Require(finalizeCalls == 1 && evaluation.preparedEyeMask == all && evaluation.bypassedEyeMask == empty &&
-							evaluation.pairBypassed == (empty == all) && evaluation.pairApplied == (empty != all));
+						evaluation.pairBypassed == (empty == all) && evaluation.pairApplied == (empty != all));
 					Require(upscaling.outputTargets == 0 && upscaling.composites == 0);
 					Require(backend.admittedEyes == ((all & ~empty) & 1u) + (((all & ~empty) >> 1u) & 1u));
 					const auto entries = backend.entries;
@@ -344,25 +284,14 @@ namespace
 			auto plan = FinalizedFinalLdrNeuralInputs::Create(upscaling, results, args, true, Upscaling::NeuralStereoRouteRole::Main);
 			Require(plan.has_value() && settingsKeyReads == 0);
 			switch (changed) {
-			case 0:
-				++upscaling.settings.policy;
-				break;
-			case 1:
-				++globals::state->frameCount;
-				break;
-			case 2:
-				results[0].prepared = false;
-				break;
-			case 3:
-				results[0].bypassed = true;
-				break;
-			case 4:
-				++upscaling.settings.neuralCharacterCropMode;
-				break;
+			case 0: ++upscaling.settings.policy; break;
+			case 1: ++globals::state->frameCount; break;
+			case 2: results[0].prepared = false; break;
+			case 3: results[0].bypassed = true; break;
+			case 4: ++upscaling.settings.neuralCharacterCropMode; break;
 			}
-			Require(plan->ActiveEyeMask() == 1u);
 			Require(!plan->Evaluate().pairApplied && NeuralRendering::Renderer::Instance().entries == 0 &&
-					upscaling.resets == 1 && finalizeCalls == 1);
+				upscaling.resets == 1 && finalizeCalls == 1);
 			Require(settingsKeyReads == (changed == 1 ? 0u : 1u));
 			globals::state->frameCount = 1;
 		}
@@ -379,142 +308,11 @@ namespace
 		Require(finalizeCalls == 1 && args[0].frameId == 1);
 		finalizeSucceeds = true;
 	}
-
-	struct MainPreparation : Upscaling
-	{
-		enum class LateStage
-		{
-			Evaluation,
-			InputConversion
-		};
-		struct Target
-		{
-			ID3D11Resource* resource = nullptr;
-			uint32_t subresource = 0, baseOffsetX = 0;
-		};
-		struct Rect
-		{
-			uint32_t outputOffsetX = 1, outputOffsetY = 2, outputWidth = 14, outputHeight = 14;
-		};
-		struct
-		{
-			std::array<Rect, 2> rects{};
-		} foveatedRectCache;
-		struct
-		{
-			uint32_t preparedEyeMask = 0, bypassedEyeMask = 0;
-			bool bypassedNoCharacters = false;
-		} a_result;
-		std::array<Target, 2> a_targets{};
-		std::array<NeuralCenterDispatchResult, 2> neuralResults{};
-		std::array<NeuralRendering::RendererApplyArgs, 2> neuralArgs{};
-		std::array<NeuralRendering::ComputeSubrect, 2> rollbackSubrects{};
-		std::optional<FinalizedFinalLdrNeuralInputs> finalizedInputs;
-		uint32_t a_outputWidthPerEye = 16, a_outputHeight = 16;
-		bool Run(NeuralRendering::FramebufferTransaction* a_mainTransaction, NeuralStereoRouteRole a_role)
-		{
-			const uint32_t eyeCount = globals::game::isVR ? 2u : 1u;
-			[[maybe_unused]] LateStage lateStage{};
-			[[maybe_unused]] uint32_t lateEye = 0;
-#include "neural_final_ldr_preparation_under_test.h"
-			return true;
-		}
-	};
-
-	void CheckMainPreparation()
-	{
-		for (bool vr : { false, true }) {
-			globals::game::isVR = vr;
-			const uint32_t all = vr ? 3u : 1u;
-			for (uint32_t empty = 0; empty <= all; ++empty) {
-				for (uint32_t mode = 0; mode < 4; ++mode) {
-					MainPreparation preparation;
-					preparation.arrangement = NeuralRendering::PipelineArrangement::DlssThenNeural;
-					NeuralRendering::FramebufferTransaction transaction;
-					transaction.succeeds = mode != 1;
-					NeuralRendering::Renderer::Instance() = {};
-					NeuralRendering::CharacterRendering::Instance() = {};
-					ID3D11Resource framebuffer;
-					for (uint32_t eye = 0; eye < (vr ? 2u : 1u); ++eye) {
-						preparation.neuralResults[eye].prepared = true;
-						preparation.neuralArgs[eye].featureSlot = eye;
-						preparation.neuralArgs[eye].insertionPoint = NeuralRendering::InsertionPoint::FinalLdrPreUi;
-						preparation.neuralArgs[eye].computeSubrect = { 0, 0, 14, 14 };
-						preparation.a_targets[eye] = { &framebuffer, 0, eye * 16 };
-					}
-					finalizeCalls = 0;
-					finalizedEmptyMask = empty;
-					const bool ready = preparation.Run(mode == 2 ? nullptr : &transaction,
-						mode >= 2 ? Upscaling::NeuralStereoRouteRole::Submit : Upscaling::NeuralStereoRouteRole::Main);
-					finalizedEmptyMask.reset();
-					Require(ready == (empty != all && (mode == 0 || mode == 2)) && finalizeCalls == 1);
-					Require(NeuralRendering::Renderer::Instance().entries == 0);
-					Require(transaction.calls == (empty != all && mode < 2 ? 1u : 0u));
-					if (empty == all) {
-						Require(preparation.a_result.bypassedNoCharacters && preparation.a_result.preparedEyeMask == all &&
-								preparation.a_result.bypassedEyeMask == all && preparation.resets == 0);
-						Require(NeuralRendering::CharacterRendering::Instance().bypassed == all);
-					} else if (mode < 2) {
-						Require(transaction.active == (all & ~empty) && transaction.eyes == (vr ? 2u : 1u) &&
-								transaction.width == 16 && transaction.height == 16);
-						for (uint32_t eye = 0; eye < transaction.eyes; ++eye) {
-							Require(transaction.regions[eye].target == &framebuffer && transaction.regions[eye].baseOffsetX == eye * 16);
-							Require(transaction.regions[eye].output == NeuralRendering::ComputeSubrect{ 1, 2, 14, 14 });
-							Require(transaction.regions[eye].compute == preparation.finalizedInputs->Args()[eye].computeSubrect);
-						}
-					}
-					if (ready) {
-						Require(preparation.finalizedInputs->Evaluate().pairApplied);
-						Require(finalizeCalls == 1);
-					} else if (empty != all) {
-						Require(preparation.resets == 1);
-					}
-				}
-			}
-		}
-	}
-
-	bool PublishMainPair(NeuralRendering::FramebufferTransaction* a_mainTransaction, uint32_t committed, uint32_t bypassed)
-	{
-		struct
-		{
-			uint32_t committedEyeMask, bypassedEyeMask;
-		} a_result{ committed, bypassed };
-		bool lateSucceeded = false;
-		auto* context = globals::d3d::context;
-		ID3D11ShaderResourceView* nullSRV = nullptr;
-		ID3D11UnorderedAccessView* nullUAV = nullptr;
-#include "neural_final_ldr_publication_under_test.h"
-	}
-
-	void CheckMainPublication()
-	{
-		for (bool vr : { false, true }) {
-			globals::game::isVR = vr;
-			const uint32_t all = vr ? 3u : 1u;
-			for (uint32_t committed = 0; committed <= all; ++committed) {
-				for (uint32_t bypassed = 0; bypassed <= all; ++bypassed) {
-					for (uint32_t mode = 0; mode < 3; ++mode) {
-						*globals::d3d::context = {};
-						NeuralRendering::FramebufferTransaction transaction;
-						transaction.succeeds = mode != 1;
-						const bool complete = (committed | bypassed) == all;
-						Require(PublishMainPair(mode == 2 ? nullptr : &transaction, committed, bypassed) == (complete && mode != 1));
-						const uint32_t publications = complete && mode != 2 ? 1u : 0u;
-						Require(transaction.publications == publications && transaction.viewsClearedAtPublication == (publications != 0));
-						Require(globals::d3d::context->clearedSRVs == publications && globals::d3d::context->clearedUAVs == publications);
-					}
-				}
-			}
-		}
-	}
 }
 
 int main()
 {
 	CheckFinalizedFinalLdrPlans();
-	CheckMainPreparation();
-	CheckMainPublication();
 	for (bool vr : { false, true })
 		for (bool batched : { false, true })
 			for (bool deferred : { false, true }) {

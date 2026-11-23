@@ -1,4 +1,3 @@
-#include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "LightLimitFix/Common.hlsli"
 
@@ -7,7 +6,7 @@ cbuffer PerFrame : register(b0)
 	uint LightCount;
 	uint ContactShadowFlagsPacked;
 	uint ContactShadowParamsPacked;
-	uint PreparePointLightColours;
+	uint pad0;
 	uint4 ClusterSize;
 }
 
@@ -16,8 +15,6 @@ cbuffer PerFrame : register(b0)
 
 StructuredBuffer<ClusterAABB> clusters : register(t0);
 StructuredBuffer<Light> lights : register(t1);
-
-RWStructuredBuffer<PreparedPointLightColour> preparedPointLightColours : register(u0);
 
 RWStructuredBuffer<uint> lightIndexList : register(u1);
 RWStructuredBuffer<LightGrid> lightGrid : register(u2);
@@ -67,7 +64,6 @@ bool IsContactShadowEligible(Light light, uint contactShadowFlags, uint particle
 
 void InsertContactShadowCandidate(
 	uint lightIndex,
-	uint visibleLightSlot,
 	float score,
 	bool isParticle,
 	uint candidateBudget,
@@ -76,7 +72,7 @@ void InsertContactShadowCandidate(
 	inout uint particleCount,
 	inout uint indices[MAX_CONTACT_SHADOW_LIGHTS],
 	inout float scores[MAX_CONTACT_SHADOW_LIGHTS],
-	inout uint particleSlots[MAX_CONTACT_SHADOW_LIGHTS])
+	inout uint particles[MAX_CONTACT_SHADOW_LIGHTS])
 {
 	if (score <= 1e-5 || candidateBudget == 0)
 		return;
@@ -87,14 +83,11 @@ void InsertContactShadowCandidate(
 	if (isParticle && particleBudget == 0)
 		return;
 
-	// Reuse the particle-state word to retain the slot without another per-thread array.
-	const uint particleSlot = (visibleLightSlot << 1) | (isParticle ? 1u : 0u);
-
 	if (isParticle && particleCount >= particleBudget) {
 		uint weakestParticle = MAX_CONTACT_SHADOW_LIGHTS;
 		float weakestParticleScore = score;
 		for (uint i = 0; i < candidateCount; ++i) {
-			if ((particleSlots[i] & 1u) != 0 && scores[i] < weakestParticleScore) {
+			if (particles[i] != 0 && scores[i] < weakestParticleScore) {
 				weakestParticle = i;
 				weakestParticleScore = scores[i];
 			}
@@ -104,7 +97,6 @@ void InsertContactShadowCandidate(
 			return;
 
 		indices[weakestParticle] = lightIndex;
-		particleSlots[weakestParticle] = particleSlot;
 		scores[weakestParticle] = score;
 		return;
 	}
@@ -112,7 +104,7 @@ void InsertContactShadowCandidate(
 	if (candidateCount < candidateBudget) {
 		indices[candidateCount] = lightIndex;
 		scores[candidateCount] = score;
-		particleSlots[candidateCount] = particleSlot;
+		particles[candidateCount] = isParticle ? 1 : 0;
 		candidateCount++;
 		if (isParticle)
 			particleCount++;
@@ -131,17 +123,17 @@ void InsertContactShadowCandidate(
 	if (score <= weakestScore)
 		return;
 
-	if ((particleSlots[weakest] & 1u) != 0)
+	if (particles[weakest] != 0)
 		particleCount--;
 
 	indices[weakest] = lightIndex;
 	scores[weakest] = score;
-	particleSlots[weakest] = particleSlot;
+	particles[weakest] = isParticle ? 1 : 0;
 	if (isParticle)
 		particleCount++;
 }
 
-[numthreads(NUMTHREAD_X, NUMTHREAD_Y, NUMTHREAD_Z)] void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex, uint3 groupID : SV_GroupID) {
+[numthreads(NUMTHREAD_X, NUMTHREAD_Y, NUMTHREAD_Z)] void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex) {
 	const uint lightCount = min(LightCount, GROUP_SIZE);
 	if (groupIndex < lightCount) {
 		Light light = lights[groupIndex];
@@ -149,15 +141,6 @@ void InsertContactShadowCandidate(
 #if defined(VR)
 		sharedLightsVSRight[groupIndex] = FrameBuffer::WorldToView(light.positionWS[1].xyz, true, 1);
 #endif
-		// Inactive cluster lanes can still own valid lights in the designated group.
-		[branch] if (PreparePointLightColours && all(groupID == 0))
-		{
-			const bool isLinear = (light.lightFlags & LightFlags::Linear) != 0;
-			PreparedPointLightColour prepared;
-			prepared.nonPBR = float4(Color::PointLight(light.color, isLinear, light.lightFlags, false, true, ENABLE_LL, false), 0.0);
-			prepared.pbr = float4(Color::PointLight(light.color, isLinear, light.lightFlags, false, true, ENABLE_LL, true), 0.0);
-			preparedPointLightColours[groupIndex] = prepared;
-		}
 	}
 	// Partial edge groups must reach the barrier before inactive lanes leave.
 	GroupMemoryBarrierWithGroupSync();
@@ -170,7 +153,7 @@ void InsertContactShadowCandidate(
 	uint contactShadowParticleCount = 0;
 	uint contactShadowLightIndices[MAX_CONTACT_SHADOW_LIGHTS];
 	float contactShadowLightScores[MAX_CONTACT_SHADOW_LIGHTS];
-	uint contactShadowParticleSlots[MAX_CONTACT_SHADOW_LIGHTS];
+	uint contactShadowParticles[MAX_CONTACT_SHADOW_LIGHTS];
 
 	uint clusterIndex = dispatchThreadId.x +
 	                    dispatchThreadId.y * ClusterSize.x +
@@ -220,7 +203,6 @@ void InsertContactShadowCandidate(
 #endif
 				InsertContactShadowCandidate(
 					i,
-					visibleLightCount - 1,
 					contactShadowScore,
 					(light.lightFlags & LightFlags::Particle) != 0,
 					contactShadowClusterBudget,
@@ -229,7 +211,7 @@ void InsertContactShadowCandidate(
 					contactShadowParticleCount,
 					contactShadowLightIndices,
 					contactShadowLightScores,
-					contactShadowParticleSlots);
+					contactShadowParticles);
 			}
 		}
 
@@ -249,8 +231,6 @@ void InsertContactShadowCandidate(
 
 		for (uint k = 0; k < contactShadowLightCount; k++) {
 			contactShadowIndexList[contactShadowOffset + k] = contactShadowLightIndices[k];
-			const uint visibleSlot = contactShadowParticleSlots[k] >> 1;
-			lightIndexList[offset + visibleSlot] = contactShadowLightIndices[k] | ClusteredContactShadowMemberBit;
 		}
 	}
 

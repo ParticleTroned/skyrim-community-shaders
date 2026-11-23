@@ -5,18 +5,13 @@
 #include <winrt/base.h>
 
 #include <array>
-#include <cstdarg>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
-#include <functional>
 #include <iostream>
 #include <new>
-#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <vector>
 
 namespace DX
 {
@@ -110,12 +105,10 @@ namespace
 		}
 	};
 
-	void ReadSharedInput(Devices& a_devices, WrappedResource& imported, const D3D11_TEXTURE2D_DESC& a_desc,
-		uint32_t a_bytesPerPixel, std::span<const uint8_t> a_expected, UINT a_width, UINT a_height,
-		const std::function<void()>& a_laterWrite = {})
+	void ReadSharedGuide(Devices& a_devices, TextureHandleOwner& a_texture, ID3D11UnorderedAccessView* a_uav,
+		uint32_t a_bytesPerPixel, uint32_t a_expectedPixel, float a_value)
 	{
-		Require(a_expected.size() == static_cast<size_t>(a_desc.Width) * a_desc.Height * a_bytesPerPixel,
-			"Readback pattern has the wrong storage size");
+		WrappedResource imported(a_texture.resource.get(), a_devices.device12.get(), "InteropTest::GuideImport", a_texture.GetOrCreateSharedHandle());
 		D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
 		UINT64 totalBytes = 0;
 		const auto resourceDesc = imported.resource->GetDesc();
@@ -138,6 +131,8 @@ namespace
 		DX::ThrowIfFailed(a_devices.device12->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(allocator.put())));
 		DX::ThrowIfFailed(a_devices.device12->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
 			allocator.get(), nullptr, IID_PPV_ARGS(commands.put())));
+		const float clear[4]{ a_value, a_value, a_value, a_value };
+		a_devices.context11->ClearUnorderedAccessViewFloat(a_uav, clear);
 		const auto producerValue = ++a_devices.fenceValue;
 		DX::ThrowIfFailed(a_devices.context4->Signal(a_devices.fence11.get(), producerValue));
 		a_devices.context11->Flush();
@@ -156,8 +151,7 @@ namespace
 		destination.pResource = readback.get();
 		destination.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
 		destination.PlacedFootprint = footprint;
-		const D3D12_BOX active{ 0, 0, 0, a_width, a_height, 1 };
-		commands->CopyTextureRegion(&destination, 0, 0, 0, &source, &active);
+		commands->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
 		std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
 		commands->ResourceBarrier(1, &barrier);
 		DX::ThrowIfFailed(commands->Close());
@@ -166,32 +160,24 @@ namespace
 		const auto consumerValue = ++a_devices.fenceValue;
 		DX::ThrowIfFailed(a_devices.queue->Signal(a_devices.fence12.get(), consumerValue));
 		DX::ThrowIfFailed(a_devices.context4->Wait(a_devices.fence11.get(), consumerValue));
-		// The next producer write must be queued before any CPU completion wait.
-		uint64_t finalValue = consumerValue;
-		if (a_laterWrite) {
-			a_laterWrite();
-			finalValue = ++a_devices.fenceValue;
-			DX::ThrowIfFailed(a_devices.context4->Signal(a_devices.fence11.get(), finalValue));
-			a_devices.context11->Flush();
-		}
 		winrt::handle complete(CreateEventW(nullptr, FALSE, FALSE, nullptr));
 		winrt::check_bool(static_cast<bool>(complete));
-		DX::ThrowIfFailed(a_devices.fence12->SetEventOnCompletion(finalValue, complete.get()));
+		DX::ThrowIfFailed(a_devices.fence12->SetEventOnCompletion(consumerValue, complete.get()));
 		Require(WaitForSingleObject(complete.get(), 5000) == WAIT_OBJECT_0, "Shared guide readback timed out");
 		void* pixels = nullptr;
 		D3D12_RANGE range{ 0, static_cast<SIZE_T>(totalBytes) };
 		DX::ThrowIfFailed(readback->Map(0, &range, &pixels));
 		bool matches = true;
-		for (UINT y = 0; y < a_height; ++y) {
-			for (UINT x = 0; x < a_width; ++x) {
-				const auto* actual = static_cast<const uint8_t*>(pixels) + y * footprint.Footprint.RowPitch + x * a_bytesPerPixel;
-				const auto* expected = a_expected.data() + (y * a_desc.Width + x) * a_bytesPerPixel;
-				matches = matches && std::memcmp(actual, expected, a_bytesPerPixel) == 0;
+		for (UINT y = 0; y < a_texture.desc.Height; ++y) {
+			for (UINT x = 0; x < a_texture.desc.Width; ++x) {
+				uint32_t pixel = 0;
+				std::memcpy(&pixel, static_cast<const uint8_t*>(pixels) + y * footprint.Footprint.RowPitch + x * a_bytesPerPixel, a_bytesPerPixel);
+				matches = matches && pixel == a_expectedPixel;
 			}
 		}
 		D3D12_RANGE noWrites{};
 		readback->Unmap(0, &noWrites);
-		Require(matches, "Imported input did not preserve exact D3D11 contents");
+		Require(matches, "Imported guide did not preserve D3D11 UAV contents");
 	}
 
 	void CheckFormat(Devices& a_devices, DXGI_FORMAT a_format, uint32_t a_bytesPerPixel, uint32_t a_onePixel)
@@ -207,82 +193,14 @@ namespace
 		texture.desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 		texture.desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
 		DX::ThrowIfFailed(a_devices.device11->CreateTexture2D(&texture.desc, nullptr, texture.resource.put()));
-		Util::SetResourceName(texture.resource.get(), "InteropTest::Input");
 		winrt::com_ptr<ID3D11UnorderedAccessView> uav;
 		DX::ThrowIfFailed(a_devices.device11->CreateUnorderedAccessView(texture.resource.get(), nullptr, uav.put()));
-		Util::SetResourceName(uav.get(), "InteropTest::Input UAV");
 		const HANDLE original = texture.GetOrCreateSharedHandle();
-		for (uint32_t value = 0; value < 2; ++value) {
-			WrappedResource imported(texture.resource.get(), a_devices.device12.get(), "InteropTest::GuideImport", texture.GetOrCreateSharedHandle());
-			const float clear[4]{ float(value), float(value), float(value), float(value) };
-			a_devices.context11->ClearUnorderedAccessViewFloat(uav.get(), clear);
-			std::vector<uint8_t> expected(texture.desc.Width * texture.desc.Height * a_bytesPerPixel);
-			const uint32_t pixel = value ? a_onePixel : 0;
-			for (size_t offset = 0; offset < expected.size(); offset += a_bytesPerPixel)
-				std::memcpy(expected.data() + offset, &pixel, a_bytesPerPixel);
-			ReadSharedInput(a_devices, imported, texture.desc, a_bytesPerPixel, expected, texture.desc.Width, texture.desc.Height);
-			Require(texture.GetOrCreateSharedHandle() == original, "Context recreation replaced the NT handle");
-		}
+		ReadSharedGuide(a_devices, texture, uav.get(), a_bytesPerPixel, 0, 0.0f);
+		Require(texture.GetOrCreateSharedHandle() == original, "Context recreation replaced the NT handle");
+		ReadSharedGuide(a_devices, texture, uav.get(), a_bytesPerPixel, a_onePixel, 1.0f);
 		std::cout << "Shared guide format " << static_cast<uint32_t>(a_format) << ": two fenced imports passed\n";
 	}
-	std::vector<uint8_t> ColorPattern(DXGI_FORMAT a_format, UINT a_width, UINT a_height,
-		UINT a_activeWidth, UINT a_activeHeight, uint32_t a_eye, uint32_t a_phase)
-	{
-		const uint32_t bytes = a_format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8 : 4;
-		std::vector<uint8_t> pixels(a_width * a_height * bytes, 0xD3);
-		for (UINT y = 0; y < a_activeHeight; ++y) {
-			for (UINT x = 0; x < a_activeWidth; ++x) {
-				auto* pixel = pixels.data() + (y * a_width + x) * bytes;
-				const auto index = x + y * 3 + a_eye * 5 + a_phase * 7;
-				if (bytes == 8) {
-					constexpr std::array<uint16_t, 8> half{ 0, 1, 0x1400, 0x3000, 0x3800, 0x3C00, 0x4800, 0x5400 };
-					const std::array<uint16_t, 4> rgba{ half[index % 8], half[(index + 2) % 8], half[(index + 5) % 8], half[(index + 1) % 6] };
-					std::memcpy(pixel, rgba.data(), bytes);
-				} else {
-					constexpr std::array<uint32_t, 8> packedFloat{ 0, 1, 0x00400801, 0x701C0380, 0x781E03C0, 0x90240480, 0xB02C0580, 0x40100200 };
-					const uint32_t packed = a_format == DXGI_FORMAT_R11G11B10_FLOAT ? packedFloat[index % 8] :
-					                                                                  (index * 37u & 255u) | ((index * 53u & 255u) << 8) | ((index * 71u & 255u) << 16) | ((index * 19u & 255u) << 24);
-					std::memcpy(pixel, &packed, bytes);
-				}
-			}
-		}
-		return pixels;
-	}
-
-	void CheckColor(Devices& a_devices, DXGI_FORMAT a_format)
-	{
-		const uint32_t bytes = a_format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8 : 4;
-		for (uint32_t eye = 0; eye < 2; ++eye) {
-			TextureHandleOwner texture;
-			texture.desc = { 11, 9, 1, 1, a_format, { 1, 0 }, D3D11_USAGE_DEFAULT,
-				D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS, 0,
-				D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE };
-			DX::ThrowIfFailed(a_devices.device11->CreateTexture2D(&texture.desc, nullptr, texture.resource.put()));
-			Util::SetResourceName(texture.resource.get(), "InteropTest::Input");
-			WrappedResource imported(texture.resource.get(), a_devices.device12.get(), "InteropTest::ColorImport", texture.GetOrCreateSharedHandle());
-			TextureHandleOwner staging;
-			staging.desc = texture.desc;
-			staging.desc.BindFlags = 0;
-			DX::ThrowIfFailed(a_devices.device11->CreateTexture2D(&staging.desc, nullptr, staging.resource.put()));
-			Util::SetResourceName(staging.resource.get(), "InteropTest::ColorCopy");
-			WrappedResource copied(staging.resource.get(), a_devices.device12.get(), "InteropTest::ColorCopy", staging.GetOrCreateSharedHandle());
-			for (UINT width : { 3u, 11u, 7u }) {
-				const UINT height = width == 11 ? 9 : 5;
-				const auto first = ColorPattern(a_format, 11, 9, width, height, eye, 0);
-				const auto later = ColorPattern(a_format, 11, 9, width, height, eye, 1);
-				a_devices.context11->UpdateSubresource(texture.resource.get(), 0, nullptr, first.data(), 11 * bytes, 0);
-				const D3D11_BOX active{ 0, 0, 0, width, height, 1 };
-				a_devices.context11->CopySubresourceRegion(staging.resource.get(), 0, 0, 0, 0, texture.resource.get(), 0, &active);
-				ReadSharedInput(a_devices, imported, texture.desc, bytes, first, 11, 9, [&] {
-					a_devices.context11->UpdateSubresource(texture.resource.get(), 0, nullptr, later.data(), 11 * bytes, 0);
-				});
-				ReadSharedInput(a_devices, imported, texture.desc, bytes, later, 11, 9);
-				ReadSharedInput(a_devices, copied, staging.desc, bytes, first, width, height);
-			}
-		}
-		std::cout << "Colour format " << static_cast<uint32_t>(a_format) << ": both eyes, padding, active copies and queued overwrite passed\n";
-	}
-
 }
 
 int main(int a_argc, char** a_argv)
@@ -302,9 +220,6 @@ int main(int a_argc, char** a_argv)
 		CheckFormat(devices, DXGI_FORMAT_R16G16_FLOAT, 4, 0x3C003C00u);
 		CheckFormat(devices, DXGI_FORMAT_R8_UNORM, 1, 0xFFu);
 		CheckFormat(devices, DXGI_FORMAT_R8_UNORM, 1, 0xFFu);
-		CheckColor(devices, DXGI_FORMAT_R16G16B16A16_FLOAT);
-		CheckColor(devices, DXGI_FORMAT_R11G11B10_FLOAT);
-		CheckColor(devices, DXGI_FORMAT_R8G8B8A8_UNORM);
 		return 0;
 	} catch (const winrt::hresult_error& error) {
 		std::cerr << "D3D interop failed: 0x" << std::hex << static_cast<uint32_t>(error.code()) << "\n";

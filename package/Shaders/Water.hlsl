@@ -2104,8 +2104,7 @@ PS_OUTPUT main(PS_INPUT input)
 			LightLimitFix::GetContactShadowClusterRange(clusterIndex, contactShadowOffset, contactShadowCount);
 		[loop] for (uint i = 0; i < lightCount; i++)
 		{
-			uint clusteredLightEntry = LightLimitFix::lightList[lightOffset + i];
-			uint clusteredLightIndex = LightLimitFix::DecodeClusteredLightIndex(clusteredLightEntry);
+			uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + i];
 			LightLimitFix::Light light = LightLimitFix::lights[clusteredLightIndex];
 			const bool usesEngineWaterPath =
 				(light.lightFlags & (LightLimitFix::LightFlags::PortalStrict | LightLimitFix::LightFlags::Shadow)) != 0;
@@ -2124,9 +2123,6 @@ PS_OUTPUT main(PS_INPUT input)
 			float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #					endif
 
-			if (intensityMultiplier == 0.0)
-				continue;
-
 			float3 normalizedLightDirection = normalize(lightDirection);
 
 			float3 H = normalize(normalizedLightDirection - viewDirection);
@@ -2141,7 +2137,7 @@ PS_OUTPUT main(PS_INPUT input)
 				HdotN > 0.0 &&
 				intensityMultiplier > 1e-5 &&
 				LightLimitFix::CanUseContactShadows(light, isParticleLight) &&
-				LightLimitFix::HasContactShadowMembership(clusteredLightEntry))
+				LightLimitFix::IsContactShadowCandidate(clusteredLightIndex, contactShadowOffset, contactShadowCount))
 			{
 				if (!hasContactShadowNoise) {
 					contactShadowNoise = Random::InterleavedGradientNoise(

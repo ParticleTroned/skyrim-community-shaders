@@ -60,11 +60,6 @@
 #	include "Upscaling/VRRenderScaleRetryTelemetry.h"
 #endif
 
-namespace NeuralRendering
-{
-	class FramebufferTransaction;
-}
-
 namespace RE
 {
 	class MapMenu;
@@ -3107,9 +3102,7 @@ public:
 		ID3D11Resource* reactiveSrc, ID3D11Resource* transparencySrc, bool copyAuxiliaryInputs = true, bool copyDepthInput = true,
 		const UpscalingTextures::VRInputSourceDescriptions* sourceDescriptions = nullptr);
 	bool AreVRPerEyeUpscalingResourcesReady(bool requireDepth, bool requireLinearDepth) const;
-	/** Quarantined shared colour cannot be read or overwritten by presentation work. */
-	[[nodiscard]] bool IsVRColorInputQuarantined(uint32_t a_eye) const;
-	/** Rejects any input retained by an unsafe optional-provider ownership domain. */
+	/** Rejects any guide retained by an unsafe optional-provider ownership domain. */
 	bool HasQuarantinedVRGuideInputs() const;
 	bool AreVRIntermediateTexturesCompatibleForFSR(uint32_t a_displayEyeWidth, uint32_t a_displayEyeHeight) const;
 	bool AreActiveVRIntermediateTexturesCompatible(
@@ -4513,7 +4506,6 @@ public:
 	bool IsNeuralRenderingInsertionTransitionBlocked() const noexcept;
 	/** Optional texture work must yield to renderer recovery and replacement allocations. */
 	bool IsTextureStreamingTransitionActive() const noexcept;
-	/** Apply a finalized pair, optionally preparing and publishing a private main framebuffer transaction. */
 	bool ApplyFinalLdrNeuralStereo(
 		NeuralStereoRouteRole a_role,
 		const std::array<FinalLdrNeuralEyeTarget, 2>& a_targets,
@@ -4523,8 +4515,7 @@ public:
 		uint32_t a_outputHeight,
 		uint64_t a_generation,
 		uint32_t a_neuralSourceFrame,
-		FinalLdrNeuralResult& a_result,
-		NeuralRendering::FramebufferTransaction* a_mainTransaction = nullptr) noexcept;
+		FinalLdrNeuralResult& a_result) noexcept;
 	/** Prepares current raw guides and the shared region plan for a full-resolution NR pass. */
 	bool PrepareFullResolutionNeuralInputs(uint32_t inputWidthPerEye, uint32_t inputHeight, uint32_t outputWidthPerEye, uint32_t outputHeight,
 		NeuralStereoRouteRole a_role, uint32_t a_sourceWorldFrame, uint64_t a_generation);

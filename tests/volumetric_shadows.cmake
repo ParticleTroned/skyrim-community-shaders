@@ -50,7 +50,3 @@ target_sources(lighting_shadow_sources_test PRIVATE "${_lighting_shadow_shader}"
 target_compile_definitions(lighting_shadow_sources_test PRIVATE
     LIGHTING_SHADOW_TEST_SHADER=L"${_lighting_shadow_shader}" NOMINMAX)
 set_tests_properties(LightingShadowSources PROPERTIES TIMEOUT 180)
-
-add_d3d_shader_test(contact_shadow_membership_test ContactShadowMembership tests/contact_shadow_membership_test.cpp)
-target_compile_definitions(contact_shadow_membership_test PRIVATE NOMINMAX)
-set_tests_properties(ContactShadowMembership PROPERTIES TIMEOUT 180)

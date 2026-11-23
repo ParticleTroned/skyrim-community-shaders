@@ -6,8 +6,6 @@
 #include "LocationContext.h"
 #include "State.h"
 
-#include <cstring>
-
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LinearLighting::Settings,
 	enableLinearLighting,
@@ -177,7 +175,6 @@ void LinearLighting::RestoreDefaultSettings()
 
 void LinearLighting::SetupResources()
 {
-	perGeometryUploadValid = false;
 	PerGeometryCB = new ConstantBuffer(ConstantBufferDesc<PerGeometryData>(), "LinearLighting::PerGeometry");
 }
 
@@ -302,15 +299,8 @@ void LinearLighting::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		auto* lightProperty = static_cast<RE::BSLightingShaderProperty*>(shaderProperty);
 		perGeometryData.emissiveMult = lightProperty->emissiveMult;
 	}
-	if (!perGeometryUploadValid ||
-		std::memcmp(lastUploadedPerGeometryBytes.data(), &perGeometryData, sizeof(perGeometryData)) != 0) {
-		perGeometryUploadValid = false;
-		PerGeometryCB->Update(perGeometryData);
-		std::memcpy(lastUploadedPerGeometryBytes.data(), &perGeometryData, sizeof(perGeometryData));
-		perGeometryUploadValid = true;
-	}
+	PerGeometryCB->Update(perGeometryData);
 
-	// Native rendering or another pass may have replaced b8 even when the payload matches.
 	ID3D11Buffer* buffer = { PerGeometryCB->CB() };
 	globals::d3d::context->PSSetConstantBuffers(kPerGeometryCBRegister, 1, &buffer);
 }

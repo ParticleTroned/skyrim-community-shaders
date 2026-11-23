@@ -267,11 +267,6 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		grassLightingSettings.SpecularStrength,
 		wetternessSettings);
 
-	const auto balance = globals::features::adaptiveBrightness.GetCommonBufferData();
-	const auto lighting = globals::features::linearLighting.GetCommonBufferData();
-	globals::features::lightLimitFix.preparedColourState.PublishInputs(
-		LightLimitFixDetail::PointLightColourInputs::FromSettings(balance, lighting));
-
 	return BuildFeatureBufferData(
 		grassLightingSettings,
 		globals::features::extendedMaterials.settings,
@@ -287,8 +282,8 @@ std::pair<const unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::terrainVariation.settings,
 		globals::features::ibl.GetCommonBufferData(),
 		globals::features::extendedTranslucency.GetCommonBufferData(),
-		balance,
-		lighting,
+		globals::features::adaptiveBrightness.GetCommonBufferData(),
+		globals::features::linearLighting.GetCommonBufferData(),
 		globals::features::terrainBlending.settings,
 		globals::features::truePBR.settings,
 		globals::features::foliageLighting.GetCommonBufferData(),

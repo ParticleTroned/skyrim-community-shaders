@@ -228,8 +228,7 @@ PS_OUTPUT RenderPBRGrass(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			uint lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
 			[loop] for (uint i = 0; i < lightCount; ++i)
 			{
-				uint clusteredLightIndex = LightLimitFix::DecodeClusteredLightIndex(LightLimitFix::lightList[lightOffset + i]);
-				LightLimitFix::Light light = LightLimitFix::lights[clusteredLightIndex];
+				LightLimitFix::Light light = LightLimitFix::lights[LightLimitFix::lightList[lightOffset + i]];
 				float3 lightVector = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
 				float lightDist = length(lightVector);
 #		if defined(ISL)

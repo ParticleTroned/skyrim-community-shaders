@@ -2283,10 +2283,10 @@ FidelityFX::LifecycleResult FidelityFX::DestroyRuntimeUpscalerResources(bool a_w
 	ResetOwnedResourceArray(runtimeReactiveShared);
 	ResetOwnedResourceArray(runtimeTransparencyShared);
 	ResetOwnedResourceArray(runtimeOutputShared);
-	for (auto& eye : runtimeSharedInputImports) {
-		for (auto& input : eye) {
-			input.imported.reset();
-			input.source = nullptr;
+	for (auto& eye : runtimeSharedGuideImports) {
+		for (auto& guide : eye) {
+			guide.imported.reset();
+			guide.source = nullptr;
 		}
 	}
 
@@ -2483,9 +2483,9 @@ bool FidelityFX::HasRuntimeUpscalerResources() const
 		state.sharedResource = state.sharedResource || resource != nullptr;
 	for (const auto& resource : runtimeOutputShared)
 		state.sharedResource = state.sharedResource || resource != nullptr;
-	for (const auto& eye : runtimeSharedInputImports) {
-		for (const auto& input : eye)
-			state.sharedResource = state.sharedResource || input.source != nullptr;
+	for (const auto& eye : runtimeSharedGuideImports) {
+		for (const auto& guide : eye)
+			state.sharedResource = state.sharedResource || guide.source != nullptr;
 	}
 	return FSRRuntimeLifecyclePolicy::HasRetirementRelevantState(state);
 }
@@ -4050,9 +4050,9 @@ bool FidelityFX::IsRuntimeSharedGuideQuarantined(ID3D11Resource* a_source) const
 {
 	if (!runtimeUpscalerSessionQuarantined || !a_source)
 		return false;
-	for (const auto& eye : runtimeSharedInputImports) {
-		for (const auto& input : eye) {
-			if (input.imported && CSX::NvidiaComIdentity::IsSame(input.source.get(), a_source))
+	for (const auto& eye : runtimeSharedGuideImports) {
+		for (const auto& guide : eye) {
+			if (guide.imported && CSX::NvidiaComIdentity::IsSame(guide.source.get(), a_source))
 				return true;
 		}
 	}
@@ -4061,46 +4061,53 @@ bool FidelityFX::IsRuntimeSharedGuideQuarantined(ID3D11Resource* a_source) const
 
 bool FidelityFX::HasQuarantinedRuntimeSharedGuides(const UpscaleRegionParameters& a_region) const noexcept
 {
-	return IsRuntimeSharedGuideQuarantined(a_region.color) ||
-	       IsRuntimeSharedGuideQuarantined(a_region.depth) ||
+	return IsRuntimeSharedGuideQuarantined(a_region.depth) ||
 	       IsRuntimeSharedGuideQuarantined(a_region.motionVectors) ||
 	       IsRuntimeSharedGuideQuarantined(a_region.reactiveMask) ||
 	       IsRuntimeSharedGuideQuarantined(a_region.transparencyCompositionMask);
 }
 
-WrappedResource* FidelityFX::ResolveRuntimeSharedInput(uint32_t a_eye, std::size_t a_inputIndex,
+WrappedResource* FidelityFX::ResolveRuntimeSharedGuide(uint32_t a_eye, FSRSharedGuidePolicy::Guide a_guide,
 	ID3D11Resource* a_source, const D3D11_TEXTURE2D_DESC& a_desc)
 {
 	using namespace FSRSharedGuidePolicy;
-	if (!globals::game::isVR || a_eye >= runtimeSharedInputImports.size() || a_inputIndex >= kInputCount || !a_source ||
-		!AreRuntimeSharedGuideInputsEnabled())
+	const auto guideIndex = static_cast<std::size_t>(a_guide);
+	if (!globals::game::isVR || a_eye >= runtimeSharedGuideImports.size() || guideIndex >= kGuideCount || !a_source)
 		return nullptr;
 	auto& upscaling = globals::features::upscaling;
 	auto& swapChain = upscaling.dx12SwapChain;
-	const std::array<Texture2D*, kInputCount> expectedInputs{
-		upscaling.vrIntermediateLinearDepth[a_eye].get(), upscaling.vrIntermediateMotionVectors[a_eye].get(),
-		upscaling.vrIntermediateReactiveMask[a_eye].get(), upscaling.vrIntermediateTransparencyMask[a_eye].get(),
-		upscaling.vrIntermediateColorIn[a_eye].get()
-	};
-	constexpr std::array names{ "Depth", "MotionVectors", "Reactive", "Transparency", "Color" };
-	auto* expectedInput = expectedInputs[a_inputIndex];
-	const bool color = a_inputIndex == kColorInputIndex;
-	// Only typed colour formats with the exact staging interpretation may bypass the copy.
-	const bool colorFormatCompatible = !color ||
-	                                   (a_desc.Format == runtimeColorSharedDesc.Format &&
-										   (a_desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ||
-											   a_desc.Format == DXGI_FORMAT_R11G11B10_FLOAT ||
-											   a_desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM));
-	const bool eligible = colorFormatCompatible && expectedInput && expectedInput->resource &&
+	Texture2D* expectedGuide = nullptr;
+	const char* guideName = "";
+	switch (a_guide) {
+	case Guide::Depth:
+		expectedGuide = upscaling.vrIntermediateLinearDepth[a_eye].get();
+		guideName = "Depth";
+		break;
+	case Guide::MotionVectors:
+		expectedGuide = upscaling.vrIntermediateMotionVectors[a_eye].get();
+		guideName = "MotionVectors";
+		break;
+	case Guide::Reactive:
+		expectedGuide = upscaling.vrIntermediateReactiveMask[a_eye].get();
+		guideName = "Reactive";
+		break;
+	case Guide::Transparency:
+		expectedGuide = upscaling.vrIntermediateTransparencyMask[a_eye].get();
+		guideName = "Transparency";
+		break;
+	default:
+		return nullptr;
+	}
+	const bool eligible = expectedGuide && expectedGuide->resource &&
+	                      CSX::NvidiaComIdentity::IsSame(expectedGuide->resource.get(), a_source) &&
 	                      a_desc.Width == runtimeUpscalerMaxRenderWidth && a_desc.Height == runtimeUpscalerMaxRenderHeight &&
 	                      a_desc.MipLevels == 1 && a_desc.ArraySize == 1 && a_desc.SampleDesc.Count == 1 && a_desc.SampleDesc.Quality == 0 &&
 	                      a_desc.Usage == D3D11_USAGE_DEFAULT && a_desc.CPUAccessFlags == 0 &&
 	                      (a_desc.MiscFlags & (D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE)) ==
 	                          (D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE) &&
-	                      !(a_desc.MiscFlags & D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX) &&
-	                      CSX::NvidiaComIdentity::IsSame(expectedInput->resource.get(), a_source);
-	auto& cached = runtimeSharedInputImports[a_eye][a_inputIndex];
-	const auto route = SelectRoute(true, eligible,
+	                      !(a_desc.MiscFlags & D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX);
+	auto& cached = runtimeSharedGuideImports[a_eye][guideIndex];
+	const auto route = SelectRoute(AreRuntimeSharedGuideInputsEnabled(), eligible,
 		cached.source != nullptr, CSX::NvidiaComIdentity::IsSame(cached.source.get(), a_source),
 		cached.imported && cached.imported->resource && cached.imported->resource11);
 	if (route == Route::Copy)
@@ -4119,21 +4126,19 @@ WrappedResource* FidelityFX::ResolveRuntimeSharedInput(uint32_t a_eye, std::size
 			return nullptr;
 		winrt::com_ptr<ID3D11Texture2D> texture;
 		DX::ThrowIfFailed(cached.source->QueryInterface(IID_PPV_ARGS(texture.put())));
-		cached.imported = std::make_unique<WrappedResource>(texture.get(), swapChain.d3d12Device.get(), std::format("FidelityFX::Runtime{}Import[{}]", names[a_inputIndex], a_eye), expectedInput->GetOrCreateSharedHandle());
+		cached.imported = std::make_unique<WrappedResource>(texture.get(), swapChain.d3d12Device.get(), std::format("FidelityFX::Runtime{}Import[{}]", guideName, a_eye), expectedGuide->GetOrCreateSharedHandle());
 		return cached.imported.get();
 	} catch (const winrt::hresult_error& e) {
-		logger::warn("[FidelityFX] Shared input import failed for eye {} input {}; retaining the copy path: 0x{:08X}",
-			a_eye, names[a_inputIndex], static_cast<uint32_t>(e.code()));
+		logger::warn("[FidelityFX] Shared guide import failed for eye {} guide {}; retaining the copy path: 0x{:08X}",
+			a_eye, guideIndex, static_cast<uint32_t>(e.code()));
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		if (!color)
-			upscaling.RecordVRRenderScaleGPUPerformanceCounter(Upscaling::VRRenderScaleGPUPerformanceCounter::FSRGuideImportFailures);
+		upscaling.RecordVRRenderScaleGPUPerformanceCounter(Upscaling::VRRenderScaleGPUPerformanceCounter::FSRGuideImportFailures);
 #endif
 		return nullptr;
 	} catch (const std::exception& e) {
-		logger::warn("[FidelityFX] Shared input import failed for eye {} input {}; retaining the copy path: {}", a_eye, names[a_inputIndex], e.what());
+		logger::warn("[FidelityFX] Shared guide import failed for eye {} guide {}; retaining the copy path: {}", a_eye, guideIndex, e.what());
 #ifdef DEVBENCH_BRIDGE_ENABLED
-		if (!color)
-			upscaling.RecordVRRenderScaleGPUPerformanceCounter(Upscaling::VRRenderScaleGPUPerformanceCounter::FSRGuideImportFailures);
+		upscaling.RecordVRRenderScaleGPUPerformanceCounter(Upscaling::VRRenderScaleGPUPerformanceCounter::FSRGuideImportFailures);
 #endif
 		return nullptr;
 	}
@@ -4290,7 +4295,6 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(
 	bool commandListSubmitted = false;
 	bool commandFenceTracked = false;
 	bool commandListRecording = false;
-	std::array<WrappedResource*, 2> colorInputs{};
 	std::array<std::array<WrappedResource*, FSRSharedGuidePolicy::kGuideCount>, 2> guideInputs{};
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	constexpr auto probeRoute = Probe::Route::CompositorSubmit;
@@ -4336,7 +4340,7 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(
 					metadata.submittedInputs = dispatch.submittedInputs;
 					metadata.path = GetRuntimeUpscalerFramePathLabel(dispatch.path);
 				}
-				const auto* texture = output ? runtimeOutputShared[eye].get() : colorInputs[eye];
+				const auto& texture = output ? runtimeOutputShared[eye] : runtimeColorShared[eye];
 				Probe::CaptureVendorStage(a_stage, eye, texture->resource11.get(),
 					texture->srv.get(), texture->rtv.get(), texture->uav.get(),
 					output ? region.displayWidth : region.renderWidth,
@@ -4385,10 +4389,7 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(
 			const auto& region = a_regions[regionIndex];
 			const auto& desc = descriptions[regionIndex];
 			const uint32_t contextIndex = region.contextIndex;
-			auto* colorImport = ResolveRuntimeSharedInput(contextIndex, FSRSharedGuidePolicy::kColorInputIndex, region.color, desc.color);
-			colorInputs[contextIndex] = colorImport ? colorImport : runtimeColorShared[contextIndex].get();
-			if (!colorImport)
-				copyIntoShared(region.color, runtimeColorShared[contextIndex], region.renderWidth, region.renderHeight);
+			copyIntoShared(region.color, runtimeColorShared[contextIndex], region.renderWidth, region.renderHeight);
 			const std::array<ID3D11Resource*, FSRSharedGuidePolicy::kGuideCount> sources{
 				region.depth, region.motionVectors, region.reactiveMask, region.transparencyCompositionMask
 			};
@@ -4401,8 +4402,8 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(
 			};
 			[[maybe_unused]] uint32_t directGuideCount = 0;
 			for (size_t guide = 0; guide < FSRSharedGuidePolicy::kGuideCount; ++guide) {
-				auto* imported = ResolveRuntimeSharedInput(contextIndex,
-					guide, sources[guide], *guideDescriptions[guide]);
+				auto* imported = ResolveRuntimeSharedGuide(contextIndex,
+					static_cast<FSRSharedGuidePolicy::Guide>(guide), sources[guide], *guideDescriptions[guide]);
 				guideInputs[contextIndex][guide] = imported ? imported : staging[guide]->get();
 				if (imported)
 					++directGuideCount;
@@ -4413,7 +4414,7 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(
 			if (upscaling.IsVRRenderScaleGPUPerformanceTelemetryActive()) {
 				using Counter = Upscaling::VRRenderScaleGPUPerformanceCounter;
 				const auto work = FSRSharedGuidePolicy::CountInputCopies(region.renderWidth, region.renderHeight,
-					runtimeUpscalerMaxRenderWidth, runtimeUpscalerMaxRenderHeight, directGuideCount, colorImport != nullptr);
+					runtimeUpscalerMaxRenderWidth, runtimeUpscalerMaxRenderHeight, directGuideCount);
 				upscaling.RecordVRRenderScaleGPUPerformanceCounter(Counter::FSRActiveInputCopyCalls, work.copyCalls);
 				upscaling.RecordVRRenderScaleGPUPerformanceCounter(Counter::FSRActiveInputPixels, work.activePixels);
 				upscaling.RecordVRRenderScaleGPUPerformanceCounter(Counter::FSRAvoidedInputPixels, work.avoidedPixels);
@@ -4439,7 +4440,7 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(
 		UINT barrierCount = 0;
 		for (const auto& region : a_regions) {
 			const uint32_t contextIndex = region.contextIndex;
-			beginBarriers[barrierCount++] = CD3DX12_RESOURCE_BARRIER::Transition(colorInputs[contextIndex]->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+			beginBarriers[barrierCount++] = CD3DX12_RESOURCE_BARRIER::Transition(runtimeColorShared[contextIndex]->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 			for (auto* guide : guideInputs[contextIndex])
 				beginBarriers[barrierCount++] = CD3DX12_RESOURCE_BARRIER::Transition(guide->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 			beginBarriers[barrierCount++] = CD3DX12_RESOURCE_BARRIER::Transition(runtimeOutputShared[contextIndex]->resource.get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -4457,9 +4458,7 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(
 				return ffxApiGetResourceDX12(guideInputs[contextIndex][static_cast<size_t>(a_guide)]->resource.get(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
 			};
 			dispatchParameters.commandList = commandList;
-			dispatchParameters.color = ffxApiGetResourceDX12(colorInputs[contextIndex]->resource.get(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
-			// Producer UAV capability must not change the provider's read-only colour contract.
-			dispatchParameters.color.description.usage = FFX_API_RESOURCE_USAGE_READ_ONLY;
+			dispatchParameters.color = ffxApiGetResourceDX12(runtimeColorShared[contextIndex]->resource.get(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
 			dispatchParameters.depth = guideResource(FSRSharedGuidePolicy::Guide::Depth);
 			dispatchParameters.motionVectors = guideResource(FSRSharedGuidePolicy::Guide::MotionVectors);
 			dispatchParameters.exposure = FfxApiResource({});
@@ -4520,7 +4519,7 @@ FidelityFX::LifecycleResult FidelityFX::DispatchRuntimeUpscalerBatch(
 			barrierCount = 0;
 			for (const auto& region : a_regions) {
 				const uint32_t contextIndex = region.contextIndex;
-				endBarriers[barrierCount++] = CD3DX12_RESOURCE_BARRIER::Transition(colorInputs[contextIndex]->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
+				endBarriers[barrierCount++] = CD3DX12_RESOURCE_BARRIER::Transition(runtimeColorShared[contextIndex]->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
 				for (auto* guide : guideInputs[contextIndex])
 					endBarriers[barrierCount++] = CD3DX12_RESOURCE_BARRIER::Transition(guide->resource.get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
 				endBarriers[barrierCount++] = CD3DX12_RESOURCE_BARRIER::Transition(runtimeOutputShared[contextIndex]->resource.get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON);

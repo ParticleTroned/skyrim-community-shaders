@@ -39,8 +39,7 @@ foreach(_required_contract IN ITEMS
     "submitStageRuntimeFSRStereoState.Matches( submitInputProof"
     "submitStageRuntimeFSRStereoState.Record( submitInputProof"
     "submitStageRuntimeFSRStereoState = {}"
-    "const bool peerInputSanitized = prepareSubmitStageColorInput(otherEyeIndex, otherSourceRegion)"
-    "sanitizeSubmitStageInputEye(targetEyeIndex, targetRegion)"
+    "sanitizeSubmitStageInputEye(otherEyeIndex, otherSourceRegion)"
     "if (!peerInputSanitized) { replayOtherEyeFromFoveated = false; runtimeFSRStereoResourcesReady = false; }"
     "otherEyeState = otherEyeStateBeforeFullEncode"
     "a_observation.activeHandleIdentity != a_observation.nestedHandleIdentity"
@@ -87,7 +86,7 @@ string(FIND
 )
 string(FIND
     "${_upscaling_source}"
-    "const bool peerInputSanitized ="
+    "sanitizeSubmitStageInputEye(otherEyeIndex, otherSourceRegion)"
     _peer_sanitization_position
 )
 string(FIND

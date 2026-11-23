@@ -49,7 +49,6 @@
 #include <atomic>
 #include <cctype>
 #include <cmath>
-#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <format>
@@ -1662,7 +1661,6 @@ void AdaptiveBrightness::RegisterWeatherVariables()
 
 void AdaptiveBrightness::SetupResources()
 {
-	vanillaPointLightUploadValid = false;
 	vanillaPointLightCB = new ConstantBuffer(
 		ConstantBufferDesc<VanillaPointLightData>(),
 		"AdaptiveBalance::VanillaPointLightData");
@@ -3530,15 +3528,8 @@ void AdaptiveBrightness::UpdateVanillaPointLightData(
 	}
 #endif
 
-	if (!vanillaPointLightUploadValid ||
-		std::memcmp(&lastUploadedVanillaPointLightData, &data, sizeof(data)) != 0) {
-		vanillaPointLightUploadValid = false;
-		vanillaPointLightCB->Update(data);
-		lastUploadedVanillaPointLightData = data;
-		vanillaPointLightUploadValid = true;
-	}
+	vanillaPointLightCB->Update(data);
 
-	// Other passes may replace either binding even when this buffer's contents match.
 	ID3D11Buffer* buffer = vanillaPointLightCB->CB();
 	globals::d3d::context->PSSetConstantBuffers(a_bufferRegister, 1, &buffer);
 }

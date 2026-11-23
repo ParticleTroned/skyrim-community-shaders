@@ -267,10 +267,9 @@ namespace Color
 #	endif
 	}
 
-	/// Explicit working-space and material context shared by pixel and compute lighting.
-	float3 Light(float3 color, bool isLinear, bool preserveHDRIntensity, bool linearSpace, bool pbrMaterial)
+	float3 Light(float3 color, bool isLinear = false, bool preserveHDRIntensity = false)
 	{
-		[branch] if (linearSpace && !isLinear)
+		[branch] if (ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear)
 		{
 			if (preserveHDRIntensity) {
 				const float hdrScale = max(1.0f, max(abs(color.r), max(abs(color.g), abs(color.b))));
@@ -279,19 +278,11 @@ namespace Color
 				color = CategoryGamma(color, SharedData::linearLightingSettings.lightGamma);
 			}
 		}
-		if (pbrMaterial)
-			return color * (linearSpace ? 1.0 : Math::PI);
-		return color;
-	}
-
-	float3 Light(float3 color, bool isLinear = false, bool preserveHDRIntensity = false)
-	{
 #	if defined(TRUE_PBR)
-		const bool pbrMaterial = true;
+		return color * PBRLightingCompensation;  // Compensate for traditional Lambertian diffuse
 #	else
-		const bool pbrMaterial = false;
+		return color;
 #	endif
-		return Light(color, isLinear, preserveHDRIntensity, ENABLE_LL_COLOR_ADJUSTMENTS, pbrMaterial);
 	}
 
 	float GetPointLightMultiplier(bool isLinear)
@@ -319,42 +310,31 @@ namespace Color
 
 #	include "Common/AdaptiveBalanceUtilityColor.hlsli"
 
-	/// Canonical point-light transform; context is independent of the shader stage.
-	float3 PointLight(float3 color, bool isLinear, uint lightFlags, bool preserveHDRIntensity, bool sceneColor, bool linearSpace, bool pbrMaterial)
+	/// Composed Adaptive Balance multiplier, excluding out-of-world object previews.
+	float3 PointLight(float3 color, bool isLinear = false, uint lightFlags = 0, bool preserveHDRIntensity = false)
 	{
 		const float curve = SharedData::adaptiveBalanceSettings.pointLightCurve;
 		const float saturation = SharedData::adaptiveBalanceSettings.pointLightSaturation;
 		const float2 utility = PointLightUtilityAdjustment(isLinear, lightFlags);
-		const bool grade = sceneColor && (curve != 1.0 || saturation != 1.0 || utility.x != 1.0 || utility.y != 0.0);
+		const bool grade = IsSceneColorDraw() && (curve != 1.0 || saturation != 1.0 || utility.x != 1.0 || utility.y != 0.0);
 		// Grade authored RGB before light conversion; neutral settings retain signed inputs.
-		[branch] if (sceneColor && curve != 1.0)
+		[branch] if (IsSceneColorDraw() && curve != 1.0)
 			color = pow(max(color, 0.0), curve);
-		color = Light(color, isLinear, preserveHDRIntensity, linearSpace, pbrMaterial);
-		color = AdjustUtilityColor(color, utility.x, utility.y, linearSpace, sceneColor);
+		color = Light(color, isLinear, preserveHDRIntensity);
+		color = AdjustUtilityColor(color, utility.x, utility.y);
 		if (grade)
-			color = AdaptiveBalanceColorBounds::Intermediate(color, linearSpace);
+			color = AdaptiveBalanceColorBounds::Intermediate(color, ENABLE_LL_COLOR_ADJUSTMENTS);
 		// Neutral profiles preserve the authored color without a gamma round trip.
-		[branch] if (sceneColor && saturation != 1.0)
+		[branch] if (IsSceneColorDraw() && saturation != 1.0)
 		{
-			float3 linearColor = linearSpace ? color : GammaToLinearSafe(color);
+			float3 linearColor = ENABLE_LL_COLOR_ADJUSTMENTS ? color : GammaToLinearSafe(color);
 			linearColor = Saturation(linearColor, saturation);
-			color = linearSpace ? linearColor : LinearToGammaSafe(linearColor);
+			color = ENABLE_LL_COLOR_ADJUSTMENTS ? linearColor : LinearToGammaSafe(linearColor);
 		}
-		color *= ((linearSpace && !isLinear) ? Math::PI : 1.0f);
-		if (sceneColor)
+		color *= ((ENABLE_LL_COLOR_ADJUSTMENTS && !isLinear) ? Math::PI : 1.0f);
+		if (IsSceneColorDraw())
 			color = color * GetPointLightMultiplier(isLinear) * GetPointLightTypeMultiplier(isLinear, lightFlags);
 		return grade ? AdaptiveBalanceColorBounds::Output(color) : color;
-	}
-
-	/// Composed Adaptive Balance multiplier, excluding out-of-world object previews.
-	float3 PointLight(float3 color, bool isLinear = false, uint lightFlags = 0, bool preserveHDRIntensity = false)
-	{
-#	if defined(TRUE_PBR)
-		const bool pbrMaterial = true;
-#	else
-		const bool pbrMaterial = false;
-#	endif
-		return PointLight(color, isLinear, lightFlags, preserveHDRIntensity, IsSceneColorDraw(), ENABLE_LL_COLOR_ADJUSTMENTS, pbrMaterial);
 	}
 
 	float3 PointLightPreserveHDRIntensity(float3 color, bool isLinear = false, uint lightFlags = 0)

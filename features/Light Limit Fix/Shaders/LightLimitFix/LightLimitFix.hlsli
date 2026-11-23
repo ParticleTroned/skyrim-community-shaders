@@ -18,9 +18,6 @@ namespace LightLimitFix
 		Light StrictLights[15];
 	};
 
-#if defined(LIGHTING)
-#	include "LightLimitFix/PreparedPointLightColour.hlsli"
-#endif
 	StructuredBuffer<Light> lights : register(t35);
 	StructuredBuffer<uint> lightList : register(t36);       //MAX_CLUSTER_LIGHTS * 16^3
 	StructuredBuffer<LightGrid> lightGrid : register(t37);  //16^3
@@ -33,7 +30,7 @@ namespace LightLimitFix
 	bool GetClusterIndex(in float2 uv, in float z, inout uint clusterIndex)
 	{
 		bool found = false;
-		[branch] if ((SharedData::lightLimitFixSettings.ClusteredLightFlags & ClusteredLightFlags::Available) != 0)
+		[branch] if (SharedData::lightLimitFixSettings.HasClusteredLights != 0)
 		{
 			const uint3 clusterSize = SharedData::lightLimitFixSettings.ClusterSize.xyz;
 
@@ -61,6 +58,22 @@ namespace LightLimitFix
 	bool IsSaturated(float2 value)
 	{
 		return IsSaturated(value.x) && IsSaturated(value.y);
+	}
+
+	bool IsContactShadowCandidate(uint lightIndex, uint contactShadowOffset, uint contactShadowCount)
+	{
+		contactShadowCount = min(contactShadowCount, MAX_CONTACT_SHADOW_LIGHTS);
+
+		[unroll] for (uint i = 0; i < MAX_CONTACT_SHADOW_LIGHTS; ++i)
+		{
+			if (i >= contactShadowCount)
+				break;
+
+			if (contactShadowList[contactShadowOffset + i] == lightIndex)
+				return true;
+		}
+
+		return false;
 	}
 
 	bool GetContactShadowClusterRange(uint clusterIndex, out uint contactShadowOffset, out uint contactShadowCount)

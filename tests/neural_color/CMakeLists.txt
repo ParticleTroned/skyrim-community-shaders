@@ -75,15 +75,9 @@ if(WIN32)
 	target_include_directories(nr_exposure_evidence_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../../src")
 	add_test(NAME NRExposureEvidence COMMAND nr_exposure_evidence_test)
 	add_executable(nr_framebuffer_gpu_test framebuffer_gpu_test.cpp)
-	include("${CMAKE_CURRENT_LIST_DIR}/../extract_d3d_resource_naming.cmake")
-	include("${CMAKE_CURRENT_LIST_DIR}/../extract_neural_prepared_selection.cmake")
-	set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-		"${PROJECT_ROOT}/src/Utils/D3D.cpp"
-		"${PROJECT_ROOT}/src/Features/Upscaling.cpp"
-		"${PROJECT_ROOT}/src/Features/Upscaling/NeuralRendering/CharacterRendering.cpp")
 	target_compile_features(nr_framebuffer_gpu_test PRIVATE cxx_std_20)
 	target_compile_definitions(nr_framebuffer_gpu_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-	target_include_directories(nr_framebuffer_gpu_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../../src" "${CMAKE_CURRENT_BINARY_DIR}")
+	target_include_directories(nr_framebuffer_gpu_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../../src")
 	target_link_libraries(nr_framebuffer_gpu_test PRIVATE d3d11 d3dcompiler)
 	add_test(NAME NRFramebufferWARP COMMAND nr_framebuffer_gpu_test
 		"${CMAKE_CURRENT_LIST_DIR}/../../features/Upscaling/Shaders/Upscaling/ClearHMDMaskCS.hlsl"

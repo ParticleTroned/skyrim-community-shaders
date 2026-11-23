@@ -741,7 +741,7 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 
 			[loop] for (uint i = 0; i < lightCount; i++)
 			{
-				uint clusteredLightIndex = LightLimitFix::DecodeClusteredLightIndex(LightLimitFix::lightList[lightOffset + i]);
+				uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + i];
 				LightLimitFix::Light light = LightLimitFix::lights[clusteredLightIndex];
 
 				float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;
@@ -1043,7 +1043,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 			[loop] for (uint i = 0; i < lightCount; i++)
 			{
-				uint clusteredLightIndex = LightLimitFix::DecodeClusteredLightIndex(LightLimitFix::lightList[lightOffset + i]);
+				uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + i];
 				LightLimitFix::Light light = LightLimitFix::lights[clusteredLightIndex];
 
 				float3 lightDirection = light.positionWS[eyeIndex].xyz - input.WorldPosition.xyz;

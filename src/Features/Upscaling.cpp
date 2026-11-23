@@ -17640,7 +17640,7 @@ void Upscaling::DrawSettings()
 					{
 						ImGui::BeginDisabled(!canChangeSharedGuides);
 						auto endDisabled = ScopeExit([]() { ImGui::EndDisabled(); });
-						if (Util::Widgets::Checkbox("Share FSR input textures", &sharedGuides))
+						if (Util::Widgets::Checkbox("Share FSR guide textures", &sharedGuides))
 							SetFSRSharedGuideInputsEnabled(sharedGuides);
 					}
 					if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -17648,7 +17648,7 @@ void Upscaling::DrawSettings()
 						ImGui::TextUnformatted("Disable if you notice flickering, ghosting or differences between eyes.");
 					}
 					if (!canChangeSharedGuides)
-						ImGui::TextDisabled("Stop GPU performance capture to change input sharing.");
+						ImGui::TextDisabled("Stop GPU performance capture to change guide sharing.");
 				}
 			}
 			if (page.Is("tuning")) {
@@ -46870,8 +46870,6 @@ namespace
 		[[nodiscard]] const auto& Args() const { return args_; }
 		/** Uses the empty-region decisions frozen during finalisation. */
 		[[nodiscard]] bool WillEvaluate() const { return bypassedEyeMask_ != expectedEyeMask_; }
-		/** Participating eyes are frozen with the finalized compute rectangles. */
-		[[nodiscard]] uint32_t ActiveEyeMask() const { return expectedEyeMask_ & ~bypassedEyeMask_; }
 
 		/** Consumes this operation's validated plan without repeating character finalisation. */
 		NeuralStereoEvaluationSummary Evaluate()
@@ -47089,8 +47087,7 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 	uint32_t a_outputHeight,
 	uint64_t a_generation,
 	uint32_t a_neuralSourceFrame,
-	FinalLdrNeuralResult& a_result,
-	NeuralRendering::FramebufferTransaction* a_mainTransaction) noexcept
+	FinalLdrNeuralResult& a_result) noexcept
 {
 	a_result = {};
 	const uint32_t eyeCount = globals::game::isVR ? 2u : 1u;
@@ -47454,22 +47451,6 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 			a_result.bypassedNoCharacters = evaluation.pairBypassed;
 			return false;
 		}
-		if (a_mainTransaction) {
-			std::array<NeuralRendering::FramebufferTransaction::EyeRegion, 2> regions{};
-			for (uint32_t eye = 0; eye < eyeCount; ++eye) {
-				const auto& target = a_targets[eye];
-				const auto& rect = foveatedRectCache.rects[eye];
-				regions[eye] = { target.resource, target.subresource, target.baseOffsetX,
-					{ rect.outputOffsetX, rect.outputOffsetY, rect.outputWidth, rect.outputHeight },
-					finalizedArgs[eye].computeSubrect };
-			}
-			if (a_role != NeuralStereoRouteRole::Main ||
-				!a_mainTransaction->PrepareRegions(regions, finalizedInputs->ActiveEyeMask(),
-					eyeCount, a_outputWidthPerEye, a_outputHeight)) {
-				RequestHistoryReset();
-				return false;
-			}
-		}
 		lateStage = LateStage::InputConversion;
 		for (uint32_t eye = 0; eye < eyeCount; ++eye) {
 			lateEye = eye;
@@ -47624,12 +47605,6 @@ bool Upscaling::ApplyFinalLdrNeuralStereo(
 				globals::state->frameCount);
 		}
 		lateSucceeded = (a_result.committedEyeMask | a_result.bypassedEyeMask) == NeuralRendering::RequiredEyeMask(globals::game::isVR);
-		if (lateSucceeded && a_mainTransaction) {
-			// Publish before the enclosing guard restores potentially conflicting compute views.
-			context->CSSetShaderResources(0, 1, &nullSRV);
-			context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
-			lateSucceeded = a_mainTransaction->Commit(true);
-		}
 		return lateSucceeded;
 	} catch (const std::exception& e) {
 		restoreCommittedCenters();
@@ -47932,8 +47907,7 @@ void Upscaling::ApplyMainFinalLdrNeuralStereo() noexcept
 		return;
 	}
 	NeuralRendering::FramebufferTransaction transaction(globals::d3d::context,
-		finalTexture, neuralFinalLdrFramebuffer->resource.get(),
-		NeuralRendering::FramebufferTransaction::Preparation::DeferredRegions);
+		finalTexture, neuralFinalLdrFramebuffer->resource.get());
 	if (!transaction.IsValid()) {
 		route.disposition = NeuralStereoPairDisposition::NormalDLSSPair;
 		route.fallbackReason = NeuralStereoFallbackReason::StereoPreflightFailed;
@@ -47956,11 +47930,12 @@ void Upscaling::ApplyMainFinalLdrNeuralStereo() noexcept
 		},
 	};
 	FinalLdrNeuralResult result{};
-	const bool applied = ApplyFinalLdrNeuralStereo(
+	const bool pairApplied = ApplyFinalLdrNeuralStereo(
 		NeuralStereoRouteRole::Main, targets,
 		pending.inputWidthPerEye, pending.inputHeight,
 		pending.outputWidthPerEye, pending.outputHeight,
-		pending.generation, neuralSourceFrame, result, &transaction);
+		pending.generation, neuralSourceFrame, result);
+	const bool applied = transaction.Commit(pairApplied);
 	route.preparedEyeMask = result.preparedEyeMask;
 	route.attemptedEyeMask = result.attemptedEyeMask;
 	route.appliedEyeMask = result.appliedEyeMask;
@@ -49488,7 +49463,7 @@ bool Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 		GetRuntimeUpscaleMethod() == UpscaleMethod::kFSR;
 	const uint32_t allocationInWidth = useStableFSRInputBounds ? std::max(inWidth, outWidth) : inWidth;
 	const uint32_t allocationInHeight = useStableFSRInputBounds ? std::max(inHeight, outHeight) : inHeight;
-	const bool shareInputsWithRuntime = useStableFSRInputBounds &&
+	const bool shareGuidesWithRuntime = useStableFSRInputBounds &&
 	                                    (fidelityFX.ShouldUseRuntimeUpscalerForFSR() || fidelityFX.ShouldRequestRuntimeFsr4());
 	RetiredVRIntermediateTextures replacement{};
 
@@ -49496,7 +49471,7 @@ bool Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 		std::string suffix = (i == 0) ? "Left" : "Right";
 
 		replacement.colorIn[i] = CreateTextureFromSource(colorSrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscale_ColorIn_" + suffix).c_str(),
-			false, shareInputsWithRuntime, DXGI_FORMAT_UNKNOWN, &sourceDescriptions->color);
+			false, false, DXGI_FORMAT_UNKNOWN, &sourceDescriptions->color);
 		replacement.colorOut[i] =
 			colorOutFormat == colorSrcDesc.Format ?
 				CreateTextureFromSource(colorSrc, outWidth, outHeight, false, true, true, ("Upscale_ColorOut_" + suffix).c_str(), requiresColorOutRTV,
@@ -49541,7 +49516,7 @@ bool Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 			linearDepthDesc.Usage = D3D11_USAGE_DEFAULT;
 			linearDepthDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 			replacement.linearDepth[i] = CreateUpscalingTexture(linearDepthDesc,
-				("Upscaling::LinearDepth_" + suffix).c_str(), shareInputsWithRuntime);
+				("Upscaling::LinearDepth_" + suffix).c_str(), shareGuidesWithRuntime);
 
 			D3D11_SHADER_RESOURCE_VIEW_DESC linearSRVDesc = {};
 			linearSRVDesc.Format = DXGI_FORMAT_R32_FLOAT;
@@ -49556,11 +49531,11 @@ bool Upscaling::CreateVRIntermediateTextures(uint32_t inWidth, uint32_t inHeight
 			replacement.linearDepth[i]->CreateUAV(linearUAVDesc);
 		}
 
-		replacement.motionVectors[i] = CreateTextureFromSource(mvecSrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscaling::MotionVectors_" + suffix).c_str(), false, shareInputsWithRuntime,
+		replacement.motionVectors[i] = CreateTextureFromSource(mvecSrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscaling::MotionVectors_" + suffix).c_str(), false, shareGuidesWithRuntime,
 			DXGI_FORMAT_UNKNOWN, &sourceDescriptions->motion);
-		replacement.reactiveMask[i] = CreateTextureFromSource(reactiveSrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscaling::Reactive_" + suffix).c_str(), false, shareInputsWithRuntime,
+		replacement.reactiveMask[i] = CreateTextureFromSource(reactiveSrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscaling::Reactive_" + suffix).c_str(), false, shareGuidesWithRuntime,
 			DXGI_FORMAT_UNKNOWN, &sourceDescriptions->reactive);
-		replacement.transparencyMask[i] = CreateTextureFromSource(transparencySrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscaling::Transparency_" + suffix).c_str(), false, shareInputsWithRuntime,
+		replacement.transparencyMask[i] = CreateTextureFromSource(transparencySrc, allocationInWidth, allocationInHeight, false, true, true, ("Upscaling::Transparency_" + suffix).c_str(), false, shareGuidesWithRuntime,
 			DXGI_FORMAT_UNKNOWN, &sourceDescriptions->transparency);
 	}
 	for (uint32_t eye = 0; eye < 2; ++eye) {
@@ -49761,7 +49736,7 @@ bool Upscaling::EnsureVRPresentationTextures(uint32_t inWidth, uint32_t inHeight
 
 	bool needsRecreate = false;
 	for (uint32_t eye = 0; eye < 2; ++eye) {
-		needsRecreate = needsRecreate || IsVRColorInputQuarantined(eye) ||
+		needsRecreate = needsRecreate ||
 		                !matchesInput(vrIntermediateColorIn[eye]) ||
 		                !matchesOutput(vrIntermediateColorOut[eye]);
 	}
@@ -50131,22 +50106,15 @@ bool Upscaling::AreVRIntermediateTexturesCompatibleForFSR(uint32_t a_displayEyeW
 	return true;
 }
 
-bool Upscaling::IsVRColorInputQuarantined(uint32_t a_eye) const
-{
-	return a_eye < std::size(vrIntermediateColorIn) && vrIntermediateColorIn[a_eye] &&
-	       fidelityFX.IsRuntimeSharedGuideQuarantined(vrIntermediateColorIn[a_eye]->resource.get());
-}
-
 bool Upscaling::HasQuarantinedVRGuideInputs() const
 {
 	for (uint32_t eye = 0; eye < 2; ++eye) {
-		const std::array<const Texture2D*, 5> inputs{
-			vrIntermediateColorIn[eye].get(),
+		const std::array<const Texture2D*, 4> guides{
 			vrIntermediateLinearDepth[eye].get(), vrIntermediateMotionVectors[eye].get(),
 			vrIntermediateReactiveMask[eye].get(), vrIntermediateTransparencyMask[eye].get()
 		};
-		for (const auto* input : inputs) {
-			if (input && fidelityFX.IsRuntimeSharedGuideQuarantined(input->resource.get()))
+		for (const auto* guide : guides) {
+			if (guide && fidelityFX.IsRuntimeSharedGuideQuarantined(guide->resource.get()))
 				return true;
 		}
 	}
@@ -51329,7 +51297,7 @@ bool Upscaling::StretchSubmitStageEyeOutput(
 	uint32_t outputHeight)
 {
 	if (eyeIndex >= 2 || !inputWidth || !inputHeight || !outputWidth ||
-		!outputHeight || IsSubmitStageDeviceLost() || IsVRColorInputQuarantined(eyeIndex)) {
+		!outputHeight || IsSubmitStageDeviceLost()) {
 		return false;
 	}
 	if (!vrIntermediateColorIn[eyeIndex] ||
@@ -59926,8 +59894,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	}
 
 	if (!reuseRuntimeFSRStereoOutput) {
-		if (IsVRColorInputQuarantined(eyeIndex))
-			return false;
 		context->CopySubresourceRegion(vrIntermediateColorIn[eyeIndex]->resource.get(), 0, 0, 0, 0, sourceTexture, sourceSubresource, &colorBox);
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		VRRenderScaleDevBenchBridge::RecordSubmitFreshnessWork(
@@ -59946,8 +59912,6 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	// history. Failure safely retains the original compositor submission.
 	const auto sanitizeSubmitStageInputEye = [&](uint32_t targetEyeIndex,
 												 const VRSubmitSourceRegion& targetSourceRegion) {
-		if (IsVRColorInputQuarantined(targetEyeIndex))
-			return false;
 		const bool inputMaskEligible =
 			ShouldClearHMDMaskInPhase(HMDMaskClearPhase::SubmitStageInput);
 		bool inputMaskCleared = false;
@@ -59990,7 +59954,7 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 	}
 
 	const auto prepareSubmitStageColorInput = [&](uint32_t targetEyeIndex, const VRSubmitSourceRegion& targetRegion) {
-		if (!peerInputFreshnessProven || targetEyeIndex >= 2 || IsVRColorInputQuarantined(targetEyeIndex) ||
+		if (!peerInputFreshnessProven || targetEyeIndex >= 2 ||
 			!targetRegion.valid || !targetRegion.matchesExpectedSize ||
 			!vrIntermediateColorIn[targetEyeIndex] || !vrIntermediateColorIn[targetEyeIndex]->resource)
 			return false;
@@ -61205,9 +61169,26 @@ bool Upscaling::SubmitVRUpscaledFrame(vr::EVREye a_eye, uint64_t a_compositorCyc
 		if (runtimeFSRStereoResourcesReady) {
 			const auto& otherSourceRegion =
 				canonicalSourceRegions[otherEyeIndex];
-			const bool peerInputSanitized =
-				prepareSubmitStageColorInput(otherEyeIndex, otherSourceRegion);
+			// Peer input is legal only inside the exact engine pair producer scope.
+			context->CopySubresourceRegion(
+				vrIntermediateColorIn[otherEyeIndex]->resource.get(),
+				0,
+				0,
+				0,
+				0,
+				sourceTexture,
+				otherSourceRegion.subresource,
+				&otherSourceRegion.box);
+#ifdef DEVBENCH_BRIDGE_ENABLED
+			VRRenderScaleDevBenchBridge::RecordSubmitFreshnessWork(
+				VRRenderScaleDevBenchBridge::SubmitFreshnessWork::ColorCopyEyes,
+				static_cast<uint32_t>(upscaleMethod));
+#endif
 			submitStageRuntimeFSRStereoState = {};
+			if (MarkSubmitStageDeviceLostIfDeviceRemoved("submit-stage stereo source copy"))
+				return false;
+			const bool peerInputSanitized =
+				sanitizeSubmitStageInputEye(otherEyeIndex, otherSourceRegion);
 			if (!peerInputSanitized && IsSubmitStageDeviceLost())
 				return false;
 			if (!peerInputSanitized) {

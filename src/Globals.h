@@ -67,8 +67,6 @@ namespace globals
 {
 	/** Reports validated native VR upload hook readiness. */
 	bool IsVRFrameBufferUploadHookReady();
-	/** Whether the captured upload matches the currently bound compute framebuffer. */
-	bool IsFrameBufferCacheCurrentForCS(ID3D11DeviceContext* context);
 	namespace d3d
 	{
 		extern ID3D11Device* device;

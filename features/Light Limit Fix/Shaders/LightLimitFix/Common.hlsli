@@ -11,19 +11,6 @@
 #define MAX_CLUSTER_LIGHTS 256
 #define MAX_CONTACT_SHADOW_LIGHTS 8
 
-// Global light indices fit within GROUP_SIZE; membership belongs to each cluster entry.
-static const uint ClusteredContactShadowMemberBit = 0x80000000u;
-
-uint DecodeClusteredLightIndex(uint entry)
-{
-	return entry & ~ClusteredContactShadowMemberBit;
-}
-
-bool HasContactShadowMembership(uint entry)
-{
-	return (entry & ClusteredContactShadowMemberBit) != 0u;
-}
-
 namespace ContactShadowFlags
 {
 	static const uint Point = (1u << 0);
@@ -47,18 +34,6 @@ namespace LightFlags
 	static const uint Spot = POINT_LIGHT_FLAG_SPOT;
 	static const uint OmniDirectional = POINT_LIGHT_FLAG_OMNIDIRECTIONAL;
 }
-
-namespace ClusteredLightFlags
-{
-	static const uint Available = 1u;
-	static const uint PreparedColours = 2u;
-}
-
-struct PreparedPointLightColour
-{
-	float4 nonPBR;
-	float4 pbr;
-};
 
 struct ClusterAABB
 {

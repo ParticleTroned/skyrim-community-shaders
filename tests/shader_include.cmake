@@ -37,114 +37,6 @@ add_d3d_shader_test(
 target_link_libraries(adaptive_balance_color_shader_test PRIVATE nlohmann_json::nlohmann_json)
 set_tests_properties(AdaptiveBalanceColorShader PROPERTIES TIMEOUT 180)
 
-add_d3d_shader_test(
-    prepared_point_light_colour_test
-    PreparedPointLightColour
-    tests/prepared_point_light_colour_test.cpp
-)
-set_tests_properties(PreparedPointLightColour PROPERTIES TIMEOUT 180)
-
-set(_zero_attenuation_dir
-    "${CMAKE_CURRENT_BINARY_DIR}/generated/zero-attenuation"
-)
-set(_zero_attenuation_shader "${_zero_attenuation_dir}/zero_attenuation.hlsl")
-add_custom_command(
-    OUTPUT "${_zero_attenuation_shader}"
-    COMMAND
-        "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
-        "-DOUTPUT_DIRECTORY=${_zero_attenuation_dir}" -P
-        "${PROJECT_SOURCE_DIR}/tests/extract_zero_attenuation.cmake"
-    DEPENDS
-        package/Shaders/Effect.hlsl
-        package/Shaders/Particle.hlsl
-        package/Shaders/Water.hlsl
-        tests/extract_zero_attenuation.cmake
-        tests/extract_source_region.cmake
-        tests/zero_attenuation.hlsl.in
-    VERBATIM
-)
-set_source_files_properties(
-    "${_zero_attenuation_shader}"
-    PROPERTIES HEADER_FILE_ONLY TRUE
-)
-target_sources(
-    adaptive_balance_color_shader_test
-    PRIVATE "${_zero_attenuation_shader}"
-)
-target_compile_definitions(
-    adaptive_balance_color_shader_test
-    PRIVATE ZERO_ATTENUATION_TEST_SHADER=L"${_zero_attenuation_shader}"
-)
-add_test(
-    NAME ZeroAttenuation
-    COMMAND adaptive_balance_color_shader_test --zero-attenuation
-)
-set_tests_properties(
-    ZeroAttenuation
-    PROPERTIES
-        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-        TIMEOUT 180
-        LABELS ControllerTests
-)
-
-add_controller_test(cluster_bounds_test ClusterBounds tests/cluster_bounds_test.cpp)
-
-set(_cluster_scheduling_dir
-    "${CMAKE_CURRENT_BINARY_DIR}/generated/cluster-scheduling"
-)
-add_custom_command(
-    OUTPUT
-        "${_cluster_scheduling_dir}/cluster_structure_under_test.h"
-        "${_cluster_scheduling_dir}/cluster_upload_under_test.h"
-    COMMAND
-        "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
-        "-DOUTPUT_DIRECTORY=${_cluster_scheduling_dir}" -P
-        "${PROJECT_SOURCE_DIR}/tests/extract_cluster_scheduling.cmake"
-    DEPENDS
-        src/Features/LightLimitFix.cpp
-        tests/extract_cluster_scheduling.cmake
-        tests/extract_source_region.cmake
-    VERBATIM
-)
-add_controller_test(cluster_scheduling_test ClusterScheduling tests/cluster_scheduling_test.cpp)
-target_sources(
-    cluster_scheduling_test
-    PRIVATE
-        "${_cluster_scheduling_dir}/cluster_structure_under_test.h"
-        "${_cluster_scheduling_dir}/cluster_upload_under_test.h"
-)
-target_include_directories(
-    cluster_scheduling_test
-    PRIVATE "${_cluster_scheduling_dir}"
-)
-
-set(_stereo_output_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/stereo-output")
-add_custom_command(
-    OUTPUT "${_stereo_output_dir}/stereo_output_selection.h"
-    COMMAND
-        "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
-        "-DOUTPUT_DIRECTORY=${_stereo_output_dir}" -P
-        "${PROJECT_SOURCE_DIR}/tests/extract_stereo_shadow_output.cmake"
-    DEPENDS
-        src/Features/ScreenSpaceShadows.cpp
-        tests/extract_stereo_shadow_output.cmake
-        tests/extract_source_region.cmake
-    VERBATIM
-)
-add_d3d_shader_test(stereo_shadow_output_test StereoShadowOutput tests/stereo_shadow_output_test.cpp)
-target_sources(
-    stereo_shadow_output_test
-    PRIVATE
-        "${_stereo_output_dir}/stereo_output_selection.h"
-        src/Utils/ShaderInclude.cpp
-)
-target_include_directories(
-    stereo_shadow_output_test
-    PRIVATE "${_stereo_output_dir}"
-)
-target_link_libraries(stereo_shadow_output_test PRIVATE spdlog::spdlog)
-set_tests_properties(StereoShadowOutput PROPERTIES TIMEOUT 180)
-
 set(_mapped_emission_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/mapped-emission")
 set(_mapped_emission_shader "${_mapped_emission_dir}/mapped_emission.hlsl")
 add_custom_command(
@@ -303,7 +195,6 @@ foreach(
         shader_include_test
         glint_parallax_shader_test
         adaptive_balance_color_shader_test
-        prepared_point_light_colour_test
         foveated_blend_curve_shader_test
         foveated_mask_overlay_shader_test
         hair_indirect_shader_test

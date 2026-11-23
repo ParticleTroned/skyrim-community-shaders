@@ -7,11 +7,9 @@
 #include "Utils/LazyShader.h"
 #include "Utils/PointLightFlags.h"
 
-#include "Features/LightLimitFix/ClusterBoundsCache.h"
 #include "Features/LightLimitFix/EffectSpotlight.h"
 #include "Features/LightLimitFix/LightAttach.h"
 #include "Features/LightLimitFix/ParticleLights.h"
-#include "Features/LightLimitFix/PreparedPointLightColours.h"
 #include "Features/LightLimitFix/SceneLightSnapshot.h"
 #include "Features/LightLimitFix/ShadowCullingPolicy.h"
 
@@ -27,9 +25,6 @@ class ParticleLights;
 struct LightLimitFix : OverlayFeature
 {
 private:
-	LightLimitFixDetail::ClusterBoundsCache clusterBoundsCache;
-	winrt::com_ptr<ID3D11ComputeShader> clusterBoundsShader;
-
 	Util::RuntimeToggle runtimeToggle{ false };
 	static constexpr std::string_view MOD_ID = "99548";
 	eastl::hash_map<RE::BSLight*, RE::NiLight*> effectLightValidationCache;
@@ -50,7 +45,7 @@ public:
 	virtual inline std::string GetShortName() override { return "LightLimitFix"; }
 	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
 	virtual inline std::string_view GetShaderDefineName() override { return "LIGHT_LIMIT_FIX"; }
-	std::string_view GetShaderCacheAbiVersion() override { return "cluster-contact-membership-v3+prepared-point-light-colours-v1"; }
+	std::string_view GetShaderCacheAbiVersion() override { return "effect-spotlights-v2"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
@@ -125,7 +120,7 @@ public:
 		uint LightCount;
 		uint ContactShadowFlags;
 		uint ContactShadowParams;
-		uint PreparePointLightColours;
+		uint pad0;
 		uint ClusterSize[4];
 	};
 	STATIC_ASSERT_ALIGNAS_16(LightCullingCB);
@@ -138,11 +133,11 @@ public:
 		uint ContactShadowFlags;
 		uint ContactShadowParams;
 		uint ClusterSize[3];
-		uint ClusteredLightFlags;
+		uint HasClusteredLights;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 	static_assert(sizeof(PerFrame) == 32);
-	static_assert(offsetof(PerFrame, ClusteredLightFlags) == 28);
+	static_assert(offsetof(PerFrame, HasClusteredLights) == 28);
 
 	PerFrame GetCommonBufferData();
 
@@ -184,15 +179,6 @@ public:
 	eastl::unique_ptr<Buffer> contactShadowIndexCounter = nullptr;
 	eastl::unique_ptr<Buffer> contactShadowIndexList = nullptr;
 	eastl::unique_ptr<Buffer> contactShadowGrid = nullptr;
-
-	struct PreparedPointLightColour
-	{
-		float4 nonPBR;
-		float4 pbr;
-	};
-	static_assert(sizeof(PreparedPointLightColour) == 32);
-	eastl::unique_ptr<Buffer> preparedPointLightColours;
-	LightLimitFixDetail::PreparedPointLightColours preparedColourState;
 
 	std::uint32_t lightCount = 0;
 	bool clusteredLightsAvailable = false;
@@ -607,9 +593,6 @@ public:
 	virtual bool IsCore() const override { return true; }
 
 private:
-	/** Revoke shader readiness before replacing resources or producer bytecode. */
-	void InvalidatePreparedPointLightColours();
-
 	eastl::unique_ptr<Buffer> effectSpotlights;
 	eastl::vector<LightLimitFixDetail::EffectSpotlight> effectSpotlightScratch;
 	bool effectSpotlightsAvailable = false;

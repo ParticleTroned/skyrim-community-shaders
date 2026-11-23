@@ -32,25 +32,6 @@ def body(source, signature, indent="\t"):
 
 
 class MemoryRecoveryContracts(unittest.TestCase):
-    def test_capabilities_follow_backend_retirement_without_releasing_unsafe_resources(self):
-        teardown = body(RENDERER, "bool Renderer::State::TeardownBackendLocked(")
-        self.assertIn("if (!retainBackend)\n\t\t\td3d11Capabilities_.Invalidate();", teardown)
-        self.assertLess(teardown.index("d3d11Capabilities_.Invalidate()"), teardown.index("if (quarantined_)"))
-        self.assertIn("if (!retainBackend) {\n\t\t\td3d11Capabilities_.Reset();", teardown)
-        self.assertLess(teardown.index("interop_.Shutdown("), teardown.index("d3d11Capabilities_.Reset()"))
-        self.assertLess(teardown.index("slots_ = {}"), teardown.index("d3d11Capabilities_.Reset()"))
-        self.assertLess(teardown.index("d3d11Capabilities_.Reset()"), teardown.index("device_.Reset()"))
-        destruction = body(RENDERER, "void Renderer::State::ShutdownForDestruction()")
-        self.assertLess(destruction.rindex("AbandonSlotsLocked()"), destruction.index("d3d11Capabilities_.Reset()"))
-        self.assertTrue(destruction.rstrip().endswith("d3d11Capabilities_.Reset();"))
-
-    def test_argument_device_loss_invalidates_capabilities_before_backend_initialization(self):
-        for signature in ("bool Renderer::State::AdmitMemoryLocked(",
-                          "bool Renderer::State::ApplyModelResolutionLocked("):
-            source = body(RENDERER, signature)
-            observation = source.split("first.device->GetDeviceRemovedReason()", 1)[1]
-            self.assertRegex(observation, r"^; FAILED\(\w+\)\) \{\s+d3d11Capabilities_\.Invalidate\(\);\s+return FailLocked\(")
-
     def test_output_creation_denial_preserves_pressure_retirement_progress(self):
         source = body(RENDERER, "Renderer::ReserveOutputAllocation(")
         retire_gate = source.index("if (state_->memoryRecovery_.phase == MemoryRecoveryPhase::Retiring)")

@@ -1004,7 +1004,7 @@ namespace
 	std::atomic_bool g_vrLoadingTransitionSerialOpen{ false };
 	std::mutex g_vrLoadingTransitionSerialMutex;
 
-	/** Allow synchronous recreation queries to borrow this thread's existing serial lock. */
+	/** Allow synchronous readiness queries to borrow this thread's existing serial lock. */
 	class ScopedVRLoadingSerialReadOwner
 	{
 	public:
@@ -1016,7 +1016,7 @@ namespace
 		ScopedVRLoadingSerialReadOwner(const ScopedVRLoadingSerialReadOwner&) = delete;
 		ScopedVRLoadingSerialReadOwner& operator=(const ScopedVRLoadingSerialReadOwner&) = delete;
 
-		/** Acquire normal query ownership unless recreation already owns the same mutex here. */
+		/** Acquire query ownership unless this thread already owns the same mutex here. */
 		static std::unique_lock<std::mutex> LockForQuery()
 		{
 			std::unique_lock lock(g_vrLoadingTransitionSerialMutex, std::defer_lock);
@@ -35119,14 +35119,13 @@ void Upscaling::PrepareVRRenderScalePostLoadRecovery(uint64_t a_recoveryEpoch)
 	if (IsLoadingMenuPhysicallyOpen())
 		return;
 
-	// Linearize the menu edge, immutable recovery owner, and destructive cleanup.
-	// The event callback publishes open+serial under the gate and releases it
-	// before controller/queue work, so std::lock can acquire this complete set
-	// without a gate->queue inversion. Retain it until cleanup state is published.
-	const std::scoped_lock recoveryOwnershipLock(
-		perfModeRenderTargetRecreateQueueMutex,
-		g_vrLoadingMenuGateReconciliationMutex,
-		g_vrLoadingTransitionSerialMutex);
+	// Keep load ownership through cleanup; nested readiness queries borrow
+	// only this thread's held serial lock without weakening menu-edge exclusion.
+	std::unique_lock queueLock(perfModeRenderTargetRecreateQueueMutex, std::defer_lock);
+	std::unique_lock loadingGateLock(g_vrLoadingMenuGateReconciliationMutex, std::defer_lock);
+	std::unique_lock loadingSerialLock(g_vrLoadingTransitionSerialMutex, std::defer_lock);
+	std::lock(queueLock, loadingGateLock, loadingSerialLock);
+	const ScopedVRLoadingSerialReadOwner loadingSerialReadOwner(loadingSerialLock);
 	if (g_vrLoadingTransitionSerialOpen.load(std::memory_order_relaxed) ||
 		IsLoadingMenuContextActive()) {
 		return;
@@ -42221,8 +42220,10 @@ bool Upscaling::TryRetainFSRForCompletedSaveLoad(
 		return false;
 	}
 
-	const std::scoped_lock loadLock(
-		g_vrLoadingMenuGateReconciliationMutex, g_vrLoadingTransitionSerialMutex);
+	std::unique_lock loadingGateLock(g_vrLoadingMenuGateReconciliationMutex, std::defer_lock);
+	std::unique_lock loadingSerialLock(g_vrLoadingTransitionSerialMutex, std::defer_lock);
+	std::lock(loadingGateLock, loadingSerialLock);
+	const ScopedVRLoadingSerialReadOwner loadingSerialReadOwner(loadingSerialLock);
 	const auto loadSerial = g_vrLoadingTransitionSerial.load(std::memory_order_relaxed);
 	const auto closeFrame = g_vrLoadingTransitionCloseFrame.load(std::memory_order_relaxed);
 	const auto transition = GetVRRenderScaleTransitionSnapshot();
@@ -57022,9 +57023,10 @@ void Upscaling::LogVRRenderScalePresentationStall(
 
 bool Upscaling::TryResumeVRRenderScalePresentationLocked(uint64_t a_epoch)
 {
-	const std::scoped_lock ownerLock(
-		g_vrLoadingMenuGateReconciliationMutex,
-		g_vrLoadingTransitionSerialMutex);
+	std::unique_lock loadingGateLock(g_vrLoadingMenuGateReconciliationMutex, std::defer_lock);
+	std::unique_lock loadingSerialLock(g_vrLoadingTransitionSerialMutex, std::defer_lock);
+	std::lock(loadingGateLock, loadingSerialLock);
+	const ScopedVRLoadingSerialReadOwner loadingSerialReadOwner(loadingSerialLock);
 	const auto transition = GetVRRenderScaleTransitionSnapshot();
 	const auto& applied = transition.applied;
 	const auto boot = perfMode.GetBootSnapshot();

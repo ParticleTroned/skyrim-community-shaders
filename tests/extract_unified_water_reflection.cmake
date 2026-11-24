@@ -13,6 +13,10 @@ file(READ "${PROJECT_ROOT}/src/Features/UnifiedWater.cpp" _water)
 string(REPLACE "\r\n" "\n" _water "${_water}")
 include("${PROJECT_ROOT}/tests/extract_source_region.cmake")
 extract_between("${_water}"
+    "\ttemplate <class Entry>\n\tvoid EraseEntry"
+    "\n\tfloat ClampFiniteOrDefault"
+    "water_entry_cleanup_under_test.h")
+extract_between("${_water}"
     "namespace\n{\n\tRE::BSWaterShaderProperty* GetWaterProperty"
     "void UnifiedWater::UpdateWaterLODCull() const"
     "reflection_maintenance_under_test.h")

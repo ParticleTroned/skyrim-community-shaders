@@ -66,6 +66,13 @@ struct UnifiedWater : OverlayFeature
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	/** @brief Repairs shared raw material pointers under the water-system lock before native water initialization. */
+	struct TESWaterSystem_AddWater
+	{
+		static void thunk(RE::TESWaterSystem* waterSystem, RE::NiAVObject* water, RE::TESWaterForm* waterType, float waterHeight, const RE::BSTArray<RE::NiPointer<RE::BSMultiBoundAABB>>* multiBounds, bool noDisplacement, bool isProcedural);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct BSWaterShaderMaterial_ComputeCRC32
 	{
 		static int32_t thunk(RE::BSWaterShaderMaterial* material, uint32_t srcHash);

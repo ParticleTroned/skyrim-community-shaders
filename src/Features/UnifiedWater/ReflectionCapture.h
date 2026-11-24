@@ -97,7 +97,14 @@ public:
 	/** @brief Reports whether both dependencies already have a lifetime guard. */
 	bool Contains(const RE::TESWaterReflections* reflection) const
 	{
-		return std::ranges::any_of(owners, [&](const auto& owner) { return owner->reflection.get() == reflection; });
+		return FindOwner(reflection) != nullptr;
+	}
+
+	/** @brief Returns the pinned material even when no native water object owns the capture; requires the water-system lock. */
+	RE::BSWaterShaderMaterial* GetRetainedMaterial(const RE::TESWaterReflections* reflection) const
+	{
+		const auto owner = FindOwner(reflection);
+		return owner ? static_cast<RE::BSWaterShaderMaterial*>(owner->materialOwner->material) : nullptr;
 	}
 
 	/** @brief Retires unused captures once native borrowers have released them, then defers destruction. */
@@ -134,6 +141,12 @@ private:
 		RE::NiPointer<RE::BSWaterShaderProperty> materialOwner;
 		RE::NiPointer<RE::TESWaterReflections> reflection;
 	};
+
+	const Owner* FindOwner(const RE::TESWaterReflections* reflection) const
+	{
+		const auto it = std::ranges::find_if(owners, [&](const auto& owner) { return owner->reflection.get() == reflection; });
+		return it == owners.end() ? nullptr : it->get();
+	}
 
 	std::vector<RE::NiPointer<Owner>> owners;
 	std::unordered_map<RE::BSMultiBoundNode*, Source> sources;

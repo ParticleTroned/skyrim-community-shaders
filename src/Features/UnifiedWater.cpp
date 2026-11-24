@@ -19,6 +19,7 @@
 #include <cmath>
 #include <imgui_internal.h>
 #include <memory>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -74,6 +75,15 @@ namespace
 		func(&object);
 	}
 
+	/** @brief Defers entry destruction before erasing its array reference; requires the water-system lock. */
+	template <class Entry>
+	void EraseEntry(RE::BSTArray<RE::NiPointer<Entry>>& entries, typename RE::BSTArray<RE::NiPointer<Entry>>::iterator it)
+	{
+		RE::NiPointer<RE::NiRefObject> released{ it->get() };
+		QueueDeferredRelease(released);
+		entries.erase(it);
+	}
+
 	/** @brief Removes an array-only water entry while the water-system lock is held. */
 	template <class Entry>
 	void RemoveOrphanedEntry(RE::BSTArray<RE::NiPointer<Entry>>& entries, const Entry* entry)
@@ -86,9 +96,7 @@ namespace
 		if (it == entries.end() || (*it)->GetRefCount() != 1)
 			return;
 
-		RE::NiPointer<RE::NiRefObject> released{ it->get() };
-		QueueDeferredRelease(released);
-		entries.erase(it);
+		EraseEntry(entries, it);
 	}
 
 	float ClampFiniteOrDefault(float a_value, float a_min, float a_max, float a_default)
@@ -1213,6 +1221,7 @@ void UnifiedWater::PostPostLoad()
 	stl::detour_thunk<BGSTerrainBlock_Attach>(REL::RelocationID(30934, 31737));
 
 	stl::detour_thunk<BGSTerrainBlock_Detach>(REL::RelocationID(30936, 31739));
+	stl::detour_thunk<TESWaterSystem_AddWater>(REL::RelocationID(31388, 32179));
 
 	stl::detour_thunk<BGSTerrainNode_UpdateWaterMeshSubVisibility>(REL::RelocationID(31059, 31846));
 
@@ -1310,6 +1319,51 @@ namespace
 		           nullptr;
 	}
 
+	/** @brief Repairs shared materials using live owners without dereferencing stored raw pointers; requires the water-system lock. */
+	template <class Entry>
+	void RepairSharedMaterials(const RE::TESWaterSystem& waterSystem, RE::BSTArray<RE::NiPointer<Entry>>& entries,
+		RE::NiPointer<Entry> RE::TESWaterObject::* member, const UnifiedWaterReflectionCapture& captures)
+	{
+		for (auto index = entries.size(); index-- > 0;) {
+			const auto entry = entries[index].get();
+			if (!entry) {
+				entries.erase(entries.begin() + index);
+				continue;
+			}
+
+			if constexpr (std::is_same_v<Entry, RE::TESWaterReflections>) {
+				// CSX captures intentionally outlive their temporary native water object.
+				if (const auto retained = captures.GetRetainedMaterial(entry)) {
+					if (entry->waterMaterial != retained)
+						entry->waterMaterial = retained;
+					continue;
+				}
+			}
+
+			RE::BSWaterShaderMaterial* replacement = nullptr;
+			for (const auto& object : waterSystem.waterObjects) {
+				if (!object || (object.get()->*member).get() != entry)
+					continue;
+				const auto property = GetWaterProperty(object->shape.get());
+				if (!property)
+					continue;
+				const auto material = static_cast<RE::BSWaterShaderMaterial*>(property->material);
+				if (material == entry->waterMaterial) {
+					replacement = material;
+					break;
+				}
+				if (!replacement)
+					replacement = material;
+			}
+
+			// Native AddWater dereferences the material, so an ownerless entry cannot remain listed.
+			if (!replacement)
+				EraseEntry(entries, entries.begin() + index);
+			else if (entry->waterMaterial != replacement)
+				entry->waterMaterial = replacement;
+		}
+	}
+
 	RE::TESWaterReflections* FindDynamicReflection(RE::TESWaterSystem& waterSystem)
 	{
 		for (const auto& reflection : waterSystem.waterReflections) {
@@ -1318,6 +1372,15 @@ namespace
 		}
 		return nullptr;
 	}
+}
+
+void UnifiedWater::TESWaterSystem_AddWater::thunk(RE::TESWaterSystem* waterSystem, RE::NiAVObject* water, RE::TESWaterForm* waterType, float waterHeight, const RE::BSTArray<RE::NiPointer<RE::BSMultiBoundAABB>>* multiBounds, bool noDisplacement, bool isProcedural)
+{
+	RE::BSSpinLockGuard guard(waterSystem->lock);
+	const auto& captures = globals::features::unifiedWater.reflectionCapture;
+	RepairSharedMaterials(*waterSystem, waterSystem->waterReflections, &RE::TESWaterObject::reflections, captures);
+	RepairSharedMaterials(*waterSystem, waterSystem->waterNormals, &RE::TESWaterObject::normals, captures);
+	func(waterSystem, water, waterType, waterHeight, multiBounds, noDisplacement, isProcedural);
 }
 
 void UnifiedWater::InitializeWaterMaterial(RE::TESWaterSystem& waterSystem, RE::BSTriShape* shape, RE::TESWaterForm* form, float height)

@@ -60,9 +60,11 @@ namespace RE
 	{
 		enum class Type
 		{
-			kWater
+			kWater,
+			kOther
 		};
-		Type GetType() const { return Type::kWater; }
+		Type type = Type::kWater;
+		Type GetType() const { return type; }
 		void IncRef() { Acquire(); }
 	};
 	struct BSWaterShaderMaterial : BSShaderMaterial
@@ -97,15 +99,24 @@ namespace RE
 			}
 		} flags;
 		BSWaterShaderMaterial* waterMaterial = nullptr;
+		// Only retained captures promise material lifetime through deferred destruction.
+		bool requireLiveMaterialOnDestruction = false;
 		~TESWaterReflections() override
 		{
-			assert(liveMaterials.contains(waterMaterial));
+			assert(!requireLiveMaterialOnDestruction || liveMaterials.contains(waterMaterial));
 			++destroyedReflections;
 		}
 	};
 	struct TESWaterNormals : NiRefObject
-	{};
+	{
+		BSWaterShaderMaterial* waterMaterial = nullptr;
+	};
+	template <class T>
+	using BSTArray = std::vector<T>;
 	struct BSTriShape;
+	using NiAVObject = BSTriShape;
+	struct BSMultiBoundAABB : NiRefObject
+	{};
 	struct BSMultiBoundNode;
 	struct NiObject : NiRefObject
 	{
@@ -129,6 +140,7 @@ namespace RE
 		BSShaderMaterial* material = nullptr;
 		static inline bool cloneFails = false;
 		static inline bool cloneSharesProperty = false;
+		bool validRTTI = true;
 		BSWaterShaderProperty() { SetMaterial(new BSWaterShaderMaterial, false); }
 		~BSWaterShaderProperty() override { ReleaseNativeMaterial(material); }
 		const void* GetRTTI() const override;
@@ -150,6 +162,7 @@ namespace RE
 	};
 	struct BSTriShape : NiObject
 	{
+		static inline unsigned geometryReads = 0;
 		BSMultiBoundNode* parent = nullptr;
 		struct RuntimeData
 		{
@@ -164,7 +177,11 @@ namespace RE
 		} local;
 		static inline bool cloneFails = false;
 		BSTriShape* AsTriShape() override { return this; }
-		RuntimeData& GetGeometryRuntimeData() { return data; }
+		RuntimeData& GetGeometryRuntimeData()
+		{
+			++geometryReads;
+			return data;
+		}
 		NiObject* CreateClone(NiCloningProcess&) { return cloneFails ? nullptr : new BSTriShape; }
 		bool worldUpdated = false;
 		void UpdateWorldData(NiUpdateData*) { worldUpdated = true; }
@@ -206,7 +223,9 @@ namespace RE
 	};
 	struct BSSpinLockGuard
 	{
-		explicit BSSpinLockGuard(int&) {}
+		int& depth;
+		explicit BSSpinLockGuard(int& lock) : depth(lock) { ++depth; }
+		~BSSpinLockGuard() { --depth; }
 	};
 	struct TESWaterSystem
 	{
@@ -224,8 +243,19 @@ namespace RE
 			enabled = true;
 			++enableCalls;
 		}
-		void AddWater(BSTriShape* shape, TESWaterForm*, float, void*, bool, bool)
+		void AddWater(BSTriShape* shape, TESWaterForm* type, float height, const BSTArray<NiPointer<BSMultiBoundAABB>>* bounds, bool noDisplacement, bool procedural);
+		void CheckSharedMaterials() const
 		{
+			assert(lock > 0);
+			for (const auto& entry : waterReflections)
+				assert(entry && liveMaterials.contains(entry->waterMaterial));
+			for (const auto& entry : waterNormals)
+				assert(entry && liveMaterials.contains(entry->waterMaterial));
+		}
+		void AddWaterNative(BSTriShape* shape, TESWaterForm*, float, const BSTArray<NiPointer<BSMultiBoundAABB>>*, bool, bool)
+		{
+			BSSpinLockGuard guard(lock);
+			CheckSharedMaterials();
 			assert(shape->parent && shape->parent->GetRuntimeData().multiBound && shape->parent->GetRuntimeData().multiBound->data);
 			assert(shape->worldUpdated);
 			++addCalls;
@@ -241,6 +271,7 @@ namespace RE
 			object->shape = NiPointer<BSTriShape>{ shape };
 			object->reflections = waterReflections.front();
 			object->normals = NiPointer<TESWaterNormals>{ new TESWaterNormals };
+			object->normals->waterMaterial = static_cast<BSWaterShaderMaterial*>(shape->data.shaderProperty->material);
 			waterNormals.push_back(object->normals);
 			waterObjects.push_back(object);
 			Enable();
@@ -278,28 +309,37 @@ namespace globals::rtti
 		const void* get() const { return this; }
 	} BSWaterShaderPropertyRTTI;
 }
-const void* RE::BSWaterShaderProperty::GetRTTI() const { return globals::rtti::BSWaterShaderPropertyRTTI.get(); }
+const void* RE::BSWaterShaderProperty::GetRTTI() const { return validRTTI ? globals::rtti::BSWaterShaderPropertyRTTI.get() : nullptr; }
 static bool interior = false;
 static bool IsInteriorCellActive() { return interior; }
 static const RE::TESWorldSpace* ResolveLODDataWorldSpace(const RE::TESWorldSpace* world) { return world; }
 static std::vector<RE::NiPointer<RE::NiRefObject>> deferred;
 static void QueueDeferredRelease(RE::NiPointer<RE::NiRefObject>& object) { deferred.push_back(object); }
-template <class T>
-static void RemoveOrphanedEntry(std::vector<RE::NiPointer<T>>& entries, const T* entry)
-{
-	std::erase_if(entries, [&](const auto& candidate) { return candidate.get() == entry && candidate->GetRefCount() == 1; });
-}
+#include "water_entry_cleanup_under_test.h"
 
 #include "reflection_capture_under_test.h"
 
+namespace globals::features
+{
+	static struct
+	{
+		UnifiedWaterReflectionCapture reflectionCapture;
+	} unifiedWater;
+}
+
 struct UnifiedWater
 {
+	struct TESWaterSystem_AddWater
+	{
+		static void thunk(RE::TESWaterSystem*, RE::NiAVObject*, RE::TESWaterForm*, float, const RE::BSTArray<RE::NiPointer<RE::BSMultiBoundAABB>>*, bool, bool);
+		static inline decltype(&thunk) func;
+	};
 	bool loaded = true;
 	bool ready = true;
 	bool exterior = true;
 	std::atomic<RE::TESWorldSpace*> currentPlayerWorldSpace{ nullptr };
 	RE::NiPointer<RE::BSTriShape> waterMesh{ new RE::BSTriShape };
-	UnifiedWaterReflectionCapture reflectionCapture;
+	UnifiedWaterReflectionCapture& reflectionCapture = globals::features::unifiedWater.reflectionCapture;
 	std::uint32_t reflectionRetryFrames = 0;
 	bool IsWaterDataReady() const { return ready; }
 	bool IsExteriorWorldspaceActive() const { return exterior; }
@@ -308,6 +348,17 @@ struct UnifiedWater
 	void MaintainReflectionCapture();
 };
 #include "reflection_maintenance_under_test.h"
+
+void RE::TESWaterSystem::AddWater(BSTriShape* shape, TESWaterForm* type, float height, const BSTArray<NiPointer<BSMultiBoundAABB>>* bounds, bool noDisplacement, bool procedural)
+{
+	UnifiedWater::TESWaterSystem_AddWater::thunk(this, shape, type, height, bounds, noDisplacement, procedural);
+}
+
+static void NativeAddWater(RE::TESWaterSystem* system, RE::NiAVObject* shape, RE::TESWaterForm* type, float height,
+	const RE::BSTArray<RE::NiPointer<RE::BSMultiBoundAABB>>* bounds, bool noDisplacement, bool procedural)
+{
+	system->AddWaterNative(shape, type, height, bounds, noDisplacement, procedural);
+}
 
 struct Scene
 {
@@ -339,13 +390,202 @@ struct Scene
 	}
 };
 
+static unsigned checkedNativeCalls = 0;
+struct WaterCallArguments
+{
+	RE::NiAVObject* water = nullptr;
+	RE::TESWaterForm* type = nullptr;
+	float height = 123.5f;
+	const RE::BSTArray<RE::NiPointer<RE::BSMultiBoundAABB>>* bounds = nullptr;
+	bool noDisplacement = true;
+	bool procedural = false;
+};
+static WaterCallArguments expectedWaterCall;
+static void CheckNativeAddWater(RE::TESWaterSystem* system, RE::NiAVObject* water, RE::TESWaterForm* type, float height,
+	const RE::BSTArray<RE::NiPointer<RE::BSMultiBoundAABB>>* bounds, bool noDisplacement, bool procedural)
+{
+	assert(system->lock > 0);
+	assert(water == expectedWaterCall.water && type == expectedWaterCall.type && height == expectedWaterCall.height);
+	assert(bounds == expectedWaterCall.bounds && noDisplacement == expectedWaterCall.noDisplacement && procedural == expectedWaterCall.procedural);
+	system->CheckSharedMaterials();
+	++checkedNativeCalls;
+}
+
+static void CheckSharedMaterials(RE::TESWaterSystem& system, const WaterCallArguments& arguments = {})
+{
+	const auto depth = system.lock;
+	const auto calls = checkedNativeCalls;
+	const auto original = std::exchange(UnifiedWater::TESWaterSystem_AddWater::func, CheckNativeAddWater);
+	const auto previousArguments = std::exchange(expectedWaterCall, arguments);
+	const SKSE::stl::scope_exit restore([&] {
+		UnifiedWater::TESWaterSystem_AddWater::func = original;
+		expectedWaterCall = previousArguments;
+	});
+	UnifiedWater::TESWaterSystem_AddWater::thunk(&system, arguments.water, arguments.type, arguments.height, arguments.bounds, arguments.noDisplacement, arguments.procedural);
+	assert(system.lock == depth && checkedNativeCalls == calls + 1);
+}
+
+static RE::TESWaterObject* AddNativeOwner(RE::TESWaterSystem& system, RE::TESWaterReflections* reflection, RE::TESWaterNormals* normals)
+{
+	RE::NiPointer<RE::TESWaterObject> object{ new RE::TESWaterObject };
+	object->shape = RE::NiPointer<RE::BSTriShape>{ new RE::BSTriShape };
+	object->reflections = RE::NiPointer<RE::TESWaterReflections>{ reflection };
+	object->normals = RE::NiPointer<RE::TESWaterNormals>{ normals };
+	system.waterObjects.push_back(object);
+	return object.get();
+}
+
+static void TestSharedMaterialRepair()
+{
+	auto& captures = globals::features::unifiedWater.reflectionCapture;
+	{
+		RE::TESWaterSystem system;
+		RE::NiPointer<RE::BSTriShape> shape{ new RE::BSTriShape };
+		RE::TESWaterForm type;
+		RE::BSTArray<RE::NiPointer<RE::BSMultiBoundAABB>> bounds;
+		for (const auto noDisplacement : { false, true }) {
+			for (const auto procedural : { false, true })
+				CheckSharedMaterials(system, { shape.get(), &type, -256.0f, &bounds, noDisplacement, procedural });
+		}
+	}
+	for (const auto flags : { 4u, 2u, 12u }) {
+		RE::TESWaterSystem system;
+		system.waterReflections.emplace_back(new RE::TESWaterReflections);
+		system.waterNormals.emplace_back(new RE::TESWaterNormals);
+		const auto reflection = system.waterReflections.front().get();
+		reflection->flags.value = flags;
+		const auto normals = system.waterNormals.front().get();
+		const auto original = AddNativeOwner(system, reflection, normals);
+		const auto survivor = AddNativeOwner(system, reflection, normals);
+		const auto originalMaterial = static_cast<RE::BSWaterShaderMaterial*>(original->shape->data.shaderProperty->material);
+		const auto survivorMaterial = static_cast<RE::BSWaterShaderMaterial*>(survivor->shape->data.shaderProperty->material);
+		reflection->waterMaterial = survivorMaterial;
+		normals->waterMaterial = survivorMaterial;
+		CheckSharedMaterials(system);
+		assert(reflection->waterMaterial == survivorMaterial && normals->waterMaterial == survivorMaterial);
+
+		reflection->waterMaterial = originalMaterial;
+		normals->waterMaterial = originalMaterial;
+		const auto reads = RE::BSTriShape::geometryReads;
+		CheckSharedMaterials(system);
+		assert(RE::BSTriShape::geometryReads == reads + 2);
+		system.waterObjects.erase(system.waterObjects.begin());
+		assert(!liveMaterials.contains(originalMaterial));
+		{
+			RE::BSSpinLockGuard outer(system.lock);
+			CheckSharedMaterials(system);
+		}
+		assert(reflection->waterMaterial == survivorMaterial && normals->waterMaterial == survivorMaterial);
+		assert(deferred.empty());
+		reflection->waterMaterial = reinterpret_cast<RE::BSWaterShaderMaterial*>(1);
+		normals->waterMaterial = nullptr;
+		CheckSharedMaterials(system);
+		assert(reflection->waterMaterial == survivorMaterial && normals->waterMaterial == survivorMaterial);
+	}
+	{
+		RE::TESWaterSystem system;
+		system.waterReflections.emplace_back(new RE::TESWaterReflections);
+		system.waterNormals.emplace_back(new RE::TESWaterNormals);
+		const auto reflection = system.waterReflections.front().get();
+		const auto normals = system.waterNormals.front().get();
+		const auto creator = AddNativeOwner(system, reflection, normals);
+		const auto borrower = AddNativeOwner(system, reflection, normals);
+		const auto oldMaterial = static_cast<RE::BSWaterShaderMaterial*>(creator->shape->data.shaderProperty->material);
+		reflection->waterMaterial = oldMaterial;
+		normals->waterMaterial = oldMaterial;
+		{
+			RE::NiPointer<RE::NiRefObject> pruned{ creator };
+			QueueDeferredRelease(pruned);
+		}
+		system.waterObjects.erase(system.waterObjects.begin());
+		CheckSharedMaterials(system);
+		assert(liveMaterials.contains(oldMaterial));
+		assert(reflection->waterMaterial == borrower->shape->data.shaderProperty->material);
+		assert(normals->waterMaterial == reflection->waterMaterial);
+		deferred.clear();
+		assert(!liveMaterials.contains(oldMaterial));
+		CheckSharedMaterials(system);
+	}
+	{
+		RE::TESWaterSystem system;
+		RE::NiPointer<RE::TESWaterReflections> reflection{ new RE::TESWaterReflections };
+		RE::NiPointer<RE::TESWaterNormals> normals{ new RE::TESWaterNormals };
+		reflection->waterMaterial = reinterpret_cast<RE::BSWaterShaderMaterial*>(1);
+		normals->waterMaterial = reinterpret_cast<RE::BSWaterShaderMaterial*>(1);
+		system.waterReflections = { reflection, {}, RE::NiPointer<RE::TESWaterReflections>{ new RE::TESWaterReflections } };
+		system.waterNormals = { normals, {}, RE::NiPointer<RE::TESWaterNormals>{ new RE::TESWaterNormals } };
+		CheckSharedMaterials(system);
+		assert(system.waterReflections.empty() && system.waterNormals.empty());
+		assert(deferred.size() == 4 && reflection->GetRefCount() == 2 && normals->GetRefCount() == 2);
+		deferred.clear();
+		assert(reflection->GetRefCount() == 1 && normals->GetRefCount() == 1);
+	}
+	for (unsigned invalidOwner = 0; invalidOwner < 5; ++invalidOwner) {
+		RE::TESWaterSystem system;
+		system.waterObjects.emplace_back();
+		system.waterReflections.emplace_back(new RE::TESWaterReflections);
+		system.waterNormals.emplace_back(new RE::TESWaterNormals);
+		const auto owner = AddNativeOwner(system, system.waterReflections.front().get(), system.waterNormals.front().get());
+		switch (invalidOwner) {
+		case 0:
+			owner->shape = {};
+			break;
+		case 1:
+			owner->shape->data.shaderProperty = {};
+			break;
+		case 2:
+			owner->shape->data.shaderProperty->validRTTI = false;
+			break;
+		case 3:
+			owner->shape->data.shaderProperty->material->type = RE::BSShaderMaterial::Type::kOther;
+			break;
+		case 4:
+			owner->shape->data.shaderProperty->SetMaterial(nullptr, false);
+			break;
+		}
+		CheckSharedMaterials(system);
+		assert(system.waterReflections.empty() && system.waterNormals.empty() && deferred.size() == 2);
+		deferred.clear();
+	}
+	{
+		RE::TESWaterSystem system;
+		system.waterReflections.emplace_back(new RE::TESWaterReflections);
+		const auto reflection = system.waterReflections.front().get();
+		const auto owner = AddNativeOwner(system, reflection, nullptr);
+		const auto material = static_cast<RE::BSWaterShaderMaterial*>(owner->shape->data.shaderProperty->material);
+		reflection->waterMaterial = material;
+		reflection->requireLiveMaterialOnDestruction = true;
+		assert(captures.Retain(reflection, owner->shape->data.shaderProperty.get()));
+		system.waterObjects.clear();
+		assert(liveMaterials.contains(material));
+		CheckSharedMaterials(system);
+		assert(system.waterReflections.size() == 1 && reflection->waterMaterial == material && deferred.empty());
+		AddNativeOwner(system, reflection, nullptr);
+		const auto reads = RE::BSTriShape::geometryReads;
+		CheckSharedMaterials(system);
+		assert(reflection->waterMaterial == material && RE::BSTriShape::geometryReads == reads);
+		system.waterObjects.clear();
+		// A changed raw field must not detach the capture from its actual lifetime guard.
+		reflection->waterMaterial = reinterpret_cast<RE::BSWaterShaderMaterial*>(1);
+		CheckSharedMaterials(system);
+		assert(reflection->waterMaterial == captures.GetRetainedMaterial(reflection));
+		captures.RetireUnused(system, nullptr, QueueDeferredRelease);
+		assert(system.waterReflections.empty() && liveMaterials.contains(material));
+		deferred.clear();
+		assert(!liveMaterials.contains(material));
+	}
+}
+
 int main()
 {
+	UnifiedWater::TESWaterSystem_AddWater::func = NativeAddWater;
+	TestSharedMaterialRepair();
 	{
 		Scene scene;
 		auto tile = scene.MakeTile();
 		scene.uw.InitializeWaterMaterial(scene.system, tile.get(), &scene.water, 100);
 		const auto reflection = scene.system.waterReflections.front().get();
+		reflection->requireLiveMaterialOnDestruction = true;
 		const auto material = reflection->waterMaterial;
 		assert(reflection->GetRefCount() == 2);
 		assert(scene.system.waterObjects.empty() && scene.system.waterNormals.empty());
@@ -370,14 +610,34 @@ int main()
 	}
 	{
 		Scene scene;
+		RE::TESWaterReflections* retained = nullptr;
+		for (unsigned tileIndex = 0; tileIndex < 32; ++tileIndex) {
+			auto tile = scene.MakeTile();
+			scene.uw.InitializeWaterMaterial(scene.system, tile.get(), &scene.water, 100);
+			assert(scene.system.waterReflections.size() == 1);
+			const auto reflection = scene.system.waterReflections.front().get();
+			if (!retained)
+				retained = reflection;
+			assert(reflection == retained && scene.uw.reflectionCapture.Contains(reflection));
+			reflection->requireLiveMaterialOnDestruction = true;
+			assert(scene.system.waterObjects.empty() && scene.system.waterNormals.empty());
+			deferred.clear();
+			scene.block.DetachChild2(tile.get());
+		}
+		assert(scene.system.addCalls == 32 && retained->GetRefCount() == 2);
+	}
+	{
+		Scene scene;
 		auto nativeShape = scene.MakeTile();
 		scene.system.AddWater(nativeShape.get(), &scene.water, 100, nullptr, true, false);
 		const auto reflection = scene.system.waterReflections.front().get();
 		auto tile = scene.MakeTile();
 		scene.uw.InitializeWaterMaterial(scene.system, tile.get(), &scene.water, 100);
 		assert(!scene.uw.reflectionCapture.Contains(reflection));  // Reused entry belongs to nativeShape.
+		deferred.clear();
 		scene.uw.MaintainReflectionCapture();
 		assert(scene.uw.reflectionCapture.Contains(reflection));
+		reflection->requireLiveMaterialOnDestruction = true;
 		const auto material = reflection->waterMaterial;
 		scene.uw.reflectionCapture.ClearSources();
 		scene.uw.MaintainReflectionCapture();

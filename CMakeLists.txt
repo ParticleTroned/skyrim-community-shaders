@@ -5550,6 +5550,7 @@ if(BUILD_CONTROLLER_TESTS)
     set(_reflection_test_headers
         "${_reflection_test_dir}/reflection_capture_under_test.h"
         "${_reflection_test_dir}/reflection_maintenance_under_test.h"
+        "${_reflection_test_dir}/water_entry_cleanup_under_test.h"
     )
     add_custom_command(
         OUTPUT ${_reflection_test_headers}

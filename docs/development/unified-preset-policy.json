@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.11.23.1",
+    "packageVersion": "d2026.11.24.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -19,12 +19,13 @@
     },
     "runtimeSettingsContract": {
         "revision": 36,
-        "sourceTreeSha256": "C96CED65DF6C3949454CB0547D6539ADBBF2DC4102649C10AD2E94BA3F98450B",
+        "sourceTreeSha256": "07B692C239DEAFA13F164747C90B89F8F38E2B8632D5983A00D06345996CD68F",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
                 "src/Feature.cpp",
                 "src/Feature.h",
+                "src/FeatureSettingsScope.h",
                 "src/Features/AdaptiveBalanceAppearance.h",
                 "src/Features/AdaptiveBalanceDepthOfField.cpp",
                 "src/Features/AdaptiveBalanceDepthOfField.h",
@@ -60,6 +61,7 @@
                 "src/MenuDepthOfFieldSettingsPolicy.h",
                 "src/Menu.cpp",
                 "src/Menu.h",
+                "src/Menu/SettingsActions.cpp",
                 "src/PresetCompatibility.cpp",
                 "src/PresetCompatibility.h",
                 "src/SettingsMigrations.cpp",
@@ -80,6 +82,7 @@
             "src/Api/FeatureDevBenchBridge.cpp",
             "src/Feature.cpp",
             "src/Feature.h",
+            "src/FeatureSettingsScope.h",
             "src/Features/AdaptiveBalanceAppearance.h",
             "src/Features/AdaptiveBalanceDepthOfField.cpp",
             "src/Features/AdaptiveBalanceDepthOfField.h",
@@ -204,6 +207,7 @@
             "src/LegacyUtilityCompatibility.h",
             "src/Menu.cpp",
             "src/Menu.h",
+            "src/Menu/SettingsActions.cpp",
             "src/MenuDepthOfFieldSettingsPolicy.h",
             "src/PresetCompatibility.cpp",
             "src/PresetCompatibility.h",

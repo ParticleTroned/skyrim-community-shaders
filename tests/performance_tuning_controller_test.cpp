@@ -1,7 +1,9 @@
 #include "Menu/PerformanceQuickScan.h"
 #include "Menu/PerformanceTuningController.h"
 
+#include "Utils/FlatFrameTiming.h"
 #include "Utils/RuntimeToggle.h"
+#include "Utils/VRFrameTiming.h"
 #include <limits>
 #include <vector>
 
@@ -121,6 +123,72 @@ namespace
 		Require(!reset.enabled, "renderer reinitialization must not leak a temporary enabled preference");
 	}
 
+	void TestWholeFrameCapture()
+	{
+		struct Summary
+		{
+			bool vrTiming = true;
+			std::uint64_t vrTimingEpoch = 1, flatTimingEpoch = 1, flatPresentId = 10;
+			std::uint32_t vrLatestFrameIndex = 10;
+			std::vector<Util::VRFrameTiming::Sample> vrSamples;
+			std::vector<Util::FlatFrameTiming::Sample> flatSamples;
+		} summary;
+		PerformanceQuickScan::FrameTimingCapture capture;
+		capture.Begin(summary);
+		Util::VRFrameTiming::Sample sample;
+		sample.frameIndex = 11;
+		sample.frameMs = 10;
+		sample.cpuMs = 2;
+		sample.gpuMs = 4;
+		sample.hasFrame = sample.hasCpu = sample.hasGpu = true;
+		summary.vrSamples.push_back(sample);
+		capture.Push(summary);
+		capture.Push(summary);
+		Require(capture.frame.moments.sampleWeight == 1 && capture.Mean(capture.frame) == 10,
+			"repeated timing reads must not duplicate whole-frame samples");
+		sample.frameIndex = 12;
+		sample.frameMs = 20;
+		sample.cpuMs = 4;
+		sample.gpuMs = 8;
+		summary.vrSamples.push_back(sample);
+		capture.Push(summary);
+		Require(capture.Mean(capture.frame) == 15 && capture.Mean(capture.cpu) == 3 && capture.Mean(capture.gpu) == 6,
+			"whole-frame means must cover the measured window using the live panel definitions");
+		auto partial = capture;
+		sample.frameIndex = 13;
+		sample.hasCpu = false;
+		summary.vrSamples = { sample };
+		partial.Push(summary);
+		Require(!partial.Mean(partial.cpu) && partial.cpu.missingSamples == 1 && partial.Mean(partial.gpu),
+			"invalid native samples must invalidate that metric without discarding valid independent metrics");
+		sample.frameIndex = 14;
+		sample.hasCpu = true;
+		summary.vrSamples = { sample };
+		partial = capture;
+		partial.Push(summary);
+		Require(!partial.Mean(partial.frame) && partial.frame.missingSamples == 1,
+			"gaps in completed timing history must not silently produce a partial mean");
+		++summary.vrTimingEpoch;
+		capture.Push(summary);
+		Require(!capture.Mean(capture.frame), "clock discontinuities must invalidate the whole-frame aggregate");
+		summary.vrTiming = false;
+		capture.Begin(summary);
+		Util::FlatFrameTiming::Sample flat;
+		flat.presentId = 11;
+		flat.frameMs = 12;
+		flat.cpuMs = 3;
+		flat.hasFrame = flat.hasCpu = true;
+		flat.resolved = false;
+		summary.flatSamples.push_back(flat);
+		capture.Push(summary);
+		Require(!capture.Mean(capture.cpu) && !capture.Mean(capture.gpu), "unresolved desktop frames must wait for a complete matched sample");
+		summary.flatSamples[0].gpuMs = 7;
+		summary.flatSamples[0].hasGpu = summary.flatSamples[0].resolved = true;
+		capture.Push(summary);
+		Require(capture.Mean(capture.gpu) == 7 && capture.cpu.moments.sampleWeight == 1,
+			"late desktop GPU queries must resolve without duplicating CPU timing");
+	}
+
 	void TestQuickScan()
 	{
 		using namespace PerformanceQuickScan;
@@ -159,11 +227,11 @@ namespace
 		for (unsigned next = 2; next <= 3; ++next) {
 			scan.phase = Phase::Complete;
 			Require(scan.Advance(next * 20) && scan.Active() && scan.scanIndex == next, "gaps must retain the batch's ownership");
-			Require(scan.Poll(next * 20 + 4.9, true, original) == Action::Wait, "no capture before the five-second gap");
-			Require(scan.Poll(next * 20 + 5, true, original) == Action::StartCapture, "settling must fit within the five-second gap");
-			Require(scan.Poll(next * 20 + 5, false, original) == Action::Wait, "unready rendering extends the gap");
-			Require(scan.Poll(next * 20 + 9.9, true, original) == Action::Wait, "readiness must remain stable for five seconds");
-			Require(scan.Poll(next * 20 + 10, true, original) == Action::StartCapture, "extended gaps must resume when ready");
+			Require(scan.Poll(next * 20 + 2.9, true, original) == Action::Wait, "no capture before the three-second gap");
+			Require(scan.Poll(next * 20 + 3, true, original) == Action::StartCapture, "settling must fit within the three-second gap");
+			Require(scan.Poll(next * 20 + 3, false, original) == Action::Wait, "unready rendering extends the gap");
+			Require(scan.Poll(next * 20 + 5.9, true, original) == Action::Wait, "readiness must remain stable for three seconds");
+			Require(scan.Poll(next * 20 + 6, true, original) == Action::StartCapture, "extended gaps must resume when ready");
 		}
 		scan.phase = Phase::Complete;
 		Require(!scan.Advance(100) && !scan.Active(), "three successful scans must terminate without another gap");
@@ -232,6 +300,7 @@ namespace
 int main()
 try {
 	TestQuickScan();
+	TestWholeFrameCapture();
 	TestCaptureOwnership();
 	using namespace PerformanceTuningController;
 	using nlohmann::json;

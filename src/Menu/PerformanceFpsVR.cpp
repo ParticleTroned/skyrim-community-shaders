@@ -146,21 +146,10 @@ namespace PerformanceFpsVR
 			return { { "meanMs", mean }, { "medianMs", percentile(0.5) }, { "p95Ms", percentile(0.95) }, { "p99Ms", percentile(0.99) } };
 		}
 
-		Observation Latest(const std::filesystem::path& directory, bool samples = true)
+		Observation ReadObservation(const std::filesystem::path& file, bool samples)
 		{
 			Observation result;
-			if (directory.empty() || !std::filesystem::exists(directory))
-				return result;
-			std::filesystem::file_time_type newest = std::filesystem::file_time_type::min();
-			for (const auto& entry : std::filesystem::directory_iterator(directory)) {
-				if (entry.is_regular_file() && entry.path().filename().wstring().starts_with(L"Frametimes#Raw#") &&
-					entry.path().extension() == L".csv" && entry.last_write_time() > newest) {
-					result.file = entry.path();
-					newest = entry.last_write_time();
-				}
-			}
-			if (result.file.empty())
-				return result;
+			result.file = file;
 			result.bytes = std::filesystem::file_size(result.file);
 			if (!samples)
 				return result;
@@ -185,21 +174,28 @@ namespace PerformanceFpsVR
 			return result;
 		}
 
+		Observation Latest(const std::filesystem::path& directory, bool samples = true)
+		{
+			if (directory.empty() || !std::filesystem::exists(directory))
+				return {};
+			std::filesystem::path file;
+			auto newest = std::filesystem::file_time_type::min();
+			std::size_t entries = 0;
+			for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+				if (++entries > 8192)
+					throw std::runtime_error("fpsVR CSV discovery exceeded its directory limit.");
+				if (entry.is_regular_file() && entry.path().filename().wstring().starts_with(L"Frametimes#Raw#") &&
+					entry.path().extension() == L".csv" && entry.last_write_time() > newest) {
+					file = entry.path();
+					newest = entry.last_write_time();
+				}
+			}
+			return file.empty() ? Observation{} : ReadObservation(file, samples);
+		}
+
 		bool Growing(const Observation& before, const Observation& after)
 		{
 			return !before.file.empty() && before.file == after.file && after.bytes > before.bytes && after.lastSample > before.lastSample;
-		}
-
-		bool WriterOpen(const std::filesystem::path& file)
-		{
-			if (file.empty())
-				return false;
-			Handle handle(CreateFileW(file.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
-			if (handle.get() != INVALID_HANDLE_VALUE)
-				return false;
-			if (GetLastError() == ERROR_SHARING_VIOLATION)
-				return true;
-			throw std::runtime_error("Cannot establish fpsVR recording ownership.");
 		}
 
 		void ToggleCommand(const std::filesystem::path& command)
@@ -300,15 +296,24 @@ namespace PerformanceFpsVR
 	{
 		if (cancelled.load(std::memory_order_acquire))
 			throw std::runtime_error("fpsVR preparation cancelled.");
-		const auto before = logger.Observe();
+		const auto before = logger.Observe(false);
 		logger.Wait(2s);
-		auto current = logger.Observe();
-		if (Growing(before, current)) {
+		auto current = logger.Observe(false);
+		if (!before.file.empty() && before.file == current.file && current.bytes > before.bytes) {
 			observation = current;
+			owned = true;
+			current = logger.Observe();
+			if (current.file != observation.file) {
+				owned = false;
+				throw std::runtime_error("fpsVR recording changed during admission; left untouched.");
+			}
+			observation = current;
+			if (current.lastSample <= 0)
+				throw std::runtime_error("fpsVR CSV is growing without complete timing samples.");
 			confirmed = true;
 			return;
 		}
-		if (before.file != current.file || logger.AnyWriter())
+		if (before.file != current.file)
 			throw std::runtime_error("Existing fpsVR recording is not advancing; left untouched.");
 		if (!logger.Running() || cancelled.load(std::memory_order_acquire))
 			throw std::runtime_error("fpsVR exited or preparation was cancelled before recording.");
@@ -322,7 +327,7 @@ namespace PerformanceFpsVR
 					throw std::runtime_error("fpsVR recording changed during admission; left untouched.");
 				}
 				observation = next;
-				owned = logger.WriterOpen(next.file);
+				owned = true;
 				next = logger.Observe();
 				if (next.file != observation.file) {
 					owned = false;
@@ -346,16 +351,29 @@ namespace PerformanceFpsVR
 		owned = false;
 		if (!logger.Running())
 			throw std::runtime_error("fpsVR exited; no stop toggle sent.");
-		const auto current = logger.Observe(false);
-		if (current.file != observation.file || current.bytes < observation.bytes)
-			throw std::runtime_error("fpsVR process or recording changed; no stop toggle sent.");
-		if (!logger.WriterOpen(observation.file))
-			return;
+		const auto observe = [&] {
+			const auto current = logger.Observe(false);
+			if (!logger.Running() || current.file != observation.file || current.bytes < observation.bytes)
+				throw std::runtime_error("fpsVR process or recording changed; inspect recording state.");
+			observation = current;
+			return current;
+		};
+		auto current = observe();
+		logger.Wait(2s);
+		auto next = observe();
+		if (next.bytes == current.bytes)
+			throw std::runtime_error("fpsVR CSV is not advancing; recording stop cannot be confirmed safely.");
 		logger.Toggle();
-		for (int attempt = 0; attempt < 32 && logger.WriterOpen(observation.file); ++attempt)
+		int quietSamples = 0;
+		for (int attempt = 0; attempt < 32; ++attempt) {
 			logger.Wait(250ms);
-		if (logger.WriterOpen(observation.file))
-			throw std::runtime_error("fpsVR stop was not confirmed; inspect fpsVR recording state.");
+			current = next;
+			next = observe();
+			quietSamples = next.bytes == current.bytes ? quietSamples + 1 : 0;
+			if (quietSamples == 8)
+				return;
+		}
+		throw std::runtime_error("fpsVR stop was not confirmed; inspect fpsVR recording state.");
 	}
 
 	json Correlate(std::istream& csv, const json& captures)
@@ -434,19 +452,9 @@ namespace PerformanceFpsVR
 		std::future<void> preparation;
 
 		bool Running() const override { return fpsvr && WaitForSingleObject(fpsvr.get(), 0) == WAIT_TIMEOUT; }
-		Observation Observe(bool samples) override { return Latest(directory, samples); }
-		bool WriterOpen(const std::filesystem::path& file) override { return PerformanceFpsVR::WriterOpen(file); }
+		Observation Observe(bool samples = true) override { return recording.observation.file.empty() ? Latest(directory, samples) : ReadObservation(recording.observation.file, samples); }
 		void Toggle() override { ToggleCommand(command); }
 		void Wait(std::chrono::milliseconds duration) override { std::this_thread::sleep_for(duration); }
-		bool AnyWriter() override
-		{
-			if (!std::filesystem::exists(directory))
-				return false;
-			for (const auto& file : std::filesystem::directory_iterator(directory))
-				if (file.is_regular_file() && file.path().filename().wstring().starts_with(L"Frametimes#Raw#") && file.path().extension() == L".csv" && WriterOpen(file.path()))
-					return true;
-			return false;
-		}
 
 		void Prepare()
 		try {
@@ -484,7 +492,7 @@ namespace PerformanceFpsVR
 					for (const auto& capture : captures)
 						end = std::max(end, capture.value("endSteamVrSeconds", 0.0));
 					for (int attempt = 0; attempt < 32; ++attempt) {
-						const auto current = Latest(directory);
+						const auto current = Observe();
 						if (current.file != recording.observation.file || current.lastSample >= end)
 							break;
 						std::this_thread::sleep_for(250ms);
@@ -493,8 +501,20 @@ namespace PerformanceFpsVR
 			} catch (const std::exception& failure) {
 				error = failure.what();
 			}
+			std::string stopError;
 			try {
+				if (recording.owned && Latest(directory, false).file != recording.observation.file) {
+					recording.owned = false;
+					throw std::runtime_error("fpsVR recording changed; no stop toggle sent.");
+				}
 				recording.Stop(*this);
+				if (result["owned"].get<bool>())
+					result["recordingStopped"] = true;
+			} catch (const std::exception& failure) {
+				stopError = failure.what();
+				result["recordingStopped"] = false;
+			}
+			try {
 				if (!recording.confirmed || !error.empty())
 					throw std::runtime_error(error.empty() ? "fpsVR recording unavailable." : error);
 				if (std::filesystem::file_size(recording.observation.file) > 512 * 1024 * 1024)
@@ -507,6 +527,8 @@ namespace PerformanceFpsVR
 			} catch (const std::exception& failure) {
 				result["reason"] = failure.what();
 			}
+			if (!stopError.empty())
+				result["reason"] = result.value("reason", "") + " Recording cleanup failed: " + stopError;
 			return result;
 		}
 	};

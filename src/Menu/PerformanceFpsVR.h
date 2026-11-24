@@ -26,13 +26,11 @@ namespace PerformanceFpsVR
 		virtual ~Logger() = default;
 		virtual bool Running() const = 0;
 		virtual Observation Observe(bool samples = true) = 0;
-		virtual bool AnyWriter() = 0;
-		virtual bool WriterOpen(const std::filesystem::path& file) = 0;
 		virtual void Toggle() = 0;
 		virtual void Wait(std::chrono::milliseconds duration) = 0;
 	};
 
-	/** A borrowed recording is never stopped; an uncertain toggle is never retried. */
+	/** Selected recordings are stopped after the scan; uncertain toggles are never retried. */
 	struct Recording
 	{
 		Observation observation;
@@ -56,7 +54,7 @@ namespace PerformanceFpsVR
 		bool Prepared() const;
 		/** Prevent a pending preparation from dispatching a new recording command. */
 		void RequestFinish();
-		/** Worker-thread finalization stops only the owned logger and attaches matched results. */
+		/** Worker-thread finalization stops the selected recording and attaches matched results. */
 		void Finish(nlohmann::json& record);
 
 	private:

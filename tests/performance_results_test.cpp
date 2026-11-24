@@ -2,6 +2,7 @@
 #include "Menu/PerformanceResults.h"
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <deque>
 #include <fstream>
 #include <iostream>
@@ -46,14 +47,66 @@ namespace
 											  { "cpu", { { "unit", "ms" }, { "value", nullptr } } } } } } }) } };
 	}
 
+	void TestTriplicateSummary()
+	{
+		Require(SceneLabel({ { "cellName", "" }, { "cell", 38706 } }) == "Cell 0x00009732", "unnamed exterior cells must retain a scene identity");
+		Require(SceneLabel({ { "cellName", " " }, { "locationName", "Riverwood" }, { "cell", 38706 } }) == "Riverwood", "location names must replace empty cell names");
+		Require(SceneLabel({ { "cellName", "Dragonsreach" }, { "locationName", "Whiterun" } }) == "Dragonsreach", "named interior cells must retain their display name");
+		auto run = Record();
+		run["kind"] = "quick_scan";
+		run["scanCount"] = 3;
+		run["results"] = Json::array();
+		for (unsigned index = 1; index <= 3; ++index)
+			run["results"].push_back({ { "id", std::to_string(index) + ":Upscaling" }, { "label", "Upscaling" }, { "scanIndex", index },
+				{ "coverage", "Instrumented passes" }, { "metrics", { { "gpu", { { "unit", "ms" }, { "value", index * 1.0 } } }, { "cpu", { { "unit", "ms" }, { "value", 0.0 } } } } } });
+		const auto rows = SummaryMetrics(run);
+		Require(rows.size() == 2 && Metrics(run).size() == 6, "summaries must retain individual repeat measurements");
+		Require(rows[0]["value"] == 0.0 && rows[0]["standardError"] == 0.0, "valid zero timings and zero SE must be retained");
+		Require(rows[1]["value"] == 2.0 && std::abs(rows[1]["standardError"].get<double>() - std::sqrt(1.0 / 3.0)) < 1e-12,
+			"SE must use sample variance across the three scan means");
+		Require(rows[1]["repeatValues"] == Json::array({ 1.0, 2.0, 3.0 }), "report must retain each repeat value in order");
+		auto second = run;
+		for (auto& row : second["results"]) row["metrics"]["gpu"]["value"] = 10.0;
+		const auto report = HtmlSession(Json::array({ run, second, run }));
+		Require(report.find("Experiments side by side") != std::string::npos && report.find("Experiment 3") != std::string::npos &&
+					report.find("2.000 &plusmn; 0.577") != std::string::npos && report.find("10.000 &plusmn; 0.000") != std::string::npos,
+			"experiments must have separate columns and independent within-run SE");
+		Require(report.find("<th>p-value</th>") == std::string::npos && report.find("<th>Current</th>") == std::string::npos &&
+					report.find("<th>Scan 3</th>") != std::string::npos,
+			"quick scans must not show On/Off-only columns");
+		Require(Csv(run).find("within_run_repeats") != std::string::npos, "CSV must include the same summary statistics as HTML");
+		auto mixedSources = run;
+		mixedSources["results"][1]["source"] = "csx_whole_frame";
+		Require(Rejects([&] { SummaryMetrics(mixedSources); }), "different timing sources must not be pooled into a triplicate");
+		auto precise = run;
+		for (unsigned i = 0; i < 3; ++i)
+			precise["results"][i]["metrics"]["gpu"]["value"] = 0.001 + i * 0.0000001;
+		Require(Html(precise).find("e-08") != std::string::npos, "small nonzero standard errors must not be displayed as zero");
+		auto wholeFrame = run;
+		for (unsigned index = 1; index <= 3; ++index)
+			wholeFrame["results"].push_back({ { "id", std::to_string(index) + ":$whole_frame" }, { "label", "Whole frame (CSX)" },
+				{ "source", "csx_whole_frame" }, { "scanIndex", index }, { "metrics", { { "fps", { { "unit", "fps" }, { "value", 100.0 * index } } }, { "frame", { { "unit", "ms" }, { "value", 10.0 } } }, { "cpu", { { "unit", "ms" }, { "value", 3.0 } } }, { "gpu", { { "unit", "ms" }, { "value", 8.0 } } } } } });
+		const auto nativeReport = HtmlSession(Json::array({ wholeFrame, run }));
+		Require(nativeReport.find("CSX Performance Tuning whole-frame timings") != std::string::npos &&
+					nativeReport.find("CSX FPS") != std::string::npos && nativeReport.find("200.000") != std::string::npos &&
+					Csv(wholeFrame).find("csx_whole_frame") != std::string::npos,
+			"native frame, FPS, CPU and GPU timings must survive summary, HTML and CSV independently of fpsVR");
+		run["results"][2]["metrics"]["gpu"]["value"] = nullptr;
+		Require(SummaryMetrics(run)[1]["value"].is_null() && SummaryMetrics(run)[1]["standardError"].is_null(),
+			"a missing repeat must not be replaced with zero or produce a complete triplicate");
+		run["results"].push_back(run["results"][0]);
+		run["results"].back()["id"] = "1:Upscaling";
+		Require(Rejects([&] { SummaryMetrics(run); }), "duplicate repeat identity must be rejected");
+	}
+
 	void TestRecordingOwnership()
 	{
 		using namespace PerformanceFpsVR;
 		struct FakeLogger : Logger
 		{
 			std::deque<Observation> observations;
-			bool running = true, writer = false, foreignWriter = false;
-			bool unreadableNewFile = false;
+			bool running = true, writer = false;
+			bool unreadableNewFile = false, ignoreStop = false;
 			int toggles = 0, waits = 0, rejectToggle = 0;
 			std::atomic_bool* cancelOnWait = nullptr;
 			bool Running() const override { return running; }
@@ -62,21 +115,24 @@ namespace
 				auto value = observations.front();
 				if (samples && unreadableNewFile && value.file == "owned.csv")
 					throw std::runtime_error("Malformed CSV samples");
-				if (samples && observations.size() > 1)
+				if (observations.size() > 1)
 					observations.pop_front();
 				return value;
 			}
-			bool AnyWriter() override { return writer || foreignWriter; }
-			bool WriterOpen(const std::filesystem::path&) override { return writer; }
 			void Toggle() override
 			{
 				++toggles;
 				RequireCommandSuccess(0, toggles == rejectToggle ? "Can't connect to fpsVR..." : "");
-				writer = !writer;
+				if (!ignoreStop || !writer)
+					writer = !writer;
 			}
 			void Wait(std::chrono::milliseconds) override
 			{
 				++waits;
+				if (writer && observations.size() == 1) {
+					observations.front().bytes += 10;
+					observations.front().lastSample += 1;
+				}
 				if (cancelOnWait)
 					*cancelOnWait = true;
 			}
@@ -87,6 +143,14 @@ namespace
 			return logger;
 		};
 		std::atomic_bool cancel = false;
+		{
+			auto logger = idle();
+			Recording recording;
+			recording.Prepare(logger, cancel);
+			Require(recording.confirmed, "a growing shared-access CSV must prove recording without a file lock");
+			recording.Stop(logger);
+			Require(!logger.writer && logger.toggles == 2, "shared-access recording must stop after scanning");
+		}
 		{
 			auto logger = idle();
 			Recording recording;
@@ -103,7 +167,7 @@ namespace
 			Recording recording;
 			recording.Prepare(logger, cancel);
 			recording.Stop(logger);
-			Require(recording.confirmed && !recording.owned && logger.toggles == 0, "foreign recordings must never be toggled");
+			Require(recording.confirmed && !recording.owned && logger.toggles == 1 && !logger.writer, "an existing recording must stop after the selected scan");
 		}
 		{
 			auto logger = idle();
@@ -115,9 +179,10 @@ namespace
 		for (bool running : { false, true }) {
 			auto logger = idle();
 			logger.running = running;
-			logger.foreignWriter = running;
+			if (running)
+				logger.observations[1].file = "foreign.csv";
 			Recording recording;
-			Require(Rejects([&] { recording.Prepare(logger, cancel); }) && logger.toggles == 0, "exited fpsVR and older active CSVs must block start");
+			Require(Rejects([&] { recording.Prepare(logger, cancel); }) && logger.toggles == 0, "exited fpsVR and a changed recording must block start");
 		}
 		{
 			auto logger = idle();
@@ -135,6 +200,16 @@ namespace
 			recording.Stop(logger);
 			Require(logger.toggles == 2 && !logger.writer, "failed sample validation must still stop the owned recording");
 		}
+		{
+			auto logger = idle();
+			logger.observations = { { "owned.csv", 10, 1 }, { "owned.csv", 20, 2 } };
+			logger.writer = logger.unreadableNewFile = true;
+			Recording recording;
+			Require(Rejects([&] { recording.Prepare(logger, cancel); }) && recording.owned,
+				"malformed samples in an existing growing CSV must retain stop responsibility");
+			recording.Stop(logger);
+			Require(logger.toggles == 1 && !logger.writer, "an existing malformed recording must still be stopped");
+		}
 		for (bool duringAdmission : { true, false }) {
 			auto logger = idle();
 			Recording recording;
@@ -149,6 +224,23 @@ namespace
 			recording.Stop(logger);
 			Require(logger.toggles == 1, "ownership changes must never trigger a second toggle");
 		}
+		{
+			auto logger = idle();
+			Recording recording;
+			recording.Prepare(logger, cancel);
+			logger.writer = false;
+			Require(Rejects([&] { recording.Stop(logger); }), "a quiet CSV alone must not claim a confirmed stop");
+			Require(logger.toggles == 1, "an externally stopped recording must not be restarted");
+		}
+		{
+			auto logger = idle();
+			Recording recording;
+			recording.Prepare(logger, cancel);
+			logger.ignoreStop = true;
+			Require(Rejects([&] { recording.Stop(logger); }), "continued CSV growth must reject stop confirmation");
+			recording.Stop(logger);
+			Require(logger.toggles == 2, "an unconfirmed stop must never be toggled a second time");
+		}
 		Require(Rejects([] { RequireCommandSuccess(1, ""); }) && Rejects([] { RequireCommandSuccess(0, "Usage: fpsVRcmd"); }), "failed and unsupported commands must be rejected");
 	}
 }
@@ -156,6 +248,7 @@ namespace
 int main(int argc, char** argv)
 try {
 	TestRecordingOwnership();
+	TestTriplicateSummary();
 	const auto root = std::filesystem::temp_directory_path() / ("csx-performance-test-" + NewId());
 	std::filesystem::create_directories(root);
 	struct Cleanup
@@ -214,7 +307,7 @@ try {
 			windows[0]["scanIndex"] = -1;
 		Require(Rejects([&] { std::istringstream input(raw); PerformanceFpsVR::Correlate(input, windows); }), "invalid matching windows must be rejected");
 	}
-	for (int issue = 0; issue < 7; ++issue) {
+	for (int issue = 0; issue < 8; ++issue) {
 		auto malformed = record;
 		malformed["fpsVR"] = { { "status", "complete" }, { "scans", matched } };
 		if (issue == 0)
@@ -231,6 +324,8 @@ try {
 			malformed["results"][0]["sampling"] = nullptr;
 		if (issue == 6)
 			malformed["fpsVR"]["status"] = "omitted";
+		if (issue == 7)
+			malformed["fpsVR"]["recordingStopped"] = "unknown";
 		Require(Rejects([&] { Validate(malformed); }), "malformed optional metadata must not reach the report or UI");
 	}
 	{
@@ -242,12 +337,15 @@ try {
 		outdoor["settings"]["NeuralRendering"] = { { "Enabled", true }, { "Mode", "Full" } };
 		indoor["settings"]["Upscaling"] = outdoor["settings"]["Upscaling"] = { { "Method", "DLSS" }, { "RenderScale", 0.77 } };
 		indoor["fpsVR"] = { { "status", "complete" }, { "scans", matched } };
+		indoor["fpsVR"]["recordingStopped"] = false;
 		outdoor["fpsVR"] = { { "status", "omitted" }, { "reason", "fpsVR was not running" }, { "scans", Json::array() } };
 		const auto report = HtmlSession(Json::array({ indoor, outdoor }));
 		Require(report.find("Indoor lights") != std::string::npos && report.find("Outdoor water and grass") != std::string::npos &&
 					report.find("Settings for this run") != std::string::npos && report.find("false") != std::string::npos && report.find("true") != std::string::npos &&
 					report.find("fpsVR whole-frame timings") != std::string::npos && report.find("<script>") == std::string::npos,
 			"session reports must preserve independent settings, fpsVR omissions and escaped labels");
+		Require(report.find("stop unconfirmed") != std::string::npos && report.find("p95 ms") != std::string::npos,
+			"recording cleanup failures must remain visible without discarding valid fpsVR measurements");
 		if (argc == 2) {
 			std::ofstream preview(std::filesystem::path(reinterpret_cast<const char8_t*>(argv[1])), std::ios::binary);
 			preview << report;

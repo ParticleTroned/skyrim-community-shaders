@@ -59,9 +59,13 @@ namespace
 	void LiveAndRecovery()
 	{
 		using namespace TestRuntime;
+		const auto captureStart = Tick();
 		for (unsigned i = 0; i < 3000; ++i) {
 			auto summary = Tick();
 			CheckLive(summary);
+			Check(summary.vrTimingEpoch == captureStart.vrTimingEpoch && !summary.vrSamples.empty() &&
+					  summary.vrSamples.back().systemTime > captureStart.vrSamples.back().systemTime,
+				"polling during a capture must retain its clock epoch and advance the end timestamp");
 			Check(summary.sampleFrameCount == compositorFrame - Util::VRFrameTiming::kCompletionLagFrames,
 				"live capture must advance continuously beyond ten seconds");
 			const auto calls = reads;

@@ -63,7 +63,7 @@ namespace MenuUI::PerformanceResultsPage
 			ContextLine(context, "gpu", "Graphics card");
 			ContextLine(context, "cpu", "Processor");
 			ContextLine(context, "resolution", "Resolution");
-			ContextLine(context, "cellName", "Scene");
+			ImGui::TextWrapped("Scene: %s", PerformanceResults::SceneLabel(context).c_str());
 			ContextLine(context, "gameHour", "Game hour");
 			ContextLine(record, "elapsedSeconds", "Duration (seconds)");
 			if (context.contains("build") && context.at("build").is_object()) {
@@ -91,9 +91,9 @@ namespace MenuUI::PerformanceResultsPage
 				return;
 			const auto& record = *view.first;
 			const bool quick = record.at("kind") == "quick_scan";
-			SectionHeading(quick ? "Instrumented self-time (ms/frame)" : "Measured cost", quick ?
-																							  "Instrumented feature work only. Shared passes and uninstrumented work are excluded. This is not an On/Off saving." :
-																							  "Current minus Off/None, with standard error. FPS reports the loss relative to Off/None. Independent feature costs do not add up to a total.");
+			SectionHeading(quick ? "Scan results" : "Measured cost", quick ?
+																		 "Whole-frame CSX metrics and instrumented feature work are separate rows. Standard error uses only this run's repeat scans." :
+																		 "Current minus Off/None, with standard error. FPS reports the loss relative to Off/None. Independent feature costs do not add up to a total.");
 			if (record.contains("failure") && !record.at("failure").is_null())
 				PageNotice(record.at("failure").get<std::string>(), NoticeKind::Error);
 			static std::shared_ptr<const nlohmann::json> previousFirst, previousSecond;
@@ -102,7 +102,7 @@ namespace MenuUI::PerformanceResultsPage
 				previousFirst = view.first;
 				previousSecond = view.second;
 				compared = view.second ? PerformanceResults::Compare(record, *view.second) : nlohmann::json{};
-				rows = view.second ? compared.at("rows") : PerformanceResults::Metrics(record);
+				rows = view.second ? compared.at("rows") : PerformanceResults::SummaryMetrics(record);
 			}
 			if (view.second && (!compared.at("compatible").get<bool>() || !compared.at("contextMatches").get<bool>() || !compared.at("settingsMatch").get<bool>()))
 				PageNotice("Saved runs use different settings or conditions.", NoticeKind::Pending,

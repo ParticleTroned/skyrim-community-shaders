@@ -1,5 +1,6 @@
 #pragma once
 
+#include "PerformanceTuningStatistics.h"
 #include "Utils/FeatureProfiling.h"
 #include "Utils/ProfilerTiming.h"
 
@@ -14,7 +15,67 @@ namespace PerformanceQuickScan
 	inline constexpr double kMaximumSeconds = 30.0;
 	inline constexpr std::uint32_t kCaptureFrames = 300;
 	inline constexpr std::uint32_t kBatchScans = 3;
-	inline constexpr double kBatchGapSeconds = 5.0;
+	inline constexpr double kBatchGapSeconds = 3.0;
+	/** Collect the live panel's unique completed samples only within an active capture. */
+	struct FrameTimingCapture
+	{
+		struct Channel
+		{
+			PerformanceTuningStatistics::Moments moments;
+			std::uint64_t lastId = 0;
+			std::uint64_t missingSamples = 0;
+			void Push(std::uint64_t id, double value, bool available)
+			{
+				if (id <= lastId)
+					return;
+				if (lastId != 0)
+					missingSamples += id - lastId - 1;
+				if (!available || !PerformanceTuningStatistics::AddMoment(moments, value, 1.0))
+					++missingSamples;
+				lastId = id;
+			}
+		};
+		Channel frame, cpu, gpu;
+		std::uint64_t epoch = 0;
+		bool vr = false, valid = false;
+		template <class Summary>
+		void Begin(const Summary& summary)
+		{
+			*this = {};
+			vr = summary.vrTiming;
+			epoch = vr ? summary.vrTimingEpoch : summary.flatTimingEpoch;
+			const auto baselineFrameId = vr ? (summary.vrSamples.empty() ? summary.vrLatestFrameIndex : summary.vrSamples.back().frameIndex) : summary.flatPresentId;
+			frame.lastId = cpu.lastId = gpu.lastId = baselineFrameId;
+			valid = true;
+		}
+		template <class Summary>
+		void Push(const Summary& summary)
+		{
+			if (!valid || vr != summary.vrTiming || epoch != (vr ? summary.vrTimingEpoch : summary.flatTimingEpoch)) {
+				valid = false;
+				return;
+			}
+			if (vr) {
+				for (const auto& sample : summary.vrSamples) {
+					frame.Push(sample.frameIndex, sample.frameMs, sample.hasFrame);
+					cpu.Push(sample.frameIndex, sample.cpuMs, sample.hasCpu);
+					gpu.Push(sample.frameIndex, sample.gpuMs, sample.hasGpu);
+				}
+			} else {
+				for (const auto& sample : summary.flatSamples) {
+					if (!sample.resolved)
+						break;
+					frame.Push(sample.presentId, sample.frameMs, sample.hasFrame);
+					cpu.Push(sample.presentId, sample.cpuMs, sample.hasCpu);
+					gpu.Push(sample.presentId, sample.gpuMs, sample.hasGpu);
+				}
+			}
+		}
+		std::optional<double> Mean(const Channel& channel) const
+		{
+			return valid && channel.missingSamples == 0 && channel.moments.sampleWeight > 0 ? std::optional(PerformanceTuningStatistics::GetMean(channel.moments)) : std::nullopt;
+		}
+	};
 
 	/** Global switches are observed every update, including changes made by hotkeys. */
 	struct RenderConfiguration
@@ -96,7 +157,7 @@ namespace PerformanceQuickScan
 				return Action::Wait;
 			if (!ready)
 				readySince = now;
-			else if (now - readySince >= kSettleSeconds && (phase != Phase::BetweenScans || now - started >= kBatchGapSeconds))
+			else if (now - readySince >= (phase == Phase::BetweenScans ? kBatchGapSeconds : kSettleSeconds))
 				return Action::StartCapture;
 			return Action::Wait;
 		}

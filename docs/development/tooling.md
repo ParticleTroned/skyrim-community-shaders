@@ -316,6 +316,24 @@ Status requests are fresh and do not enter the command journal.
 
 The service forwards quick scans, three-scan batches, feature comparisons,
 upscaling sweeps and saved-result exports to the existing UI controllers.
+Three-scan results report the equal-weight mean and standard error across
+the three scan means within that run, with three seconds of stable rendering
+between scans. The first scan retains its five-second settling period.
+Repeated runs remain separate experiments; session reports compare them in
+adjacent columns. Incomplete
+triplicates retain their individual values without an aggregate. Optional
+fpsVR recording is verified through CSV growth and stopped after the batch,
+including an existing recording selected for the run. fpsVR stays open.
+An unproven stop is reported explicitly without sending a second toggle;
+valid timing data survives a recording cleanup failure. Active logging is
+read from its selected CSV rather than rediscovering the directory per poll.
+Each quick scan also saves CSX's native whole-frame interval, FPS, CPU and
+GPU measurements independently of fpsVR. They use the live Performance
+Tuning panel's sample definitions and retain per-metric sample counts.
+FPS is 1000 divided by the scan's mean frame interval. Timing epoch changes
+invalidate the native whole-frame aggregate instead of mixing clocks.
+Missing or invalid native samples invalidate the affected metric. Desktop
+samples wait for GPU resolution before entering their matched window.
 An export requires an explicit destination directory. Only the initiating
 client can cancel its measurement, and ownership is tied to its saved run
 identity. Starts and feature changes reject an active bounded profiler capture. Poll `status` for progress and

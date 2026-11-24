@@ -164,7 +164,6 @@ void WeatherPicker::DrawWeatherStatusPanel()
 
 	auto* weatherManager = WeatherManager::GetSingleton();
 	auto currentWeathers = weatherManager->GetCurrentWeathers();
-	const auto& theme = Menu::GetSingleton()->GetTheme();
 
 	if (currentWeathers.currentWeather) {
 		ImGui::Text(T(TKEY("current_weather"), "Current Weather: %s"),
@@ -186,7 +185,7 @@ void WeatherPicker::DrawWeatherStatusPanel()
 			ImGui::TextDisabled("%s", T(TKEY("no_transition"), "No active weather transition"));
 		}
 	} else {
-		ImGui::TextColored(theme.StatusPalette.Warning, "%s", T(TKEY("no_active_weather"), "No Active Weather"));
+		ImGui::TextColored(Util::Colors::GetWarning(), "%s", T(TKEY("no_active_weather"), "No Active Weather"));
 	}
 }
 

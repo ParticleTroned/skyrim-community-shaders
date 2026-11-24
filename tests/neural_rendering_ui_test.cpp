@@ -498,7 +498,7 @@ namespace MenuUI
 		const char* tooltip;
 		bool enabled = true;
 	};
-	int ChoiceCards(const char*, int, std::span<const Choice> choices)
+	int ChoiceCards(const char*, int, std::span<const Choice> choices, int* = nullptr)
 	{
 		int selected = -1;
 		for (size_t index = 0; index < choices.size(); ++index) {

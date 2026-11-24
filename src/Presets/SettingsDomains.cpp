@@ -321,7 +321,7 @@ namespace Presets
 		}
 	}
 
-	bool ValidatePatch(const Json& patch, const Json& schema, std::string& error, const std::string& path)
+	bool ValidatePatch(const Json& patch, const Json& schema, std::string& error, const std::string& path, ValidationMode mode)
 	{
 		if (std::count(path.begin(), path.end(), '/') > 64) {
 			error = "Settings are nested too deeply";
@@ -330,10 +330,12 @@ namespace Presets
 		if (patch.is_object() && schema.is_object()) {
 			for (const auto& [key, value] : patch.items()) {
 				if (!schema.contains(key)) {
+					if (mode == ValidationMode::SettingsSnapshot)
+						continue;
 					error = "Unrecognized setting: " + path + "/" + key;
 					return false;
 				}
-				if (!ValidatePatch(value, schema.at(key), error, path + "/" + key))
+				if (!ValidatePatch(value, schema.at(key), error, path + "/" + key, mode))
 					return false;
 			}
 			return true;
@@ -343,13 +345,15 @@ namespace Presets
 				error = "Too many entries: " + path;
 				return false;
 			}
-			if (!path.ends_with("/locationOverrides") && patch.size() != schema.size()) {
+			if (mode == ValidationMode::ClosedPatch && !path.ends_with("/locationOverrides") && patch.size() != schema.size()) {
 				error = "Incorrect array length: " + path;
 				return false;
 			}
 			std::set<std::string> locations;
 			for (size_t i = 0; i < patch.size(); ++i) {
 				if (schema.empty()) {
+					if (mode == ValidationMode::SettingsSnapshot)
+						continue;
 					error = "No entry schema available: " + path;
 					return false;
 				}
@@ -361,7 +365,7 @@ namespace Presets
 						return false;
 					}
 				}
-				if (!ValidatePatch(patch[i], schema[std::min(i, schema.size() - 1)], error, path + "/" + std::to_string(i)))
+				if (!ValidatePatch(patch[i], schema[std::min(i, schema.size() - 1)], error, path + "/" + std::to_string(i), mode))
 					return false;
 			}
 			return true;

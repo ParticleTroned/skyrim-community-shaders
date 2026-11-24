@@ -195,6 +195,10 @@ public:
 	bool Save(ConfigMode a_configMode = ConfigMode::USER, Feature* a_feature = nullptr);
 	/** Applies installed defaults in memory, preserving saved files and the dirty baseline. */
 	bool RestoreDefaultSettings(std::string& a_error);
+	/** Capture all CSX settings, retaining saved sections for unavailable features. */
+	bool CaptureSettingsSnapshot(nlohmann::json& a_settings, std::string& a_error);
+	/** Apply a complete or partial preset through native loaders, with rollback on failure. */
+	bool ApplySettingsSnapshot(const nlohmann::json& a_settings, std::string& a_error);
 
 	static constexpr uint32_t kSaveLoadSafeModeGraceFrames = 120;
 	static constexpr uint32_t kSaveLoadSafeModeFallbackFrames = 36000;
@@ -608,6 +612,8 @@ public:
 	}
 
 	std::unordered_map<std::string, bool> disabledFeatures;
+	// Retain preset values for unavailable features until saved or reloaded.
+	json appliedPresetSettings = json::object();
 	std::mutex m_mutex;
 
 	inline ~State()

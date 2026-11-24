@@ -159,7 +159,7 @@ file(WRITE "${OUTPUT_DIRECTORY}/settings_constraint_warning_under_test.h" "${war
 extract_between("${source}" "void FeatureListRenderer::RenderPerformancePage(" "void FeatureListRenderer::SetSidebarVisible(" "settings_performance_navigation_under_test.h")
 
 file(READ "${PROJECT_ROOT}/src/State.cpp" source)
-extract_between("${source}" "bool State::RestoreDefaultSettings(" "void State::Load(" "settings_restore_under_test.h")
+extract_between("${source}" "bool State::CaptureSettingsSnapshot(" "void State::Load(" "settings_restore_under_test.h")
 file(READ "${PROJECT_ROOT}/src/Menu/ProfilingRenderer.cpp" source)
 extract_between("${source}" "bool ProfilingRenderer::RenderEnabledControl()" "void ProfilingRenderer::RenderStatistics(" "settings_profiling_enabled_under_test.h")
 file(READ "${PROJECT_ROOT}/src/Menu/PerformanceTuningRenderer.cpp" source)

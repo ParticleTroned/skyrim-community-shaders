@@ -281,9 +281,9 @@ void PrecipitationWidget::DrawWidget()
 					}
 					if (settings.particleTexture != buf && !buf.empty()) {
 						if (!WeatherUtils::TexturePath::HasDdsExtension(buf))
-							ImGui::TextColored(globals::menu->GetTheme().StatusPalette.Error, "Path must end with '.dds'");
+							ImGui::TextColored(Util::Colors::GetError(), "Path must end with '.dds'");
 						else if (!lastCheckedExists)
-							ImGui::TextColored(globals::menu->GetTheme().StatusPalette.Error, "Texture not found in loose files or archives.");
+							ImGui::TextColored(Util::Colors::GetError(), "Texture not found in loose files or archives.");
 					}
 				});
 

@@ -1139,27 +1139,27 @@ namespace Util
 
 	/**
 	 * Provides access to theme-aware UI colors for consistent styling.
-	 * These functions return colors from the active theme's StatusPalette,
-	 * ensuring consistency with the overall application theme.
+	 * Warnings and errors use the shared magenta attention color with light/dark
+	 * contrast adjustment. Other status colors follow the active theme.
 	 */
 	namespace Colors
 	{
 		/**
 		 * Get theme-appropriate colors for timer/countdown displays.
-		 * @return Theme colors: Good=SuccessColor, Warning=Warning, Critical=Error
+		 * @return Theme success color or magenta for warning/critical status.
 		 */
 		ImVec4 GetTimerGood();      // Green - good/safe status (from theme SuccessColor)
-		ImVec4 GetTimerWarning();   // Orange - warning status (from theme Warning)
-		ImVec4 GetTimerCritical();  // Red - critical/error status (from theme Error)
+		ImVec4 GetTimerWarning();   // Magenta - warning status
+		ImVec4 GetTimerCritical();  // Magenta - critical/error status
 
 		/**
 		 * Get standard theme UI colors for consistent theming.
-		 * @return Theme colors from StatusPalette
+		 * @return Theme status colors, with magenta warnings and errors.
 		 */
 		ImVec4 GetDefault();   // White - default text (from theme Text)
 		ImVec4 GetSuccess();   // Green - success/positive (from theme SuccessColor)
-		ImVec4 GetWarning();   // Orange - warning (from theme Warning)
-		ImVec4 GetError();     // Red - error/negative (from theme Error)
+		ImVec4 GetWarning();   // Magenta - warning
+		ImVec4 GetError();     // Magenta - error
 		ImVec4 GetInfo();      // Blue - informational (from theme InfoColor)
 		ImVec4 GetDisabled();  // Gray - disabled items (from theme Disable)
 	}

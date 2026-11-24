@@ -1733,12 +1733,12 @@ namespace Util
 
 		ImVec4 GetTimerWarning()
 		{
-			return globals::menu->GetTheme().StatusPalette.Warning;
+			return GetWarning();
 		}
 
 		ImVec4 GetTimerCritical()
 		{
-			return globals::menu->GetTheme().StatusPalette.Error;
+			return GetError();
 		}
 
 		ImVec4 GetDefault()
@@ -1753,12 +1753,12 @@ namespace Util
 
 		ImVec4 GetWarning()
 		{
-			return globals::menu->GetTheme().StatusPalette.Warning;
+			return Color::Readiness(false);
 		}
 
 		ImVec4 GetError()
 		{
-			return globals::menu->GetTheme().StatusPalette.Error;
+			return Color::Readiness(false);
 		}
 
 		ImVec4 GetInfo()

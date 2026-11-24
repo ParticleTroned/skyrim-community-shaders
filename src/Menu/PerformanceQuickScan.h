@@ -14,7 +14,7 @@ namespace PerformanceQuickScan
 	inline constexpr double kMaximumSeconds = 30.0;
 	inline constexpr std::uint32_t kCaptureFrames = 300;
 	inline constexpr std::uint32_t kBatchScans = 3;
-	inline constexpr double kBatchGapSeconds = 10.0;
+	inline constexpr double kBatchGapSeconds = 5.0;
 
 	/** Global switches are observed every update, including changes made by hotkeys. */
 	struct RenderConfiguration

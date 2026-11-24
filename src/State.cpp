@@ -63,6 +63,7 @@
 #include "Features/Wetterness.h"
 #include "Menu.h"
 #include "Menu/PerformancePage.h"
+#include "Menu/PerformanceProfiles.h"
 #include "Menu/PerformanceTuningRenderer.h"
 #include "PresetCompatibility.h"
 #include "Presets/LookProfiles.h"
@@ -1221,6 +1222,161 @@ static std::filesystem::path GetConfigPath(State::ConfigMode a_configMode)
 	}
 }
 
+bool State::CaptureSettingsSnapshot(json& a_settings, std::string& a_error)
+{
+	a_error.clear();
+	try {
+		json snapshot = json::object();
+		for (const auto mode : { ConfigMode::DEFAULT, ConfigMode::USER }) {
+			json saved;
+			const auto read = Util::FileHelpers::ReadJsonFile(GetConfigPath(mode), saved, a_error);
+			if (read == Util::FileHelpers::JsonFileReadResult::Error || (read == Util::FileHelpers::JsonFileReadResult::Success && !saved.is_object())) {
+				if (a_error.empty())
+					a_error = "The saved settings document is invalid.";
+				return false;
+			}
+			if (read == Util::FileHelpers::JsonFileReadResult::Success)
+				Presets::Overlay(snapshot, saved);
+		}
+		SaveToJson(snapshot, false);
+		// A preset must not recursively contain its own saved profile.
+		snapshot.erase("Performance Profiles");
+		a_settings = std::move(snapshot);
+		return true;
+	} catch (const std::exception& error) {
+		a_error = error.what();
+		return false;
+	}
+}
+
+bool State::ApplySettingsSnapshot(const json& a_settings, std::string& a_error)
+{
+	a_error.clear();
+	if (!PerformanceProfiles::ValidateSnapshot(a_settings)) {
+		a_error = "The preset settings are invalid.";
+		return false;
+	}
+	if (IsPersistentMutationBlocked() || PerformanceTuningRenderer::HasActiveMeasurements()) {
+		a_error = "Wait for loading, saving and measurements to finish before applying this preset.";
+		return false;
+	}
+	if (!globals::menu->PrepareSettingsMutation()) {
+		a_error = "Could not preserve the saved settings baseline.";
+		return false;
+	}
+	json previous;
+	if (!CaptureSettingsSnapshot(previous, a_error))
+		return false;
+	if (!Presets::ValidatePatch(Presets::Difference(a_settings, previous), previous, a_error, "", Presets::ValidationMode::SettingsSnapshot))
+		return false;
+	auto desired = previous;
+	Presets::Overlay(desired, a_settings);
+	const auto changed = [&](const char* key) { return desired.contains(key) && (!previous.contains(key) || desired[key] != previous[key]); };
+	const bool coreChanged = changed("Menu") || changed("General") || changed("Advanced") || changed("Replace Original Shaders");
+	const bool startupChanged = changed("Disable at Boot");
+	const bool lookChanged = changed("Presets");
+	std::vector<Feature*> targets;
+	for (auto* feature : Feature::GetFeatureList()) {
+		const auto name = feature->GetName();
+		if (!feature->loaded || !feature->HasFeatureSettings() || !desired.contains(name) ||
+			(!changed(name.c_str()) && !(lookChanged && a_settings.contains(name))))
+			continue;
+		if (const auto* reason = PerformanceTuningRenderer::GetFeatureSceneControlBlockReason(feature)) {
+			a_error = name + ": " + reason;
+			return false;
+		}
+		targets.push_back(feature);
+	}
+	json defaults;
+	if (lookChanged && Util::FileHelpers::ReadJsonFile(GetConfigPath(ConfigMode::DEFAULT), defaults, a_error) == Util::FileHelpers::JsonFileReadResult::Error)
+		return false;
+	const auto previousRetained = appliedPresetSettings;
+	const auto previousHistory = PerformanceTuningRenderer::CaptureFeatureToggleHistory();
+	const auto applyCore = [&](json settings) {
+		if (coreChanged) {
+			MenuUI::PerformancePage::Save(settings);
+			LoadFromJson(settings, false);
+		}
+		if (startupChanged && settings.contains("Disable at Boot")) {
+			auto disabled = settings.at("Disable at Boot");
+			ApplyDefaultDisableAtBootSettings(disabled);
+			ApplyForcedDisableAtBootSettings(disabled);
+			decltype(disabledFeatures) candidate;
+			for (const auto& [name, value] : disabled.items()) {
+				if (!value.is_boolean())
+					throw std::runtime_error("Invalid startup feature switch: " + name);
+				candidate[name] = value.get<bool>();
+			}
+			disabledFeatures = std::move(candidate);
+		}
+	};
+	const auto applyLook = [&](const json& settings) {
+		if (!lookChanged)
+			return;
+		Presets::LookProfiles::Get().Load(defaults, settings);
+		if (!Presets::LookProfiles::Get().GetLoadError().empty())
+			throw std::runtime_error(Presets::LookProfiles::Get().GetLoadError());
+	};
+	const auto applyFeature = [&](Feature* feature, const json& settings) {
+		auto values = settings.at(feature->GetName());
+		feature->LoadSettings(values);
+		WeatherVariables::GlobalWeatherRegistry::GetSingleton()->CaptureFeatureUserSettings(feature->GetShortName());
+	};
+	SceneSettingsManager::BaseSettingsScope scope;
+	try {
+		applyCore(desired);
+		applyLook(desired);
+		// Explicit profile values take precedence over the Look's saved appearance edits.
+		for (auto* feature : targets)
+			applyFeature(feature, desired);
+		auto history = previousHistory;
+		for (auto* feature : targets)
+			history.erase(feature->GetShortName());
+		PerformanceTuningRenderer::RestoreFeatureToggleHistory(history);
+		if (!targets.empty())
+			PerformanceTuningRenderer::NotifyFeatureSettingsChanged(targets.front());
+		WeatherManager::GetSingleton()->NotifyUserSettingsChanged();
+		appliedPresetSettings = desired;
+		for (const auto* key : { "Menu", "General", "Advanced", "Replace Original Shaders", "Disable at Boot", "Version", "Performance Profiles" })
+			appliedPresetSettings.erase(key);
+		for (auto* feature : Feature::GetFeatureList())
+			if (feature->loaded && feature->HasFeatureSettings())
+				appliedPresetSettings.erase(feature->GetName());
+		scope.Finish();
+		WeatherManager::GetSingleton()->RefreshFeatureOverrides();
+		globals::menu->RequestSettingsDirtyCheck();
+		return true;
+	} catch (const std::exception& error) {
+		a_error = error.what();
+	} catch (...) {
+		a_error = "The preset failed unexpectedly.";
+	}
+	const auto restore = [&](const auto& action) {
+		try {
+			action();
+		} catch (const std::exception& failure) {
+			a_error += std::string("; restoring previous settings also failed: ") + failure.what();
+		} catch (...) {
+			a_error += "; restoring previous settings also failed unexpectedly";
+		}
+	};
+	restore([&] {
+		SceneSettingsManager::BaseSettingsScope rollbackScope;
+		restore([&] { applyCore(previous); });
+		restore([&] { applyLook(previous); });
+		for (auto it = targets.rbegin(); it != targets.rend(); ++it)
+			restore([&] { applyFeature(*it, previous); });
+		appliedPresetSettings = previousRetained;
+		PerformanceTuningRenderer::RestoreFeatureToggleHistory(previousHistory);
+		WeatherManager::GetSingleton()->NotifyUserSettingsChanged();
+		rollbackScope.Finish();
+		scope.Finish();
+		WeatherManager::GetSingleton()->RefreshFeatureOverrides();
+	});
+	globals::menu->RequestSettingsDirtyCheck();
+	return false;
+}
+
 bool State::RestoreDefaultSettings(std::string& a_error)
 {
 	a_error.clear();
@@ -1609,6 +1765,7 @@ void State::SaveToJson(
 	bool a_includeMissingUnloadedFeatures)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
+	Presets::Overlay(settings, appliedPresetSettings);
 	Presets::LookProfiles::Get().SaveSelection(settings);
 	SettingsMigrations::MigrateAdaptiveBalanceRootLayer(settings);
 	const auto shaderCache = globals::shaderCache;
@@ -1684,6 +1841,7 @@ void State::LoadFromJson(
 {
 	PerformanceTuningRenderer::NotifyConfigurationChanging();
 	std::lock_guard<std::mutex> lock(m_mutex);
+	appliedPresetSettings = json::object();
 	SettingsMigrations::MigrateReverseZStartup(settings);
 	SettingsMigrations::MigrateEditorSettingsRootLayer(settings);
 	if (a_loadFeatureSettings)

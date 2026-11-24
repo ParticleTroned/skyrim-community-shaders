@@ -2047,7 +2047,10 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_sources(
         settings_ui_test
-        PRIVATE src/Menu/PerformanceResults.cpp src/PresetCompatibility.cpp
+        PRIVATE
+            src/Menu/PerformanceResults.cpp
+            src/PresetCompatibility.cpp
+            src/Presets/SettingsDomains.cpp
     )
     target_include_directories(settings_ui_test PRIVATE "${_settings_ui_dir}")
     find_package(fmt CONFIG REQUIRED)
@@ -2157,6 +2160,7 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE nlohmann_json::nlohmann_json
     )
 
+    add_controller_test(path_validation_test PathValidation tests/path_validation_test.cpp)
     add_controller_test(look_profiles_test LookProfiles tests/look_profiles_test.cpp)
     set(_look_profiles_test
         "${CMAKE_CURRENT_BINARY_DIR}/look_profiles_under_test.h"

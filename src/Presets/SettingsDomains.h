@@ -30,6 +30,11 @@ namespace Presets
 	Json Difference(const Json& current, const Json& baseline);
 	/** Removes keys supplied by a patch, including overlapping nested objects. */
 	void RemoveCovered(Json& edits, const Json& patch);
-	/** Rejects unrecognized keys, incompatible types and non-finite values before mutation. */
-	bool ValidatePatch(const Json& patch, const Json& schema, std::string& error, const std::string& path = "");
+	enum class ValidationMode
+	{
+		ClosedPatch,
+		SettingsSnapshot
+	};
+	/** Snapshots also allow new map entries and resized lists; native loaders validate their contents. */
+	bool ValidatePatch(const Json& patch, const Json& schema, std::string& error, const std::string& path = "", ValidationMode mode = ValidationMode::ClosedPatch);
 }

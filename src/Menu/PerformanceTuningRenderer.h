@@ -25,6 +25,9 @@ public:
 	static const char* GetFeatureSceneControlBlockReason(Feature* a_feature);
 	/** Apply settings while preserving reversible toggle history on failure. */
 	static bool ApplyFeatureSettingsTransaction(const std::vector<Feature*>& a_features, const std::function<bool()>& a_apply, bool a_replaceToggleHistory = false);
+	/** Preserve reversible On/Off configurations across an explicit editor Restore. */
+	static nlohmann::json CaptureFeatureToggleHistory();
+	static void RestoreFeatureToggleHistory(const nlohmann::json& a_history);
 	/** Draws the reversible feature switch; custom help never replaces a blocking reason. */
 	static void RenderFeatureEnabledControl(Feature* a_feature, const char* a_tooltip = nullptr);
 	/** Persistent toggle failure for the header or the feature's profiling row. */

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Menu/PerformanceTuningController.h"
+#include "Presets/LookProfileState.h"
 #include "Utils/RuntimeToggle.h"
 #include <algorithm>
 #include <functional>
@@ -11,13 +12,30 @@ struct Feature
 	std::string name;
 	bool loaded = true, sceneOwned = false, rejectToggle = false, measurable = true, profileToggle = true, presetEnables = false;
 	bool inMenu = true;
+	int loadFailures = 0;
 	const char* profileReadOnlyReason = nullptr;
 	nlohmann::json settings{ { "enabled", true }, { "preset", "Quality" }, { "tint", 0.75 } };
+	nlohmann::json transient = nlohmann::json::object();
 	static inline std::vector<Feature*> features;
 	explicit Feature(std::string a_name) : name(std::move(a_name)) {}
 	virtual ~Feature() = default;
 	static const auto& GetFeatureList() { return features; }
 	std::string GetShortName() const { return name; }
+	std::string GetName() const { return name; }
+	void SaveSettings(nlohmann::json& value)
+	{
+		value = settings;
+		value.update(transient);
+	}
+	void SaveBaseSettings(nlohmann::json& value) { value = settings; }
+	void LoadSettings(nlohmann::json& value)
+	{
+		settings = value;
+		if (loadFailures > 0) {
+			--loadFailures;
+			throw std::runtime_error("Feature load failed");
+		}
+	}
 	std::string GetDisplayName() const { return name; }
 	std::string_view GetCategory() const { return "Lighting"; }
 	bool SupportsPerformanceCostMeasurement() const { return measurable; }
@@ -105,6 +123,31 @@ namespace globals
 {
 	struct State
 	{
+		bool saveSucceeds = true;
+		int saves = 0;
+		nlohmann::json globalSettings{ { "Menu", { { "zoom", 1.25 } } }, { "General", { { "shaders", true } } }, { "Unavailable feature", { { "detail", 17 } } } };
+		bool Save()
+		{
+			++saves;
+			return saveSucceeds;
+		}
+		bool CaptureSettingsSnapshot(nlohmann::json& result, std::string&)
+		{
+			result = globalSettings;
+			for (auto* feature : Feature::features)
+				result[feature->name] = feature->settings;
+			return true;
+		}
+		bool ApplySettingsSnapshot(const nlohmann::json& settings, std::string&)
+		{
+			for (auto* feature : Feature::features)
+				if (settings.contains(feature->name))
+					feature->settings = settings[feature->name];
+			for (const auto& [key, value] : settings.items())
+				if (globalSettings.contains(key))
+					globalSettings[key] = value;
+			return true;
+		}
 		bool isMainMenuOpen = false, isLoadingMenuOpen = false, saving = false, pendingPostLoadRuntimeReset = false;
 		bool IsSaveLoadSafeModeActive() const { return saving; }
 		bool IsEngineSaveLoadActivityActive() const { return saving; }
@@ -118,7 +161,14 @@ namespace globals
 	};
 	struct Menu
 	{
+		std::string selectedPage;
+		void SelectFeatureMenu(const std::string& page) { selectedPage = page; }
 		void RequestSettingsDirtyCheck() {}
+		void OpenMenu() {}
+		bool PrepareSettingsMutation() { return true; }
+		void CaptureFeatureMenuSettings(const std::string&, nlohmann::json&) {}
+		void ApplyFeatureMenuSettings(const std::string&, const nlohmann::json*) {}
+		std::string GetSettingsSaveMessage() const { return "Save failed"; }
 	};
 	inline State stateStorage;
 	inline State* state = &stateStorage;
@@ -141,6 +191,19 @@ public:
 	static inline bool busy = false;
 	static inline std::unordered_map<std::string, std::optional<PerformanceTuningController::DisabledConfiguration>> configurations;
 	static bool HasActiveMeasurements() { return busy; }
+	static nlohmann::json CaptureFeatureToggleHistory()
+	{
+		auto result = nlohmann::json::object();
+		for (const auto& [name, state] : configurations)
+			result[name] = state ? nlohmann::json{ { "enabled", state->enabledState }, { "disabled", state->disabledState } } : nlohmann::json(nullptr);
+		return result;
+	}
+	static void RestoreFeatureToggleHistory(const nlohmann::json& history)
+	{
+		configurations.clear();
+		for (const auto& [name, state] : history.items())
+			configurations[name] = state.is_null() ? std::nullopt : std::optional(PerformanceTuningController::DisabledConfiguration{ state["enabled"], state["disabled"] });
+	}
 	static const char* GetFeatureSceneControlBlockReason(Feature* a_feature) { return a_feature->sceneOwned ? "scene owned" : nullptr; }
 	static const char* GetFeatureControlBlockReason(Feature* a_feature) { return GetFeatureSceneControlBlockReason(a_feature); }
 	static bool SetFeatureEnabled(Feature* a_feature, bool a_enabled)
@@ -159,10 +222,50 @@ namespace logger
 }
 namespace MenuUI
 {
+	inline const char* GetFeatureSettingsActionBlockReason(Feature* feature) { return PerformanceTuningRenderer::busy ? "busy" : feature ? nullptr :
+		                                                                                                                                   "unavailable"; }
 	struct ActionFeedback
 	{
 		bool error = false;
 		std::string message;
+	};
+}
+struct FeatureListRenderer
+{
+	static std::string GetBuiltInPageMenuEntryId(const std::string& page) { return "builtin:" + page; }
+};
+struct WeatherManager
+{
+	static WeatherManager* GetSingleton()
+	{
+		static WeatherManager manager;
+		return &manager;
+	}
+	void NotifyUserSettingsChanged() {}
+	void RefreshFeatureOverrides() {}
+};
+namespace WeatherVariables
+{
+	struct GlobalWeatherRegistry
+	{
+		static GlobalWeatherRegistry* GetSingleton()
+		{
+			static GlobalWeatherRegistry registry;
+			return &registry;
+		}
+		void CaptureFeatureUserSettings(const std::string&) {}
+	};
+}
+namespace Presets
+{
+	struct LookProfiles
+	{
+		static LookProfiles& Get()
+		{
+			static LookProfiles profiles;
+			return profiles;
+		}
+		void SaveSelection(nlohmann::json&) {}
 	};
 }
 #include "performance_profile_actions_under_test.h"
@@ -376,5 +479,46 @@ void TestProfileApplication()
 	require(SelectIncludedFeature("Upscaling", false)["accepted"] && SaveIncludedFeatures()["accepted"] &&
 				user.choices["upscaling"]["upscaleMethod"] == 0 && !user.choices["features"].contains("Upscaling"),
 		"upscaling Off must use its native selection boundary rather than a feature toggle");
+	const auto savesBefore = globals::state->saves;
+	require(BeginFeatureEdit(grass.name)["accepted"] && EditedFeature() == &grass, "double-click route opens the requested native editor");
+	grass.settings["tint"] = 0.33;
+	grass.transient["tint"] = 0.99;
+	require(ApplyFeatureEdit()["accepted"] && user.settings[grass.name]["tint"] == 0.33 && globals::state->saves == savesBefore + 1,
+		"Apply captures authored settings without baking transient weather values, and also persists normal settings");
+	grass.transient.clear();
+	require(EndFeatureEdit()["accepted"] && !EditedFeature() && grass.settings["tint"] == 0.33 &&
+				globals::menu->selectedPage == "builtin:PerformancePresets",
+		"Back keeps applied game settings and returns to tiles");
+	require(BeginFeatureEdit(grass.name)["accepted"], "editor can reopen");
+	grass.settings["tint"] = 0.91;
+	const auto savedEditorProfile = user.Save();
+	globals::state->saveSucceeds = false;
+	require(!ApplyFeatureEdit()["accepted"] && user.Save() == savedEditorProfile && grass.settings["tint"] == 0.91,
+		"failed normal save preserves the profile and live edits for retry");
+	globals::state->saveSucceeds = true;
+	grass.loadFailures = 1;
+	require(!RestoreFeatureEdit()["accepted"] && grass.settings["tint"] == 0.91,
+		"failed restoration rolls back complete feature values for retry");
+	require(RestoreFeatureEdit()["accepted"] && grass.settings["tint"] == 0.33,
+		"Restore uses this editor's opening settings, not defaults or the original game baseline");
+	grass.settings["tint"] = 0.42;
+	require(EndFeatureEdit()["accepted"] && grass.settings["tint"] == 0.42,
+		"Back also retains unapplied live edits as requested");
+	require(CaptureCurrentSettings()["accepted"] && user.settings[grass.name]["tint"] == 0.42 &&
+				user.settings.contains("Menu") && user.settings.contains("General") && user.settings.contains("Unavailable feature") &&
+				user.settings.contains(unsupported.name) && user.settings.contains(reverseZ.name),
+		"copy ALL includes global, unsupported, restart-only and retained unavailable settings");
+	const auto allSettingsProfile = user.Save();
+	grass.settings["tint"] = 0.66;
+	globals::state->globalSettings["Menu"]["zoom"] = 2;
+	require(Apply("MyPerformance")["accepted"] && grass.settings["tint"] == 0.42 && globals::state->globalSettings["Menu"]["zoom"] == 1.25,
+		"applying a full preset restores arbitrary feature tuning and global settings");
+	PerformanceProfiles::UserProfile exchanged;
+	require(PerformanceProfiles::ReadExport(PerformanceProfiles::MakeExport(user, "test"), exchanged) && exchanged.Save() == allSettingsProfile,
+		"full settings survive profile export and import");
+	globals::state->saveSucceeds = false;
+	require(!CaptureCurrentSettings()["accepted"] && user.Save() == allSettingsProfile,
+		"failed full capture save does not replace the prior profile");
+	globals::state->saveSucceeds = true;
 	Feature::features.clear();
 }

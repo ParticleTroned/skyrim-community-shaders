@@ -6,6 +6,10 @@
 #include <string_view>
 
 struct Feature;
+namespace MenuUI
+{
+	struct SettingsFooter;
+}
 
 namespace MenuUI::PerformancePage
 {
@@ -21,9 +25,11 @@ namespace MenuUI::PerformancePage
 	nlohmann::json Capture(std::string_view a_feature);
 	/** Snapshot all editable choices atomically; skipped features retain existing saved choices. */
 	nlohmann::json CaptureAll();
+	/** Copy all CSX settings, including globals and unavailable feature sections, and persist them. */
+	nlohmann::json CaptureCurrentSettings();
 	nlohmann::json SetBase(std::string_view a_profile);
 	nlohmann::json Status();
-	/** Imports staged choices only; Apply MyPerformance remains explicit. */
+	/** Import saved choices and settings without applying them to the game. */
 	nlohmann::json ImportProfile(const std::filesystem::path& source);
 	/** Exports one portable MyPerformance JSON without saving or applying settings. */
 	nlohmann::json ExportProfile(const std::filesystem::path& folder, const std::string& name);
@@ -32,4 +38,12 @@ namespace MenuUI::PerformancePage
 	nlohmann::json SelectIncludedFeature(std::string_view a_feature, bool a_enabled);
 	nlohmann::json RestoreIncludedFeatures();
 	nlohmann::json SaveIncludedFeatures();
+	/** Open the native feature UI from profile tiles; Back retains live edits. */
+	nlohmann::json BeginFeatureEdit(std::string_view a_feature);
+	nlohmann::json EndFeatureEdit();
+	nlohmann::json RestoreFeatureEdit();
+	/** Save current feature values to both MyPerformance and the normal settings file. */
+	nlohmann::json ApplyFeatureEdit();
+	Feature* EditedFeature();
+	SettingsFooter FeatureEditFooter();
 }

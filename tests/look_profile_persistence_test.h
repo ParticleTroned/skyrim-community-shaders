@@ -238,4 +238,9 @@ void TestProfilePersistence(const std::filesystem::path& root)
 		if (pack["id"] == "Invalid")
 			Require(pack["status"] == "invalid" && pack["summary"] == "Invalid profile." && !pack["errors"].empty(), "UI and API receive malformed-profile feedback");
 	}
+	Require(restored.Import(root / "Exported" / "Exported.json", "Reimported", error) &&
+				restored.ActiveId() == "Reimported" && feature->settings["MinDiffuseVisibility"] == .81f,
+		"a freshly exported manifest can be imported from a different folder and applied");
+	Require(restored.Import(library / "Reimported" / "Reimported.json", "Reimported", error),
+		"reopening an installed manifest selects it without replacing its folder");
 }

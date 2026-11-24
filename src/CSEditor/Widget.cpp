@@ -430,7 +430,7 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 		if (!HasUnsavedChanges() || !menu)
 			return;
 		ImGui::SameLine();
-		ImGui::TextColored(menu->GetTheme().StatusPalette.Warning, "(UNSAVED CHANGES)");
+		ImGui::TextColored(Util::Colors::GetWarning(), "(UNSAVED CHANGES)");
 		Util::AddTooltip("Unsaved changes - click save to keep");
 	};
 
@@ -532,7 +532,7 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 
 	if (showApply && RequiresManualApply() && editorWindow->settings.autoApplyChanges && menu) {
 		ImGui::SameLine();
-		ImGui::TextColored(menu->GetTheme().StatusPalette.Warning, "(Manual apply only)");
+		ImGui::TextColored(Util::Colors::GetWarning(), "(Manual apply only)");
 		Util::AddTooltip("The engine rereads this form only on weather reinit. Auto-apply is disabled; use Apply.");
 	}
 

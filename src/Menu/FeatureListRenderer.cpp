@@ -308,8 +308,8 @@ namespace
 		const std::string detail = external ? external->detail : error ? (featureResult ? featureResult->message : menu.GetSettingsSaveMessage()) :
 		                                                     dirty     ? "Save to keep your current choices." :
 		                                                                 "Your choices are up to date.";
-		const auto statusColor = error ? palette.Error : dirty ? palette.Warning :
-		                                                         Util::Color::SecondaryText();
+		const auto statusColor = error ? Util::Color::Readiness(false) : dirty ? palette.Warning :
+		                                                                         Util::Color::SecondaryText();
 		auto* draw = ImGui::GetWindowDrawList();
 		{
 			draw->PushClipRect({ statusStart.x - font * .2f, statusStart.y }, { statusStart.x + layout.statusWidth, statusStart.y + statusHeight }, true);
@@ -796,6 +796,11 @@ void FeatureListRenderer::RenderFeatureList(
 	const std::function<void()>& drawAdvancedSettings)
 {
 	ImGui::BeginChild("Menus Table", ImVec2(0, -footerHeight));
+	if (auto* feature = MenuUI::PerformancePage::EditedFeature()) {
+		DrawMenuVisitor{ pendingFeatureSelection }(feature);
+		ImGui::EndChild();
+		return;
+	}
 
 	if (!pendingFeatureSelection.empty()) {
 		featureSearch.clear();
@@ -1128,9 +1133,8 @@ void FeatureListRenderer::ListMenuVisitor::operator()(const BuiltInMenu& menu)
 			MenuUI::SettingsPage::Open("DevTools");
 	}
 	const auto maximum = ImGui::GetItemRectMax();
-	const auto& statusPalette = globals::menu->GetTheme().StatusPalette;
 	const auto color = menu.name == "Feature Issues" ?
-	                       (FeatureIssues::CountLoadFailures() ? statusPalette.Error : statusPalette.Warning) :
+	                       Util::Color::Readiness(false) :
 	                       ImGui::GetStyleColorVec4(ImGuiCol_Text);
 	DrawSidebarLabel(menu.name.c_str(), icon != icons.end() ? icon->second : Util::ActionGlyph::Texture, start, maximum, color);
 }
@@ -1181,17 +1185,17 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 	} else if (isLoaded) {
 		textColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
 	} else if (hasFailedMessage) {
-		textColor = feat->version.empty() ? themeSettings.StatusPalette.Disable : themeSettings.StatusPalette.Error;
+		textColor = feat->version.empty() ? themeSettings.StatusPalette.Disable : Util::Colors::GetError();
 	} else if (!feat->conflictMessage.empty()) {
-		textColor = themeSettings.StatusPalette.Warning;
+		textColor = Util::Colors::GetWarning();
 	} else {
 		// No failed message but not loaded - check if INI file exists
 		if (!std::filesystem::exists(Util::PathHelpers::GetFeatureIniPath(feat->GetShortName()))) {
 			// INI file missing - treat as missing feature (grey)
 			textColor = themeSettings.StatusPalette.Disable;
 		} else {
-			// An installed feature awaiting restart shares the unsaved-settings color.
-			textColor = themeSettings.StatusPalette.Warning;
+			// Installed features awaiting restart need attention.
+			textColor = Util::Colors::GetWarning();
 		}
 	}
 
@@ -1340,7 +1344,9 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 		RenderFeatureHeader(feat, isDisabled, isLoaded, sceneControlled);
 		notices.Reserve(MenuUI::SettingsPage::OverviewTextInset(featureName.c_str(), ImGui::GetContentRegionAvail().x));
 
-		auto externalFooter = external ? std::optional(external->GetSettingsFooter()) : std::nullopt;
+		const bool profileEdit = MenuUI::PerformancePage::EditedFeature() == feat;
+		auto externalFooter = profileEdit ? std::optional(MenuUI::PerformancePage::FeatureEditFooter()) : external ? std::optional(external->GetSettingsFooter()) :
+		                                                                                                             std::nullopt;
 		const float textInset = MenuUI::SettingsPage::OverviewTextInset(featureName.c_str(), ImGui::GetContentRegionAvail().x);
 		weatherControlInFooter = feat == &globals::features::adaptiveBrightness && isLoaded && !isDisabled &&
 		                         MenuUI::SettingsPage::Selected(featureName.c_str()) == "overview" &&
@@ -1373,7 +1379,10 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 			DrawWeatherOverrideControl(feat);
 		}
 		// Keep save, load and feature defaults together in the fixed footer.
-		if (external) {
+		if (profileEdit) {
+			externalFooter = MenuUI::PerformancePage::FeatureEditFooter();
+			DrawSettingsFooter(featureName.c_str(), {}, &*externalFooter, feat);
+		} else if (external) {
 			externalFooter = external->GetSettingsFooter();
 			DrawSettingsFooter(featureName.c_str(), {}, &*externalFooter, feat);
 		} else if (feat == &globals::features::adaptiveBrightness && MenuUI::SettingsPage::Selected(featureName.c_str()) == "presets") {

@@ -405,7 +405,7 @@ namespace Presets
 			std::filesystem::create_directories(root);
 			const auto destination = root / Utf8Path(pack.id);
 			if (!Util::IsPathWithinDirectory(root, destination))
-				throw std::runtime_error("Export resolves outside the presets folder");
+				throw std::runtime_error("Profile destination could not be verified inside the selected folder.\nDestination: " + Util::PathToUtf8(destination) + "\nFolder: " + Util::PathToUtf8(root));
 			if (std::filesystem::exists(destination))
 				throw std::runtime_error("That Look already exists; choose a new name");
 			staging = root / Utf8Path("." + pack.id + ".exporting");

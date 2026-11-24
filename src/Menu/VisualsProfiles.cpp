@@ -66,8 +66,10 @@ namespace MenuUI
 		}
 		DrawProfileExchange(exchange, "Share Visuals", Presets::LookProfiles::RootPath(), true, blocked, [&](const auto& source, const auto& name) {
 				feedback.error = !profiles.Import(source, name, feedback.message);
+				if (feedback.error) feedback.message = "Import failed: " + feedback.message;
 				if (!feedback.error) { feedback.message = "Profile imported and applied. Save settings to keep it."; refresh(); } }, [&](const auto& folder, const auto& name) {
 				feedback.error = !profiles.Export(name, feedback.message, folder);
+				if (feedback.error) feedback.message = "Export failed: " + feedback.message;
 				if (!feedback.error) { feedback.message = "Visuals profile exported."; refresh(); } });
 		if (!profiles.GetLoadError().empty())
 			PageNotice("Saved Visuals profile unavailable.", NoticeKind::Unavailable, profiles.GetLoadError());

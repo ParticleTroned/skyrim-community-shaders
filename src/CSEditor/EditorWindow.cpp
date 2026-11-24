@@ -686,7 +686,7 @@ void EditorWindow::ShowObjectsWindow()
 							ImGui::TableNextRow();
 							ImGui::TableSetColumnIndex(1);
 							ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
-							ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.Warning, "Cell Lighting is only available for interior cells.");
+							ImGui::TextColored(Util::Colors::GetWarning(), "Cell Lighting is only available for interior cells.");
 							ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.Disable, "You are currently in an exterior cell.");
 							ImGui::PopTextWrapPos();
 						}
@@ -695,7 +695,7 @@ void EditorWindow::ShowObjectsWindow()
 						ImGui::TableNextRow();
 						ImGui::TableSetColumnIndex(1);
 						ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
-						ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.Error, "Player cell not available.");
+						ImGui::TextColored(Util::Colors::GetError(), "Player cell not available.");
 						ImGui::PopTextWrapPos();
 					}
 				}
@@ -2465,7 +2465,7 @@ void EditorWindow::PerformUndo()
 	} else {
 		ShowNotification(
 			std::format("Cannot undo {} because its editor is no longer active", state.widgetLabel),
-			Menu::GetSingleton()->GetSettings().Theme.StatusPalette.Warning,
+			Util::Colors::GetWarning(),
 			3.0f);
 	}
 }

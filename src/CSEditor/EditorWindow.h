@@ -2,6 +2,7 @@
 
 #include "Buffer.h"
 #include "LightEditor.h"
+#include "Utils/UI.h"
 #include "Utils/VanityCamera.h"
 #include "Weather/CellLightingWidget.h"
 #include "Weather/ImageSpaceWidget.h"
@@ -207,7 +208,7 @@ public:
 	};
 	std::vector<Notification> notifications;
 
-	void ShowNotification(const std::string& message, const ImVec4& color = ImVec4(1.0f, 0.0f, 0.0f, 1.0f), float duration = 3.0f);
+	void ShowNotification(const std::string& message, const ImVec4& color = Util::Colors::GetError(), float duration = 3.0f);
 	void RenderNotifications();
 
 	struct Settings

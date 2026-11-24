@@ -120,10 +120,11 @@ namespace MenuUI
 	{
 		static uint32_t filter = Util::WeatherFilter::All;
 		static RE::TESWeather* selected = nullptr;
+		static bool allSelected = false;
 		static Util::WeatherFilter::CachedList weatherList;
 		static ActionFeedback feedback;
 		bool selectionChanged = false;
-		SectionHeading("Weather adjustments", "Choose a category, then select a weather to edit its Visuals adjustments. Apply and save to that entry, or copy its Visuals adjustments to every weather in the displayed category.");
+		SectionHeading("Weather adjustments", "Select one weather or all matching weathers, edit their Visuals adjustments, then Apply & Save. Saved adjustments are used whenever those weathers are active.");
 		{
 			float categoryWidth = 0;
 			for (const auto& category : Util::WeatherFilter::Classified)
@@ -131,8 +132,10 @@ namespace MenuUI
 			DetailGrid categories("VisualsWeatherCategories", 4, categoryWidth + ImGui::GetFontSize() * 2);
 			auto choice = [&](const char* label, uint32_t mask) {
 				categories.Next();
-				if (ImGui::Selectable(label, filter == mask))
+				if (ImGui::Selectable(label, filter == mask)) {
 					filter = mask;
+					allSelected = false;
+				}
 			};
 			choice("All", Util::WeatherFilter::All);
 			for (const auto& category : Util::WeatherFilter::Classified)
@@ -140,19 +143,67 @@ namespace MenuUI
 			choice("None", Util::WeatherFilter::Unclassified);
 		}
 		{
+			DetailGrid selectionActions("VisualsWeatherSelection", 3);
+			selectionActions.Next();
 			auto* sky = globals::game::sky;
-			const auto disabled = Util::DisableGuard(!sky || !sky->currentWeather);
-			if (ImGui::Button("Select Current Weather")) {
-				filter = Util::WeatherFilter::All;
-				selected = sky->currentWeather;
-				selectionChanged = true;
+			{
+				const auto disabled = Util::DisableGuard(!sky || !sky->currentWeather);
+				if (ImGui::Button("Select Current Weather")) {
+					filter = Util::WeatherFilter::All;
+					selected = sky->currentWeather;
+					allSelected = false;
+					selectionChanged = true;
+				}
+			}
+			const bool matchesChanged = weatherList.Update(WeatherPicker::GetWeatherCatalog(), filter);
+			const auto matches = weatherList.Get();
+			if (matchesChanged)
+				allSelected = false;
+			if ((matchesChanged || selectionChanged) && std::ranges::find(matches, selected) == matches.end())
+				selected = nullptr;
+			selectionActions.Next();
+			{
+				const auto disabled = Util::DisableGuard(matches.empty());
+				if (ImGui::Button("Select all matching")) {
+					allSelected = true;
+					if (!selected)
+						selected = matches.front();
+				}
+				Util::AddTooltip("Select every weather in the displayed category. Edit one template, then Apply & Save its Visuals adjustments to the whole group.");
+			}
+			selectionActions.Next();
+			if (ImGui::Button("Clear selection")) {
+				selected = nullptr;
+				allSelected = false;
 			}
 		}
-		const bool matchesChanged = weatherList.Update(WeatherPicker::GetWeatherCatalog(), filter);
 		const auto matches = weatherList.Get();
-		if ((matchesChanged || selectionChanged) && std::ranges::find(matches, selected) == matches.end())
-			selected = nullptr;
-		ImGui::Text("%zu matching weathers", matches.size());
+		ImGui::Text("%zu matching weathers; %zu selected", matches.size(), allSelected ? matches.size() : selected ? size_t{ 1 } :
+																													 size_t{ 0 });
+		if (selected)
+			DetailText(std::format("{}: {}", allSelected ? "Group template" : "Selected", Util::FormatWeather(selected)).c_str());
+		const auto* reason = GetFeatureMutationBlockReason(&globals::features::adaptiveBrightness);
+		if (reason)
+			AvailabilityNotice(reason);
+
+		{
+			DetailGrid actions("VisualsWeatherActions", 2);
+			actions.Next();
+			const auto disabled = Util::DisableGuard(!selected || reason);
+			if (ImGui::Button(allSelected ? "Edit Group Settings" : "Edit Selected Weather"))
+				EditorWindow::GetSingleton()->OpenWeatherFeatureSetting(selected, "AdaptiveBrightness", "brightness");
+			Util::AddTooltip("In Features > Visuals, switch Using Global Settings to Using Weather-Specific Settings, then adjust the controls. Return here to apply and save.");
+			actions.Next();
+			if (ImGui::Button(allSelected ? "Apply & Save All Matches" : "Apply & Save Selected")) {
+				const auto result = ApplyVisualsWeather(Util::GetFormFileKey(selected), filter, allSelected);
+				feedback.error = !result.at("ok").get<bool>();
+				feedback.message = std::format("Saved Visuals adjustments for {} of {} weathers.", result.at("savedWeathers").get<size_t>(), result.at("matchedWeathers").get<size_t>());
+				if (feedback.error)
+					feedback.message += std::format(" Applied {}. {} {}", result.at("appliedWeathers").get<size_t>(), result.value("failedWeather", std::string{}), result.at("error").get<std::string>());
+			}
+		}
+		DetailText("In the editor, open Features > Visuals and enable Using Weather-Specific Settings. Adjust the controls, then return here to Apply & Save. Leave Pause Weather Overrides unchecked to use the saved adjustments.");
+		feedback.Draw();
 		if (ImGui::BeginListBox("##VisualsWeatherList", { -1, ImGui::GetTextLineHeightWithSpacing() * 8 })) {
 			ImGuiListClipper clipper;
 			clipper.Begin(static_cast<int>(matches.size()));
@@ -160,39 +211,14 @@ namespace MenuUI
 				for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
 					auto* weather = matches[row];
 					ImGui::PushID(weather);
-					if (ImGui::Selectable(Util::FormatWeather(weather).c_str(), selected == weather))
+					if (ImGui::Selectable(Util::FormatWeather(weather).c_str(), allSelected || selected == weather)) {
 						selected = weather;
+						allSelected = false;
+					}
 					ImGui::PopID();
 				}
 			}
 			ImGui::EndListBox();
 		}
-		if (selected)
-			DetailText(std::format("Selected: {}", Util::FormatWeather(selected)).c_str());
-		const auto* reason = GetFeatureMutationBlockReason(&globals::features::adaptiveBrightness);
-		if (reason)
-			AvailabilityNotice(reason);
-
-		{
-			DetailGrid actions("VisualsWeatherActions", 3);
-			actions.Next();
-			const auto disabled = Util::DisableGuard(!selected || reason);
-			if (ImGui::Button("Edit Selected Weather"))
-				EditorWindow::GetSingleton()->OpenWeatherFeatureSetting(selected, "AdaptiveBrightness", "brightness");
-			auto apply = [&](const char* label, bool all) {
-				actions.Next();
-				if (ImGui::Button(label)) {
-					const auto result = ApplyVisualsWeather(Util::GetFormFileKey(selected), filter, all);
-					feedback.error = !result.at("ok").get<bool>();
-					feedback.message = std::format("Saved Visuals adjustments for {} of {} weathers.", result.at("savedWeathers").get<size_t>(), result.at("matchedWeathers").get<size_t>());
-					if (feedback.error)
-						feedback.message += std::format(" Applied {}. {} {}", result.at("appliedWeathers").get<size_t>(), result.value("failedWeather", std::string{}), result.at("error").get<std::string>());
-				}
-			};
-			apply("Apply & Save Selected", false);
-			apply("Apply & Save All Matches", true);
-		}
-		DetailText("Apply & Save uses the selected entry's current Visuals edits (or its saved adjustments if the editor has not been opened), including its enabled state. It replaces only Visuals adjustments in each target. Other feature settings and weather properties are preserved. Weather transitions continue to blend normally.");
-		feedback.Draw();
 	}
 }

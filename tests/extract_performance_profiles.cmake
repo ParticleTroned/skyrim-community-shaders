@@ -5,7 +5,7 @@ file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 include("${PROJECT_ROOT}/tests/extract_source_region.cmake")
 file(READ "${PROJECT_ROOT}/src/Menu/PerformancePage.cpp" source)
 extract_between("${source}" "\t\tusing json = nlohmann::json;" "\t\tvoid DrawPresets()" "profile_helpers.h")
-extract_between("${source}" "\tvoid Save(nlohmann::json&" "\tvoid DrawSaveChoice(" "profile_actions.h")
+extract_between("${source}" "\tvoid Save(nlohmann::json&" "\tSettingsFooter FeatureEditFooter()" "profile_actions.h")
 file(READ "${OUTPUT_DIRECTORY}/profile_helpers.h" helpers)
 file(READ "${OUTPUT_DIRECTORY}/profile_actions.h" actions)
 file(WRITE "${OUTPUT_DIRECTORY}/performance_profile_actions_under_test.h"

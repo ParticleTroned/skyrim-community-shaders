@@ -9,6 +9,8 @@ namespace MenuUI
 	{
 		int mode = 0;
 		std::string name;
+		std::string nameDraft;
+		bool upperCase = false;
 		std::filesystem::path source;
 		AdaptiveBalancePresets::ExportFolder importPicker, exportPicker;
 	};

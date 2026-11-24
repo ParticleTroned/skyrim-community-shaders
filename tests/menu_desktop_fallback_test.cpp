@@ -213,6 +213,11 @@ namespace FeatureIssues
 }
 namespace Util
 {
+	namespace Colors
+	{
+		ImVec4 GetWarning() { return { 1, 0, .95f, 1 }; }
+		ImVec4 GetError() { return GetWarning(); }
+	}
 #include "menu_ui_scale_under_test.h"
 	unsigned GetPerformanceCoreCount() { return 4; }
 	unsigned inputUpdates = 0;

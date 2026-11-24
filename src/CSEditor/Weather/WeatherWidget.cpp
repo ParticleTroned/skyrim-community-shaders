@@ -157,7 +157,7 @@ void WeatherWidget::DrawWidget()
 				ImGui::BeginTooltip();
 				ImGui::TextUnformatted("Editor-only feature: Set a parent weather to copy settings from.");
 				ImGui::TextUnformatted("Use 'Inherit From Parent' checkboxes to copy specific values.");
-				ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), "Note: This is NOT the same as cell lighting template inheritance.");
+				ImGui::TextColored(Util::Colors::GetWarning(), "Note: This is NOT the same as cell lighting template inheritance.");
 				ImGui::EndTooltip();
 			}
 
@@ -416,7 +416,7 @@ void WeatherWidget::LoadSettings()
 				settings = vanillaSettings;
 				EditorWindow::GetSingleton()->ShowNotification(
 					std::format("Some values failed to load for {}", GetEditorID()),
-					ImVec4(1.0f, 0.0f, 0.0f, 1.0f),
+					Util::Colors::GetError(),
 					3.0f);
 			} else {
 				logger::info("Weather {}: Loaded settings - {} weather properties, {} colors, {} fog properties",
@@ -454,7 +454,7 @@ void WeatherWidget::LoadSettings()
 			settings = vanillaSettings;
 			EditorWindow::GetSingleton()->ShowNotification(
 				std::format("Some values failed to load for {}", GetEditorID()),
-				ImVec4(1.0f, 0.0f, 0.0f, 1.0f),
+				Util::Colors::GetError(),
 				3.0f);
 		}
 	} else {
@@ -1649,7 +1649,7 @@ void WeatherWidget::LoadFeatureSettings()
 			// Show notification
 			EditorWindow::GetSingleton()->ShowNotification(
 				std::format("Warning: {} references missing feature(s): {}", GetEditorID(), missingList),
-				ImVec4(1.0f, 0.6f, 0.0f, 1.0f),
+				Util::Colors::GetWarning(),
 				5.0f);
 
 			// Add to Feature Issues system for each missing feature
@@ -2059,7 +2059,7 @@ void WeatherWidget::DrawFeatureSettings()
 							// Generic handling for other types
 							ImGui::TextDisabled("%s: %s", varDisplayName.c_str(), currentValue.dump().c_str());
 							if (auto _tt = Util::HoverTooltipWrapper()) {
-								ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Unsupported Variable Type");
+								ImGui::TextColored(Util::Colors::GetWarning(), "Unsupported Variable Type");
 								ImGui::Text("%s", tooltip.c_str());
 								ImGui::Separator();
 								ImGui::TextWrapped("This variable type doesn't have a custom UI implementation yet. The raw JSON value is shown above.");

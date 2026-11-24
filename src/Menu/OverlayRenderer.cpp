@@ -170,14 +170,14 @@ namespace
 		return mapped;
 	}
 
-	void DrawShaderCompilationFailures(uint64_t failed, const Menu::ThemeSettings& themeSettings)
+	void DrawShaderCompilationFailures(uint64_t failed)
 	{
-		ImGui::TextColored(themeSettings.StatusPalette.Error,
+		ImGui::TextColored(Util::Colors::GetError(),
 			"ERROR: %llu shaders failed to compile. Check installation and CSX.log",
 			static_cast<unsigned long long>(failed));
 
 		if (FeatureIssues::HasPotentialShaderModifyingFeatures()) {
-			ImGui::TextColored(themeSettings.StatusPalette.Error, "Features that may have modified shaders detected. Check Feature Issues in the Menu.");
+			ImGui::TextColored(Util::Colors::GetError(), "Features that may have modified shaders detected. Check Feature Issues in the Menu.");
 		}
 	}
 
@@ -830,7 +830,6 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 	const auto restoreWrap = SKSE::stl::scope_exit([] { ImGui::PopTextWrapPos(); });
 
 	auto* menu = Menu::GetSingleton();
-	const auto& themeSettings = menu->GetTheme();
 	if (isCompiling) {
 		auto state = globals::state;
 		const uint64_t totalShaders = shaderCache->GetTotalTasks();
@@ -861,7 +860,7 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 		ImGui::TextUnformatted(progressTitle.c_str());
 		ImGui::ProgressBar(percent, ImVec2(-FLT_MIN, 0.0f), progressOverlay.c_str());
 		if (hasFeatureSetRevertPending) {
-			ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s",
+			ImGui::TextColored(Util::Colors::GetWarning(), "%s",
 				"Previous cache restored.\n"
 				"Restart to use it.");
 		} else if (hasFeatureSetChanges) {
@@ -869,16 +868,16 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 				const char* restoreStatus = rollback.previousDiskCacheAvailable ?
 				                                "Previous cache saved. Restore is available after compilation finishes." :
 				                                "Previous cache saved. Restore availability will be verified after compilation finishes.";
-				ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s\n%s",
+				ImGui::TextColored(Util::Colors::GetWarning(), "%s\n%s",
 					"Feature setup changed. Building a new shader cache for this setup.",
 					restoreStatus);
 			} else {
-				ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s",
+				ImGui::TextColored(Util::Colors::GetWarning(), "%s",
 					"Feature setup changed. Building shaders in memory until the cache can be rebuilt.\n"
 					"Previous cache is not available for restore.");
 			}
 		} else if (isDiskCacheHeld) {
-			ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s",
+			ImGui::TextColored(Util::Colors::GetWarning(), "%s",
 				"Saved shader cache cannot be used.\n"
 				"A required feature is missing or failed to load.");
 		}
@@ -889,7 +888,7 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 				"Compiling now bakes the wrong shaders and you will have to recompile after fixing.",
 				loadFailureCount,
 				loadFailureCount == 1 ? "" : "s");
-			ImGui::TextColored(themeSettings.StatusPalette.Error, "%s", issueMessage.c_str());
+			ImGui::TextColored(Util::Colors::GetError(), "%s", issueMessage.c_str());
 		}
 		if (state->IsDeveloperMode()) {
 			const auto threadLimits = shaderCache->GetCompilationThreadLimits();
@@ -920,9 +919,9 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 	}
 
 	if (showFailures)
-		DrawShaderCompilationFailures(failed, themeSettings);
+		DrawShaderCompilationFailures(failed);
 	if (renderDocAvailable)
-		ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s", renderDoc->GetOverlayWarningMessage().c_str());
+		ImGui::TextColored(Util::Colors::GetWarning(), "%s", renderDoc->GetOverlayWarningMessage().c_str());
 }
 
 void OverlayRenderer::RenderFeatureOverlays(const std::vector<OverlayFeature*>& overlays)

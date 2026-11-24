@@ -26,6 +26,7 @@
 #include "Features/VR.h"
 #include "Globals.h"
 #include "Menu.h"
+#include "Menu/FeatureListRenderer.h"
 #include "Menu/OverlayRenderer.h"
 #include "Menu/ProfilingRenderer.h"
 #include "PerformanceOverlay.h"
@@ -74,31 +75,33 @@ namespace
 		return name.empty() ? "None" : name;
 	}
 
-	void DrawPerformanceHUDOverlayHelp()
+	void DrawPerformanceOverlayShortcuts()
 	{
-		ImGui::TextUnformatted("Displays the performance panel in the standalone HUD, which can stay visible after CSX settings close.");
+		const auto openBindings = [](const char* section) {
+			if (MenuUI::SettingsPage::Select("Settings", section))
+				globals::menu->SelectFeatureMenu(FeatureListRenderer::GetBuiltInPageMenuEntryId("Settings"));
+		};
+		ImGui::TextUnformatted("Shortcuts");
+		ImGui::TextUnformatted("Keyboard toggle:");
+		ImGui::SameLine();
+		ImGui::TextColored(globals::menu->GetTheme().StatusPalette.CurrentHotkey, "%s",
+			Util::Input::KeyIdToString(globals::menu->GetSettings().OverlayToggleKey).c_str());
+		if (ImGui::Button("Change keyboard shortcut"))
+			openBindings("hotkeys");
+		Util::AddTooltip("Open Bindings to assign, change or clear Overlay Toggle Key. Save settings there to keep the shortcut.");
 		if (REL::Module::IsVR()) {
 			const auto& vrSettings = globals::features::vr.settings;
-			ImGui::TextUnformatted("Show Performance Overlay:");
+			ImGui::Spacing();
+			ImGui::TextUnformatted("Show in headset:");
 			ImGui::SameLine();
 			Util::DrawButtonCombo(vrSettings.VROverlayOpenKeys, true);
-			ImGui::TextUnformatted("Hide Performance Overlay:");
+			ImGui::TextUnformatted("Hide in headset:");
 			ImGui::SameLine();
 			Util::DrawButtonCombo(vrSettings.VROverlayCloseKeys, true);
-			ImGui::TextDisabled("Configure these actions under VR > Controls > Controller shortcuts.");
-			return;
+			if (ImGui::Button("Change controller shortcuts"))
+				openBindings("vr_controls");
+			Util::AddTooltip("Open VR Controls to record or clear Show Performance Overlay and Hide Performance Overlay combinations. Save settings there to keep them.");
 		}
-
-		auto* menu = Menu::GetSingleton();
-		if (!menu) {
-			return;
-		}
-		const auto& themeSettings = menu->GetTheme();
-		const auto& menuSettings = menu->GetSettings();
-		ImGui::TextUnformatted("Desktop toggle:");
-		ImGui::SameLine();
-		ImGui::TextColored(themeSettings.StatusPalette.CurrentHotkey, "%s",
-			Util::Input::KeyIdToString(menuSettings.OverlayToggleKey).c_str());
 	}
 }
 
@@ -224,11 +227,18 @@ void PerformanceOverlay::DrawSettingsEnabledControl()
 
 void PerformanceOverlay::DrawSettings()
 {
+	MenuUI::SectionHeading("Counters and graphs");
+	const bool columns = ImGui::GetContentRegionAvail().x >= ImGui::GetFontSize() * 39.0f &&
+	                     ImGui::BeginTable("##OverlayCountersAndShortcuts", 2, ImGuiTableFlags_SizingStretchProp);
+	if (columns) {
+		ImGui::TableSetupColumn("Counters", ImGuiTableColumnFlags_WidthStretch, 0.6f);
+		ImGui::TableSetupColumn("Shortcuts", ImGuiTableColumnFlags_WidthStretch, 0.4f);
+		ImGui::TableNextColumn();
+	}
 	{
 		const auto disabled = Util::DisableGuard(!settings.ShowInOverlay);
 		{
 			// Display options
-			MenuUI::SectionHeading("Counters and graphs");
 
 			Util::Widgets::Checkbox("Show FPS Counter", &this->settings.ShowFPS);
 			Util::AddTooltip("Shows how many frames the game draws each second. Higher FPS usually means smoother motion.");
@@ -259,6 +269,14 @@ void PerformanceOverlay::DrawSettings()
 			ImGui::Spacing();
 			ImGui::Spacing();
 		}
+	}
+	if (columns)
+		ImGui::TableNextColumn();
+	DrawPerformanceOverlayShortcuts();
+	if (columns)
+		ImGui::EndTable();
+	{
+		const auto disabled = Util::DisableGuard(!settings.ShowInOverlay);
 		{
 			// Appearance settings
 			MenuUI::SectionHeading("Size and timing");
@@ -891,9 +909,9 @@ void PerformanceOverlay::DrawABTestStatisticalValidity(const Menu::ThemeSettings
 	if (coverage == ABTestCoverage::Sufficient) {
 		validityColor = theme.StatusPalette.SuccessColor;
 	} else if (coverage == ABTestCoverage::Marginal) {
-		validityColor = theme.StatusPalette.Warning;
+		validityColor = Util::Colors::GetWarning();
 	} else {
-		validityColor = theme.StatusPalette.Error;
+		validityColor = Util::Colors::GetError();
 	}
 
 	ImGui::PushStyleColor(ImGuiCol_Text, validityColor);
@@ -909,8 +927,8 @@ void PerformanceOverlay::DrawABTestStatisticalValidity(const Menu::ThemeSettings
 				{ "Requires valid frame timings. Excludes outliers over 100 ms or 3x the variant median. Both variants must meet coverage thresholds; coverage alone does not prove significance.", theme.Palette.Text },
 				{ "", theme.Palette.Text },
 				{ validStr, theme.StatusPalette.SuccessColor },
-				{ marginalStr, theme.StatusPalette.Warning },
-				{ "Insufficient data for reliable results", theme.StatusPalette.Error }
+				{ marginalStr, Util::Colors::GetWarning() },
+				{ "Insufficient data for reliable results", Util::Colors::GetError() }
 			};
 			Util::DrawColoredMultiLineTooltip(validityLegend);
 		}

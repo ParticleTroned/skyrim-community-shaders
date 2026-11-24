@@ -4,6 +4,7 @@
 #include "Presets/LookScenes.h"
 #include "SettingsSerialization.h"
 #include <chrono>
+#include <crtdbg.h>
 #include <fstream>
 #include <iostream>
 #include <numeric>
@@ -37,6 +38,9 @@ void Save(const std::filesystem::path& path, const Json& value)
 
 int main()
 try {
+	_CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+	_CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+	_set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
 	const auto root = std::filesystem::current_path() / ("csx-look-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
 	struct Cleanup
 	{

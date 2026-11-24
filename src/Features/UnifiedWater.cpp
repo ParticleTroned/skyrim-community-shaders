@@ -866,8 +866,6 @@ void UnifiedWater::DrawOverlay()
 
 	const auto snapshot = waterCache->GetBuildProgressSnapshot();
 
-	auto& themeSettings = Menu::GetSingleton()->GetTheme();
-
 	if (waterCache->IsBuildRunning()) {
 		auto progressTitle = fmt::format("Generating Water Cache:");
 		auto percent = static_cast<float>(snapshot.completed) / static_cast<float>(snapshot.total);
@@ -890,9 +888,9 @@ void UnifiedWater::DrawOverlay()
 		}
 
 		if (snapshot.failed > 0) {
-			ImGui::TextColored(themeSettings.StatusPalette.Error, "ERROR: Water cache generation failed for %d WorldSpaces. Check installation and CSX.log", snapshot.failed);
+			ImGui::TextColored(Util::Colors::GetError(), "ERROR: Water cache generation failed for %d WorldSpaces. Check installation and CSX.log", snapshot.failed);
 		} else {
-			ImGui::TextColored(themeSettings.StatusPalette.Error, "ERROR: Generated water caches could not be loaded completely. Check CSX.log");
+			ImGui::TextColored(Util::Colors::GetError(), "ERROR: Generated water caches could not be loaded completely. Check CSX.log");
 		}
 
 		ImGui::End();

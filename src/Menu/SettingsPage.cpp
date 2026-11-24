@@ -388,8 +388,9 @@ namespace MenuUI
 		const std::string pageId = activeFeature ? activeFeature->GetShortName() : a_id;
 		a_id = pageId.c_str();
 		const bool singlePage = sections.empty();
-		const bool measurementAvailable = activeFeature ? activeFeature->SupportsPerformanceCostMeasurement() : pageId != "PerformanceTuning";
-		const bool profilingAvailable = activeFeature ? ProfilingRenderer::CanProfileFeature(pageId) : pageId != "Profiling" && pageId != "PerformanceTuning";
+		const bool profileEdit = PerformancePage::EditedFeature() != nullptr;
+		const bool measurementAvailable = !profileEdit && (activeFeature ? activeFeature->SupportsPerformanceCostMeasurement() : pageId != "PerformanceTuning");
+		const bool profilingAvailable = !profileEdit && (activeFeature ? ProfilingRenderer::CanProfileFeature(pageId) : pageId != "Profiling" && pageId != "PerformanceTuning");
 		if (!singlePage && !SettingsNavigation::IsPerformancePage(pageId) && (activeFeature || (pageId != "Home" && pageId != "Settings" && pageId != "Advanced" && pageId != "DevTools"))) {
 			Section performance{ "performance", "Performance", "Tune this feature: compare its performance cost with the current settings.", "Measure current settings", measurementAvailable, false, nullptr, "Performance tuning" };
 			Section profiling{ "profiling", "Profiling", "Profile this feature: open its live CPU and GPU timings.", "Live CPU and GPU timings", profilingAvailable, false };
@@ -608,8 +609,10 @@ namespace MenuUI
 		return contentVisible && selected == a_section;
 	}
 
-	int ChoiceCards(const char* a_id, int a_selected, std::span<const Choice> a_choices)
+	int ChoiceCards(const char* a_id, int a_selected, std::span<const Choice> a_choices, int* a_doubleClicked)
 	{
+		if (a_doubleClicked)
+			*a_doubleClicked = -1;
 		if (a_choices.empty())
 			return -1;
 		ImGui::PushID(a_id);
@@ -618,22 +621,33 @@ namespace MenuUI
 		const float available = std::max(1.0f, ImGui::GetContentRegionAvail().x);
 		const int count = static_cast<int>(a_choices.size());
 		float minimumWidth = line * 8;
-		for (const auto& choice : a_choices)
-			minimumWidth = std::max(minimumWidth, ImGui::GetFont()->CalcTextSizeA(line * cardTitleScale, FLT_MAX, 0, choice.title).x + line * 1.5f);
+		for (const auto& choice : a_choices) {
+			const auto title = choice.toggle ? std::string("Off: ") + choice.title : std::string(choice.title);
+			minimumWidth = std::max(minimumWidth, ImGui::GetFont()->CalcTextSizeA(line * cardTitleScale, FLT_MAX, 0, title.c_str()).x + line * 1.5f);
+		}
 		const int columns = std::clamp(static_cast<int>((available + line * .65f) / (minimumWidth + line * .65f)), 1, count);
 		const float gap = line * .65f;
 		const float width = (available - (columns - 1) * gap) / columns;
 		float height = line * 3.2f;
-		for (const auto& choice : a_choices)
-			height = std::max(height, MeasureCardText({ choice.id, choice.title, choice.description }, width, 0).height);
+		for (const auto& choice : a_choices) {
+			const auto title = choice.toggle ? std::string("Off: ") + choice.title : std::string(choice.title);
+			height = std::max(height, MeasureCardText({ choice.id, title.c_str(), choice.description }, width, 0).height);
+		}
 		const auto origin = ImGui::GetCursorScreenPos();
 		int clicked = -1;
+		const auto lastClickId = ImGui::GetID("##LastChoiceClick");
 		for (int index = 0; index < count; ++index) {
 			const auto& choice = a_choices[index];
 			const ImVec2 minimum{ origin.x + (index % columns) * (width + gap), origin.y + (index / columns) * (height + gap) };
 			auto guard = Util::DisableGuard(!choice.enabled);
-			if (DrawSettingsCard({ choice.id, choice.title, choice.description }, minimum, { width, height }, 0, choice.selected || index == a_selected, false, choice.groupColor))
+			const std::string title = choice.toggle ? std::string(choice.selected ? "On: " : "Off: ") + choice.title : choice.title;
+			if (DrawSettingsCard({ choice.id, title.c_str(), choice.description }, minimum, { width, height }, 0, choice.selected || index == a_selected, false, choice.groupColor)) {
 				clicked = index;
+				ImGui::GetStateStorage()->SetInt(lastClickId, static_cast<int>(ImGui::GetItemID()));
+			}
+			if (a_doubleClicked && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
+				ImGui::GetStateStorage()->GetInt(lastClickId) == static_cast<int>(ImGui::GetItemID()))
+				*a_doubleClicked = index;
 			Util::AddTooltip(choice.tooltip, ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
 		}
 		const int rows = (count + columns - 1) / columns;
@@ -741,11 +755,9 @@ namespace MenuUI
 		{
 			switch (kind) {
 			case NoticeKind::Error:
-				return globals::menu->GetTheme().StatusPalette.Error;
 			case NoticeKind::Unavailable:
-				return Util::Color::Readiness(false);
 			case NoticeKind::Pending:
-				return globals::menu->GetTheme().StatusPalette.Warning;
+				return Util::Color::Readiness(false);
 			default:
 				return Util::Color::SecondaryText();
 			}

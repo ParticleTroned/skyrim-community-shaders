@@ -1337,13 +1337,13 @@ void Menu::DrawFooter()
 		{
 			const bool warn = index == commitIndex && systemCommitSampleValid && systemCommitTotalBytes < kRecommendedSystemCommitBytes;
 			if (warn)
-				ImGui::PushStyleColor(ImGuiCol_Text, settings.Theme.StatusPalette.Error);
+				ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetError());
 			const SKSE::stl::scope_exit restoreColor([warn] { if (warn) ImGui::PopStyleColor(); });
 			ImGui::BulletText("%s", items[index].c_str());
 		}
 		if (index == commitIndex) {
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::TextWrapped("Windows committed memory / total commit capacity. Recommended minimum total: 128 GB on all systems. Red indicates lower total capacity.");
+				ImGui::TextWrapped("Windows committed memory / total commit capacity. Recommended minimum total: 128 GB on all systems. Magenta indicates lower total capacity.");
 		}
 	}
 }

@@ -94,7 +94,17 @@ int main()
 		Require(resolved["presets"]["Wetterness"] == "Balanced", "unmodified selections inherit the base");
 		UserProfile loaded;
 		Require(loaded.Load(user.Save()) && loaded.Save() == user.Save(), "saved user profile round-trips");
+		auto legacy = user.Save();
+		legacy["version"] = 1;
+		legacy.erase("settings");
+		Require(loaded.Load(legacy) && loaded.settings.empty() && loaded.choices == user.choices,
+			"version one profiles remain readable without a settings snapshot");
 		const auto previous = loaded.Save();
+		auto missingSnapshot = previous;
+		missingSnapshot.erase("settings");
+		missingSnapshot["unknown"] = json::object();
+		Require(!loaded.Load(missingSnapshot) && loaded.Save() == previous, "version two requires its settings field, not an arbitrary fourth field");
+		Require(!ValidateSettings(json{ { std::string("bad\0key", 7), true } }), "embedded nulls in setting names are rejected");
 		for (const auto& invalid : {
 				 json{ { "appearance", { { "brightness", 2 } } } },
 				 json{ { "features", { { "Wetterness", { { "brightness", 2 } } } } } },

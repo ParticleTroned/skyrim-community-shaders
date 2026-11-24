@@ -360,7 +360,6 @@ void RenderDoc::DrawSettings()
 					ImGui::TableSetColumnIndex(0);
 					bool isSelected = false;
 
-					// Push red color for failed deletions
 					if (file.deletionFailed) {
 						ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetError());
 					}

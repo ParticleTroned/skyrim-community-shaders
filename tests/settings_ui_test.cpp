@@ -5,8 +5,10 @@
 #include "Features/Upscaling/NeuralRendering/GuidedReconstructionPolicy.h"
 #include "Features/Upscaling/NeuralRendering/ModelResolutionPolicy.h"
 #include "Menu/AdaptiveBalancePresets.h"
+#include "Menu/InputPadStyle.h"
 #include "Menu/Layout.h"
 #include "Menu/PerformancePage.h"
+#include "Menu/PerformanceProfiles.h"
 #include "Menu/PerformanceResults.h"
 #include "Menu/ProfileExchange.h"
 #include "Menu/SectionDivider.h"
@@ -15,6 +17,7 @@
 #include "Menu/SettingsPage.h"
 #include "Menu/SettingsSearch.h"
 #include "PresetCompatibility.h"
+#include "Presets/SettingsDomains.h"
 #include "Utils/FeatureProfiling.h"
 #include "Utils/NumericEntry.h"
 #include "Utils/StringUtils.h"
@@ -68,10 +71,11 @@ struct Feature
 	nlohmann::json settings = { { "Enabled", true } };
 	std::string GetName() const { return name; }
 	bool HasFeatureSettings() const { return hasSettings; }
-	int loadFailures = 0;
+	int loadFailures = 0, loads = 0;
 	void SaveSettings(nlohmann::json& value) const { value = settings; }
 	void LoadSettings(nlohmann::json& value)
 	{
+		++loads;
 		settings = value;
 		if (loadFailures > 0) {
 			--loadFailures;
@@ -83,7 +87,8 @@ struct Feature
 	bool SupportsPerformanceCostMeasurement() const { return supportsMeasurement; }
 	std::string GetDisplayName() const { return name; }
 	std::string_view GetSettingsFooterText() const { return {}; }
-	static std::vector<Feature*> GetFeatureList() { return {}; }
+	static inline std::vector<Feature*> features;
+	static std::vector<Feature*> GetFeatureList() { return features; }
 };
 
 namespace globals
@@ -179,6 +184,7 @@ namespace globals
 		}
 		int applyFailures = 0, saves = 0, loads = 0, snapshots = 0, applies = 0;
 		nlohmann::json settings{ { "current", true } };
+		nlohmann::json appliedPresetSettings = nlohmann::json::object();
 		bool Save()
 		{
 			++saves;
@@ -191,6 +197,7 @@ namespace globals
 			return true;
 		}
 		bool startupDisabled = false;
+		std::map<std::string, bool> disabledFeatures;
 		bool IsFeatureDisabled(const std::string&) const { return startupDisabled; }
 		void Load() { ++loads; }
 		bool IsPersistentMutationBlocked() const { return blocked; }
@@ -201,11 +208,16 @@ namespace globals
 			++snapshots;
 			if (snapshotFailure)
 				throw std::runtime_error("Snapshot failed");
-			value = settings;
+			value.update(appliedPresetSettings);
+			value.update(settings);
+			for (auto* feature : Feature::GetFeatureList())
+				if (feature->loaded && feature->HasFeatureSettings())
+					feature->SaveSettings(value[feature->GetName()]);
 		}
-		void LoadFromJson(nlohmann::json& value)
+		void LoadFromJson(nlohmann::json& value, bool = true)
 		{
 			++applies;
+			appliedPresetSettings = nlohmann::json::object();
 			settings = value;
 			if (applyFailures > 0) {
 				--applyFailures;
@@ -213,6 +225,8 @@ namespace globals
 			}
 		}
 		bool RestoreDefaultSettings(std::string& error);
+		bool CaptureSettingsSnapshot(nlohmann::json&, std::string&);
+		bool ApplySettingsSnapshot(const nlohmann::json&, std::string&);
 	} stateStorage;
 	auto* state = &stateStorage;
 	namespace features
@@ -312,6 +326,10 @@ struct PerformanceTuningRenderer
 	static void SelectView(std::string_view section) { requestedView = section; }
 	static const char* GetFeatureSceneControlBlockReason(Feature*) { return sceneControlled ? "Scene owns feature settings" : nullptr; }
 	static bool ApplyFeatureSettingsTransaction(const std::vector<Feature*>&, const std::function<bool()>& apply, bool = false) { return apply(); }
+	static inline nlohmann::json history = nlohmann::json::object();
+	static nlohmann::json CaptureFeatureToggleHistory() { return history; }
+	static void RestoreFeatureToggleHistory(const nlohmann::json& value) { history = value; }
+	static void NotifyFeatureSettingsChanged(Feature*) {}
 	static void NotifyOverviewInactive() { ++inactiveNotifications; }
 	static inline std::string feature;
 	static inline std::function<void()> inspect;
@@ -472,14 +490,29 @@ namespace Presets
 {
 	struct LookProfiles
 	{
+		int loads = 0;
+		std::function<void()> onLoad;
 		static LookProfiles& Get()
 		{
 			static LookProfiles instance;
 			return instance;
 		}
 		void OnDefaultsRestored() {}
+		void Load(const nlohmann::json&, const nlohmann::json&)
+		{
+			++loads;
+			if (onLoad)
+				onLoad();
+		}
+		std::string GetLoadError() const { return {}; }
 	};
 }
+namespace MenuUI::PerformancePage
+{
+	void Save(nlohmann::json& settings) { settings["Performance Profiles"] = { { "retained", true } }; }
+}
+void ApplyDefaultDisableAtBootSettings(nlohmann::json&) {}
+void ApplyForcedDisableAtBootSettings(nlohmann::json&) {}
 namespace globals
 {
 	using json = nlohmann::json;
@@ -512,6 +545,7 @@ std::vector<std::string> BuildPerformanceFeaturePrefixes(const std::vector<Featu
 namespace MenuUI::PerformancePage
 {
 	void DrawSaveChoice(Feature*, float) {}
+	Feature* EditedFeature() { return nullptr; }
 }
 #include "settings_performance_counters_under_test.h"
 #include "settings_stabilizer_navigation_under_test.h"
@@ -1131,6 +1165,40 @@ int main()
 			require(Presets::SetExportFolder(folder, {}, error) && folder.directory.empty(), "default export folder restored");
 		}
 
+		{
+			MenuUI::ProfileExchangeState exchange;
+			exchange.name = "Preset";
+			float fieldY = 80, font = 22;
+			const auto draw = [&] {
+				ImGui::PushFont(ImGui::GetFont(), font);
+				ImGui::SetCursorScreenPos({ 100, fieldY });
+				ImGui::PushID("KeyboardFixture");
+				MenuUI::DrawProfileName(exchange);
+				ImGui::PopID();
+				ImGui::PopFont();
+			};
+			for (const float size : { 18.f, 27.f, 40.f }) {
+				font = size;
+				for (const float y : { 80.f, 350.f, 620.f }) {
+					fieldY = y;
+					frame(draw);
+					click(Util::controls.at("Enter a profile name using the keyboard.").GetCenter(), draw);
+					frame(draw);
+					require(!GImGui->OpenPopupStack.empty(), "activating a profile name opens the virtual keyboard");
+					const auto* popup = GImGui->OpenPopupStack.back().Window;
+					const ImRect keyboard(popup->Pos, { popup->Pos.x + popup->Size.x, popup->Pos.y + popup->Size.y });
+					const auto field = Util::controls.at("Enter a profile name using the keyboard.");
+					require(!keyboard.Overlaps(field), "keyboard must not cover the profile name at any supported font size or field position");
+					require(popup->ScrollMax.x == 0 && popup->ScrollMax.y == 0, "keyboard keys and actions must fit without scrolling");
+					const auto before = exchange.name;
+					click(Util::controls.at("q").GetCenter(), draw);
+					require(exchange.nameDraft == before + "q", "laser-compatible key buttons update the visible draft");
+					click(Util::controls.at("Done").GetCenter(), draw);
+					require(exchange.name == before + "q" && GImGui->OpenPopupStack.empty(), "Done commits the name and dismisses the keyboard");
+				}
+			}
+		}
+
 		using Viewport = MenuUI::DevBenchViewport;
 		bool allowScroll = true;
 		auto drawScrollable = [&](const char* tab = "content", const char* window = "ScrollContent") {
@@ -1435,20 +1503,37 @@ int main()
 		key(ImGuiKey_Enter, drawChoices);
 		require(selectedChoice == 2, "keyboard navigation skips the disabled choice and Enter selects a card");
 		std::array independentSelections{ true, false };
+		int openedFeature = -1;
 		const auto drawIndependentChoices = [&] {
 			const MenuUI::Choice choices[]{
 				{ "one", "Feature one", "First feature", "First preset feature", true, independentSelections[0], { .2f, .6f, .9f, 1 } },
 				{ "two", "Feature two", "Second feature", "Second preset feature", true, independentSelections[1], { .2f, .6f, .9f, 1 } }
 			};
-			const int clicked = MenuUI::ChoiceCards("Included features", -1, choices);
-			if (clicked >= 0)
+			int doubleClicked = -1;
+			const int clicked = MenuUI::ChoiceCards("Included features", -1, choices, &doubleClicked);
+			if (doubleClicked >= 0) {
+				independentSelections[doubleClicked] = !independentSelections[doubleClicked];
+				openedFeature = doubleClicked;
+			} else if (clicked >= 0)
 				independentSelections[clicked] = !independentSelections[clicked];
 		};
 		frame(drawIndependentChoices);
 		click(Util::controls.at("Second preset feature").GetCenter(), drawIndependentChoices);
 		require(independentSelections[0] && independentSelections[1], "selecting one preset tile must preserve the other selections");
+		io.DeltaTime = io.MouseDoubleClickTime + .01f;
+		frame(drawIndependentChoices);
+		io.DeltaTime = 1.0f / 60;
 		click(Util::controls.at("Second preset feature").GetCenter(), drawIndependentChoices);
 		require(independentSelections[0] && !independentSelections[1], "clicking a selected preset tile again must deselect only that tile");
+		io.DeltaTime = io.MouseDoubleClickTime + .01f;
+		frame(drawIndependentChoices);
+		io.DeltaTime = 1.0f / 60;
+		click(Util::controls.at("Second preset feature").GetCenter(), drawIndependentChoices);
+		io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+		frame(drawIndependentChoices);
+		require(openedFeature == 1 && !independentSelections[1], "double-click opens the feature and undoes the first click's tile toggle");
+		io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+		frame([] {});
 		for (const bool vr : { false, true }) {
 			globals::game::isVR = vr;
 			const auto drawRuntimeSettings = [] {
@@ -3075,6 +3160,111 @@ int main()
 		MenuUI::StabilizerPage::dirty = true;
 		require(!CanSelectEditor("targets") && CanSelectEditor("locations"), "location draft remains visible");
 		MenuUI::StabilizerPage::dirty = false;
+
+		{
+			auto& state = *globals::state;
+			const auto previousState = state;
+			const auto previousDefaults = Util::FileHelpers::defaults;
+			const auto previousReadResult = Util::FileHelpers::result;
+			const auto previousReads = Util::FileHelpers::reads;
+			Util::FileHelpers::result = Util::FileHelpers::JsonFileReadResult::Success;
+			Util::FileHelpers::defaults = { { "Unavailable feature", { { "detail", 17 } } } };
+			state.settings = { { "General", { { "shaders", true } } }, { "Menu", { { "zoom", 1.25 } } },
+				{ "SnapshotFeature", { { "Enabled", true } } }, { "Disable at Boot", { { "SnapshotFeature", false } } },
+				{ "Performance Profiles", { { "nested", true } } } };
+			state.blocked = state.snapshotFailure = false;
+			state.applyFailures = 0;
+			globals::menu->mutationAllowed = true;
+			PerformanceTuningRenderer::measuring = false;
+			Feature snapshotFeature;
+			snapshotFeature.name = "SnapshotFeature";
+			Feature::features = { &snapshotFeature };
+			std::string error;
+			nlohmann::json snapshot;
+			require(state.CaptureSettingsSnapshot(snapshot, error) && snapshot.contains("Unavailable feature") &&
+						!snapshot.contains("Performance Profiles") && snapshot["Menu"]["zoom"] == 1.25,
+				"full snapshot retains unavailable sections, captures globals and excludes recursive profiles");
+			auto desired = snapshot;
+			const auto lookLoads = Presets::LookProfiles::Get().loads;
+			desired["General"]["shaders"] = false;
+			desired["SnapshotFeature"]["Enabled"] = false;
+			desired["Disable at Boot"]["SnapshotFeature"] = true;
+			desired["Unavailable feature"]["detail"] = 23;
+			require(state.ApplySettingsSnapshot(desired, error) && !snapshotFeature.settings["Enabled"] &&
+						state.disabledFeatures[snapshotFeature.name] && !state.settings["General"]["shaders"],
+				"full snapshot applies global settings, native feature values and requested startup states");
+			require(state.appliedPresetSettings["Unavailable feature"]["detail"] == 23 &&
+						!state.appliedPresetSettings.contains("Performance Profiles"),
+				"applied presets retain unavailable settings for subsequent saves without recursive profiles");
+			require(Presets::LookProfiles::Get().loads == lookLoads,
+				"feature-only snapshots do not reload old Visuals edits over the requested feature values");
+			const auto appliedSnapshot = state.settings;
+			auto invalid = desired;
+			invalid["Menu"]["zoom"] = "invalid";
+			require(!state.ApplySettingsSnapshot(invalid, error) && state.settings == appliedSnapshot,
+				"invalid snapshot types reject before any settings mutation");
+			snapshotFeature.loadFailures = 1;
+			require(!state.ApplySettingsSnapshot(snapshot, error) && state.settings == appliedSnapshot && !snapshotFeature.settings["Enabled"],
+				"failed native application rolls back global values and feature values together");
+			state.applyFailures = 2;
+			require(!state.ApplySettingsSnapshot(snapshot, error) && error.find("restoring previous settings also failed") != error.npos,
+				"a failed rollback is reported without claiming restoration");
+			state = previousState;
+			Util::FileHelpers::defaults = previousDefaults;
+			Util::FileHelpers::result = previousReadResult;
+			Util::FileHelpers::reads = previousReads;
+			Feature::features.clear();
+		}
+
+		{
+			auto& state = *globals::state;
+			const auto oldState = state;
+			const auto oldDefaults = Util::FileHelpers::defaults;
+			const auto oldRead = Util::FileHelpers::result;
+			const auto oldReads = Util::FileHelpers::reads;
+			const auto oldHistory = PerformanceTuningRenderer::history;
+			Util::FileHelpers::defaults = nlohmann::json::object();
+			Util::FileHelpers::result = Util::FileHelpers::JsonFileReadResult::Success;
+			state.settings = { { "Menu", { { "ToggleKey", nlohmann::json::array() } } }, { "Disable at Boot", { { "First", false } } } };
+			state.appliedPresetSettings = nlohmann::json::object();
+			state.blocked = state.snapshotFailure = false;
+			state.applyFailures = state.applies = 0;
+			PerformanceTuningRenderer::sceneControlled = false;
+			Feature first, second;
+			first.name = "First";
+			second.name = "Second";
+			Feature::features = { &first, &second };
+			PerformanceTuningRenderer::history = { { "First", "old" }, { "Second", "retained" } };
+			std::string error;
+			require(state.ApplySettingsSnapshot({ { "First", { { "Enabled", false } } } }, error) && first.loads == 1 && second.loads == 0 && state.applies == 0,
+				"single-feature presets must not reload unrelated features or global settings");
+			require(!PerformanceTuningRenderer::history.contains("First") && PerformanceTuningRenderer::history["Second"] == "retained",
+				"replacing one feature invalidates only that feature's toggle history");
+			require(state.ApplySettingsSnapshot({ { "First", { { "Enabled", false } } } }, error) && first.loads == 1,
+				"reapplying identical custom settings must avoid native resource reloads");
+			const auto keys = nlohmann::json::array({ nlohmann::json{ { "key", 45 } } });
+			require(state.ApplySettingsSnapshot({ { "Menu", { { "ToggleKey", keys } } } }, error) && state.settings["Menu"]["ToggleKey"] == keys,
+				"full settings snapshots can restore a nonempty shortcut into an empty shortcut list");
+			require(!Presets::ValidatePatch({ { "ToggleKey", keys } }, { { "ToggleKey", nlohmann::json::array() } }, error),
+				"appearance patches retain their strict collection validation");
+			require(!state.ApplySettingsSnapshot({ { "Disable at Boot", { { "Added", true }, { "Invalid", "bad" } } } }, error) && !state.disabledFeatures.contains("Added"),
+				"invalid new startup switches cannot leave earlier switches partially applied");
+			Presets::LookProfiles::Get().onLoad = [&] { first.settings["Enabled"] = false; second.settings["Enabled"] = false; };
+			require(state.ApplySettingsSnapshot({ { "Presets", { { "activePackId", "saved-look" } } }, { "First", { { "Enabled", true } } }, { "Second", { { "Enabled", true } } } }, error) &&
+						first.settings["Enabled"] && second.settings["Enabled"],
+				"explicit snapshot values win over older personal Look edits");
+			Presets::LookProfiles::Get().onLoad = {};
+			second.loadFailures = 2;
+			require(!state.ApplySettingsSnapshot({ { "First", { { "Enabled", false } } }, { "Second", { { "Enabled", false } } } }, error) &&
+						first.settings["Enabled"] && second.settings["Enabled"] && error.find("restoring previous settings also failed") != error.npos,
+				"rollback continues restoring other features after one native restoration throws");
+			state = oldState;
+			Util::FileHelpers::defaults = oldDefaults;
+			Util::FileHelpers::result = oldRead;
+			Util::FileHelpers::reads = oldReads;
+			PerformanceTuningRenderer::history = oldHistory;
+			Feature::features.clear();
+		}
 
 		{
 			using namespace Util::FileHelpers;

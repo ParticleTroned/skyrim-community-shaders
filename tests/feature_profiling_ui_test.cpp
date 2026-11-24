@@ -52,7 +52,7 @@ namespace MenuUI
 {
 	int chosenMode = 1;
 	int choiceDraws = 0;
-	int ChoiceCards(const char*, int, std::span<const Choice>)
+	int ChoiceCards(const char*, int, std::span<const Choice>, int*)
 	{
 		++choiceDraws;
 		return chosenMode;

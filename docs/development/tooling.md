@@ -291,6 +291,22 @@ every target remains inside the common Git object directory. It does not run
 
 ## Production performance API
 
+The developer bridge's `communityshaders.performance` profile controls
+include `edit_profile_feature`, `apply_profile_feature`,
+`restore_profile_feature`, and `close_profile_feature`. Editing uses the
+native feature UI and changes the running game. Apply stores that feature's
+values in MyPerformance and saves normal CSX settings; Back retains live
+changes. Restore returns to the settings captured when the editor opened
+without writing files. `included_features.editingFeature` identifies the
+open editor.
+
+`capture_current_profile_settings` copies all current CSX settings into
+MyPerformance, including global settings and retained unavailable feature
+sections, and saves normal settings. The profile excludes its own container
+to prevent recursive snapshots. Version 2 profile exchange includes these
+settings; version 1 selection-only files remain readable. Applying saved
+settings uses native loaders and retains restart requirements.
+
 Production builds expose `csx.performance` 1.0 through the public registry
 in `include/VRAPI/CSserviceapi.h`. `CSperformanceapi.h` defines its bounded
 JSON transport. Requests require `contractMajor: 1`, `clientId`, `commandId`

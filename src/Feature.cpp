@@ -529,20 +529,16 @@ void Feature::DrawUnloadedUI()
 {
 	// Prioritize detailed failure message if available
 	if (!failedLoadedMessage.empty()) {
-		// Use error color for all failure messages
-		auto& themeSettings = Menu::GetSingleton()->GetTheme();
-		ImGui::TextColored(themeSettings.StatusPalette.Error, "%s", failedLoadedMessage.c_str());
+		ImGui::TextColored(Util::Colors::GetError(), "%s", failedLoadedMessage.c_str());
 		return;
 	}
 
 	if (!conflictMessage.empty()) {
-		auto& themeSettings = Menu::GetSingleton()->GetTheme();
-		ImGui::TextColored(themeSettings.StatusPalette.Warning, "%s", conflictMessage.c_str());
+		ImGui::TextColored(Util::Colors::GetWarning(), "%s", conflictMessage.c_str());
 		return;
 	}
 
 	// Missing-file guidance applies only when no specific reason is available.
-	auto& themeSettings = Menu::GetSingleton()->GetTheme();
 	auto ini_filename = std::format("{}.ini", GetShortName());
 	// Get the minimum required version to include in the error message
 	std::string requiredVersion = Feature::GetFeatureRequiredVersion(GetShortName());
@@ -551,7 +547,7 @@ void Feature::DrawUnloadedUI()
 		"This feature is not installed or may not yet be available! Version required: {} version {}",
 		ini_filename,
 		requiredVersion);
-	ImGui::TextColored(themeSettings.StatusPalette.Error, "%s", missingFileMessage.c_str());
+	ImGui::TextColored(Util::Colors::GetError(), "%s", missingFileMessage.c_str());
 
 	// Also show feature summary if available
 	auto [description, keyFeatures] = GetFeatureSummary();

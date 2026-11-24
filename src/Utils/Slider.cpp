@@ -1,6 +1,7 @@
 #include "Features/VR.h"
 #include "Globals.h"
 #include "Menu.h"
+#include "Menu/InputPadStyle.h"
 #include "Menu/SettingsSearch.h"
 #include "NumericEntry.h"
 #include "UI.h"
@@ -23,7 +24,6 @@ namespace Util::Widgets
 		constexpr float controlTextScale = 14.0f / 12.0f;
 		constexpr float controlPadding = .35f;
 		constexpr float numberTargetWidth = 4.5f;
-		constexpr float numberPadScale = .5f;
 		constexpr float handleRadius = .6f;
 
 		struct ControlStyle
@@ -197,16 +197,7 @@ namespace Util::Widgets
 				else
 					drafts[draftId] = std::to_string(*value);
 			}
-			ImGui::PushFont(ImGui::GetFont(), ImGui::GetStyle().FontSizeBase * 1.25f * numberPadScale);
-			const auto& style = ImGui::GetStyle();
-			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { style.WindowPadding.x * numberPadScale, style.WindowPadding.y * numberPadScale });
-			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, { style.FramePadding.x * numberPadScale, style.FramePadding.y * numberPadScale });
-			ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, { style.ItemSpacing.x * numberPadScale, style.ItemSpacing.y * numberPadScale });
-			ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, { style.ItemInnerSpacing.x * numberPadScale, style.ItemInnerSpacing.y * numberPadScale });
-			ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, { style.WindowMinSize.x * numberPadScale, style.WindowMinSize.y * numberPadScale });
-			ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, style.WindowRounding * numberPadScale);
-			ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, style.FrameRounding * numberPadScale);
-			const SKSE::stl::scope_exit restoreKeypadStyle([] { ImGui::PopStyleVar(7); ImGui::PopFont(); });
+			const MenuUI::InputPadStyle padStyle;
 			const auto viewportSize = ImGui::GetWindowViewport()->WorkSize;
 			ImGui::SetNextWindowSizeConstraints({ 0, 0 }, { std::max(1.0f, viewportSize.x - ImGui::GetFontSize()), std::max(1.0f, viewportSize.y - ImGui::GetFontSize()) });
 			if (auto popup = Util::CenteredPopupModal("Enter value")) {

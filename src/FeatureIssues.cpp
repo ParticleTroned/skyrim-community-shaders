@@ -392,49 +392,49 @@ namespace FeatureIssues
 		// Shader Breaking Features Section (most critical)
 		if (auto section = Util::SectionWrapper("Compilation Breaking Features",
 				"These features changed core shaders. Uninstall them completely with your mod manager; deleting their INIs will not fix compilation errors.",
-				theme.StatusPalette.Error, !shaderBreakingIssues.empty())) {
+				Util::Colors::GetError(), !shaderBreakingIssues.empty())) {
 			for (const auto* issue : shaderBreakingIssues) {
-				DrawFeatureIssue(*issue, theme.StatusPalette.Error, pendingRemoval);
+				DrawFeatureIssue(*issue, Util::Colors::GetError(), pendingRemoval);
 			}
 		}
 		// Unknown Features Section (potentially compilation breaking)
 		if (auto section = Util::SectionWrapper("Unknown Features",
 				"Unrecognized features may come from development branches or newer CSX versions. CSX attempted to disable them. Remove them to prevent compilation failures; their shader changes are unknown.",
-				theme.StatusPalette.Error, !unknownIssues.empty())) {
+				Util::Colors::GetError(), !unknownIssues.empty())) {
 			for (const auto* issue : unknownIssues) {
-				DrawFeatureIssue(*issue, theme.StatusPalette.Error, pendingRemoval);
+				DrawFeatureIssue(*issue, Util::Colors::GetError(), pendingRemoval);
 			}
 		}
 		// Obsolete Features Section (non-shader-breaking)
 		if (auto section = Util::SectionWrapper("Obsolete Features",
 				"These obsolete features were disabled automatically. They were removed or replaced and do not modify core shaders.",
-				theme.StatusPalette.Warning, !obsoleteIssues.empty())) {
+				Util::Colors::GetWarning(), !obsoleteIssues.empty())) {
 			for (const auto* issue : obsoleteIssues) {
-				DrawFeatureIssue(*issue, theme.StatusPalette.Warning, pendingRemoval);
+				DrawFeatureIssue(*issue, Util::Colors::GetWarning(), pendingRemoval);
 			}
 		}
 		// Version Mismatch Section
 		if (auto section = Util::SectionWrapper("Wrong Version Features",
 				"These features were disabled due to incompatible versions. Check for updates or replacements.",
-				theme.StatusPalette.Warning, !versionIssues.empty())) {
+				Util::Colors::GetWarning(), !versionIssues.empty())) {
 			for (const auto* issue : versionIssues) {
-				DrawFeatureIssue(*issue, theme.StatusPalette.Warning, pendingRemoval);
+				DrawFeatureIssue(*issue, Util::Colors::GetWarning(), pendingRemoval);
 			}
 		}
 		if (auto section = Util::SectionWrapper("Conflicting Mods",
 				"These features were disabled because an incompatible mod was detected. Keep the feature disabled at boot to use that mod, or remove the mod and restart to use the feature.",
-				theme.StatusPalette.Warning, !conflictIssues.empty())) {
+				Util::Colors::GetWarning(), !conflictIssues.empty())) {
 			for (const auto* issue : conflictIssues) {
-				DrawFeatureIssue(*issue, theme.StatusPalette.Warning, pendingRemoval);
+				DrawFeatureIssue(*issue, Util::Colors::GetWarning(), pendingRemoval);
 				ImGui::TextWrapped("%s", issue->rejectionReason.c_str());
 			}
 		}
 		// Override Failures Section
 		if (auto section = Util::SectionWrapper("Override Failures",
 				"The following override files failed to load or apply. Check the file format and content.",
-				theme.StatusPalette.Error, !overrideIssues.empty())) {
+				Util::Colors::GetError(), !overrideIssues.empty())) {
 			for (const auto* issue : overrideIssues) {
-				DrawFeatureIssue(*issue, theme.StatusPalette.Error, pendingRemoval);
+				DrawFeatureIssue(*issue, Util::Colors::GetError(), pendingRemoval);
 			}
 		}
 
@@ -498,7 +498,7 @@ namespace FeatureIssues
 
 		// Show detailed information in tooltip
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			// Show compilation failure warning at the top in red if applicable
+			// Keep compilation failures ahead of optional cleanup actions.
 			if ((issue.IsObsolete() && issue.ModifiedShaderDirectory()) || issue.IsUnknown()) {
 				ImGui::TextColored(color, "POTENTIAL COMPILATION FAILURE");
 				if (issue.IsUnknown()) {
@@ -686,10 +686,10 @@ namespace FeatureIssues
 
 				// Enhanced warning for unknown features
 				if (issue.IsUnknown()) {
-					ImGui::TextColored(theme.StatusPalette.Error, "WARNING:");
+					ImGui::TextColored(Util::Colors::GetError(), "WARNING:");
 					ImGui::TextWrapped("Unknown feature: deleting its own files will not fix core shaders it changed outside its folder.");
 					ImGui::Spacing();
-					ImGui::TextColored(theme.StatusPalette.Warning, "If compilation issues persist after deletion:");
+					ImGui::TextColored(Util::Colors::GetWarning(), "If compilation issues persist after deletion:");
 					ImGui::BulletText("Completely uninstall the feature via your mod manager");
 					ImGui::BulletText("Check for modified files in Data/Shaders/ (not in feature subfolders)");
 					ImGui::BulletText("Consider reinstalling CSX if issues persist");
@@ -698,7 +698,7 @@ namespace FeatureIssues
 					ImGui::Spacing();
 				}
 
-				ImGui::TextColored(theme.StatusPalette.Warning, "This will delete:");
+				ImGui::TextColored(Util::Colors::GetWarning(), "This will delete:");
 				if (issue.fileInfo.hasINI) {
 					ImGui::BulletText("INI file: %s", issue.fileInfo.iniPath.c_str());
 				}
@@ -710,7 +710,7 @@ namespace FeatureIssues
 				}
 
 				ImGui::Spacing();
-				ImGui::TextColored(theme.StatusPalette.Error, "This action cannot be undone!");
+				ImGui::TextColored(Util::Colors::GetError(), "This action cannot be undone!");
 				ImGui::Spacing();
 
 				if (ImGui::Button("Delete", ImVec2(120, 0))) {
@@ -1489,12 +1489,12 @@ namespace FeatureIssues
 
 			if (sectionWrapper) {
 				const bool hasActiveTests = HasActiveTestInis();
-				if (hasActiveTests) {  // Warning section using theme colors
-					ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.Warning);
+				if (hasActiveTests) {
+					ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetWarning());
 					ImGui::TextWrapped("Test INI files are currently active. Restart CSX to see feature issues.");
 					ImGui::PopStyleColor();  // Show detailed test state information
 					ImGui::Spacing();
-					ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.Warning);
+					ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetWarning());
 					ImGui::TextWrapped(GetTestStateDescription().c_str());
 					ImGui::PopStyleColor();
 					ImGui::Spacing();

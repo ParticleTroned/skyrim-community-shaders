@@ -3138,6 +3138,21 @@ bool PerformanceTuningRenderer::ApplyFeatureSettingsTransaction(const std::vecto
 	return applied;
 }
 
+json PerformanceTuningRenderer::CaptureFeatureToggleHistory()
+{
+	auto result = json::object();
+	for (const auto& [name, state] : g_disabledFeatureConfigurations)
+		result[name] = state ? json{ { "enabled", state->enabledState }, { "disabled", state->disabledState } } : json(nullptr);
+	return result;
+}
+
+void PerformanceTuningRenderer::RestoreFeatureToggleHistory(const json& a_history)
+{
+	g_disabledFeatureConfigurations.clear();
+	for (const auto& [name, state] : a_history.items())
+		g_disabledFeatureConfigurations[name] = state.is_null() ? std::nullopt : std::optional(PerformanceTuningController::DisabledConfiguration{ state.at("enabled"), state.at("disabled") });
+}
+
 const char* PerformanceTuningRenderer::GetFeatureToggleFailureReason(Feature* a_feature)
 {
 	return a_feature && failedToggleFeature == a_feature ?
@@ -3203,7 +3218,20 @@ namespace
 				const char* error = StartQuickScan(false, true, recordFpsVR);
 				g_featureCostUiMessage = error ? fmt::format("Scan batch could not start: {}", error) : "";
 			}
-			Util::AddTooltip("Capture three scans with ten-second gaps. Readiness settling occurs during each gap; delays extend the gap. CSV and JSON are saved beside the saved results, including commit, Build ID and capture times. Keep the scene and headset still throughout.");
+			Util::AddTooltip("Capture three scans with five-second gaps. Readiness settling occurs during each gap; delays extend the gap. CSV and JSON are saved beside the saved results, including commit, Build ID and capture times. Keep the scene and headset still throughout.");
+			const float resultsWidth = ImGui::CalcTextSize("Open results").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+			const float resultsOffset = std::max(0.0f, ImGui::GetContentRegionAvail().x - resultsWidth);
+			const float resultsLeft = ImGui::GetCursorPosX() + resultsOffset;
+			if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x <= ImGui::GetCursorScreenPos().x + resultsOffset)
+				ImGui::SameLine(resultsLeft);
+			else
+				ImGui::SetCursorPosX(resultsLeft);
+			if (ImGui::Button("Open results")) {
+				PerformanceTuningRenderer::SelectView("saved_results");
+				ImGui::SetScrollY(0);
+				return;
+			}
+			Util::AddTooltip("View saved runs and reports, export them, or open the results folder.");
 		}
 		if (!g_featureCostUiMessage.empty())
 			MenuUI::PageNotice(g_featureCostUiMessage, MenuUI::NoticeKind::Error);
@@ -3251,6 +3279,8 @@ void PerformanceTuningRenderer::SelectView(std::string_view a_section)
 			tuningView = 1;
 		else if (a_section == "compare" || a_section == "performance")
 			tuningView = 0;
+		else if (a_section == "saved_results")
+			tuningView = 2;
 	}
 }
 

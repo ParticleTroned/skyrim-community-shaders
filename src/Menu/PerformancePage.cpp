@@ -1,12 +1,16 @@
 #include "PerformancePage.h"
 
+#include "ExternalSettingsPage.h"
 #include "Feature.h"
+#include "FeatureListRenderer.h"
 #include "Features/Upscaling.h"
 #include "Globals.h"
 #include "Menu.h"
 #include "PerformanceProfiles.h"
 #include "PerformanceTuningRenderer.h"
 #include "Presets/LookPack.h"
+#include "Presets/LookProfileState.h"
+#include "Presets/LookProfiles.h"
 #include "ProfileExchange.h"
 #include "SettingsActions.h"
 #include "SettingsPage.h"
@@ -16,6 +20,8 @@
 #include "Utils/FileSystem.h"
 #include "Utils/RuntimeToggle.h"
 #include "Utils/UI.h"
+#include "WeatherManager.h"
+#include "WeatherVariableRegistry.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -33,6 +39,9 @@ namespace MenuUI::PerformancePage
 		ActionFeedback feedback;
 		json includedFeatureChoices;
 		bool includedFeaturesOpen = false;
+		Feature* editedFeature = nullptr;
+		json editBaseline;
+		json editToggleHistory;
 
 		Feature* FindFeature(std::string_view a_name)
 		{
@@ -65,6 +74,8 @@ namespace MenuUI::PerformancePage
 
 		const char* MutationBlockReason()
 		{
+			if (editedFeature)
+				return "Return to MyPerformance before changing profiles.";
 			if (PerformanceTuningRenderer::HasActiveMeasurements())
 				return "Finish the active measurement before changing profiles.";
 			if (Util::IsRuntimeToggleBlocked(globals::state))
@@ -156,6 +167,25 @@ namespace MenuUI::PerformancePage
 			return selections;
 		}
 
+		json CaptureEditorSettings(Feature* a_feature)
+		{
+			auto snapshot = json::object();
+			a_feature->SaveBaseSettings(snapshot["settings"]);
+			snapshot["runtime"] = a_feature->CapturePerformanceCostMeasurementState();
+			snapshot["menu"] = json::object();
+			globals::menu->CaptureFeatureMenuSettings(a_feature->GetName(), snapshot["menu"]);
+			return snapshot;
+		}
+
+		void RestoreEditorSettings(Feature* a_feature, const json& a_snapshot)
+		{
+			auto settings = a_snapshot.at("settings");
+			a_feature->LoadSettings(settings);
+			WeatherVariables::GlobalWeatherRegistry::GetSingleton()->CaptureFeatureUserSettings(a_feature->GetShortName());
+			a_feature->RestorePerformanceToggleState(a_snapshot.at("runtime"));
+			globals::menu->ApplyFeatureMenuSettings(a_feature->GetName(), &a_snapshot.at("menu"));
+		}
+
 		bool Matches(const json& a_choices)
 		{
 			if (a_choices.contains("upscaling") && IsAvailable(&globals::features::upscaling)) {
@@ -218,7 +248,7 @@ namespace MenuUI::PerformancePage
 			switch (selectedProfile) {
 			case 3:
 				{
-					SectionHeading("Preset selections", "Choose a base and review your saved choices, then use Apply MyPerformance. Applies upscaling choices, feature On/Off states and named feature presets. Other individual visual adjustments are preserved.");
+					SectionHeading("Preset selections", "Choose a base and review your saved choices, then use Apply MyPerformance. Saved custom settings replace the base values; individual adjustments outside the preset are preserved.");
 					const char* names[]{ "Performance", "Balanced", "Quality" };
 					int base = static_cast<int>(std::ranges::find(PerformanceProfiles::Names, user.base) - PerformanceProfiles::Names.begin());
 					{
@@ -233,6 +263,12 @@ namespace MenuUI::PerformancePage
 						ImGui::SetScrollY(0);
 					}
 					Util::AddTooltip("Choose which loaded features MyPerformance will turn on or off when applied. Editing these tiles does not change the running features.");
+					{
+						const auto disabled = Util::DisableGuard(MutationBlockReason() != nullptr);
+						if (ImGui::Button("Apply current settings to my preset"))
+							Report(CaptureCurrentSettings());
+					}
+					Util::AddTooltip("Copy ALL current CSX settings into MyPerformance, including global settings and every feature, then save CSX settings.");
 					SectionHeading("Saved performance choices");
 					for (const auto& [category, values] : user.choices.items()) {
 						if (category == "upscaling") {
@@ -260,13 +296,15 @@ namespace MenuUI::PerformancePage
 								ImGui::TextWrapped("%s preset: %s", label.c_str(), value.get_ref<const std::string&>().c_str());
 						}
 					}
-					if (user.choices.empty()) {
+					if (user.choices.empty() && user.settings.empty()) {
 						ImGui::TextDisabled("Base preset only");
 						Util::AddTooltip("MyPerformance currently uses only its base preset. To add your own choices, open Performance Tuning and use Save settings to MyPerformance for individual features or all editable features.");
 					}
+					if (!user.settings.empty())
+						ImGui::TextWrapped("Custom settings saved for %zu sections.", user.settings.size());
 					if (!Matches(user.Resolve())) {
-						PageNotice("MyPerformance changes not applied.", NoticeKind::Pending,
-							"Current settings differ from MyPerformance. Use Apply MyPerformance to apply its base and saved choices, then Save settings to keep the result.");
+						PageNotice("MyPerformance performance choices differ from current settings.", NoticeKind::Pending,
+							"Use Apply MyPerformance to apply its base, choices and custom settings, then Save settings to keep the result.");
 					}
 					{
 						const auto disabled = Util::DisableGuard(MutationBlockReason() != nullptr);
@@ -322,7 +360,7 @@ namespace MenuUI::PerformancePage
 				Util::AddTooltip(blocked ? blocked : "Reset the draft to current Enabled settings. This does not change MyPerformance or any running feature.");
 			}
 			ImGui::SetCursorScreenPos({ toolbarStart.x, ImGui::GetCursorScreenPos().y });
-			SectionHeading("Included Features", "Highlighted editable tiles will be On when MyPerformance is applied; unhighlighted tiles will be Off. Restart-only features show their selected state and cannot be changed here. These choices do not change the running features.");
+			SectionHeading("Included Features", "Click once to switch On or Off. Double-click to open a feature's settings. Tile switches are saved to MyPerformance; the feature editor changes the running game.");
 			feedback.Draw();
 			if (includedFeatureChoices.is_null())
 				includedFeatureChoices = MakeIncludedFeatureChoices(false);
@@ -346,7 +384,7 @@ namespace MenuUI::PerformancePage
 						continue;
 					auto description = feature->GetFeatureSummary().first;
 					const auto* readOnlyReason = feature->GetPerformanceProfileReadOnlyReason();
-					const auto help = description + "\n\n" + (readOnlyReason ? readOnlyReason : "Click to stage this feature On or Off in MyPerformance. The running feature is unchanged.");
+					const auto help = description + "\n\n" + (readOnlyReason ? readOnlyReason : "Click to stage this feature On or Off in MyPerformance. Double-click to edit its live settings.");
 					description = description.substr(0, description.find_first_of("\r\n"));
 					if (const auto sentence = description.find(". "); sentence != std::string::npos)
 						description.resize(sentence + 1);
@@ -360,9 +398,15 @@ namespace MenuUI::PerformancePage
 				SectionHeading(category.data());
 				std::vector<Choice> cards;
 				for (const auto& item : text)
-					cards.push_back({ item.id.c_str(), item.name.c_str(), item.description.c_str(), item.help.c_str(), item.enabled, item.selected, color });
-				const int clicked = ChoiceCards(category.data(), -1, cards);
-				if (clicked >= 0)
+					cards.push_back({ item.id.c_str(), item.name.c_str(), item.description.c_str(), item.help.c_str(), item.enabled, item.selected, color, true });
+				int doubleClicked = -1;
+				const int clicked = ChoiceCards(category.data(), -1, cards, &doubleClicked);
+				if (doubleClicked >= 0) {
+					// Undo the first click's switch before entering the editor.
+					Report(SelectIncludedFeature(text[doubleClicked].id, !includedFeatureChoices.value(text[doubleClicked].id, false)));
+					Report(BeginFeatureEdit(text[doubleClicked].id));
+					return;
+				} else if (clicked >= 0)
 					Report(SelectIncludedFeature(text[clicked].id, !includedFeatureChoices.value(text[clicked].id, false)));
 			}
 		}
@@ -373,6 +417,7 @@ namespace MenuUI::PerformancePage
 
 	void Load(const nlohmann::json& a_settings)
 	{
+		editedFeature = nullptr;
 		includedFeatureChoices = nullptr;
 		if (!a_settings.contains("Performance Profiles"))
 			user = {};
@@ -417,6 +462,7 @@ namespace MenuUI::PerformancePage
 		if (!PerformanceProfiles::ValidateChoices(candidate))
 			return { { "accepted", false }, { "error", "These selections cannot be stored in a performance profile." } };
 		user.choices = std::move(candidate);
+		user.settings.erase(feature->GetName());
 		globals::menu->RequestSettingsDirtyCheck();
 		return { { "accepted", true }, { "message", "Performance choices added to MyPerformance. Custom visual tuning is excluded. Save CSX settings in the header to keep MyPerformance." } };
 	}
@@ -444,12 +490,44 @@ namespace MenuUI::PerformancePage
 		if (!PerformanceProfiles::ValidateChoices(candidate))
 			return { { "accepted", false }, { "error", "These selections cannot be stored in a performance profile." } };
 		user.choices = std::move(candidate);
+		for (const auto& name : captured)
+			user.settings.erase(FindFeature(name.get<std::string>())->GetName());
 		globals::menu->RequestSettingsDirtyCheck();
 		std::string message = "Saved settings for " + std::to_string(captured.size()) + " features to MyPerformance.";
 		if (!skipped.empty())
 			message += " Skipped " + std::to_string(skipped.size()) + " unavailable or controlled features; their saved choices were kept.";
 		message += " Save CSX settings in the header to keep MyPerformance.";
 		return { { "accepted", true }, { "capturedFeatures", captured }, { "skippedFeatures", skipped }, { "message", message } };
+	}
+
+	nlohmann::json CaptureCurrentSettings()
+	{
+		if (const auto* reason = MutationBlockReason())
+			return { { "accepted", false }, { "error", reason } };
+		const auto previous = user;
+		try {
+			json snapshot;
+			std::string error;
+			if (!globals::state->CaptureSettingsSnapshot(snapshot, error))
+				return { { "accepted", false }, { "error", error } };
+			if (!PerformanceProfiles::ValidateSnapshot(snapshot))
+				return { { "accepted", false }, { "error", "The current settings cannot be stored in a preset." } };
+			auto choices = json::object();
+			for (auto* feature : Feature::GetFeatureList())
+				if (IsAvailable(feature) && IsSelectable(feature))
+					AppendChoices(choices, feature);
+			user.choices = std::move(choices);
+			user.settings = std::move(snapshot);
+			if (!globals::state->Save()) {
+				user = previous;
+				return { { "accepted", false }, { "error", globals::menu->GetSettingsSaveMessage() } };
+			}
+			includedFeatureChoices = nullptr;
+			return { { "accepted", true }, { "message", "All current CSX settings copied to MyPerformance and saved." } };
+		} catch (const std::exception& error) {
+			user = previous;
+			return { { "accepted", false }, { "error", error.what() } };
+		}
 	}
 
 	nlohmann::json Apply(std::string_view a_profile)
@@ -460,6 +538,7 @@ namespace MenuUI::PerformancePage
 		if (choices.is_null() || !PerformanceProfiles::ValidateChoices(choices))
 			return { { "accepted", false }, { "error", "Unknown or invalid performance profile." } };
 		std::vector<Feature*> targets;
+		const auto settings = a_profile == "MyPerformance" || a_profile == "User defined" ? user.settings : json::object();
 		auto skipped = json::array();
 		for (const auto* category : { "features", "presets" }) {
 			if (!choices.contains(category))
@@ -492,11 +571,19 @@ namespace MenuUI::PerformancePage
 		}
 		std::string error;
 		bool applied = false;
+		json previousSettings;
+		const auto previousToggleHistory = PerformanceTuningRenderer::CaptureFeatureToggleHistory();
 		try {
+			if (!settings.empty()) {
+				if (!globals::state->CaptureSettingsSnapshot(previousSettings, error) || !globals::state->ApplySettingsSnapshot(settings, error)) {
+					PerformanceTuningRenderer::RestoreFeatureToggleHistory(previousToggleHistory);
+					return { { "accepted", false }, { "error", error } };
+				}
+			}
 			applied = PerformanceTuningRenderer::ApplyFeatureSettingsTransaction(targets, [&] {
 				for (auto* feature : targets) {
 					const auto name = feature->GetShortName();
-					if ((choices.contains("presets") && choices["presets"].contains(name) &&
+					if ((!settings.contains(feature->GetName()) && choices.contains("presets") && choices["presets"].contains(name) &&
 							!feature->ApplyPerformancePreset(choices["presets"][name].get<std::string>())) ||
 						(choices.contains("features") && choices["features"].contains(name) &&
 							!PerformanceTuningRenderer::SetFeatureEnabled(feature, choices["features"][name]))) {
@@ -518,12 +605,29 @@ namespace MenuUI::PerformancePage
 				return true;
 			});
 		} catch (const std::exception& exception) {
-			return { { "accepted", false }, { "error", std::string("Performance preset failed: ") + exception.what() } };
+			error = std::string("Performance preset failed: ") + exception.what();
 		} catch (...) {
-			return { { "accepted", false }, { "error", "Performance preset failed unexpectedly." } };
+			error = "Performance preset failed unexpectedly.";
 		}
-		if (!applied)
-			return { { "accepted", false }, { "error", error + " Previous feature settings and toggle history were restored." } };
+		if (!applied) {
+			bool restored = true;
+			if (!previousSettings.is_null()) {
+				std::string restoreError;
+				try {
+					restored = globals::state->ApplySettingsSnapshot(previousSettings, restoreError);
+				} catch (const std::exception& failure) {
+					restored = false;
+					restoreError = failure.what();
+				} catch (...) {
+					restored = false;
+					restoreError = "Unexpected restoration failure.";
+				}
+				if (!restored)
+					error += "; rollback failed: " + restoreError;
+			}
+			PerformanceTuningRenderer::RestoreFeatureToggleHistory(previousToggleHistory);
+			return { { "accepted", false }, { "error", error + (restored ? " Previous feature settings and toggle history were restored." : "") } };
+		}
 		globals::menu->RequestSettingsDirtyCheck();
 		return { { "accepted", true }, { "skippedUnavailableFeatures", skipped }, { "message", skipped.empty() ? "Performance profile accepted. Upscaling may finish asynchronously. Save CSX settings to keep it." : "Performance profile accepted for available features. Unloaded or startup-disabled features were skipped. Save CSX settings to keep it." } };
 	}
@@ -553,7 +657,7 @@ namespace MenuUI::PerformancePage
 				{ "currentEnabled", enabled }, { "selected", readOnlyReason ? enabled : selections.value(name, enabled) },
 				{ "editable", !readOnlyReason && !IncludedFeaturesBlockReason() }, { "readOnlyReason", readOnlyReason ? json(readOnlyReason) : json(nullptr) } });
 		}
-		return { { "features", features }, { "open", includedFeaturesOpen } };
+		return { { "features", features }, { "open", includedFeaturesOpen }, { "editingFeature", editedFeature ? json(editedFeature->GetShortName()) : json(nullptr) } };
 	}
 
 	nlohmann::json SelectIncludedFeature(std::string_view a_name, bool a_enabled)
@@ -608,6 +712,138 @@ namespace MenuUI::PerformancePage
 		user.choices = std::move(candidate);
 		globals::menu->RequestSettingsDirtyCheck();
 		return { { "accepted", true }, { "message", "Feature choices stored in MyPerformance. Save settings to keep them." } };
+	}
+
+	Feature* EditedFeature() { return editedFeature; }
+
+	nlohmann::json BeginFeatureEdit(std::string_view a_name)
+	{
+		if (const auto* reason = MutationBlockReason())
+			return { { "accepted", false }, { "error", reason } };
+		auto* feature = FindFeature(a_name);
+		if (!IsAvailable(feature) || !IsSelectable(feature))
+			return { { "accepted", false }, { "error", "This feature is unavailable for profile editing." } };
+		if (const auto* reason = SelectionBlockReason(feature))
+			return { { "accepted", false }, { "error", reason } };
+		if (!globals::menu->PrepareSettingsMutation())
+			return { { "accepted", false }, { "error", "Could not preserve saved settings." } };
+		try {
+			auto baseline = json::object();
+			for (auto* item : Feature::GetFeatureList()) {
+				if (!item->loaded)
+					continue;
+				baseline[item->GetShortName()] = CaptureEditorSettings(item);
+			}
+			editBaseline = std::move(baseline);
+			editToggleHistory = PerformanceTuningRenderer::CaptureFeatureToggleHistory();
+			editedFeature = feature;
+			globals::menu->OpenMenu();
+			includedFeaturesOpen = true;
+			selectedProfile = 3;
+			return { { "accepted", true }, { "message", "Editing live settings. Apply saves to MyPerformance and CSX; Restore returns to the opening settings." } };
+		} catch (const std::exception& error) {
+			return { { "accepted", false }, { "error", error.what() } };
+		}
+	}
+
+	nlohmann::json EndFeatureEdit()
+	{
+		editedFeature = nullptr;
+		editBaseline = editToggleHistory = nullptr;
+		includedFeaturesOpen = true;
+		selectedProfile = 3;
+		globals::menu->SelectFeatureMenu(FeatureListRenderer::GetBuiltInPageMenuEntryId("PerformancePresets"));
+		return { { "accepted", true }, { "message", "Returned to MyPerformance. Current game settings were kept." } };
+	}
+
+	nlohmann::json RestoreFeatureEdit()
+	{
+		if (!editedFeature)
+			return { { "accepted", false }, { "error", "No profile feature editor is open." } };
+		if (const auto* reason = GetFeatureSettingsActionBlockReason(editedFeature))
+			return { { "accepted", false }, { "error", reason } };
+		try {
+			std::vector<Feature*> targets;
+			auto previous = json::object();
+			for (auto* feature : Feature::GetFeatureList()) {
+				if (!feature->loaded || !editBaseline.contains(feature->GetShortName()))
+					continue;
+				auto current = CaptureEditorSettings(feature);
+				if (current != editBaseline[feature->GetShortName()]) {
+					targets.push_back(feature);
+					previous[feature->GetShortName()] = std::move(current);
+				}
+			}
+			for (auto* feature : targets)
+				if (const auto* reason = PerformanceTuningRenderer::GetFeatureSceneControlBlockReason(feature))
+					return { { "accepted", false }, { "error", reason } };
+			const bool restored = PerformanceTuningRenderer::ApplyFeatureSettingsTransaction(targets, [&] {
+				try {
+					for (auto* feature : targets)
+						RestoreEditorSettings(feature, editBaseline.at(feature->GetShortName()));
+				} catch (const std::exception& error) {
+					std::string message = error.what();
+					for (auto* feature : targets) {
+						try {
+							RestoreEditorSettings(feature, previous.at(feature->GetShortName()));
+						} catch (const std::exception& rollback) {
+							message += "; restoring " + feature->GetName() + " also failed: " + rollback.what();
+						}
+					}
+					throw std::runtime_error(message);
+				}
+				return true;
+			});
+			if (!restored)
+				return { { "accepted", false }, { "error", "The opening settings could not be restored." } };
+			PerformanceTuningRenderer::RestoreFeatureToggleHistory(editToggleHistory);
+			WeatherManager::GetSingleton()->NotifyUserSettingsChanged();
+			WeatherManager::GetSingleton()->RefreshFeatureOverrides();
+			globals::menu->RequestSettingsDirtyCheck();
+			return { { "accepted", true }, { "message", "Opening settings restored. Apply to save this restored state." } };
+		} catch (const std::exception& error) {
+			return { { "accepted", false }, { "error", error.what() } };
+		}
+	}
+
+	nlohmann::json ApplyFeatureEdit()
+	{
+		if (!editedFeature)
+			return { { "accepted", false }, { "error", "No profile feature editor is open." } };
+		if (const auto* reason = GetFeatureSettingsActionBlockReason(editedFeature))
+			return { { "accepted", false }, { "error", reason } };
+		const auto previous = user;
+		try {
+			json settings;
+			editedFeature->SaveBaseSettings(settings);
+			if (!settings.is_object() || !PerformanceProfiles::ValidateSettings(settings))
+				return { { "accepted", false }, { "error", "The feature settings cannot be stored in this profile." } };
+			AppendChoices(user.choices, editedFeature);
+			user.settings[editedFeature->GetName()] = std::move(settings);
+			globals::menu->CaptureFeatureMenuSettings(editedFeature->GetName(), user.settings);
+			json lookSettings = json::object();
+			Presets::LookProfiles::Get().SaveSelection(lookSettings);
+			Presets::CopyFeatureProfileState(user.settings, lookSettings, editedFeature->GetShortName());
+			if (!globals::state->Save()) {
+				user = previous;
+				return { { "accepted", false }, { "error", globals::menu->GetSettingsSaveMessage() } };
+			}
+			if (includedFeatureChoices.is_object())
+				includedFeatureChoices[editedFeature->GetShortName()] = editedFeature == &globals::features::upscaling ? CurrentUpscalingMethod() != Upscaling::UpscaleMethod::kNONE : editedFeature->IsPerformanceToggleEnabled();
+			return { { "accepted", true }, { "message", "Saved to MyPerformance and CSX settings." } };
+		} catch (const std::exception& error) {
+			user = previous;
+			return { { "accepted", false }, { "error", error.what() } };
+		}
+	}
+
+	SettingsFooter FeatureEditFooter()
+	{
+		const auto* reason = GetFeatureSettingsActionBlockReason(editedFeature);
+		return { globals::menu->HasUnsavedSettings(), feedback.error, "MyPerformance feature", feedback.message,
+			{ SettingsAction{ "Back to MyPerformance", "Return to the tiles and keep current game settings.", true, [] { Report(EndFeatureEdit()); }, nullptr, "Back" },
+				SettingsAction{ "Apply to profile", reason ? reason : "Save these feature settings to MyPerformance and normal CSX settings.", !reason, [] { Report(ApplyFeatureEdit()); }, nullptr, "Apply" },
+				SettingsAction{ "Restore", reason ? reason : "Restore the game settings from before opening this feature.", !reason, [] { Report(RestoreFeatureEdit()); } } } };
 	}
 
 	void DrawSaveChoice(Feature* a_feature, float a_rightEdge)

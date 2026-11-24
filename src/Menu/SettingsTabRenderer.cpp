@@ -778,7 +778,7 @@ void SettingsTabRenderer::RenderThemesTab()
 
 		// Highlight the input field if invalid and validation error is shown
 		if (isThemeNameError && showValidationError) {
-			ImGui::PushStyleColor(ImGuiCol_Border, themeSettings.StatusPalette.Error);
+			ImGui::PushStyleColor(ImGuiCol_Border, Util::Colors::GetError());
 			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
 		}
 
@@ -792,9 +792,9 @@ void SettingsTabRenderer::RenderThemesTab()
 		// Show inline error message
 		if (showValidationError) {
 			if (isThemeNameEmpty) {
-				ImGui::TextColored(themeSettings.StatusPalette.Error, "Theme name is required");
+				ImGui::TextColored(Util::Colors::GetError(), "Theme name is required");
 			} else if (isDuplicateName) {
-				ImGui::TextColored(themeSettings.StatusPalette.Error, "A theme with this name already exists");
+				ImGui::TextColored(Util::Colors::GetError(), "A theme with this name already exists");
 			}
 		}
 
@@ -804,7 +804,7 @@ void SettingsTabRenderer::RenderThemesTab()
 
 		// Highlight the input field if invalid and validation error is shown
 		if (isDuplicateDisplayName && showValidationError) {
-			ImGui::PushStyleColor(ImGuiCol_Border, themeSettings.StatusPalette.Error);
+			ImGui::PushStyleColor(ImGuiCol_Border, Util::Colors::GetError());
 			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
 		}
 
@@ -813,7 +813,7 @@ void SettingsTabRenderer::RenderThemesTab()
 		if (isDuplicateDisplayName && showValidationError) {
 			ImGui::PopStyleVar();
 			ImGui::PopStyleColor();
-			ImGui::TextColored(themeSettings.StatusPalette.Error, "A theme with this display name already exists");
+			ImGui::TextColored(Util::Colors::GetError(), "A theme with this display name already exists");
 		}
 
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1225,9 +1225,9 @@ void SettingsTabRenderer::RenderColorsTab()
 		if (colorFilter.PassFilter("Disabled"))
 			ColorEditWithTooltip("Disabled", themeSettings.StatusPalette.Disable, "Inactive and unavailable controls.");
 		if (colorFilter.PassFilter("Error"))
-			ColorEditWithTooltip("Error", themeSettings.StatusPalette.Error, "Errors, destructive actions, and failed states.");
+			ColorEditWithTooltip("Error", themeSettings.StatusPalette.Error, "Destructive action accents and negative performance metrics. Error messages use magenta.");
 		if (colorFilter.PassFilter("Warning"))
-			ColorEditWithTooltip("Warning", themeSettings.StatusPalette.Warning, "Warnings, cautionary actions, and secondary accents.");
+			ColorEditWithTooltip("Warning", themeSettings.StatusPalette.Warning, "Cautionary action accents and secondary accents. Warning messages use magenta.");
 		if (colorFilter.PassFilter("Restart Needed"))
 			ColorEditWithTooltip("Restart Needed", themeSettings.StatusPalette.RestartNeeded, "Feature states that require restart or reload.");
 		if (colorFilter.PassFilter("Current Hotkey"))

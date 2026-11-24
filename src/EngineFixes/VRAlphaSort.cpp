@@ -1,6 +1,7 @@
 #include "VRAlphaSort.h"
 
 #include "AlphaSortPolicy.h"
+#include "EngineFix.h"
 #include "Utils/VirtualFunctionHook.h"
 #include "VRAlphaPassListFix.h"
 #include "VRAlphaSortCode.h"
@@ -29,7 +30,7 @@ namespace VRAlphaSort
 		std::array<void*, 3> originalKeys{};
 		std::array<std::unique_ptr<KeyCode>, 3> keyCode;
 		thread_local std::optional<AlphaSort::Position> consumingOrigin;
-		bool installed{}, attempted{};
+		bool installed{}, attempted{}, engineFixesInstalled{};
 		std::string installationError;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		std::atomic_uint64_t sortedQueues{}, consumeScopes{};
@@ -122,6 +123,11 @@ namespace VRAlphaSort
 			logger::warn("[VR alpha sort] {}", installationError);
 			return;
 		}
+		if (EngineFix::IsInstalledByEngineFixes("AlphaDistanceSort")) {
+			engineFixesInstalled = true;
+			logger::info("[VR alpha sort] Skipped CSX distance ordering (already installed by Engine Fixes)");
+			return;
+		}
 		const auto base = REL::Module::get().base();
 		constexpr std::array<std::uint8_t, 14> sortBytes{ 0x48, 0x89, 0x6C, 0x24, 0x18, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57 };
 		constexpr std::array<std::uint8_t, 15> renderBytes{ 0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18 };
@@ -153,7 +159,7 @@ namespace VRAlphaSort
 			SIZE_T read{};
 			if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(base + site.rva), actual.data(), site.expected.size(), &read) ||
 				read != site.expected.size() || !std::equal(site.expected.begin(), site.expected.end(), actual.begin())) {
-				installationError = std::format("Unsupported or modified alpha-sort code at RVA {:X}; retaining native ordering", site.rva);
+				installationError = std::format("Unsupported or modified alpha-sort code at RVA {:X}; retaining existing ordering", site.rva);
 				logger::warn("[VR alpha sort] {}", installationError);
 				return;
 			}
@@ -204,7 +210,10 @@ namespace VRAlphaSort
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	nlohmann::json GetDiagnostics()
 	{
-		return { { "installed", installed }, { "candidate", true }, { "installationError", installationError },
+		return { { "installed", installed }, { "active", installed || engineFixesInstalled },
+			{ "provider", engineFixesInstalled ? "engineFixes" : installed ? "csx" :
+																			 "none" },
+			{ "candidate", true }, { "installationError", installationError },
 			{ "metric", "signedSquaredCameraDistance" }, { "sortedQueues", sortedQueues.load() },
 			{ "consumeScopes", consumeScopes.load() }, { "liveToggleSupported", false } };
 	}

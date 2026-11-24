@@ -159,6 +159,17 @@ namespace
 		Require(EngineFix::IsInstalledByEngineFixes(alphaName));
 		modules[1] = {};
 		Require(!EngineFix::IsInstalledByEngineFixes(alphaName));
+		constexpr auto sortName = "AlphaDistanceSort";
+		modules[0] = { true, true, "AlphaPassListDuplicatePush" };
+		Require(!EngineFix::IsInstalledByEngineFixes(sortName));
+		modules[1] = { true, false, sortName };
+		Require(!EngineFix::IsInstalledByEngineFixes(sortName));
+		modules[1].exported = true;
+		Require(EngineFix::IsInstalledByEngineFixes(sortName));
+		modules[1] = {};
+		modules[0] = { true, true, sortName };
+		Require(EngineFix::IsInstalledByEngineFixes(sortName));
+		modules[0] = {};
 	}
 
 	void TestInstallation()

@@ -2446,6 +2446,38 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set_tests_properties(AlphaPassListHooks PROPERTIES TIMEOUT 30)
 
+    add_controller_test(alpha_sort_hooks_test AlphaSortHooks tests/alpha_sort_hooks_test.cpp)
+    set(_alpha_sort_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/alpha-sort")
+    add_custom_command(
+        OUTPUT "${_alpha_sort_test_dir}/alpha_sort_hooks.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_alpha_sort_test_dir}"
+            -DSOURCE_NAME=VRAlphaSort -DOUTPUT_NAME=alpha_sort_hooks.h -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_alpha_pass_list.cmake"
+        DEPENDS
+            src/EngineFixes/VRAlphaSort.cpp
+            tests/extract_alpha_pass_list.cmake
+        VERBATIM
+    )
+    target_sources(
+        alpha_sort_hooks_test
+        PRIVATE "${_alpha_sort_test_dir}/alpha_sort_hooks.h"
+    )
+    target_include_directories(
+        alpha_sort_hooks_test
+        PRIVATE "${_alpha_sort_test_dir}"
+    )
+    target_link_libraries(
+        alpha_sort_hooks_test
+        PRIVATE xbyak::xbyak nlohmann_json::nlohmann_json
+    )
+    target_compile_definitions(
+        alpha_sort_hooks_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED NOMINMAX WIN32_LEAN_AND_MEAN
+    )
+    set_tests_properties(AlphaSortHooks PROPERTIES TIMEOUT 30)
+
     add_controller_test(
         shadow_batch_submissions_test
         ShadowBatchSubmissions

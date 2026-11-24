@@ -6,10 +6,10 @@
 
 namespace VRAlphaSort
 {
-	/** Install an atomic, VR 1.4.15-only distance-ordering candidate for native alpha queues. */
+	/** Install the guarded VR 1.4.15 fallback unless Engine Fixes already provides distance ordering. */
 	void Install();
 #ifdef DEVBENCH_BRIDGE_ENABLED
-	/** Inspect installation and ordering coverage without changing live queue semantics. */
+	/** Inspect the active provider and local ordering counters without changing live queue semantics. */
 	nlohmann::json GetDiagnostics();
 #endif
 }

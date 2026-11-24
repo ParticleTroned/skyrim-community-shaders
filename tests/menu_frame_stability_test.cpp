@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -86,12 +87,15 @@ ImGui::End();
 ImGui::PopStyleVar(2);
 }
 
+struct OverlayFeature;
 struct OverlayRenderer
 {
 	static bool MoveWindowBelowShaderCompilationStatus(ImVec2&, const ImVec2&, const ImVec2&);
 	static bool ExcludeTopStatusWindowsFromLayout(ImVec2&, const ImVec2&, float&);
 	static float GetTopStatusWindowBottom(float, const char*);
 	static float ShaderBlockingTop(float);
+	static uint32_t DrawMainDockSpace();
+	static void RenderFeatureOverlays(const std::vector<OverlayFeature*>&, bool);
 };
 struct VR
 {
@@ -121,6 +125,11 @@ namespace globals
 
 #include "menu_status_overlap_under_test.h"
 #include "menu_status_reservation_under_test.h"
+static ImGuiID MainDockSpace()
+{
+#include "menu_main_dockspace_under_test.h"
+	return mainDockSpaceId;
+}
 float OverlayRenderer::ShaderBlockingTop(float pos)
 {
 #include "menu_shader_status_stack_under_test.h"
@@ -134,9 +143,16 @@ static float WaterStatusTop(float pos)
 struct OverlayFeature
 {
 	const char* name;
+	std::function<void()> draw;
+	void DrawOverlay()
+	{
+		if (draw)
+			draw();
+	}
 	bool HideFromDesktopWhenSubmittedToVR() const { return true; }
 	const char* GetOverlayWindowName() const { return name; }
 };
+#include "menu_feature_overlays_under_test.h"
 static bool filterDesktopOverlays = false;
 static bool ShouldFilterVROverlaysFromDesktop() { return filterDesktopOverlays; }
 #include "menu_desktop_status_under_test.h"
@@ -323,54 +339,138 @@ static bool CheckStatusPresentationLayout()
 static bool CheckCombinedStatusStacking()
 {
 	bool passed = true;
-	for (bool blocking : { false, true }) {
-		ImGui::CreateContext();
-		auto& io = ImGui::GetIO();
-		io.IniFilename = nullptr;
-		io.DisplaySize = ImVec2(1920, 1620);
-		io.Fonts->AddFontDefault();
-		io.Fonts->Build();
-		Menu menu;
-		globals::menu = &menu;
-		globals::features::vr = { true, VR::Settings::OverlayAttachMode::HMDOnly };
-		REL::Module::vr = true;
-		for (int frame = 0; frame < 24; ++frame) {
-			ImGui::NewFrame();
-			menu.settings.ShowCompilationHUDInVR = frame >= 12;
-			const float shaderHeight = frame % 2 ? 80.0f : 300.0f;
-			const float spacing = ImGui::GetStyle().ItemSpacing.y;
-			ImGui::SetNextWindowPos(ImVec2(8, 8));
-			ImGui::SetNextWindowSize(ImVec2(600, shaderHeight));
-			ImGui::Begin("ShaderCompilationInfo");
-			ImGui::End();
-			float expectedWaterTop = 8 + shaderHeight + spacing;
-			if (blocking) {
-				const float top = OverlayRenderer::ShaderBlockingTop(8);
-				passed &= top == expectedWaterTop;
-				ImGui::SetNextWindowPos(ImVec2(8, top));
-				ImGui::SetNextWindowSize(ImVec2(600, 80));
-				ImGui::Begin("ShaderBlockingInfo");
+	for (bool vr : { false, true }) {
+		for (bool blocking : { false, true }) {
+			ImGui::CreateContext();
+			auto& io = ImGui::GetIO();
+			io.IniFilename = nullptr;
+			io.DisplaySize = ImVec2(1920, 1620);
+			io.Fonts->AddFontDefault();
+			io.Fonts->Build();
+			Menu menu;
+			globals::menu = &menu;
+			globals::features::vr = { true, VR::Settings::OverlayAttachMode::HMDOnly };
+			REL::Module::vr = vr;
+			for (int frame = 0; frame < 24; ++frame) {
+				ImGui::NewFrame();
+				menu.settings.ShowCompilationHUDInVR = frame >= 12;
+				const float shaderHeight = frame % 2 ? 80.0f : 300.0f;
+				const float spacing = ImGui::GetStyle().ItemSpacing.y;
+				ImGui::SetNextWindowPos(ImVec2(8, 8));
+				ImGui::SetNextWindowSize(ImVec2(600, shaderHeight));
+				ImGui::Begin("ShaderCompilationInfo");
 				ImGui::End();
-				expectedWaterTop += 80 + spacing;
+				float expectedWaterTop = 8 + shaderHeight + spacing;
+				if (blocking) {
+					const float top = OverlayRenderer::ShaderBlockingTop(8);
+					passed &= top == expectedWaterTop;
+					ImGui::SetNextWindowPos(ImVec2(8, top));
+					ImGui::SetNextWindowSize(ImVec2(600, 80));
+					ImGui::Begin("ShaderBlockingInfo");
+					ImGui::End();
+					expectedWaterTop += 80 + spacing;
+				}
+				const bool waterVisible = frame >= 2 && frame < 22;
+				const float waterHeight = frame % 3 ? 80.0f : 160.0f;
+				int waterDraws = 0, hudDraws = 0, unnamedDraws = 0;
+				OverlayFeature water{ "UWCacheCreationInfo", [&] {
+										 ++waterDraws;
+										 const float waterTop = WaterStatusTop(8);
+										 passed &= waterTop == expectedWaterTop;
+										 ImGui::SetNextWindowPos(ImVec2(8, waterTop));
+										 ImGui::SetNextWindowSize(ImVec2(600, waterHeight));
+										 ImGui::Begin("UWCacheCreationInfo");
+										 ImGui::End();
+									 } };
+				OverlayFeature hud{ "Weather Details##Popup", [&] { ++hudDraws; } };
+				OverlayFeature unnamed{ nullptr, [&] { ++unnamedDraws; } };
+				std::vector<OverlayFeature*> overlays{ &hud, &unnamed };
+				if (waterVisible)
+					overlays.push_back(&water);
+				OverlayRenderer::RenderFeatureOverlays(overlays, true);
+				passed &= waterDraws == (waterVisible ? 1 : 0) && hudDraws == 0 && unnamedDraws == 0;
+				ImVec2 minimum(2, 2);
+				float left = 2;
+				const bool reserved = OverlayRenderer::ExcludeTopStatusWindowsFromLayout(minimum, ImVec2(1918, 1618), left);
+				passed &= reserved && minimum.y == expectedWaterTop + (waterVisible ? waterHeight + spacing : 0);
+				OverlayRenderer::RenderFeatureOverlays(overlays, false);
+				passed &= waterDraws == (waterVisible ? 1 : 0) && hudDraws == 1 && unnamedDraws == 1;
+				ImGui::Render();
 			}
-			const float waterTop = WaterStatusTop(8);
-			passed &= waterTop == expectedWaterTop;
-			ImGui::SetNextWindowPos(ImVec2(8, waterTop));
-			ImGui::SetNextWindowSize(ImVec2(600, 80));
-			ImGui::Begin("UWCacheCreationInfo");
-			ImGui::End();
-			ImVec2 minimum(2, 2);
-			float left = 2;
-			const bool reserved = OverlayRenderer::ExcludeTopStatusWindowsFromLayout(minimum, ImVec2(1918, 1618), left);
-			passed &= reserved && minimum.y == expectedWaterTop + 80 + spacing;
-			ImGui::Render();
+			ImGui::DestroyContext();
 		}
-		ImGui::DestroyContext();
 	}
 	globals::menu = nullptr;
 	REL::Module::vr = false;
 	if (!passed)
 		std::puts("FAIL: status panels overlap in the desktop mirror");
+	return passed;
+}
+
+static bool CheckDockedStatusLayout()
+{
+	bool passed = true;
+	for (const auto canvas : { ImVec2(640, 480), ImVec2(1920, 1080), ImVec2(1920, 1620) }) {
+		ImGui::CreateContext();
+		auto& io = ImGui::GetIO();
+		io.IniFilename = nullptr;
+		io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+		io.DisplaySize = canvas;
+		io.Fonts->AddFontDefault();
+		io.Fonts->Build();
+		ImGuiID originalDock = 0;
+		for (int frame = 0; frame < 8; ++frame) {
+			ImGui::NewFrame();
+			const bool statusVisible = frame >= 2 && frame < 6;
+			auto* viewport = ImGui::GetMainViewport();
+			viewport->WorkPos = ImVec2(24, 16);
+			viewport->WorkSize = ImVec2(canvas.x - 48, canvas.y - 32);
+			const ImVec2 originalPos = viewport->WorkPos, originalSize = viewport->WorkSize;
+			float expectedTop = originalPos.y;
+			if (statusVisible) {
+				const float height = frame % 2 ? 160.0f : 80.0f;
+				ImGui::SetNextWindowPos(ImVec2(originalPos.x + 8, originalPos.y + 8));
+				const bool autoSize = canvas.y > 1200;
+				if (autoSize)
+					ImGui::SetNextWindowSizeConstraints(ImVec2(300, 0), ImVec2(300, FLT_MAX));
+				else
+					ImGui::SetNextWindowSize(ImVec2(300, height));
+				ImGui::Begin("UWCacheCreationInfo", nullptr, kShaderStatusWindowFlags);
+				for (int line = 0; line < (frame % 2 ? 8 : 1); ++line)
+					ImGui::TextUnformatted("Water cache status");
+				const auto* status = ImGui::GetCurrentWindow();
+				if (!status->Hidden)
+					expectedTop = status->Pos.y + status->Size.y + ImGui::GetStyle().ItemSpacing.y;
+				ImGui::End();
+			}
+			int backendMarker = 0;
+			viewport->PlatformUserData = viewport->RendererUserData = &backendMarker;
+			const auto dock = MainDockSpace();
+			passed &= viewport->PlatformUserData == &backendMarker && viewport->RendererUserData == &backendMarker;
+			viewport->PlatformUserData = viewport->RendererUserData = nullptr;
+			if (frame == 0) {
+				originalDock = dock;
+				ImGui::SetNextWindowDockID(dock, ImGuiCond_Always);
+			}
+			ImGui::Begin("Docked CSX");
+			const auto* window = ImGui::GetCurrentWindow();
+			const auto* node = ImGui::DockBuilderGetNode(dock);
+			passed &= dock == originalDock && window->DockId == dock && node;
+			if (node) {
+				passed &= std::abs(node->Pos.y - expectedTop) < 1.0f;
+				passed &= node->Pos.y + node->Size.y <= originalPos.y + originalSize.y;
+			}
+			if (frame > 0)
+				passed &= window->DockIsActive && window->Pos.y >= expectedTop;
+			passed &= viewport->WorkPos.x == originalPos.x && viewport->WorkPos.y == originalPos.y &&
+			          viewport->WorkSize.x == originalSize.x && viewport->WorkSize.y == originalSize.y;
+			ImGui::End();
+			ImGui::Render();
+		}
+		ImGui::DestroyContext();
+	}
+	if (!passed)
+		std::puts("FAIL: docked CSX overlaps status, loses docking, or changes the shared viewport");
 	return passed;
 }
 
@@ -483,6 +583,7 @@ int main()
 	bool passed = CheckTraceMenuPosition();
 	passed &= CheckStatusPresentationLayout();
 	passed &= CheckCombinedStatusStacking();
+	passed &= CheckDockedStatusLayout();
 	passed &= CheckPassiveDesktopStatus();
 	for (float fontSize : { 21.0f, 27.0f, 42.0f, 54.0f }) {
 		for (float globalScale : { 0.0f, 0.5f }) {

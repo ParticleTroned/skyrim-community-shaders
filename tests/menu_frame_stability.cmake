@@ -22,6 +22,8 @@ set(_menu_frame_test_headers
     "${_menu_frame_test_dir}/menu_water_status_stack_under_test.h"
     "${_menu_frame_test_dir}/menu_shader_status_stack_under_test.h"
     "${_menu_frame_test_dir}/menu_desktop_status_under_test.h"
+    "${_menu_frame_test_dir}/menu_feature_overlays_under_test.h"
+    "${_menu_frame_test_dir}/menu_main_dockspace_under_test.h"
     "${_menu_frame_test_dir}/menu_font_size_under_test.h"
     "${_menu_frame_test_dir}/menu_font_constants_under_test.h"
     "${_menu_frame_test_dir}/menu_canvas_constants_under_test.h"
@@ -51,6 +53,7 @@ add_custom_command(
         src/Menu.cpp
         src/Menu/OverlayRenderer.cpp
         src/Features/UnifiedWater.cpp
+        src/Features/UnifiedWater.h
         src/Menu/FeatureListRenderer.cpp
         src/Menu/MenuHeaderRenderer.cpp
         tests/extract_source_region.cmake

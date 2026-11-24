@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Utils/Input.h"
+#include <cstdint>
 #include <functional>
 #include <vector>
 
@@ -49,6 +50,8 @@ public:
 	static bool MoveWindowBelowShaderCompilationStatus(ImVec2& position, const ImVec2& windowSize, const ImVec2& pivot);
 	/** Reserve shared menu space for status panels visible on either output. */
 	static bool ExcludeTopStatusWindowsFromLayout(ImVec2& availableMin, const ImVec2& availableMax, float& topStatusLeft);
+	/** Keep the main dockspace below status panels without changing saved docking. */
+	static uint32_t DrawMainDockSpace();
 	/** Stack a status panel below visible peers, excluding its own window. */
 	static float GetTopStatusWindowBottom(float minimumY, const char* excludeWindow);
 	static ImVec2 GetDefaultVRSettingsWindowSize(bool a_excludeShaderCompilationWindow = true);
@@ -74,7 +77,7 @@ private:
 	static void RenderShaderCompilationStatus(const std::function<const char*(std::vector<InputCombo>)>& keyIdToString);
 	static void RenderShaderBlockingStatus();
 	static void RenderFirstTimeSetupOverlay();
-	static void RenderFeatureOverlays(const std::vector<OverlayFeature*>& overlays);
+	static void RenderFeatureOverlays(const std::vector<OverlayFeature*>& overlays, bool topStatusOnly);
 	static void HandleABTesting();
 	static void FinalizeImGuiFrame(const std::vector<OverlayFeature*>& overlays);
 };

@@ -503,6 +503,8 @@ void OverlayRenderer::RenderOverlay(
 	if (ShouldShowShaderCompilationStatus(menu))
 		RenderShaderCompilationStatus(keyIdToString);
 	RenderShaderBlockingStatus();
+	// Reserve this frame's status bounds before settings and editor layout run.
+	RenderFeatureOverlays(drawableOverlays, true);
 	PerformanceTuningRenderer::RenderClosedMenuMeasurementOverlay();
 
 	if (editorWindow->open) {
@@ -522,7 +524,7 @@ void OverlayRenderer::RenderOverlay(
 		ImGui::GetIO().MouseDrawCursor = false;
 	}
 
-	RenderFeatureOverlays(drawableOverlays);
+	RenderFeatureOverlays(drawableOverlays, false);
 	RenderFirstTimeSetupOverlay();
 	ABTestingManager::GetSingleton()->DrawOverlayUI();
 	PatchOverlappingWindowBackgrounds();
@@ -604,6 +606,21 @@ bool OverlayRenderer::ExcludeTopStatusWindowsFromLayout(ImVec2& a_availableMin, 
 	}
 
 	return foundTopStatusWindow;
+}
+
+uint32_t OverlayRenderer::DrawMainDockSpace()
+{
+	// Borrow viewport geometry without owning its backend data or altering shared layout.
+	ImGuiViewport dockViewport = *ImGui::GetMainViewport();
+	dockViewport.PlatformUserData = nullptr;
+	dockViewport.RendererUserData = nullptr;
+	ImVec2 availableMin = dockViewport.WorkPos;
+	const ImVec2 availableMax(availableMin.x + dockViewport.WorkSize.x, availableMin.y + dockViewport.WorkSize.y);
+	float statusLeft = availableMin.x;
+	ExcludeTopStatusWindowsFromLayout(availableMin, availableMax, statusLeft);
+	dockViewport.WorkPos.y = std::min(availableMin.y, availableMax.y - 1.0f);
+	dockViewport.WorkSize.y = std::max(1.0f, availableMax.y - dockViewport.WorkPos.y);
+	return ImGui::DockSpaceOverViewport(0, &dockViewport, ImGuiDockNodeFlags_PassthruCentralNode);
 }
 
 bool OverlayRenderer::MoveWindowBelowShaderCompilationStatus(ImVec2& position, const ImVec2& windowSize, const ImVec2& pivot)
@@ -924,10 +941,15 @@ void OverlayRenderer::RenderShaderCompilationStatus(const std::function<const ch
 		ImGui::TextColored(Util::Colors::GetWarning(), "%s", renderDoc->GetOverlayWarningMessage().c_str());
 }
 
-void OverlayRenderer::RenderFeatureOverlays(const std::vector<OverlayFeature*>& overlays)
+void OverlayRenderer::RenderFeatureOverlays(const std::vector<OverlayFeature*>& overlays, bool topStatusOnly)
 {
 	for (auto* overlay : overlays) {
-		overlay->DrawOverlay();
+		const char* name = overlay->GetOverlayWindowName();
+		const bool topStatus = name && std::ranges::any_of(kTopStatusWindows, [name](const char* statusName) {
+			return std::strcmp(name, statusName) == 0;
+		});
+		if (topStatus == topStatusOnly)
+			overlay->DrawOverlay();
 	}
 }
 

@@ -140,6 +140,7 @@ struct UnifiedWater : OverlayFeature
 
 	virtual void DrawOverlay() override;
 	virtual bool IsOverlayVisible() const override;
+	const char* GetOverlayWindowName() const override { return "UWCacheCreationInfo"; }
 
 	virtual void DataLoaded() override;
 	/// Native water remains active until all replacement resources are published.

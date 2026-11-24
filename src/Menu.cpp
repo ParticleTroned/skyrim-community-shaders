@@ -996,7 +996,7 @@ void Menu::DrawSettings()
 	if (useSteamVRWindowControls) {
 		ImGui::GetIO().ConfigDockingWithShift = false;
 	}
-	const ImGuiID mainDockSpaceId = ImGui::DockSpaceOverViewport(0, NULL, ImGuiDockNodeFlags_PassthruCentralNode);
+	const ImGuiID mainDockSpaceId = OverlayRenderer::DrawMainDockSpace();
 
 	auto baseTitle = std::string{ Plugin::MENU_TITLE };
 	// Use ### to keep a stable window ID regardless of build suffix, preserving docking state

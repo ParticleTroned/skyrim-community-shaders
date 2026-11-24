@@ -4,6 +4,7 @@
 #include "Common/AdaptiveBalanceColorBounds.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/PointLightFlags.hlsli"
+#include "Common/SRGB.hlsli"
 #include "Common/SharedData.hlsli"
 
 #if defined(LL_COLOR_ADJUSTMENTS_USE_EXTRA_FLAGS)
@@ -466,6 +467,17 @@ namespace Color
 	float3 ColorToLinear(float3 color)
 	{
 		return ENABLE_LL_COLOR_ADJUSTMENTS ? CategoryGamma(color, SharedData::linearLightingSettings.colorGamma) : color;
+	}
+
+	/** Decodes projected texture colors into the active material's lighting space. */
+	float3 ProjectedTextureColor(float3 color)
+	{
+#	if defined(TRUE_PBR)
+		// Projected PBR views retain sRGB texels; native PBR views decode them before shading.
+		return PBRDiffuse(SRGB::Decode(color));
+#	else
+		return ColorToLinear(color);
+#	endif
 	}
 
 	float3 RadianceToLinear(float3 color)

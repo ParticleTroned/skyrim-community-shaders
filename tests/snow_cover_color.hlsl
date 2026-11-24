@@ -12,6 +12,7 @@ cbuffer Samples : register(b0)
 	float CoatingCoverage;
 	float ProjectedCoverage;
 	uint PlantSurface;
+	uint ProjectedTexel;
 };
 
 struct ColorOutput
@@ -72,6 +73,28 @@ ColorOutput main(float4 position : SV_Position)
 	result.expected = float4(expected, 1);
 	return result;
 }
+
+#if defined(PROJECTED_UV)
+float4 ProjectedColor(float4 position : SV_Position) : SV_Target0
+{
+#	if defined(TRUE_PBR)
+	const bool pbr = true;
+#	else
+	const bool pbr = false;
+#	endif
+	float3 color;
+	if (position.x < 1) {
+		color = Color::ProjectedTextureColor(TexProjDiffuseSampler.Load(int3(ProjectedTexel, 0, 0)).rgb);
+		if (!pbr)
+			color *= Color::VanillaDiffuseColorMult();
+	} else if (position.x < 2) {
+		color = SnowCover::SnowDiffuse(SnowCover::SnowAlbedo.Load(int3(ProjectedTexel, 0, 0)).rgb, false, pbr);
+	} else {
+		color = Color::Diffuse(SnowCover::SnowAlbedo.Load(int3(ProjectedTexel, 0, 0)).rgb, pbr);
+	}
+	return float4(color, ENABLE_LL_COLOR_ADJUSTMENTS ? 2 : 1);
+}
+#endif
 
 float4 WeatherRange(float4 position : SV_Position) : SV_Target0
 {

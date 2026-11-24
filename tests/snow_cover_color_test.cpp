@@ -192,6 +192,90 @@ namespace
 		return count;
 	}
 
+	size_t CheckProjectedColors(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11VertexShader* vertex, bool vr, bool pbr)
+	{
+		std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "PROJECTED_UV", "1" } };
+		if (vr)
+			defines.push_back({ "VR", "1" });
+		if (pbr)
+			defines.push_back({ "TRUE_PBR", "1" });
+		for (bool snowCover : { false, true })
+			for (bool deferred : { false, true }) {
+				auto productionDefines = defines;
+				if (snowCover)
+					productionDefines.push_back({ "SNOW_COVER", "1" });
+				if (deferred)
+					productionDefines.push_back({ "DEFERRED", "1" });
+				CompilePixel(std::move(productionDefines), "main", L"package/Shaders/Lighting.hlsl");
+			}
+		defines.push_back({ "SNOW_COVER", "1" });
+		auto bytecode = CompilePixel(std::move(defines), "ProjectedColor");
+		ComPtr<ID3D11PixelShader> shader;
+		Check(device->CreatePixelShader(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), nullptr, shader.GetAddressOf()));
+		Util::SetResourceName(shader.Get(), "SnowColorTest::Projected PS");
+		ComPtr<ID3D11ShaderReflection> reflection;
+		Check(D3DReflect(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
+		ConstantBuffer features(device, reflection.Get(), "SharedData::FeatureData");
+		ConstantBuffer samples(device, reflection.Get(), "Samples");
+		ConstantBuffer permutation(device, reflection.Get(), "Permutation::PerShader");
+		features.SetMember("SharedData::snowCoverSettings", "LandscapeSnowColorMask", pbr ? 5u : 1u);
+		// Both views share the same bytes; hardware sRGB sampling is the independent PBR reference.
+		constexpr std::array<std::array<uint8_t, 4>, 4> texels{ { { 0, 1, 10, 255 }, { 11, 32, 64, 255 }, { 128, 192, 255, 255 }, { 204, 242, 250, 255 } } };
+		D3D11_TEXTURE2D_DESC desc{};
+		desc.Width = static_cast<UINT>(texels.size());
+		desc.Height = desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+		desc.Format = DXGI_FORMAT_R8G8B8A8_TYPELESS;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		D3D11_SUBRESOURCE_DATA data{ texels.data(), sizeof(texels), 0 };
+		ComPtr<ID3D11Texture2D> texture;
+		Check(device->CreateTexture2D(&desc, &data, texture.GetAddressOf()));
+		Util::SetResourceName(texture.Get(), "SnowColorTest::Projected Material");
+		std::array<ComPtr<ID3D11ShaderResourceView>, 2> views;
+		D3D11_SHADER_RESOURCE_VIEW_DESC view{};
+		view.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		view.Texture2D.MipLevels = 1;
+		for (size_t i = 0; i < views.size(); ++i) {
+			view.Format = i == 1 && pbr ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
+			Check(device->CreateShaderResourceView(texture.Get(), &view, views[i].GetAddressOf()));
+			Util::SetResourceName(views[i].Get(), "SnowColorTest::Projected Material %zu SRV", i);
+		}
+		Target output(device);
+		size_t count = 0;
+		for (uint32_t mode = 0; mode < 4; ++mode) {
+			const bool linearLighting = (mode & 1) != 0;
+			features.SetMember("SharedData::linearLightingSettings", "enableLinearLighting", static_cast<uint32_t>(linearLighting));
+			features.SetMember("SharedData::linearLightingSettings", "enableAdaptiveBrightnessColorAdjustments", (mode >> 1));
+			for (const auto& controls : { std::array{ 1.8f, 0.8f }, std::array{ 2.2f, 1.0f }, std::array{ 2.4f, 1.2f } }) {
+				features.SetMember("SharedData::linearLightingSettings", "colorGamma", controls[0]);
+				features.SetMember("SharedData::linearLightingSettings", "vanillaDiffuseColorMult", controls[1]);
+				for (uint32_t scene : { 0u, 1u, 2u }) {
+					permutation.SetVariable("Permutation::ExtraShaderDescriptor", scene);
+					const bool active = linearLighting && scene != 0;
+					for (uint32_t texel = 0; texel < texels.size(); ++texel) {
+						samples.SetVariable("ProjectedTexel", texel);
+						output.Bind(context, vertex, shader.Get());
+						context->PSSetShaderResources(3, 1, views[0].GetAddressOf());
+						context->PSSetShaderResources(112, 1, views[1].GetAddressOf());
+						features.Bind(context, D3D11ShaderTest::Stage::Pixel);
+						samples.Bind(context, D3D11ShaderTest::Stage::Pixel);
+						permutation.Bind(context, D3D11ShaderTest::Stage::Pixel);
+						context->Draw(3, 0);
+						context->ClearState();
+						const auto colors = output.Read(context);
+						const auto& native = colors[2];
+						for (size_t route = 0; route < colors.size(); ++route) {
+							for (size_t channel = 0; channel < 3; ++channel)
+								if (!std::isfinite(colors[route][channel]) || !std::isfinite(native[channel]) || std::abs(colors[route][channel] - native[channel]) > 2e-5f || colors[route][3] != (active ? 2.0f : 1.0f))
+									throw std::runtime_error("Projected/native snow color mismatch: VR=" + std::to_string(vr) + " PBR=" + std::to_string(pbr) + " mode=" + std::to_string(mode) + " gamma=" + std::to_string(controls[0]) + " scene=" + std::to_string(scene) + " texel=" + std::to_string(texel) + " route=" + std::to_string(route));
+							++count;
+						}
+					}
+				}
+			}
+		}
+		return count;
+	}
+
 	size_t CheckObjectFade(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11VertexShader* vertex, bool vr, bool pbr, const char* technique, bool fades)
 	{
 		std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "SNOW_COVER", "1" } };
@@ -292,6 +376,11 @@ int main()
 		ComPtr<ID3D11VertexShader> vertex;
 		Check(device->CreateVertexShader(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), nullptr, vertex.GetAddressOf()));
 		Util::SetResourceName(vertex.Get(), "SnowColorTest::VS");
+		size_t projectedCount = 0;
+		for (bool vr : { false, true })
+			for (bool pbr : { false, true })
+				projectedCount += CheckProjectedColors(device.Get(), context.Get(), vertex.Get(), vr, pbr);
+		std::cout << "Projected snow: " << projectedCount << " color comparisons passed on WARP\n";
 		size_t count = 0;
 		for (bool vr : { false, true })
 			for (bool pbr : { false, true })

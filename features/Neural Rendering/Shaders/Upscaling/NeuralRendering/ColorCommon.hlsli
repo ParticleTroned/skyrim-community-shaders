@@ -2,6 +2,7 @@
 #define CSX_NR_COLOR_COMMON
 
 #include "Common/Finite.hlsli"
+#include "Common/SRGB.hlsli"
 
 cbuffer NRColorCB : register(b0)
 {
@@ -24,10 +25,6 @@ cbuffer NRColorCB : register(b0)
 };
 Texture2D<float4> ExposureSnapshot : register(t3);
 
-float DecodeSRGB(float x) { return x <= 0.04045 ? x / 12.92 : pow(max((x + 0.055) / 1.055, 0.0), 2.4); }
-float EncodeSRGB(float x) { return x <= 0.0031308 ? x * 12.92 : 1.055 * pow(max(x, 0.0), 1.0 / 2.4) - 0.055; }
-float3 DecodeSRGB3(float3 x) { return float3(DecodeSRGB(x.r), DecodeSRGB(x.g), DecodeSRGB(x.b)); }
-float3 EncodeSRGB3(float3 x) { return float3(EncodeSRGB(x.r), EncodeSRGB(x.g), EncodeSRGB(x.b)); }
 float Maximum3(float3 x) { return max(x.r, max(x.g, x.b)); }
 
 // A logarithmic proxy has no finite inverse pole and preserves RGB ratios.
@@ -87,7 +84,7 @@ bool ForwardColor(float3 source, out float3 prepared)
 	float maximum = Maximum3(prepared);
 	if (ColorTransform == 2)
 		prepared *= ProxyForwardScale(maximum);
-	prepared = EncodeSRGB3(prepared);
+	prepared = SRGB::Encode(prepared);
 	return all(Finite::IsFinite(prepared));
 }
 
@@ -105,7 +102,7 @@ bool InverseColor(float3 model, out float3 source)
 	float exposure = 1.0;
 	if (any(model < 0.0) || !EffectiveExposure(exposure))
 		return false;
-	source = DecodeSRGB3(model);
+	source = SRGB::Decode(model);
 	if (ColorTransform == 2) {
 		float maximum = Maximum3(source);
 		if (!all(Finite::IsFinite(source)) || maximum * ProxyLogScale >= 128.0)
@@ -163,7 +160,7 @@ bool ReconstructCandidate(float3 baseline, float3 prepared, float3 neural, out f
 	result = candidate;
 	return true;
 }
-float3 ToWorking(float3 value) { return ColorDomain == 2 ? DecodeSRGB3(value) : value; }
-float3 FromWorking(float3 value) { return ColorDomain == 2 ? EncodeSRGB3(value) : value; }
+float3 ToWorking(float3 value) { return ColorDomain == 2 ? SRGB::Decode(value) : value; }
+float3 FromWorking(float3 value) { return ColorDomain == 2 ? SRGB::Encode(value) : value; }
 float Luminance(float3 value) { return dot(value, float3(0.2126, 0.7152, 0.0722)); }
 #endif

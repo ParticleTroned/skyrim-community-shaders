@@ -133,6 +133,16 @@ namespace
 		Require(errors.size() == 1 && logged.size() == 1, "each blacklisted DLL must stop startup immediately");
 		Require(errors.front().find(stl::utf16_to_utf8(plugin.dll).value()) != std::string::npos,
 			"startup failure must identify the conflicting plugin path");
+		if (std::wstring_view(plugin.dll) == L"CSSpotlightFix.dll") {
+			for (const auto* instruction : {
+					 "Disable CS Spotlight Fade Fix in your mod manager, then restart Skyrim",
+					 "superseded by CSX Visuals",
+					 "Visuals > Global > Lighting",
+					 "enable Show Detailed Lighting Controls",
+					 "Spotlights and Linear Spotlights" })
+				Require(errors.front().find(instruction) != std::string::npos,
+					"spotlight conflict must explain disabling the mod and finding the replacement controls");
+		}
 	}
 
 	void Run()
@@ -140,17 +150,22 @@ namespace
 		Fixture fixture;
 		const auto plugins = gameData / L"SKSE" / L"Plugins";
 		const auto& shadow = Compatibility::shadowFixes;
-		for (const auto* required : { &shadow, &Compatibility::externalReverseZ })
+		for (const auto* required : { shadow.dll, Compatibility::externalReverseZ.dll, L"CSSpotlightFix.dll" })
 			Require(std::ranges::count_if(Compatibility::incompatiblePlugins, [&](const auto& plugin) {
-				return std::wstring_view(plugin.dll) == required->dll;
+				return std::wstring_view(plugin.dll) == required;
 			}) == 1,
-				"Shadow Fixes and external Reverse Z must each have exactly one blacklist entry");
+				"each required incompatible plugin must have exactly one blacklist entry");
 		auto probe = Compatibility::ProbePlugin(shadow, plugins);
 		Require(!probe.present && !probe.error, "absent plugin reported as conflict or probe failure");
 		probe = Compatibility::ProbePlugin(shadow, fixture.root / L"absent" / L"plugins");
 		Require(!probe.present && !probe.error, "missing parent directory is not a probe failure");
+		{
+			std::ofstream stream(plugins / L"CSSpotLightFix.ini");
+			stream << "retained spotlight settings";
+			Require(stream.good(), "could not create the retained spotlight settings fixture");
+		}
 		CheckIncompatiblePlugins();
-		Require(errors.empty() && logged.empty(), "clean startup acquired errors");
+		Require(errors.empty() && logged.empty(), "retained spotlight settings without the DLL must not block startup");
 		for (const auto* module : { L"SPS.dll", L"po3_MoonMod.dll", L"po3_SplashesOfStorms.dll", L"HorizonFix.dll" }) {
 			const auto file = plugins / module;
 			{
@@ -228,7 +243,13 @@ namespace
 			}
 			ExpectBlockedPlugin(plugin);
 			Require(!Compatibility::IsLoaded(plugin), "detection must never load an installed conflict");
-			fs::remove(file);
+			const fs::path disabledFile = file.wstring() + L".disabled";
+			fs::rename(file, disabledFile);
+			errors.clear();
+			logged.clear();
+			CheckIncompatiblePlugins();
+			Require(errors.empty() && logged.empty(), "a fresh startup with the DLL disabled must not be blocked");
+			fs::remove(disabledFile);
 			simulatedLoadedModule = file.filename().wstring();
 			ExpectBlockedPlugin(plugin);
 			simulatedLoadedModule.clear();

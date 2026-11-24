@@ -43,6 +43,10 @@ namespace Compatibility
 		{ L"MARA.dll" },
 		{ L"NativeMeshLightFlickerFix.dll",
 			"superseded by Light Limit Fix; both replace the same lighting hooks" },
+		{ L"CSSpotlightFix.dll",
+			"Disable CS Spotlight Fade Fix in your mod manager, then restart Skyrim. "
+			"This mod is superseded by CSX Visuals: open Visuals > Global > Lighting, "
+			"enable Show Detailed Lighting Controls, and adjust Spotlights and Linear Spotlights" },
 		{ L"NMN_DeformableTerrain.dll",
 			"Dynamic Terrain Deformation is not supported alongside CSX Terrain Blending" },
 		shadowFixes,

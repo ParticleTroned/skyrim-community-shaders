@@ -1,6 +1,7 @@
 #include "SettingsActions.h"
 
 #include "Feature.h"
+#include "FeatureSettingsScope.h"
 #include "Features/LightLimitFix/ParticleLights.h"
 #include "Globals.h"
 #include "Menu.h"
@@ -14,6 +15,7 @@
 
 #include <stdexcept>
 #include <unordered_map>
+#include <vector>
 
 namespace MenuUI
 {
@@ -62,32 +64,59 @@ namespace MenuUI
 				throw std::runtime_error("No saved settings are available for this feature.");
 			if (action != GlobalSettingsAction::Load && action != GlobalSettingsAction::RestoreDefaults)
 				throw std::runtime_error("Unknown feature settings action.");
-			json previous;
-			feature->SaveSettings(previous);
+			std::vector<Feature*> targets{ feature };
+			for (auto* related : Feature::GetFeatureList())
+				if (related != feature && related->loaded && FeatureSettingsScope::Includes(feature->GetName(), related->GetName()))
+					targets.push_back(related);
+			json previous = json::object();
+			for (auto* target : targets) {
+				if (const auto* reason = GetFeatureSettingsActionBlockReason(target))
+					throw std::runtime_error(reason);
+				target->SaveBaseSettings(previous[target->GetName()]);
+				if (action == GlobalSettingsAction::Load && !saved.contains(target->GetName()))
+					throw std::runtime_error("No saved settings are available for " + target->GetName() + ".");
+			}
 			json previousMenu = json::object();
 			globals::menu->CaptureFeatureMenuSettings(feature->GetName(), previousMenu);
-			const bool applied = PerformanceTuningRenderer::ApplyFeatureSettingsTransaction({ feature }, [&] {
+			const bool applied = PerformanceTuningRenderer::ApplyFeatureSettingsTransaction(targets, [&] {
 				try {
-					if (action == GlobalSettingsAction::Load)
-						feature->LoadSettings(saved.at(feature->GetName()));
-					else
-						feature->RestoreDefaultSettings();
+					for (auto* target : targets) {
+						if (action == GlobalSettingsAction::Load)
+							target->LoadSettings(saved.at(target->GetName()));
+						else
+							target->RestoreDefaultSettings();
+					}
 					globals::menu->ApplyFeatureMenuSettings(feature->GetName(), action == GlobalSettingsAction::Load ? &saved : nullptr);
 				} catch (...) {
+					bool rollbackFailed = false;
 					try {
 						globals::menu->ApplyFeatureMenuSettings(feature->GetName(), &previousMenu);
-						feature->LoadSettings(previous);
 					} catch (...) {
-						throw std::runtime_error("The feature action failed and its previous settings could not be recovered.");
+						rollbackFailed = true;
 					}
+					for (auto it = targets.rbegin(); it != targets.rend(); ++it) {
+						try {
+							(*it)->LoadSettings(previous.at((*it)->GetName()));
+						} catch (...) {
+							rollbackFailed = true;
+						}
+					}
+					if (rollbackFailed)
+						throw std::runtime_error("The feature action failed and its previous settings could not be recovered.");
 					throw;
 				}
 				return true; }, true);
 			if (!applied)
 				throw std::runtime_error("The feature rejected the settings change.");
 			auto* registry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
-			if (registry->HasWeatherSupport(feature->GetShortName())) {
-				registry->CaptureFeatureUserSettings(feature->GetShortName());
+			bool weatherChanged = false;
+			for (auto* target : targets) {
+				if (registry->HasWeatherSupport(target->GetShortName())) {
+					registry->CaptureFeatureUserSettings(target->GetShortName());
+					weatherChanged = true;
+				}
+			}
+			if (weatherChanged) {
 				WeatherManager::GetSingleton()->NotifyUserSettingsChanged();
 				WeatherManager::GetSingleton()->RefreshFeatureOverrides();
 			}

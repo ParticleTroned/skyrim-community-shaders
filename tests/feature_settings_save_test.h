@@ -125,6 +125,7 @@ namespace FeatureSettingsSaveTest
 	namespace SettingsMigrations
 	{
 		using ::SettingsMigrations::MigrateEditorSettingsRootLayer;
+		using ::SettingsMigrations::MigrateReverseZStartup;
 		constexpr std::string_view kAdaptiveBalanceFeatureName = "AdaptiveBrightness";
 	}
 	struct SettingsOverrideManager
@@ -255,6 +256,27 @@ namespace FeatureSettingsSaveTest
 		PresetCompatibility::Publish(PresetCompatibility::Evaluate(Util::FileHelpers::file, Plugin::VERSION_LABEL));
 		require(!state.Save() && SettingsSerialization::writes == writesBeforeRejectedSave, "rejected loaded settings remain protected");
 		PresetCompatibility::Publish(PresetCompatibility::Evaluate(json::object(), Plugin::VERSION_LABEL));
+		Feature vr{ "VR", true, 0, { { "value", 2 } } };
+		Feature reverseZ{ "Reverse Z", true, 0, { { "EnableReverseZBuffer", true } } };
+		const int otherNotifications = other.notified;
+		Feature::features = { &vr, &reverseZ, &other };
+		Util::FileHelpers::file = { { "VR", { { "value", 1 } } }, { "Reverse Z", { { "EnableReverseZBuffer", false } } },
+			{ "Other", { { "value", 3 } } }, { "Disable at Boot", { { "ReverseZ", true }, { "Other", true } } } };
+		for (const bool enabled : { true, false }) {
+			reverseZ.settings["EnableReverseZBuffer"] = enabled;
+			require(state.Save(State::ConfigMode::USER, &vr), "VR page saves its embedded Reverse Z switch");
+			require(Util::FileHelpers::file["Reverse Z"]["EnableReverseZBuffer"] == enabled &&
+						Util::FileHelpers::file["VR"]["value"] == 2 && Util::FileHelpers::file["Other"]["value"] == 3,
+				"VR page persists both switch directions without saving unrelated pending settings");
+			require(!Util::FileHelpers::file["Disable at Boot"].contains("ReverseZ") && Util::FileHelpers::file["Disable at Boot"]["Other"] == true,
+				"VR save removes the obsolete Reverse Z startup gate while retaining other startup choices");
+		}
+		require(vr.notified == 2 && reverseZ.notified == 2 && other.notified == otherNotifications && overrideFeature == &reverseZ,
+			"both VR page sections receive post-save handling and scoped override persistence");
+		reverseZ.loaded = false;
+		reverseZ.settings["EnableReverseZBuffer"] = true;
+		require(state.Save(State::ConfigMode::USER, &vr) && Util::FileHelpers::file["Reverse Z"]["EnableReverseZBuffer"] == false && reverseZ.notified == 2,
+			"saving VR preserves retained Reverse Z settings when its package is unavailable");
 		Feature::features.clear();
 	}
 }

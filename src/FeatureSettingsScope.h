@@ -9,6 +9,14 @@ namespace FeatureSettingsScope
 {
 	inline constexpr std::string_view kScreenshot = "Screenshot";
 	inline constexpr const char* kScreenshotKey = "ScreenshotKey";
+	inline constexpr const char* kVR = "VR";
+	inline constexpr const char* kReverseZ = "Reverse Z";
+
+	/** The VR page also edits Reverse Z, so its footer owns both persisted sections. */
+	inline bool Includes(std::string_view owner, std::string_view section)
+	{
+		return owner == section || (owner == kVR && section == kReverseZ);
+	}
 
 	/** Locate the shortcut owned by Screenshot without moving its saved Menu key. */
 	inline const nlohmann::json* ScreenshotShortcut(const nlohmann::json& settings)
@@ -20,9 +28,11 @@ namespace FeatureSettingsScope
 		return key == menu->end() ? nullptr : &*key;
 	}
 
-	/** Replace one feature's persisted values, retaining all other owners' settings. */
+	/** Replace one feature page's persisted values, retaining all other owners' settings. */
 	inline void Copy(nlohmann::json& target, const nlohmann::json& source, std::string_view name)
 	{
+		if (name == kReverseZ)
+			SettingsMigrations::MigrateReverseZStartup(target);
 		const std::string key(name);
 		auto value = source.find(key);
 		if (value == source.end() && name == SettingsMigrations::kEditorSettingsName)
@@ -45,6 +55,8 @@ namespace FeatureSettingsScope
 					target.erase(menu);
 			}
 		}
+		if (name == kVR)
+			Copy(target, source, kReverseZ);
 	}
 
 	/** Compare a feature's values stored outside its own root section. */

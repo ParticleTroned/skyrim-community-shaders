@@ -102,7 +102,7 @@ namespace
 			return failedLayers;
 
 		for (auto* feature : Feature::GetFeatureList()) {
-			if (a_feature && feature != a_feature)
+			if (a_feature && !FeatureSettingsScope::Includes(a_feature->GetName(), feature->GetName()))
 				continue;
 			std::string featureName = "<unknown>";
 			try {
@@ -1994,9 +1994,13 @@ bool State::Save(ConfigMode a_configMode, Feature* a_feature)
 
 	try {
 		if (a_feature) {
+			if (FeatureSettingsScope::Includes(a_feature->GetName(), FeatureSettingsScope::kReverseZ))
+				SettingsMigrations::MigrateReverseZStartup(settings);
 			json featureSettings = json::object();
 			FeatureSettingsScope::Copy(featureSettings, settings, a_feature->GetName());
-			a_feature->SaveBaseSettings(featureSettings[a_feature->GetName()]);
+			for (auto* feature : Feature::GetFeatureList())
+				if (feature->loaded && FeatureSettingsScope::Includes(a_feature->GetName(), feature->GetName()))
+					feature->SaveBaseSettings(featureSettings[feature->GetName()]);
 			globals::menu->CaptureFeatureMenuSettings(a_feature->GetName(), featureSettings);
 			FeatureSettingsScope::Copy(settings, featureSettings, a_feature->GetName());
 		} else {
@@ -2032,7 +2036,7 @@ bool State::Save(ConfigMode a_configMode, Feature* a_feature)
 		PresetCompatibility::Publish(PresetCompatibility::Evaluate(settings, Plugin::VERSION_LABEL));
 		std::vector<std::string> postSaveFailures;
 		for (auto* feature : Feature::GetFeatureList()) {
-			if (!feature->loaded || (a_feature && feature != a_feature))
+			if (!feature->loaded || (a_feature && !FeatureSettingsScope::Includes(a_feature->GetName(), feature->GetName())))
 				continue;
 			try {
 				feature->OnSettingsSaved();

@@ -711,6 +711,8 @@ void Menu::UpdateDirtySettingsSections(const json& currentSettings)
 	}
 	if (!FeatureSettingsScope::MenuSettingsEqual(currentSettings, settingsDirtyBaseline, FeatureSettingsScope::kScreenshot))
 		dirtySettingsSections.emplace(FeatureSettingsScope::kScreenshot);
+	if (dirtySettingsSections.contains(FeatureSettingsScope::kReverseZ))
+		dirtySettingsSections.emplace(FeatureSettingsScope::kVR);
 }
 
 void Menu::UpdateSettingsDirtyState()

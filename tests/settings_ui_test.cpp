@@ -73,6 +73,7 @@ struct Feature
 	bool HasFeatureSettings() const { return hasSettings; }
 	int loadFailures = 0, loads = 0;
 	void SaveSettings(nlohmann::json& value) const { value = settings; }
+	void SaveBaseSettings(nlohmann::json& value) const { value = settings; }
 	void LoadSettings(nlohmann::json& value)
 	{
 		++loads;
@@ -150,7 +151,8 @@ namespace globals
 		{
 			if (!savedFeatures.contains(name))
 				return false;
-			value = { { name, savedFeatures.at(name) } };
+			value = nlohmann::json::object();
+			FeatureSettingsScope::Copy(value, nlohmann::json(savedFeatures), name);
 			return true;
 		}
 		void CaptureFeatureMenuSettings(const std::string&, nlohmann::json&) const {}
@@ -962,6 +964,13 @@ int main()
 			FeatureSettingsScope::Copy(scoped, saved, "CSX Editor");
 			require(scoped["CSX Editor"]["legacy"] == true && !scoped.contains("CS Editor") && scoped["Untouched"] == 42,
 				"scoped editor settings accept legacy presets and write only the canonical name");
+			json globalOverride{ { "VR", { { "value", 1 } } }, { "Reverse Z", { { "EnableReverseZBuffer", false } } },
+				{ "Disable at Boot", { { "ReverseZ", true }, { "Other", true } } }, { "Untouched", 42 } };
+			const json currentVR{ { "VR", { { "value", 2 } } }, { "Reverse Z", { { "EnableReverseZBuffer", true } } } };
+			FeatureSettingsScope::Copy(globalOverride, currentVR, "VR");
+			require(globalOverride["VR"]["value"] == 2 && globalOverride["Reverse Z"]["EnableReverseZBuffer"] == true &&
+						!globalOverride["Disable at Boot"].contains("ReverseZ") && globalOverride["Disable at Boot"]["Other"] == true && globalOverride["Untouched"] == 42,
+				"VR override scope includes Reverse Z and clears only its obsolete startup gate");
 		}
 		require(ParseNumber<float>("0.25", 0, 1) == .25f, "fraction parsing");
 		require(ParseNumber<int>("-2", -5, 5) == -2, "signed parsing");
@@ -2192,6 +2201,26 @@ int main()
 			globals::state->blocked = true;
 			require(!MenuUI::InvokeFeatureSettingsAction(Action::Load, &scopedFeature), "scopedFeature actions retain save/load availability guards");
 			globals::state->blocked = false;
+			Feature vr{ "VR" }, reverseZ{ "Reverse Z" };
+			const auto previousFeatures = Feature::features;
+			Feature::features = { &vr, &reverseZ, &other };
+			vr.settings = { { "value", 5 } };
+			reverseZ.settings = { { "EnableReverseZBuffer", true } };
+			globals::menu->savedFeatures["VR"] = { { "value", 2 } };
+			globals::menu->savedFeatures["Reverse Z"] = { { "EnableReverseZBuffer", false } };
+			require(MenuUI::InvokeFeatureSettingsAction(Action::Load, &vr) && vr.settings["value"] == 2 &&
+						reverseZ.settings["EnableReverseZBuffer"] == false && other.settings["value"] == 99,
+				"VR Load saved restores its embedded Reverse Z setting and preserves other features");
+			vr.settings["value"] = 5;
+			reverseZ.settings["EnableReverseZBuffer"] = true;
+			reverseZ.loadFailures = 1;
+			require(!MenuUI::InvokeFeatureSettingsAction(Action::Load, &vr) && vr.settings["value"] == 5 &&
+						reverseZ.settings["EnableReverseZBuffer"] == true,
+				"a failing embedded loader restores both VR page sections");
+			require(MenuUI::InvokeFeatureSettingsAction(Action::RestoreDefaults, &vr) && vr.settings == json({ { "Enabled", true } }) &&
+						reverseZ.settings == json({ { "Enabled", true } }) && other.settings["value"] == 99,
+				"VR defaults include embedded settings without resetting unrelated features");
+			Feature::features = previousFeatures;
 			globals::menu->savedFeatures.clear();
 			globals::state->savedFeature = nullptr;
 		}

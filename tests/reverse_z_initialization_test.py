@@ -21,6 +21,7 @@ def dirty_menu_fixture():
 #include <functional>
 #include <set>
 #include <nlohmann/json.hpp>
+#include "FeatureSettingsScope.h"
 using json = nlohmann::json;
 struct Menu {
     std::function<json()> capture;
@@ -41,18 +42,77 @@ struct Menu {
     void ResetSettingsDirtyState();
     void ReportSettingsSaveResult(bool, std::string);
     void ClearSettingsSaveResult() { settingsSaveMessage.clear(); settingsSaveMessageIsError = false; }
-    void UpdateDirtySettingsSections(const json&) {}
+    void UpdateDirtySettingsSections(const json&);
     void UpdateSettingsDirtyState();
+    void AcceptCurrentFeatureSettingsAsClean(const std::string&);
+    bool CopySavedFeatureSettings(const std::string&, json&);
     void DrawDisableAtBootSettings();
 } menu;
 namespace globals { Menu* menu = &::menu; }
 '''
     return fixture + "\n".join(block(menu, signature) for signature in (
         "bool Menu::EnsureSettingsDirtyBaseline()", "void Menu::ResetSettingsDirtyState()",
-        "void Menu::ReportSettingsSaveResult(", "void Menu::UpdateSettingsDirtyState()"))
+        "void Menu::ReportSettingsSaveResult(", "void Menu::UpdateDirtySettingsSections(",
+        "void Menu::UpdateSettingsDirtyState()"))
 
 
 class ReverseZInitializationTests(unittest.TestCase):
+    def test_vr_footer_saved_baseline_scope(self):
+        from grass_draw_lifecycle_test import compile_fixture
+
+        source = (ROOT / "src/Menu.cpp").read_text(encoding="utf-8")
+        driver = r'''
+#include <cassert>
+#include <string>
+#include <vector>
+#include "Presets/LookProfileState.h"
+DIRTY_MENU
+struct Feature {
+    std::string name;
+    const std::string& GetName() const { return name; }
+    const std::string& GetShortName() const { return name; }
+    static inline std::vector<Feature*> features;
+    static const auto& GetFeatureList() { return features; }
+};
+SCOPED_METHODS
+int main() {
+    Feature vr{"VR"}, reverseZ{"Reverse Z"}, other{"Other"};
+    Feature::features = {&vr, &reverseZ, &other};
+    json current{{"VR", {{"value", 1}}}, {"Reverse Z", {{"EnableReverseZBuffer", false}}},
+                 {"Other", {{"value", 3}}}};
+    menu.capture = [&] { return current; };
+    assert(menu.PrepareSettingsMutation());
+    current["Reverse Z"]["EnableReverseZBuffer"] = true;
+    current["Other"]["value"] = 9;
+    menu.RequestSettingsDirtyCheck();
+    menu.UpdateSettingsDirtyState();
+    assert(menu.settingsDirty && menu.dirtySettingsSections.contains("VR"));
+    menu.AcceptCurrentFeatureSettingsAsClean("VR");
+    assert(menu.settingsDirty && menu.dirtySettingsSections.contains("Other"));
+    assert(!menu.dirtySettingsSections.contains("VR") && !menu.dirtySettingsSections.contains("Reverse Z"));
+    assert(menu.settingsDirtyBaseline["Reverse Z"]["EnableReverseZBuffer"] == true);
+    assert(menu.settingsDirtyBaseline["Other"]["value"] == 3);
+    current["VR"]["value"] = 2;
+    current["Reverse Z"]["EnableReverseZBuffer"] = false;
+    menu.RequestSettingsDirtyCheck();
+    menu.UpdateSettingsDirtyState();
+    assert(menu.dirtySettingsSections.contains("VR") && menu.dirtySettingsSections.contains("Reverse Z"));
+    json saved;
+    assert(menu.CopySavedFeatureSettings("VR", saved));
+    assert(saved.size() == 2 && saved["VR"]["value"] == 1 && saved["Reverse Z"]["EnableReverseZBuffer"] == true);
+    FeatureSettingsScope::Copy(current, saved, "VR");
+    menu.RequestSettingsDirtyCheck();
+    menu.UpdateSettingsDirtyState();
+    assert(menu.settingsDirty && menu.dirtySettingsSections.contains("Other"));
+    assert(!menu.dirtySettingsSections.contains("VR") && !menu.dirtySettingsSections.contains("Reverse Z"));
+}
+'''
+        driver = driver.replace("DIRTY_MENU", dirty_menu_fixture())
+        driver = driver.replace("SCOPED_METHODS", "\n".join(block(source, signature) for signature in (
+            "void Menu::AcceptCurrentFeatureSettingsAsClean(", "bool Menu::CopySavedFeatureSettings(")))
+        result = compile_fixture(driver, include=os.environ["CSX_JSON_INCLUDE"])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_viewport_hooks_with_reverse_z_disabled(self):
         from grass_draw_lifecycle_test import compile_fixture
 
@@ -260,12 +320,17 @@ int main() {
     draw(true);
     menu.UpdateSettingsDirtyState();
     assert(menu.settingsDirty);
+    assert(menu.dirtySettingsSections.contains("Reverse Z") && menu.dirtySettingsSections.contains("VR"));
+    auto savedVR = menu.settingsDirtyBaseline;
+    FeatureSettingsScope::Copy(savedVR, menu.capture(), "VR");
+    assert(savedVR["Reverse Z"]["EnableReverseZBuffer"] == true);
     assert(!feature.activeThisBoot && !feature.requestedThisBoot);
     draw(true);
     ImGui::edit = false;
     draw(false);
     menu.UpdateSettingsDirtyState();
     assert(!menu.settingsDirty);
+    assert(!menu.dirtySettingsSections.contains("Reverse Z") && !menu.dirtySettingsSections.contains("VR"));
     feature.requestedThisBoot = feature.activeThisBoot = feature.settings.EnableReverseZBuffer = true;
     menu.ResetSettingsDirtyState();
     draw(false);
@@ -273,6 +338,7 @@ int main() {
     draw(true);
     menu.UpdateSettingsDirtyState();
     assert(menu.settingsDirty);
+    assert(menu.dirtySettingsSections.contains("Reverse Z") && menu.dirtySettingsSections.contains("VR"));
     assert(feature.activeThisBoot && feature.requestedThisBoot);
     menu.ResetSettingsDirtyState();
     assert(!menu.settingsDirty && feature.HasPendingBootChange());

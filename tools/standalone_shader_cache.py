@@ -13,7 +13,7 @@ from shader_bytecode import validate_dxbc
 
 
 RELEASE_FLAGS = 34818  # Strictness, optimization level 3, skip validation.
-STAGES = {"cs_5_0": ("COMPUTESHADER", ".cso"), "ps_5_0": ("PSHADER", ".pso"), "vs_5_0": ("VSHADER", ".vso")}
+STAGES = {"cs_5_0": ("COMPUTESHADER", ".cso"), "ps_5_0": ("PSHADER", ".pso"), "vs_5_0": ("VSHADER", ".vso"), "gs_5_0": ("GEOMETRYSHADER", ".gso")}
 
 
 def validate_source(source: object) -> str:
@@ -58,7 +58,7 @@ def compile_digest(request: dict, global_state: str) -> int:
     return combine_hashes(macros, hash_string(inputs))
 
 
-def release_requests(runtime: str, features: dict[str, bool], *, reverse_z_enabled: bool = False) -> list[dict]:
+def release_requests(runtime: str, features: dict[str, bool], *, reverse_z_enabled: bool = False, engine_tasks=()) -> list[dict]:
     """Cover shipped feature startup paths and bounded common quality variants.
 
     Other settings, custom defines and developer shaders retain runtime
@@ -73,10 +73,10 @@ def release_requests(runtime: str, features: dict[str, bool], *, reverse_z_enabl
         if feature is not None and not features.get(feature, False):
             return
         macros = list(defines)
-        if runtime == "VR":
+        if runtime == "VR" and not any(name == "VR" for name, _ in macros):
             macros.append(("VR", ""))
         macros.extend(((STAGES[profile][0], ""), ("WINPC", ""), ("DX11", "")))
-        if reverse_z_enabled and features.get("ReverseZ", False):
+        if reverse_z_enabled and features.get("ReverseZ", False) and not any(name == "REVERSE_Z" for name, _ in macros):
             macros.append(("REVERSE_Z", "1"))
         requests.append({"source": validate_source(source), "profile": profile, "entry": entry, "defines": macros})
 
@@ -100,9 +100,17 @@ def release_requests(runtime: str, features: dict[str, bool], *, reverse_z_enabl
     for source in ("Upscaling/RCAS/RCAS.hlsl", "Upscaling/LumaSharpen/LumaSharpen.hlsl"):
         for macros in ((), (("MOTION_ADAPTIVE", "1"),)):
             add(source, macros, feature="Upscaling")
+    add("Upscaling/UpscaleVS.hlsl", feature="Upscaling", profile="vs_5_0")
+    add("Upscaling/UnderwaterMaskUpscalePS.hlsl", feature="Upscaling", profile="ps_5_0")
+    for macros in ((), (("DLSS", ""), ("DEPTH_OUTPUT", "")), (("FSR", ""), ("DEPTH_OUTPUT", ""))):
+        add("Upscaling/EncodeTexturesCS.hlsl", macros, feature="Upscaling")
+    if runtime == "VR":
+        for source in ("ClearHMDMaskCS.hlsl", "FoveatedPeripheryCS.hlsl", "SubmitStageStretchCS.hlsl"):
+            add("Upscaling/" + source, feature="Upscaling")
     for source, feature in (
         ("GrassCollision/CollisionUpdateCS.hlsl", "GrassCollision"),
         ("GrassOptimizations/GrassCullingCS.hlsl", "GrassOptimizations"),
+        ("GrassOptimizations/GrassCullingBatchCS.hlsl", "GrassOptimizations"),
         ("GrassOptimizations/DetectComplexCS.hlsl", "GrassOptimizations"),
         ("LightLimitFix/ClusterBuildingCS.hlsl", "LightLimitFix"),
         ("LightLimitFix/ClusterCullingCS.hlsl", "LightLimitFix"),
@@ -191,14 +199,23 @@ def release_requests(runtime: str, features: dict[str, bool], *, reverse_z_enabl
                 if adaptive:
                     macros.append(("ADAPTIVE_SAMPLING", ""))
                 add("ScreenSpaceGI/" + name, macros, feature="ScreenSpaceGI")
+    for source, _, _, definitions in engine_tasks:
+        if source != "Utility.hlsl":
+            continue
+        macros = [tuple(value.split("=", 1)) if "=" in value else (value, "")
+                  for value in definitions if value.partition("=")[0] not in {"VSHADER", "PSHADER", "CSHADER"}]
+        names = {name for name, _ in macros}
+        if "RENDER_SHADOWMAP_PB" not in names or names & {"LOD_LANDSCAPE", "STENCIL_ABOVE_WATER"} or any(name.startswith("RENDER_SHADOWMASK") for name in names):
+            continue
+        add(source, macros, profile="gs_5_0")
     return requests
 
 
-def resolve_tasks(runtime: str, features: dict[str, bool], global_state: str, *, reverse_z_enabled: bool = False) -> dict[str, dict]:
+def resolve_tasks(runtime: str, features: dict[str, bool], global_state: str, *, reverse_z_enabled: bool = False, engine_tasks=()) -> dict[str, dict]:
     from hlslkit.shader_digest import to_hex
 
     result = {}
-    for request in release_requests(runtime, features, reverse_z_enabled=reverse_z_enabled):
+    for request in release_requests(runtime, features, reverse_z_enabled=reverse_z_enabled, engine_tasks=engine_tasks):
         digest = compile_digest(request, global_state)
         relative = f"Standalone/{to_hex(digest)}.cso"
         if relative in result:

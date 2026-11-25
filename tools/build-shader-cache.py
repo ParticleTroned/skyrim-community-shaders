@@ -158,10 +158,11 @@ CROSS_MODLIST_SHADER_VARIANTS = {
 }
 
 
-# Lighting uses the same unskinned hair/decal descriptors in SE/AE and VR.
+# Lighting shares unskinned eye, hair and decal descriptors across SE/AE and VR.
 SHARED_SHADER_VARIANTS = {
     "Lighting.hlsl": {
         "PSHADER": {
+            "Lighting:Pixel:10000001": ("EYE",),
             "Lighting:Pixel:6108001": ("DEPTH_WRITE_DECALS", "DO_ALPHA_TEST", "HAIR"),
             "Lighting:Pixel:6108011": ("DEFERRED", "DEPTH_WRITE_DECALS", "DO_ALPHA_TEST", "HAIR"),
             "Lighting:Pixel:6118001": ("ANISO_LIGHTING", "DEPTH_WRITE_DECALS", "DO_ALPHA_TEST", "HAIR"),
@@ -3372,6 +3373,7 @@ def compile_runtime_depth(
             runtime, feature_states,
             shader_cache_global_state(cache_dir, runtime, shader_cache_abi),
             reverse_z_enabled=reverse_z_enabled,
+            engine_tasks=compile_tasks,
         )
         standalone_shader_cache.compile_tasks(standalone_tasks, stage, cache_dir, fxc, jobs)
         write_shader_cache_manifest(

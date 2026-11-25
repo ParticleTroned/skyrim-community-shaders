@@ -40,12 +40,19 @@ shadow coverage includes VR per-eye sample counts 1–128 and desktop counts
 8–256 in steps of eight. Custom settings outside this inventory, experimental
 SSGI variants, custom defines and developer shaders compile on demand.
 
+Utility point-light shadow clipping geometry shaders are derived from the
+filtered engine inventory, using the same admission rules as the native
+paraboloid path. The helper inventory also covers grass batch culling and
+the fullscreen, encoding, underwater-mask and VR periphery/submit shaders
+used by upscaling. It excludes DevBench-only variants.
+
 The builder derives active features from each cache's `Info.ini`, verifies
 source/include content, and puts the additional records in the existing
 managed pack. `standaloneInputs` in `PackManifest.json` records their source
 and shader profile for offline compatibility and bytecode-stage validation.
-All helper filenames retain the runtime's `.cso` suffix, including pixel and
-vertex helpers; validators use the recorded profile to check their DXBC stage.
+All helper filenames retain the runtime's `.cso` suffix, including pixel,
+vertex and geometry helpers; validators use the recorded profile to check
+their DXBC stage.
 Do not relabel these files or substitute the engine descriptor-key scheme.
 
 Effect stage normalization uses `ShaderCache::EffectVertexIgnoredFlags` and

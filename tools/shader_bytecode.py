@@ -5,7 +5,7 @@ from __future__ import annotations
 import struct
 
 
-SHADER_STAGES = {".pso": 0, ".vso": 1, ".cso": 5}
+SHADER_STAGES = {".pso": 0, ".vso": 1, ".gso": 2, ".cso": 5}
 
 
 def validate_dxbc(data: bytes, extension: str) -> None:

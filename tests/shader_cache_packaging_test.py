@@ -1307,14 +1307,15 @@ class LightingDetailMapWorkloadTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "unsupported runtime Detail Maps eligibility"):
                 BUILDER.lighting_detail_map_policy(source)
 
-    def test_shared_hair_decal_overlay_is_idempotent_and_rejects_conflicts(self) -> None:
+    def test_shared_lighting_overlay_is_idempotent_and_rejects_conflicts(self) -> None:
         config = {"shaders": [{"file": "Lighting.hlsl", "configs": {"PSHADER": {"entries": []}}}]}
         BUILDER.append_declared_shader_variants(config, BUILDER.SHARED_SHADER_VARIANTS)
         original = copy.deepcopy(config)
         BUILDER.append_declared_shader_variants(config, BUILDER.SHARED_SHADER_VARIANTS)
         self.assertEqual(config, original)
         entries = config["shaders"][0]["configs"]["PSHADER"]["entries"]
-        self.assertEqual(len(entries), 4)
+        self.assertEqual(len(entries), 5)
+        self.assertIn({"entry": "Lighting:Pixel:10000001", "defines": ["EYE"]}, entries)
         self.assertEqual({entry["entry"] for entry in entries}, set(BUILDER.SHARED_SHADER_VARIANTS["Lighting.hlsl"]["PSHADER"]))
         entries[0]["defines"] = ["HAIR"]
         with self.assertRaisesRegex(SystemExit, "conflicts with"):

@@ -29,6 +29,68 @@ RUNTIME_TEST = Path(sys.argv.pop(1)).resolve() if len(sys.argv) > 1 and not sys.
 
 
 class ShaderCompileIdentityTests(unittest.TestCase):
+    def test_paraboloid_geometry_inventory_uses_native_utility_inputs(self) -> None:
+        native = (REPO / "src/ShaderCache.cpp").read_text(encoding="utf-8")
+        clipping = native.split("PrepareParaboloidClip(", 1)[1].split("SIE::SShaderCache::GetShaderPath", 1)[0]
+        self.assertIn('name == "LOD_LANDSCAPE"', clipping)
+        self.assertIn('name == "STENCIL_ABOVE_WATER"', clipping)
+        self.assertIn('name.starts_with("RENDER_SHADOWMASK")', clipping)
+        self.assertIn('name == "RENDER_SHADOWMAP_PB"', clipping)
+        with tempfile.TemporaryDirectory() as temporary:
+            for runtime in ("SE", "VR"):
+                for reversed_depth in (False, True):
+                    config = BUILDER.filter_profile_defines(
+                        BUILDER.configs_for(REPO)[runtime], Path(temporary) / "inputs.yaml", yaml,
+                        BUILDER.SHIPPED_CACHE_PROFILE, feature_states={"ReverseZ": True},
+                        reverse_z_enabled=reversed_depth,
+                    )
+                    engine = parse_shader_configs(str(config))
+                    requests = standalone.release_requests(runtime, {"ReverseZ": True},
+                        reverse_z_enabled=reversed_depth, engine_tasks=engine)
+                    geometry = [request for request in requests if request["profile"] == "gs_5_0"]
+                    self.assertTrue(geometry)
+                    for request in geometry:
+                        names = {name for name, _ in request["defines"]}
+                        self.assertIn("RENDER_SHADOWMAP_PB", names)
+                        self.assertIn("GEOMETRYSHADER", names)
+                        self.assertFalse(names & {"VSHADER", "PSHADER", "LOD_LANDSCAPE", "STENCIL_ABOVE_WATER"})
+                        self.assertFalse(any(name.startswith("RENDER_SHADOWMASK") for name in names))
+                        self.assertEqual("REVERSE_Z" in names, reversed_depth)
+                        if reversed_depth:
+                            self.assertIn(("REVERSE_Z", "1"), request["defines"])
+                        self.assertEqual("VR" in names, runtime == "VR")
+                    tasks = standalone.resolve_tasks(runtime, {"ReverseZ": True}, "fixture-abi",
+                        reverse_z_enabled=reversed_depth, engine_tasks=engine)
+                    self.assertEqual(len({standalone.serialize_defines(request["defines"]) for request in geometry}),
+                        sum(task["profile"] == "gs_5_0" for task in tasks.values()))
+
+    def test_geometry_bytecode_requires_its_recorded_stage(self) -> None:
+        BUILDER.validate_dxbc(make_dxbc(stage=2), ".gso")
+        for stage in (0, 1, 3, 4, 5):
+            with self.subTest(stage=stage), self.assertRaises(ValueError):
+                BUILDER.validate_dxbc(make_dxbc(stage=stage), ".gso")
+
+    def test_startup_helpers_and_eye_pixel_are_in_inventory(self) -> None:
+        features = {"GrassOptimizations": True, "Upscaling": True}
+        vr = standalone.release_requests("VR", features)
+        sources = {request["source"] for request in vr}
+        self.assertTrue({"GrassOptimizations/GrassCullingBatchCS.hlsl", "Upscaling/UpscaleVS.hlsl",
+            "Upscaling/UnderwaterMaskUpscalePS.hlsl", "Upscaling/ClearHMDMaskCS.hlsl",
+            "Upscaling/FoveatedPeripheryCS.hlsl", "Upscaling/SubmitStageStretchCS.hlsl"} <= sources)
+        self.assertTrue(any(request["source"] == "Upscaling/EncodeTexturesCS.hlsl" and
+            ("DLSS", "") in request["defines"] and ("DEPTH_OUTPUT", "") in request["defines"] for request in vr))
+        with tempfile.TemporaryDirectory() as temporary:
+            for runtime in ("SE", "VR"):
+                config = BUILDER.filter_profile_defines(BUILDER.configs_for(REPO)[runtime],
+                    Path(temporary) / "inputs.yaml", yaml, BUILDER.SHIPPED_CACHE_PROFILE,
+                    feature_states={"ReverseZ": False})
+                tasks = parse_shader_configs(str(config))
+                eye = next(task for task in tasks if task[0] == "Lighting.hlsl" and task[1] == "PSHADER"
+                    and task[2] == "Lighting:Pixel:10000001")
+                self.assertIn("EYE=", eye[3])
+                self.assertIn("VC=", eye[3])
+                self.assertNotIn("SKINNED=", eye[3])
+
     def test_standalone_key_matches_runtime_fixture(self) -> None:
         request = {"source": "test.hlsl", "profile": "ps_5_0", "entry": "main",
                    "defines": [("EXTRA", "1"), ("PSHADER", ""), ("WINPC", ""), ("DX11", "")]}
@@ -139,16 +201,16 @@ class ShaderCompileIdentityTests(unittest.TestCase):
             cache = root / "ShaderCache"
             (cache / "Standalone").mkdir(parents=True)
             tasks = {}
-            for profile, stage in (("cs_5_0", 5), ("ps_5_0", 0), ("vs_5_0", 1)):
+            for profile, stage in (("cs_5_0", 5), ("ps_5_0", 0), ("vs_5_0", 1), ("gs_5_0", 2)):
                 request = {"source": "helper.hlsl", "profile": profile, "entry": "main", "defines": [(standalone.STAGES[profile][0], "")]}
                 digest = standalone.compile_digest(request, "test-abi")
                 relative = f"Standalone/{to_hex(digest)}.cso"
                 tasks[relative] = {**request, "compile_digest": digest}
                 (cache / relative).write_bytes(make_dxbc(stage=stage))
             manifest_path = cache / "Manifest.json"
-            self.assertEqual(write_manifest(cache, source, "test-abi", manifest_path, compile_tasks=[], standalone_tasks=tasks), 3)
+            self.assertEqual(write_manifest(cache, source, "test-abi", manifest_path, compile_tasks=[], standalone_tasks=tasks), 4)
             manifest = json.loads(manifest_path.read_text())
-            self.assertEqual(len(manifest["standaloneInputs"]), 3)
+            self.assertEqual(len(manifest["standaloneInputs"]), 4)
             BUILDER.build_managed_shader_packs(REPO, cache, None, "SE", "test")
             packed = json.loads((cache / "PackManifest.json").read_text())
             self.assertEqual(packed["standaloneInputs"], manifest["standaloneInputs"])

@@ -318,12 +318,19 @@ The service forwards quick scans, three-scan batches, feature comparisons,
 upscaling sweeps and saved-result exports to the existing UI controllers.
 Three-scan results report the equal-weight mean and standard error across
 the three scan means within that run, with three seconds of stable rendering
-between scans. The first scan retains its five-second settling period.
+between scans. The first scan also requires three seconds of stable rendering.
+Scene settling overlaps fpsVR preparation; recorder readiness gates capture
+without restarting the settling period.
 Repeated runs remain separate experiments; session reports compare them in
-adjacent columns. Incomplete
-triplicates retain their individual values without an aggregate. Optional
-fpsVR recording is verified through CSV growth and stopped after the batch,
-including an existing recording selected for the run. fpsVR stays open.
+adjacent columns. HTML comparisons are limited to the current game session;
+earlier sessions remain available as individual saved runs. Rows without a
+numeric value in any compared run are omitted; missing values in retained
+rows are shown as Unavailable. Incomplete triplicates retain their individual
+values without an aggregate. Optional
+fpsVR recording is verified through CSV growth. Starting a measurement stops
+any confirmed active recording before starting a fresh CSV for that run.
+The fresh recording stops after the batch; fpsVR stays open. An unconfirmed
+interruption omits fpsVR rather than sending another start toggle.
 An unproven stop is reported explicitly without sending a second toggle;
 valid timing data survives a recording cleanup failure. Active logging is
 read from its selected CSV rather than rediscovering the directory per poll.

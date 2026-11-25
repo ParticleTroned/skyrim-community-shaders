@@ -26,11 +26,13 @@ namespace PerformanceFpsVR
 		virtual ~Logger() = default;
 		virtual bool Running() const = 0;
 		virtual Observation Observe(bool samples = true) = 0;
+		/** Discover the latest raw CSV without changing the selected recording. */
+		virtual Observation DiscoverRecording() = 0;
 		virtual void Toggle() = 0;
 		virtual void Wait(std::chrono::milliseconds duration) = 0;
 	};
 
-	/** Selected recordings are stopped after the scan; uncertain toggles are never retried. */
+	/** Each measurement starts a fresh recording; uncertain toggles are never retried. */
 	struct Recording
 	{
 		Observation observation;

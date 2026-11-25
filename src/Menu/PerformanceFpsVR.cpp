@@ -296,25 +296,21 @@ namespace PerformanceFpsVR
 	{
 		if (cancelled.load(std::memory_order_acquire))
 			throw std::runtime_error("fpsVR preparation cancelled.");
-		const auto before = logger.Observe(false);
+		auto before = logger.Observe(false);
 		logger.Wait(2s);
 		auto current = logger.Observe(false);
 		if (!before.file.empty() && before.file == current.file && current.bytes > before.bytes) {
 			observation = current;
 			owned = true;
-			current = logger.Observe();
-			if (current.file != observation.file) {
-				owned = false;
-				throw std::runtime_error("fpsVR recording changed during admission; left untouched.");
-			}
-			observation = current;
-			if (current.lastSample <= 0)
-				throw std::runtime_error("fpsVR CSV is growing without complete timing samples.");
-			confirmed = true;
-			return;
+			Stop(logger);
+			current = logger.DiscoverRecording();
+			if (current.file != observation.file || current.bytes < observation.bytes)
+				throw std::runtime_error("fpsVR recording changed after stopping; no new recording started.");
+			observation = {};
+			before = current;
 		}
-		if (before.file != current.file)
-			throw std::runtime_error("Existing fpsVR recording is not advancing; left untouched.");
+		if (before.file != current.file || current.bytes < before.bytes)
+			throw std::runtime_error("fpsVR recording changed during admission; left untouched.");
 		if (!logger.Running() || cancelled.load(std::memory_order_acquire))
 			throw std::runtime_error("fpsVR exited or preparation was cancelled before recording.");
 		logger.Toggle();
@@ -351,6 +347,8 @@ namespace PerformanceFpsVR
 		owned = false;
 		if (!logger.Running())
 			throw std::runtime_error("fpsVR exited; no stop toggle sent.");
+		if (logger.DiscoverRecording().file != observation.file)
+			throw std::runtime_error("fpsVR recording changed; no stop toggle sent.");
 		const auto observe = [&] {
 			const auto current = logger.Observe(false);
 			if (!logger.Running() || current.file != observation.file || current.bytes < observation.bytes)
@@ -453,6 +451,7 @@ namespace PerformanceFpsVR
 
 		bool Running() const override { return fpsvr && WaitForSingleObject(fpsvr.get(), 0) == WAIT_TIMEOUT; }
 		Observation Observe(bool samples = true) override { return recording.observation.file.empty() ? Latest(directory, samples) : ReadObservation(recording.observation.file, samples); }
+		Observation DiscoverRecording() override { return Latest(directory, false); }
 		void Toggle() override { ToggleCommand(command); }
 		void Wait(std::chrono::milliseconds duration) override { std::this_thread::sleep_for(duration); }
 
@@ -503,10 +502,6 @@ namespace PerformanceFpsVR
 			}
 			std::string stopError;
 			try {
-				if (recording.owned && Latest(directory, false).file != recording.observation.file) {
-					recording.owned = false;
-					throw std::runtime_error("fpsVR recording changed; no stop toggle sent.");
-				}
 				recording.Stop(*this);
 				if (result["owned"].get<bool>())
 					result["recordingStopped"] = true;

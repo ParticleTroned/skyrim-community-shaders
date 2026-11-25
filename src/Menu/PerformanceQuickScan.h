@@ -11,7 +11,7 @@
 
 namespace PerformanceQuickScan
 {
-	inline constexpr double kSettleSeconds = 5.0;
+	inline constexpr double kSettleSeconds = 3.0;
 	inline constexpr double kMaximumSeconds = 30.0;
 	inline constexpr std::uint32_t kCaptureFrames = 300;
 	inline constexpr std::uint32_t kBatchScans = 3;
@@ -143,7 +143,8 @@ namespace PerformanceQuickScan
 				phase = Phase::Settling;
 			}
 		}
-		Action Poll(double now, bool ready, RenderConfiguration configuration = {})
+		/** Recorder preparation may overlap settling but must finish before capture. */
+		Action Poll(double now, bool ready, RenderConfiguration configuration = {}, bool recorderReady = true)
 		{
 			if (!Active())
 				return Action::Wait;
@@ -157,7 +158,7 @@ namespace PerformanceQuickScan
 				return Action::Wait;
 			if (!ready)
 				readySince = now;
-			else if (now - readySince >= (phase == Phase::BetweenScans ? kBatchGapSeconds : kSettleSeconds))
+			else if (recorderReady && now - readySince >= (phase == Phase::BetweenScans ? kBatchGapSeconds : kSettleSeconds))
 				return Action::StartCapture;
 			return Action::Wait;
 		}

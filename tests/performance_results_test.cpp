@@ -75,6 +75,27 @@ namespace
 					report.find("<th>Scan 3</th>") != std::string::npos,
 			"quick scans must not show On/Off-only columns");
 		Require(Csv(run).find("within_run_repeats") != std::string::npos, "CSV must include the same summary statistics as HTML");
+		{
+			auto available = run, unavailable = run;
+			for (auto& row : available["results"]) {
+				row["metrics"]["cpu"]["value"] = nullptr;
+				row["metrics"]["gpu"]["value"] = 0.0;
+			}
+			for (auto& row : unavailable["results"])
+				for (auto& metric : row["metrics"]) metric["value"] = nullptr;
+			const auto html = Html(available, &unavailable);
+			const auto begin = html.find("<h2>Experiments side by side");
+			const auto table = html.substr(begin, html.find("<section", begin) - begin);
+			Require(table.find(">cpu<") == std::string::npos && table.find(">gpu<") != std::string::npos &&
+						table.find("0.000 &plusmn; 0.000") != std::string::npos && table.find("<td>Unavailable</td>") != std::string::npos &&
+						table.find("Unavailable &plusmn;") == std::string::npos,
+				"comparison tables must hide rows missing everywhere, retain zeroes and label a missing run once");
+			const auto difference = html.substr(html.find("<h2>Comparison:"));
+			Require(difference.find(">cpu<") == std::string::npos && difference.find(">gpu<") != std::string::npos,
+				"pairwise differences must retain a row measured by only one run");
+			Require(HtmlSession(Json::array({ unavailable, unavailable })).find("Experiments side by side") == std::string::npos,
+				"all-unavailable experiments must not produce an empty comparison table");
+		}
 		auto mixedSources = run;
 		mixedSources["results"][1]["source"] = "csx_whole_frame";
 		Require(Rejects([&] { SummaryMetrics(mixedSources); }), "different timing sources must not be pooled into a triplicate");
@@ -107,6 +128,7 @@ namespace
 			std::deque<Observation> observations;
 			bool running = true, writer = false;
 			bool unreadableNewFile = false, ignoreStop = false;
+			std::string newRecordingFile, discoveredFile;
 			int toggles = 0, waits = 0, rejectToggle = 0;
 			std::atomic_bool* cancelOnWait = nullptr;
 			bool Running() const override { return running; }
@@ -119,12 +141,22 @@ namespace
 					observations.pop_front();
 				return value;
 			}
+			Observation DiscoverRecording() override
+			{
+				auto value = observations.front();
+				if (!discoveredFile.empty())
+					value.file = discoveredFile;
+				return value;
+			}
 			void Toggle() override
 			{
 				++toggles;
 				RequireCommandSuccess(0, toggles == rejectToggle ? "Can't connect to fpsVR..." : "");
+				const bool wasRecording = writer;
 				if (!ignoreStop || !writer)
 					writer = !writer;
+				if (!wasRecording && writer && !newRecordingFile.empty())
+					observations = { { newRecordingFile, 20, 2 }, { newRecordingFile, 30, 3 } };
 			}
 			void Wait(std::chrono::milliseconds) override
 			{
@@ -164,10 +196,47 @@ namespace
 			auto logger = idle();
 			logger.observations = { { "borrowed.csv", 10, 1 }, { "borrowed.csv", 20, 2 } };
 			logger.writer = true;
+			logger.newRecordingFile = "fresh.csv";
 			Recording recording;
 			recording.Prepare(logger, cancel);
+			Require(recording.confirmed && recording.owned && recording.observation.file == "fresh.csv" && logger.toggles == 2,
+				"an active old recording must stop before a fresh per-run CSV starts");
 			recording.Stop(logger);
-			Require(recording.confirmed && !recording.owned && logger.toggles == 1 && !logger.writer, "an existing recording must stop after the selected scan");
+			Require(!recording.owned && logger.toggles == 3 && !logger.writer, "the fresh replacement recording must stop after scanning");
+		}
+		{
+			auto logger = idle();
+			logger.observations = { { "borrowed.csv", 10, 1 }, { "borrowed.csv", 20, 2 } };
+			logger.writer = logger.ignoreStop = true;
+			logger.newRecordingFile = "fresh.csv";
+			Recording recording;
+			Require(Rejects([&] { recording.Prepare(logger, cancel); }), "an unconfirmed old-recording stop must block the fresh start");
+			recording.Stop(logger);
+			Require(logger.toggles == 1 && logger.writer && !recording.confirmed, "failed interruption must never send a restart toggle");
+		}
+		{
+			auto logger = idle();
+			logger.observations = { { "borrowed.csv", 10, 1 }, { "borrowed.csv", 20, 2 } };
+			logger.writer = true;
+			logger.rejectToggle = 2;
+			logger.newRecordingFile = "fresh.csv";
+			Recording recording;
+			Require(Rejects([&] { recording.Prepare(logger, cancel); }), "a failed fresh-start acknowledgement must omit fpsVR");
+			recording.Stop(logger);
+			Require(logger.toggles == 2 && !logger.writer && !recording.owned,
+				"a failed fresh start must not restart the stopped old recording during cleanup");
+		}
+		{
+			auto logger = idle();
+			logger.observations = { { "borrowed.csv", 10, 1 }, { "borrowed.csv", 20, 2 } };
+			logger.writer = true;
+			logger.cancelOnWait = &cancel;
+			logger.newRecordingFile = "fresh.csv";
+			Recording recording;
+			Require(Rejects([&] { recording.Prepare(logger, cancel); }), "cancellation while interrupting an old recording must prevent a fresh start");
+			recording.Stop(logger);
+			Require(logger.toggles == 1 && !logger.writer && !recording.confirmed, "cancellation must leave the old recording stopped");
+			cancel = false;
 		}
 		{
 			auto logger = idle();
@@ -204,11 +273,13 @@ namespace
 			auto logger = idle();
 			logger.observations = { { "owned.csv", 10, 1 }, { "owned.csv", 20, 2 } };
 			logger.writer = logger.unreadableNewFile = true;
+			logger.newRecordingFile = "fresh.csv";
 			Recording recording;
-			Require(Rejects([&] { recording.Prepare(logger, cancel); }) && recording.owned,
-				"malformed samples in an existing growing CSV must retain stop responsibility");
+			recording.Prepare(logger, cancel);
+			Require(recording.confirmed && recording.observation.file == "fresh.csv",
+				"malformed historical CSV samples must not enter the fresh per-run recording");
 			recording.Stop(logger);
-			Require(logger.toggles == 1 && !logger.writer, "an existing malformed recording must still be stopped");
+			Require(logger.toggles == 3 && !logger.writer, "both malformed old and fresh per-run recordings must be stopped");
 		}
 		for (bool duringAdmission : { true, false }) {
 			auto logger = idle();
@@ -223,6 +294,14 @@ namespace
 			}
 			recording.Stop(logger);
 			Require(logger.toggles == 1, "ownership changes must never trigger a second toggle");
+		}
+		{
+			auto logger = idle();
+			Recording recording;
+			recording.Prepare(logger, cancel);
+			logger.discoveredFile = "foreign.csv";
+			Require(Rejects([&] { recording.Stop(logger); }), "a newer CSV must be discovered even while selected-file observations stay pinned");
+			Require(logger.toggles == 1, "a different latest recording must not receive a stop toggle");
 		}
 		{
 			auto logger = idle();
@@ -500,6 +579,31 @@ try {
 		std::ifstream session(root / "CSX-Performance.log");
 		std::string bytes((std::istreambuf_iterator<char>(session)), {});
 		Require(bytes.find("cancelled") == std::string::npos, "session log not reset");
+		const auto oldId = store.Snapshot().history->at(0).at("id").get<std::string>();
+		const auto otherOldId = store.Snapshot().history->at(1).at("id").get<std::string>();
+		store.Export(oldId, otherOldId, "html", root);
+		Wait(store);
+		Require(store.Snapshot().error.find("current game session") != std::string::npos,
+			"HTML comparisons must not pull previous-session measurements into a new session");
+		auto current = Record();
+		store.Save(current);
+		Wait(store);
+		std::ifstream currentReport(std::filesystem::path(reinterpret_cast<const char8_t*>(store.Snapshot().sessionReport.c_str())));
+		const std::string html((std::istreambuf_iterator<char>(currentReport)), {});
+		Require(store.Snapshot().sessionRuns == 1 && html.find(current.at("id").get<std::string>()) != std::string::npos &&
+					html.find(oldId) == std::string::npos && html.find(otherOldId) == std::string::npos,
+			"automatic session HTML must contain current measurements only while preserving older disk history");
+		store.Export(current.at("id"), oldId, "both", root);
+		Wait(store);
+		Require(store.Snapshot().error.find("current game session") != std::string::npos,
+			"mixed current and previous-session HTML comparisons must be rejected");
+		auto currentSecond = Record();
+		store.Save(currentSecond);
+		Wait(store);
+		store.Export(current.at("id"), currentSecond.at("id"), "html", root);
+		Wait(store);
+		Require(store.Snapshot().error.empty() && store.Snapshot().sessionRuns == 2,
+			"two current-session measurements must remain comparable");
 	}
 	std::cout << "Performance history, exports, exclusion and failure recovery passed\n";
 	return 0;

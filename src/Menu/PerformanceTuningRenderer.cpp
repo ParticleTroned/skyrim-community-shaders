@@ -1299,8 +1299,6 @@ namespace
 	{
 		if (MenuUI::PerformanceResultsPage::GetStore().Busy())
 			return false;
-		if (g_scanFpsVR && !g_scanFpsVR->Prepared())
-			return false;
 		if ((globals::game::ui && globals::game::ui->GameIsPaused()) ||
 			(globals::shaderCache && globals::shaderCache->IsCompiling()) ||
 			!globals::features::upscaling.IsPerformanceCostMeasurementReady())
@@ -1352,17 +1350,20 @@ namespace
 			return;
 		}
 		auto* profiler = globals::profiler;
+		const bool recorderReady = !g_scanFpsVR || g_scanFpsVR->Prepared();
 		if (g_scanFpsVR && !scan.fpsVrPrepared) {
-			if (!g_scanFpsVR->Prepared()) {
-				if (now - scan.controller.started >= PerformanceQuickScan::kMaximumSeconds)
+			if (!recorderReady) {
+				if (now - scan.controller.started >= PerformanceQuickScan::kMaximumSeconds) {
 					FinishQuickScan(Failed, "fpsVR preparation timed out.");
-				return;
+					return;
+				}
+			} else {
+				scan.fpsVrPrepared = true;
+				scan.controller.started = now;
 			}
-			scan.fpsVrPrepared = true;
-			scan.controller.started = scan.controller.readySince = now;
 		}
 		const auto timing = ProfilingRenderer::CaptureFrameTimingSummary(false);
-		const auto action = scan.controller.Poll(now, QuickScanReady(), CaptureQuickScanRenderConfiguration());
+		const auto action = scan.controller.Poll(now, QuickScanReady(), CaptureQuickScanRenderConfiguration(), recorderReady);
 		if (action == ConfigurationChanged) {
 			FinishQuickScan(Failed, "Shader settings changed during the quick scan.");
 			return;
@@ -3229,19 +3230,19 @@ namespace
 	{
 		RenderTopPerformanceCounters();
 		RenderMeasurementStatus(g_quickScan.controller.Active());
-		MenuUI::SectionHeading("Quick scan", "Instrumented CPU/GPU self times, not on/off savings. Existing on/off comparisons are unchanged. Keep the scene still. The menu closes; CSX waits five seconds, then captures 300 frames for all instrumented features.");
+		MenuUI::SectionHeading("Quick scan", "Instrumented CPU/GPU self times, not on/off savings. Existing on/off comparisons are unchanged. Keep the scene still. The menu closes; CSX waits three seconds, then captures 300 frames for all instrumented features.");
 		{
 			auto disabled = Util::DisableGuard(PerformanceTuningRenderer::HasActiveMeasurements() || MenuUI::PerformanceResultsPage::GetStore().Busy());
 			static bool recordFpsVR = false;
 			if (globals::game::isVR) {
 				ImGui::Checkbox("Include fpsVR when running", &recordFpsVR);
-				Util::AddTooltip("Uses the running fpsVR installation's recording command. Recording stops after the complete scan batch, including an existing recording; fpsVR stays open. If recording cannot be verified, scans continue without fpsVR. Matched whole-frame timings and a combined HTML report are saved automatically; the fpsVR CSV is unchanged.");
+				Util::AddTooltip("Uses the running fpsVR installation's recording command. A confirmed active recording is stopped first, then a fresh recording starts for this run and stops after the complete scan batch; fpsVR stays open. If recording cannot be verified, scans continue without fpsVR. Matched whole-frame timings and a combined HTML report are saved automatically; the fpsVR CSV is unchanged.");
 			}
 			if (ImGui::Button("Start quick scan")) {
 				const char* error = StartQuickScan(false, false, recordFpsVR);
 				g_featureCostUiMessage = error ? fmt::format("Quick scan could not start: {}", error) : "";
 			}
-			Util::AddTooltip("Keep the scene and headset still. The menu closes, waits five seconds and captures 300 frames for all instrumented features, then reopens with results.");
+			Util::AddTooltip("Keep the scene and headset still. The menu closes, waits three seconds and captures 300 frames for all instrumented features, then reopens with results.");
 			ImGui::SameLine();
 			if (ImGui::Button("3 scans + automatic CSV")) {
 				const char* error = StartQuickScan(false, true, recordFpsVR);

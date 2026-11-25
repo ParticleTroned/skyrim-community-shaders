@@ -435,7 +435,11 @@ namespace PerformanceResults
 	{
 		const auto count = run.value("scanCount", 1u);
 		auto rows = SummaryMetrics(run);
-		std::erase_if(rows.get_ref<Json::array_t&>(), [&](const Json& row) { return (row.value("source", "instrumented") == "csx_whole_frame") != wholeFrame; });
+		std::erase_if(rows.get_ref<Json::array_t&>(), [&](const Json& row) {
+			const auto values = row.value("repeatValues", Json::array({ row.value("value", Json(nullptr)) }));
+			return (row.value("source", "instrumented") == "csx_whole_frame") != wholeFrame ||
+			       std::ranges::none_of(values, [](const Json& value) { return value.is_number(); });
+		});
 		if (rows.empty())
 			return {};
 		std::string text = wholeFrame ? "<h3>CSX Performance Tuning whole-frame timings</h3>" : "<h3>Instrumented feature self-times</h3>";
@@ -472,10 +476,11 @@ namespace PerformanceResults
 					rows.push_back(std::move(row));
 				}
 			for (const auto& row : rows)
-				keys.emplace(std::make_pair(row.at("id").get<std::string>(), row.at("metric").get<std::string>()), row);
+				if (row.value("value", Json(nullptr)).is_number())
+					keys.emplace(std::make_pair(row.at("id").get<std::string>(), row.at("metric").get<std::string>()), row);
 			experiments.emplace_back(i, std::move(rows));
 		}
-		if (experiments.size() < 2)
+		if (experiments.size() < 2 || keys.empty())
 			return {};
 		std::string text = "<h2>Experiments side by side</h2><p>Each column is a separate run. Each SE uses only that run's triplicate; experiments are never pooled. Check each run's scene and settings before comparing.</p><div class=\"scroll\"><table><tr><th>Feature / source</th><th>Metric</th><th>Unit</th>";
 		for (const auto& [index, rows] : experiments)
@@ -485,7 +490,15 @@ namespace PerformanceResults
 			text += "<tr><td>" + Escape(Text(rowInfo.at("label"))) + "</td><td>" + Escape(key.second) + "</td><td>" + Escape(Text(rowInfo.at("unit"))) + "</td>";
 			for (const auto& [index, rows] : experiments) {
 				const auto row = std::find_if(rows.begin(), rows.end(), [&](const Json& value) { return value.at("id") == key.first && value.at("metric") == key.second; });
-				text += "<td>" + (row == rows.end() ? "Unavailable" : Escape(Display(row->value("value", Json(nullptr)))) + " &plusmn; " + Escape(Display(row->value("standardError", Json(nullptr))))) + "</td>";
+				text += "<td>";
+				if (row == rows.end() || !row->value("value", Json(nullptr)).is_number())
+					text += "Unavailable";
+				else {
+					text += Escape(Display(row->at("value")));
+					if (row->value("standardError", Json(nullptr)).is_number())
+						text += " &plusmn; " + Escape(Display(row->at("standardError")));
+				}
+				text += "</td>";
 			}
 			text += "</tr>";
 		}
@@ -588,8 +601,10 @@ namespace PerformanceResults
 				text += "<p>Context or settings differ.</p>";
 			text += "<table><tr><th>Feature / case</th><th>Metric</th><th>First</th><th>Second</th><th>Difference</th><th>Unit</th></tr>";
 			for (const auto& row : compared.at("rows")) {
+				if (!row.at("first").is_number() && !row.at("second").is_number())
+					continue;
 				text += "<tr>";
-				for (const auto* key : { "label", "metric", "first", "second", "difference", "unit" }) text += "<td>" + Escape(Text(row.at(key))) + "</td>";
+				for (const auto* key : { "label", "metric", "first", "second", "difference", "unit" }) text += "<td>" + Escape(Display(row.at(key))) + "</td>";
 				text += "</tr>";
 			}
 			text += "</table>";
@@ -875,8 +890,15 @@ namespace PerformanceResults
 				throw std::runtime_error("Export format must be html, csv or both.");
 			if (session && format != "html")
 				throw std::runtime_error("Session export requires HTML.");
+			if (!session && !comparisonId.empty() && format != "csv") {
+				const auto belongsToSession = [&](const std::string& runId) {
+					return std::ranges::any_of(sessionEntries, [&](const Json& entry) { return entry.at("id") == runId; });
+				};
+				if (!belongsToSession(id) || !belongsToSession(comparisonId))
+					throw std::runtime_error("HTML comparisons require measurements from the current game session. Older runs can be opened individually.");
+			}
 			const auto record = session ? SessionRecords() : Read(id);
-			const auto comparison = comparisonId.empty() ? Json(nullptr) : Read(comparisonId);
+			const auto comparison = session || comparisonId.empty() ? Json(nullptr) : Read(comparisonId);
 			if (destination.empty()) {
 				if (!picker)
 					throw std::runtime_error("No folder picker is available.");

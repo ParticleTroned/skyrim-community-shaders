@@ -63,7 +63,7 @@ namespace PerformanceResults
 		void Save(Json record, std::function<void(Json&)> finalize = {});
 		void Refresh();
 		void Load(std::string id, bool comparison);
-		/** Empty destination invokes the desktop folder picker, initially at Folder(). */
+		/** HTML comparisons use current-session runs; an empty destination opens a folder picker. */
 		void Export(std::string id, std::string comparisonId, std::string format, std::filesystem::path destination = {}, bool session = false);
 		void Retry();
 		View Snapshot() const;

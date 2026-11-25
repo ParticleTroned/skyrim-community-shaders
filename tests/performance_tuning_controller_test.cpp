@@ -212,16 +212,24 @@ namespace
 		scan.Begin(10.0, true);
 		Require(scan.Active() && scan.Poll(15.0, true) == Action::Wait, "settling must start after the menu actually closes");
 		scan.MenuClosed(16.0);
-		Require(scan.Poll(20.0, true) == Action::Wait, "quick scan must retain the five-second settling floor");
-		Require(scan.Poll(20.5, false) == Action::Wait && scan.Poll(24.0, true) == Action::Wait, "unready rendering must restart settling");
-		Require(scan.Poll(25.5, true) == Action::StartCapture, "uninterrupted readiness must allow capture");
+		Require(scan.Poll(18.9, true) == Action::Wait && scan.Poll(19.0, true) == Action::StartCapture, "quick scan must retain the three-second settling floor");
+		Require(scan.Poll(20.5, false) == Action::Wait && scan.Poll(23.4, true) == Action::Wait, "unready rendering must restart settling");
+		Require(scan.Poll(23.5, true) == Action::StartCapture, "uninterrupted readiness must allow capture");
 		scan.phase = Phase::Capturing;
 		Require(scan.Poll(26.0, false) == Action::Interrupted, "compilation during capture must invalidate the scan");
 		Require(scan.Poll(40.0, true) == Action::TimedOut, "capture waits must be bounded");
 		scan.phase = Phase::Cancelled;
 		Require(!scan.Active() && scan.Poll(50.0, true) == Action::Wait, "cancelled scans must not restart");
 		scan.Begin(60.0, false);
-		Require(scan.Poll(65.0, true) == Action::StartCapture, "already closed menus must work without a close notification");
+		Require(scan.Poll(63.0, true) == Action::StartCapture, "already closed menus must work without a close notification");
+		scan.Begin(0, false, original);
+		Require(scan.Poll(3, true, original, false) == Action::Wait && scan.Poll(8, true, original, false) == Action::Wait,
+			"capture must wait for the recorder while the stable scene settles");
+		Require(scan.Poll(8, true, original, true) == Action::StartCapture && scan.readySince == 0,
+			"a prepared recorder must not restart completed scene settling");
+		scan.Begin(0, false, original);
+		Require(scan.Poll(1, true, original, true) == Action::Wait && scan.Poll(3, true, original, true) == Action::StartCapture,
+			"early recorder readiness must still retain the scene's three-second settling floor");
 		scan.Begin(0, false, original, true);
 		Require(scan.scanCount == 3 && scan.scanIndex == 1, "a batch must start with three scans");
 		for (unsigned next = 2; next <= 3; ++next) {

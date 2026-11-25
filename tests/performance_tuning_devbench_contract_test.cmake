@@ -88,6 +88,16 @@ foreach(_schema_contract IN ITEMS
     endif()
 endforeach()
 
+string(JSON _fpsvr_description GET
+    "${_descriptor}" inputSchema properties recordFpsVR description
+)
+foreach(_recording_contract IN ITEMS "fresh per-run CSV" "stopped after the batch")
+    string(FIND "${_fpsvr_description}" "${_recording_contract}" _recording_position)
+    if(_recording_position EQUAL -1)
+        message(FATAL_ERROR "fpsVR schema is missing: ${_recording_contract}")
+    endif()
+endforeach()
+
 string(JSON _toggle_type GET
     "${_descriptor}" inputSchema properties enabled type
 )
@@ -240,7 +250,7 @@ foreach(_renderer_contract IN ITEMS
     "constexpr double kFeatureCostTraceIntervalSeconds = 0.1"
     "kFeatureCostMeasurementBlockCount == 6"
     "g_quickScan.controller.phase == PerformanceQuickScan::Phase::Complete"
-    "scan.controller.Poll(now, QuickScanReady(), CaptureQuickScanRenderConfiguration())"
+    "scan.controller.Poll(now, QuickScanReady(), CaptureQuickScanRenderConfiguration(), recorderReady)"
     "BuildNvidiaUpscalingCostSweepCases"
     "BuildAmdUpscalingCostSweepCases"
     "FidelityFX::GetFsrSelectionLabel(fsr4RuntimeEnabled)"

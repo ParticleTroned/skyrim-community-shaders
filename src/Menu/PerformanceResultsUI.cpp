@@ -170,7 +170,7 @@ namespace MenuUI::PerformanceResultsPage
 			PageNotice(view.message);
 		if (view.busy)
 			PageNotice(view.message == "Choose an export folder on the desktop." ? view.message : "Results task in progress.", NoticeKind::Pending);
-		SectionHeading("Saved results", "Runs are kept across game restarts. Export opens a desktop folder picker; the default is SKSE/CSX/Performance. Reports are generated after measurements finish.");
+		SectionHeading("Saved results", "Runs are kept across game restarts. HTML comparisons use only the current game session; older runs can be opened individually. Export opens a desktop folder picker; the default is SKSE/CSX/Performance. Reports are generated after measurements finish.");
 		{
 			const auto disabled = Util::DisableGuard(view.busy || PerformanceTuningRenderer::HasActiveMeasurements());
 			SelectRun("Run", view, false);

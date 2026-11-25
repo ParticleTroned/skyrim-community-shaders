@@ -1,0 +1,322 @@
+name: Water integration test build
+
+on:
+  push:
+    branches: [build/os-dev-water-integration-20261125]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: water-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  resolve-targets:
+    name: Verify independent source commits
+    if: github.repository == 'ParticleTroned/skyrim-community-shaders' && github.ref == 'refs/heads/build/os-dev-water-integration-20261125'
+    runs-on: ubuntu-latest
+    outputs:
+      standalone: ${{ steps.targets.outputs.standalone }}
+      water: ${{ steps.targets.outputs.water }}
+      short-sha: ${{ steps.targets.outputs.short-sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve and verify immutable test targets
+        id: targets
+        shell: python
+        env:
+          INTEGRATION_SHA: ${{ github.sha }}
+        run: |
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          manifest = json.loads(Path('.github/water-integration-manifest.json').read_text())
+          base = manifest['upstreamDevCommit']
+          foundation = manifest['foundationCommit']
+          restoration = manifest['restorationCommit']
+          integration = os.environ['INTEGRATION_SHA']
+          for ref in (base, foundation, restoration, integration):
+              if not re.fullmatch(r'[0-9a-f]{40}', ref):
+                  raise ValueError(f'Expected a full immutable commit: {ref!r}')
+              subprocess.run(['git', 'cat-file', '-e', f'{ref}^{{commit}}'], check=True)
+          for ref in (foundation, restoration):
+              subprocess.run(['git', 'merge-base', '--is-ancestor', base, ref], check=True)
+              subprocess.run(['git', 'merge-base', '--is-ancestor', ref, integration], check=True)
+          common = subprocess.check_output(['git', 'merge-base', foundation, restoration], text=True).strip()
+          if common != base or foundation == base or restoration == base:
+              raise ValueError('Both draft heads must contain independent changes over the pinned dev commit.')
+          standalone = [{'name': 'foundation', 'ref': foundation}, {'name': 'restoration', 'ref': restoration}]
+          water = standalone + [{'name': 'integration', 'ref': integration}]
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as output:
+              output.write('standalone=' + json.dumps({'include': standalone}) + '\n')
+              output.write('water=' + json.dumps({'include': water}) + '\n')
+              output.write('short-sha=' + integration[:10] + '\n')
+          print(json.dumps({'upstreamDevCommit': base, 'testTargets': water}, indent=2))
+
+  standalone:
+    name: Independent PR build and tests (${{ matrix.name }})
+    needs: resolve-targets
+    runs-on: windows-2025-vs2026
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve-targets.outputs.standalone) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ matrix.ref }}
+          submodules: recursive
+          persist-credentials: false
+      - uses: ./.github/actions/setup-build-environment
+        with:
+          cmake-preset: PR
+          build-dir: build/PR
+          cache-key-suffix: water-standalone-${{ matrix.name }}
+      - name: Build plugin and production unit tests
+        uses: lukka/run-cmake@v10
+        with:
+          configurePreset: PR
+          configurePresetAdditionalArgs: "['-DBUILD_SHADER_TESTS=ON', '-DBUILD_CPP_TESTS=ON']"
+          buildPreset: PR
+          buildPresetAdditionalArgs: "['--target CommunityShaders', '--target cpp_tests', '--target screenshot_tests_devbench', '--target shader_tests']"
+      - name: Run C++ unit tests
+        run: ctest --test-dir build/PR -C Release --output-on-failure -R "CppUtilTests|ScreenshotDevBenchTests" --timeout 60
+      - name: Run shader unit tests
+        run: ctest --test-dir build/PR -C Release --output-on-failure -R ShaderTests --timeout 300
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: standalone-test-results-${{ matrix.name }}
+          path: build/PR/Testing/**
+          retention-days: 14
+          if-no-files-found: ignore
+
+  water-preflight:
+    name: Water FXC validation (${{ matrix.name }})
+    needs: resolve-targets
+    runs-on: windows-2025-vs2026
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve-targets.outputs.water) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ matrix.ref }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install the current shader validator
+        run: python -m pip install git+https://github.com/alandtse/hlslkit.git@d0ed83ab12fc48b9ee03ddf61b21e80bfa5c3778 pyyaml
+      - name: Compile Water permutations for flat and VR with both depth conventions
+        shell: python
+        run: |
+          import copy
+          import importlib.util
+          import os
+          import shutil
+          import subprocess
+          import sys
+          from pathlib import Path
+          import yaml
+
+          sys.path.insert(0, str(Path('tools').resolve()))
+          spec = importlib.util.spec_from_file_location('shader_cache', 'tools/build-shader-cache.py')
+          builder = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(builder)
+          fxc = shutil.which('fxc.exe')
+          if not fxc:
+              sdk = Path(os.environ['ProgramFiles(x86)']) / 'Windows Kits/10/bin'
+              candidates = sorted(sdk.glob('*/x64/fxc.exe'), reverse=True)
+              if not candidates:
+                  raise RuntimeError('Windows SDK FXC is required.')
+              fxc = str(candidates[0])
+          stage = Path('build/water-preflight/Shaders')
+          builder.stage_merged_shaders(stage)
+          for runtime in ('SE', 'VR'):
+              config_name = 'shader-validation-vr.yaml' if runtime == 'VR' else 'shader-validation.yaml'
+              config = yaml.safe_load((Path('.github/configs') / config_name).read_text())
+              config['shaders'] = [shader for shader in config['shaders'] if shader['file'] == 'Water.hlsl']
+              if not config['shaders']:
+                  raise RuntimeError(f'No water permutations found for {runtime}.')
+              for reverse_z in (False, True):
+                  depth_config = copy.deepcopy(config)
+                  for shader in depth_config['shaders']:
+                      for settings in shader['configs'].values():
+                          defines = [d for d in settings.get('common_defines', []) if d != 'REVERSE_Z']
+                          if reverse_z:
+                              defines.append('REVERSE_Z')
+                          settings['common_defines'] = defines
+                  path = Path('build/water-preflight') / f'{runtime}-{int(reverse_z)}.yaml'
+                  path.write_text(yaml.safe_dump(depth_config, sort_keys=False))
+                  command = ['hlslkit-compile', '--fxc', fxc, '--shader-dir', str(stage),
+                      '--output-dir', str(path.with_suffix('')), '--config', str(path),
+                      '--max-warnings', '0', '--suppress-warnings', 'X1519',
+                      '--strip-debug-defines', '--optimization-level', '3', '--dedupe']
+                  with path.with_suffix('.log').open('w', encoding='utf-8') as log:
+                      result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, text=True)
+                  print(path.with_suffix('.log').read_text(encoding='utf-8'))
+                  if result.returncode:
+                      raise RuntimeError(f'Water FXC validation failed: {runtime}, reverse_z={reverse_z}.')
+      - name: Upload water preflight diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: water-preflight-logs-${{ matrix.name }}
+          path: |
+            build/water-preflight/*.log
+            build/water-preflight/*.yaml
+          if-no-files-found: warn
+          retention-days: 14
+
+  build:
+    name: Combined production build and tests
+    needs: resolve-targets
+    uses: ./.github/workflows/_shared-build.yaml
+    with:
+      ref: ${{ github.sha }}
+      repository: ${{ github.repository }}
+      cmake-preset: ALL
+      run-cpp: true
+      run-shader-validation: true
+      run-shader-tests: true
+      run-cpp-tests: true
+      run-full-config-validation: true
+      release-parity-validation: true
+      cache-artifacts: false
+      upload-compiled-shaders: false
+      generate-flip-impact: false
+      cache-key-suffix: -water-integration
+
+  package:
+    name: Verify and package complete water AIO
+    needs: [resolve-targets, standalone, water-preflight, build]
+    runs-on: windows-2025-vs2026
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist-artifacts
+          path: integration-dist
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Verify complete payload, NR exclusion and provenance
+        shell: python
+        env:
+          INTEGRATION_SHA: ${{ github.sha }}
+          INTEGRATION_REPOSITORY: ${{ github.repository }}
+          INTEGRATION_RUN_ID: ${{ github.run_id }}
+        run: |
+          import hashlib
+          import json
+          import os
+          import re
+          import subprocess
+          import zipfile
+          from pathlib import Path
+
+          archives = [p for p in Path('integration-dist').glob('CommunityShaders_AIO-*') if p.suffix in ('.7z', '.zip')]
+          if len(archives) != 1:
+              raise RuntimeError(f'Expected exactly one AIO archive; found {len(archives)}.')
+          archive = archives[0]
+          stage = Path('water-integration-package')
+          stage.mkdir()
+          if archive.suffix == '.zip':
+              with zipfile.ZipFile(archive) as bundle:
+                  bundle.extractall(stage)
+          else:
+              subprocess.run(['7z', 'x', str(archive), f'-o{stage}', '-y'], check=True)
+          def require(relative):
+              path = stage / relative
+              if not path.is_file() or path.stat().st_size == 0:
+                  raise RuntimeError(f'Missing or empty payload: {relative}')
+              return path
+          def digest(path):
+              with path.open('rb') as payload:
+                  return hashlib.file_digest(payload, 'sha256').hexdigest()
+          dll = require('SKSE/Plugins/CommunityShaders.dll')
+          require('SKSE/Plugins/CommunityShaders.pdb')
+          forbidden = [p for p in stage.rglob('*') if p.is_file() and re.fullmatch(r'nvngx_dlssnr.*\.dll', p.name, re.IGNORECASE)]
+          if forbidden:
+              raise RuntimeError(f'NR runtime DLL found in AIO: {forbidden}')
+          payload = {
+              'Shaders/Water.hlsl': Path('package/Shaders/Water.hlsl'),
+              'Shaders/Common/SharedData.hlsli': Path('package/Shaders/Common/SharedData.hlsli'),
+              'SKSE/Plugins/CommunityShaders/Translations/en.json': Path('package/SKSE/Plugins/CommunityShaders/Translations/en.json'),
+          }
+          for source in Path('package/Shaders/Common').glob('Water*.hlsli'):
+              payload['Shaders/Common/' + source.name] = source
+          for feature in ('Unified Water', 'Water Effects'):
+              shader_root = Path('features') / feature / 'Shaders'
+              for source in shader_root.rglob('*'):
+                  if source.is_file():
+                      payload['Shaders/' + source.relative_to(shader_root).as_posix()] = source
+          hashes = {}
+          for relative, source in sorted(payload.items()):
+              actual = digest(require(relative))
+              if actual != digest(source):
+                  raise RuntimeError(f'Packaged payload differs from tested source: {relative}')
+              hashes[relative] = actual
+          manifest = json.loads(Path('.github/water-integration-manifest.json').read_text())
+          manifest.update({
+              'repository': os.environ['INTEGRATION_REPOSITORY'],
+              'integrationCommit': os.environ['INTEGRATION_SHA'],
+              'workflowRun': f"https://github.com/{os.environ['INTEGRATION_REPOSITORY']}/actions/runs/{os.environ['INTEGRATION_RUN_ID']}",
+              'preset': 'ALL', 'runtimes': ['SE', 'AE', 'VR'],
+              'inputAio': archive.name, 'inputAioSha256': digest(archive),
+              'pluginSha256': digest(dll), 'verifiedPayloadSha256': hashes,
+              'externalNrRuntime': 'Not included; these water changes do not require it.',
+              'prebuiltShaderCache': 'Not included; the game compiles shaders normally.',
+              'inGameValidation': 'Not established by CI; VR and flat testing remains required.',
+          })
+          (stage / 'WATER-INTEGRATION-MANIFEST.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+          (stage / 'WATER-SHALLOW-SURFACE.md').write_bytes(Path('docs/development/water-shallow-surface.md').read_bytes())
+          (stage / 'WATER-INTEGRATION-README.md').write_text(
+              '# Open Shaders water integration test build\n\n'
+              f"Commit: {os.environ['INTEGRATION_SHA']}\n\n"
+              'Complete Open Shaders AIO with the water foundation and surface-restoration draft changes.\n'
+              'Install as one mod overriding existing Open Shaders files, keeping the DLL and shaders together.\n'
+              'This package contains no nvngx_dlssnr DLL and requires no external NR runtime for these changes.\n'
+              'Prebuilt shader caches are omitted; the game compiles shaders normally.\n\n'
+              '## Compare surface restoration\n\n'
+              'In Water > Unified Water, the normal controls are Shallow Fallback Strength (default 1),\n'
+              'Edge Fade Depth (10), and Shallow Fallback Max Distance (26000). Compare strength 0 for\n'
+              'the baseline against strength 1 for restored coverage, using matching saves, scenes,\n'
+              'cameras and existing settings. There is no separate restoration enable switch, and the\n'
+              'installer does not force saved settings. Resource-readiness and depth-validity guards remain.\n\n'
+              'Debug contains Connection Search Reach (768), Deep Context Depth (192), Deep Context\n'
+              'Transition (128), Shallow Surface Depth (256), and Minimum Edge Fade Width (2).\n'
+              'The Debug-only Use Legacy Open Shaders Depth Behaviour control defaults off; enabling it\n'
+              'suppresses effective restoration strength while preserving the selected restoration values.\n\n'
+              'With devbench, call openshaders.feature with\n'
+              '`{"action":"set","shortName":"UnifiedWater","settings":{"ShallowFallbackStrength":1,"UseOpenShadersDepthBehaviour":false}}`\n'
+              'for restoration, or use ShallowFallbackStrength 0 for the baseline. The get action returns\n'
+              'selected controls; diagnostics reports shallowSurfaceReady, legacyDepthBehaviour,\n'
+              'selectedShallowStrength and effectiveShallowStrength. See WATER-SHALLOW-SURFACE.md\n'
+              'for the complete settings and test scenarios.\n\n'
+              '## Runtime checks\n\n'
+              'Test on VR and one flat edition, with standard and reverse Z where available. Check shallow\n'
+              'shorelines, deep water, transparent objects, foreground refraction edges, interiors, both VR\n'
+              'eyes, cell transitions, and missing or invalid flowmaps. Compare feature-enabled and fallback\n'
+              'paths and capture logs plus matching before/after scenes. CI does not establish visual or\n'
+              'in-game performance correctness. See the manifest for exact independent PR commits.\n',
+              encoding='utf-8')
+      - uses: actions/upload-artifact@v7
+        with:
+          name: OpenShaders-Water-Integration-${{ needs.resolve-targets.outputs.short-sha }}
+          path: water-integration-package/
+          include-hidden-files: true
+          retention-days: 30
+          if-no-files-found: error

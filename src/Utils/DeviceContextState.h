@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ComIdentity.h"
 #include "ManualDeviceContextState.h"
 #include "ResourceName.h"
 #include <cstddef>
@@ -53,17 +54,9 @@ namespace Util
 	namespace detail
 	{
 		inline winrt::com_ptr<ID3D11DeviceContext> registeredStateContext;
-		inline winrt::com_ptr<IUnknown> registeredStateIdentity;
+		inline Microsoft::WRL::ComPtr<IUnknown> registeredStateIdentity;
 		inline bool contextStateIsolationAvailable = false;
 		inline bool useManualContextState = false;
-
-		inline winrt::com_ptr<IUnknown> QueryContextIdentity(ID3D11DeviceContext* context)
-		{
-			winrt::com_ptr<IUnknown> identity;
-			if (context && SUCCEEDED(context->QueryInterface(__uuidof(IUnknown), identity.put_void())))
-				return identity;
-			return {};
-		}
 
 		inline bool IsContextStateAvailable(ID3D11DeviceContext* context)
 		{
@@ -71,8 +64,8 @@ namespace Util
 				return true;
 			if (context == registeredStateContext.get())
 				return false;
-			const auto identity = QueryContextIdentity(context);
-			return identity && registeredStateIdentity && identity.get() != registeredStateIdentity.get();
+			const auto identity = GetComIdentity(context);
+			return identity && registeredStateIdentity && identity.Get() != registeredStateIdentity.Get();
 		}
 	}
 
@@ -174,8 +167,8 @@ namespace Util
 	{
 		if (!context || detail::registeredStateContext.get() == context)
 			return;
-		auto identity = detail::QueryContextIdentity(context);
-		const bool sameContext = identity && identity.get() == detail::registeredStateIdentity.get();
+		auto identity = GetComIdentity(context);
+		const bool sameContext = identity && identity.Get() == detail::registeredStateIdentity.Get();
 		detail::registeredStateContext.copy_from(context);
 		detail::registeredStateIdentity = std::move(identity);
 		if (!sameContext)
@@ -192,8 +185,8 @@ namespace Util
 			return;
 		}
 		// Only IUnknown identity is shared by every interface view of the context.
-		const auto identity = detail::QueryContextIdentity(context);
-		if (identity && identity.get() == detail::registeredStateIdentity.get())
+		const auto identity = GetComIdentity(context);
+		if (identity && identity.Get() == detail::registeredStateIdentity.Get())
 			detail::contextStateIsolationAvailable = false;
 	}
 }

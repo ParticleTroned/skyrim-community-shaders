@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <exception>
 #include <nlohmann/json.hpp>
@@ -10,6 +12,30 @@
 
 namespace PerformanceTuningController
 {
+	inline constexpr double kFeatureBatchMaximumSeconds = 300.0;
+	inline constexpr double kFeatureBatchCooldownSeconds = 0.0;
+	inline constexpr double kFeatureBatchRestorationMarginSeconds = 1.0;
+	/** Per-state minimum waits retained with the measurement through cancellation. */
+	struct FeatureCostWaits
+	{
+		double current, comparison, restoration;
+		/** Include both measured states without changing their sampling duration. */
+		double TotalSeconds(double measurementSeconds) const { return current + comparison + restoration + 2 * measurementSeconds; }
+	};
+	/** Compress generic waits while preserving a feature's explicit temporal requirements. */
+	inline FeatureCostWaits BatchFeatureWaits(double enabled, double disabled, double defaultWait)
+	{
+		if (!std::isfinite(enabled) || enabled < 0 || !std::isfinite(disabled) || disabled < 0)
+			return { defaultWait, std::max(3.0, defaultWait), defaultWait };
+		return enabled == defaultWait && disabled == defaultWait ? FeatureCostWaits{ 0.5, 0.5, 0.5 } :
+		                                                           FeatureCostWaits{ enabled, disabled, enabled };
+	}
+	/** Reserve the feature's restoration period and one update margin inside the batch budget. */
+	inline bool BatchNeedsRestoration(double elapsed, double restoration)
+	{
+		return elapsed >= kFeatureBatchMaximumSeconds - restoration - kFeatureBatchRestorationMarginSeconds;
+	}
+
 	struct DisabledConfiguration
 	{
 		nlohmann::json enabledState;

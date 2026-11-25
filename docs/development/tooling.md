@@ -341,6 +341,23 @@ FPS is 1000 divided by the scan's mean frame interval. Timing epoch changes
 invalidate the native whole-frame aggregate instead of mixing clocks.
 Missing or invalid native samples invalidate the affected metric. Desktop
 samples wait for GPU resolution before entering their matched window.
+
+The full feature-cost scan measures current and Off states for three seconds
+each, retaining six 500 ms blocks per state for uncertainty. Generic initial,
+Off and restoration settling take 0.5 seconds each. Feature-specific temporal
+requirements override these generic waits in both directions: Upscaling uses
+2/10/2 seconds, Skylighting 5/1/5 seconds, and Terrain Blending 2/3/2 seconds.
+Readiness is checked before sampling and after restoration. No extra gap is
+added between features. Standalone comparisons and upscaling sweeps retain
+their established timing protocols.
+
+Full scans have a five-minute budget. The controller reserves restoration
+time, rejects plans that cannot fit, and retains completed results if delays
+prevent completion. A deadline never turns an unfinished comparison or
+unconfirmed restoration into a successful result. The saved run includes its
+`timingPlan`; `availableFeatureCosts.batchTiming` and `featureBatch` expose
+the planned per-feature waits, expected duration and maximum duration.
+
 An export requires an explicit destination directory. Only the initiating
 client can cancel its measurement, and ownership is tied to its saved run
 identity. Starts and feature changes reject an active bounded profiler capture. Poll `status` for progress and

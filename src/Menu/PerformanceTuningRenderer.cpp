@@ -163,6 +163,7 @@ namespace
 	struct FeatureCostMeasurementState
 	{
 		FeatureCostMeasurementPhase phase = FeatureCostMeasurementPhase::Idle;
+		PerformanceTuningController::FeatureCostWaits waits{ kFeatureCostInitialWaitSeconds, kFeatureCostComparisonWaitSeconds, kFeatureCostRestoreWaitSeconds };
 		json originalState;
 		RE::FormID cellFormId = 0;
 		bool testStateApplied = false;
@@ -276,6 +277,8 @@ namespace
 		bool devBenchOwned = false;
 		bool reopenMenuOnCompletion = false;
 		std::size_t nextFeatureIndex = 0;
+		double started = 0.0;
+		double expectedSeconds = 0.0;
 		RE::FormID cellFormId = 0;
 		std::vector<std::string> features;
 		std::string failureMessage;
@@ -468,7 +471,8 @@ namespace
 
 	void StartFeatureCostRestartCooldown(double currentTime)
 	{
-		g_costMeasurementRestartAllowedTime = currentTime + kFeatureCostRestartCooldownSeconds;
+		const bool continuingBatch = g_featureCostBatch.active && g_featureCostBatch.nextFeatureIndex < g_featureCostBatch.features.size();
+		g_costMeasurementRestartAllowedTime = currentTime + (continuingBatch ? PerformanceTuningController::kFeatureBatchCooldownSeconds : kFeatureCostRestartCooldownSeconds);
 	}
 
 	struct UpscalingCostSweepReadiness
@@ -907,18 +911,32 @@ namespace
 		return std::max(kFeatureCostComparisonWaitSeconds, featureWaitSeconds);
 	}
 
-	double GetFeatureCostExpectedRunSeconds(const Feature* feature)
+	PerformanceTuningController::FeatureCostWaits GetFeatureCostWaits(const Feature* feature, bool batch)
 	{
-		return kFeatureCostInitialWaitSeconds +
-		       kFeatureCostMeasurementSeconds +
-		       GetFeatureCostComparisonWaitSeconds(feature) +
-		       kFeatureCostMeasurementSeconds +
-		       kFeatureCostRestoreWaitSeconds;
+		if (batch && feature)
+			return PerformanceTuningController::BatchFeatureWaits(
+				feature->GetPerformanceCostMeasurementSettleSeconds(true),
+				feature->GetPerformanceCostMeasurementSettleSeconds(false),
+				feature->Feature::GetPerformanceCostMeasurementSettleSeconds(true));
+		return { kFeatureCostInitialWaitSeconds, GetFeatureCostComparisonWaitSeconds(feature), kFeatureCostRestoreWaitSeconds };
+	}
+
+	double GetFeatureCostExpectedRunSeconds(const Feature* feature, bool batch = false)
+	{
+		const auto waits = GetFeatureCostWaits(feature, batch);
+		return waits.TotalSeconds(kFeatureCostMeasurementSeconds);
+	}
+
+	json BatchFeatureTimingJson(const Feature* feature)
+	{
+		const auto waits = GetFeatureCostWaits(feature, true);
+		return { { "initialWaitMs", waits.current * 1000.0 }, { "currentMeasurementMs", kFeatureCostMeasurementMilliseconds },
+			{ "comparisonWaitMs", waits.comparison * 1000.0 }, { "offMeasurementMs", kFeatureCostMeasurementMilliseconds },
+			{ "restoreWaitMs", waits.restoration * 1000.0 }, { "expectedRunMs", waits.TotalSeconds(kFeatureCostMeasurementSeconds) * 1000.0 } };
 	}
 
 	double GetFeatureCostRemainingSeconds(
 		const FeatureCostMeasurementState& state,
-		const Feature* feature,
 		double currentTime)
 	{
 		const auto remainingWait = [&]() {
@@ -929,33 +947,33 @@ namespace
 				0.0,
 				(kFeatureCostMeasurementMilliseconds - sample.sampledDurationMs) / 1000.0);
 		};
-		const double comparisonWaitSeconds = GetFeatureCostComparisonWaitSeconds(feature);
+		const double comparisonWaitSeconds = state.waits.comparison;
 		double remainingSeconds = 0.0;
 		switch (state.phase) {
 		case FeatureCostMeasurementPhase::AwaitingMenuClose:
-			remainingSeconds = GetFeatureCostExpectedRunSeconds(feature);
+			remainingSeconds = state.waits.TotalSeconds(kFeatureCostMeasurementSeconds);
 			break;
 		case FeatureCostMeasurementPhase::PreparingCurrent:
 			remainingSeconds = remainingWait() +
 			                   kFeatureCostMeasurementSeconds +
 			                   comparisonWaitSeconds +
 			                   kFeatureCostMeasurementSeconds +
-			                   kFeatureCostRestoreWaitSeconds;
+			                   state.waits.restoration;
 			break;
 		case FeatureCostMeasurementPhase::MeasuringCurrent:
 			remainingSeconds = remainingSample(state.currentSample) +
 			                   comparisonWaitSeconds +
 			                   kFeatureCostMeasurementSeconds +
-			                   kFeatureCostRestoreWaitSeconds;
+			                   state.waits.restoration;
 			break;
 		case FeatureCostMeasurementPhase::PreparingTest:
 			remainingSeconds = remainingWait() +
 			                   kFeatureCostMeasurementSeconds +
-			                   kFeatureCostRestoreWaitSeconds;
+			                   state.waits.restoration;
 			break;
 		case FeatureCostMeasurementPhase::MeasuringTest:
 			remainingSeconds = remainingSample(state.testSample) +
-			                   kFeatureCostRestoreWaitSeconds;
+			                   state.waits.restoration;
 			break;
 		case FeatureCostMeasurementPhase::Restoring:
 			remainingSeconds = remainingWait();
@@ -1481,6 +1499,7 @@ namespace
 		if (resetTrace)
 			ResetFeatureCostTrace();
 		state = {};
+		state.waits = GetFeatureCostWaits(feature, g_featureCostBatch.active);
 		state.originalState = originalState;
 		state.cellFormId = GetMeasurementCellId();
 		state.devBenchOwned = devBenchOwned;
@@ -1495,7 +1514,7 @@ namespace
 				FeatureCostMeasurementPhase::PreparingCurrent,
 				state,
 				currentTime,
-				kFeatureCostInitialWaitSeconds);
+				state.waits.current);
 		}
 		return true;
 	}
@@ -1541,10 +1560,33 @@ namespace
 		state.failureMessage = std::move(message);
 		if (restoring) {
 			state.runStartTime = currentTime;
-			PrepareFeatureCostPhase(FeatureCostMeasurementPhase::Restoring, state, currentTime, kFeatureCostRestoreWaitSeconds);
+			PrepareFeatureCostPhase(FeatureCostMeasurementPhase::Restoring, state, currentTime, state.waits.restoration);
 		} else {
 			state.phase = FeatureCostMeasurementPhase::Complete;
 			StartFeatureCostRestartCooldown(currentTime);
+		}
+	}
+
+	void UpdateFeatureBatchBudget(Feature* feature, FeatureCostMeasurementState& state, double currentTime)
+	{
+		if (!g_featureCostBatch.active)
+			return;
+		const double elapsed = currentTime - g_featureCostBatch.started;
+		if (elapsed >= PerformanceTuningController::kFeatureBatchMaximumSeconds) {
+			RestoreFeatureCostMeasurementOriginalState(feature, state);
+			state.delta = {};
+			if (!state.failureMessage.empty())
+				state.failureMessage += " ";
+			state.failureMessage += "Full scan reached the five-minute limit. Original settings were requested; this comparison is unavailable.";
+			if (!feature->IsPerformanceCostMeasurementReady() || feature->CapturePerformanceCostMeasurementState() != state.originalState)
+				state.failureMessage += " Restoration could not be confirmed before the deadline.";
+			state.phase = FeatureCostMeasurementPhase::Complete;
+			g_featureCostBatch.failureMessage = state.failureMessage;
+			StartFeatureCostRestartCooldown(currentTime);
+		} else if (state.phase != FeatureCostMeasurementPhase::Restoring &&
+				   PerformanceTuningController::BatchNeedsRestoration(elapsed, state.waits.restoration)) {
+			g_featureCostBatch.failureMessage = "Full scan reached its time budget. Completed results are retained.";
+			StopFeatureCostMeasurement(feature, state, currentTime, g_featureCostBatch.failureMessage);
 		}
 	}
 
@@ -1643,7 +1685,7 @@ namespace
 					FeatureCostMeasurementPhase::PreparingCurrent,
 					state,
 					currentTime,
-					kFeatureCostInitialWaitSeconds);
+					state.waits.current);
 				return;
 			}
 			const auto sampleResult = AddFeatureCostSample(state.currentSample, current);
@@ -1662,7 +1704,7 @@ namespace
 					FeatureCostMeasurementPhase::PreparingTest,
 					state,
 					currentTime,
-					GetFeatureCostComparisonWaitSeconds(feature));
+					state.waits.comparison);
 			}
 			return;
 		}
@@ -1674,7 +1716,7 @@ namespace
 					FeatureCostMeasurementPhase::PreparingTest,
 					state,
 					currentTime,
-					GetFeatureCostComparisonWaitSeconds(feature));
+					state.waits.comparison);
 				return;
 			}
 			const auto sampleResult = AddFeatureCostSample(state.testSample, current);
@@ -1692,7 +1734,7 @@ namespace
 					FeatureCostMeasurementPhase::Restoring,
 					state,
 					currentTime,
-					kFeatureCostRestoreWaitSeconds);
+					state.waits.restoration);
 			}
 		}
 	}
@@ -2655,6 +2697,10 @@ namespace
 		if (!feature || !feature->loaded || !feature->SupportsPerformanceCostMeasurement() ||
 			!feature->IsPerformanceCostMeasurementEnabled())
 			return false;
+		if (currentTime - batch.started + GetFeatureCostExpectedRunSeconds(feature, true) + PerformanceTuningController::kFeatureBatchRestorationMarginSeconds > PerformanceTuningController::kFeatureBatchMaximumSeconds) {
+			batch.failureMessage = "Full scan cannot fit another comparison inside five minutes. Completed results are retained.";
+			return false;
+		}
 		auto& state = g_costMeasurementStates[feature->GetShortName()];
 		if (!BeginFeatureCostMeasurement(feature, state, currentTime,
 				feature->CapturePerformanceCostMeasurementState(), true, false, batch.devBenchOwned))
@@ -2677,13 +2723,27 @@ namespace
 		}
 		if (enabledFeatures.empty())
 			return "no_enabled_features";
+		json timingPlan = json::array();
+		double expectedSeconds = 0.0;
+		for (const auto& name : enabledFeatures) {
+			auto timing = BatchFeatureTimingJson(FindFeatureByShortName(name));
+			expectedSeconds += timing.at("expectedRunMs").get<double>() / 1000.0;
+			timing["feature"] = name;
+			timingPlan.push_back(std::move(timing));
+		}
+		if (expectedSeconds + PerformanceTuningController::kFeatureBatchRestorationMarginSeconds > PerformanceTuningController::kFeatureBatchMaximumSeconds)
+			return "feature_batch_exceeds_five_minutes";
 
 		if (!BeginSavedRun("feature_batch"))
 			return "results_busy";
 		g_savedRun["requestedFeatures"] = enabledFeatures;
+		g_savedRun["timingPlan"] = std::move(timingPlan);
+		g_savedRun["maximumSeconds"] = PerformanceTuningController::kFeatureBatchMaximumSeconds;
 		InvalidateFeatureCostResults();
 		ResetFeatureCostTrace();
 		g_featureCostBatch.active = true;
+		g_featureCostBatch.started = currentTime;
+		g_featureCostBatch.expectedSeconds = expectedSeconds;
 		g_featureCostBatch.devBenchOwned = devBenchOwned;
 		g_featureCostBatch.reopenMenuOnCompletion = globals::menu->IsEnabled;
 		g_featureCostBatch.features = std::move(enabledFeatures);
@@ -2704,6 +2764,11 @@ namespace
 		auto& batch = g_featureCostBatch;
 		if (!batch.active)
 			return false;
+		if (!IsAnyFeatureCostMeasurementActive() && currentTime - batch.started >= PerformanceTuningController::kFeatureBatchMaximumSeconds) {
+			batch.failureMessage = "Full scan reached the five-minute limit. Completed results are retained.";
+			batch.active = false;
+			return batch.reopenMenuOnCompletion;
+		}
 		if (!IsAnyFeatureCostMeasurementActive() &&
 			(GetFeatureCostEnvironmentError() || GetMeasurementCellId() != batch.cellFormId)) {
 			batch.failureMessage = "Feature comparisons stopped because the gameplay scene changed. Completed results are retained.";
@@ -2730,7 +2795,8 @@ namespace
 				break;
 			[[fallthrough]];
 		case PerformanceTuningController::BatchAction::Fail:
-			batch.failureMessage = "Feature comparisons stopped because a measurement could not complete. Completed results are retained.";
+			if (batch.failureMessage.empty())
+				batch.failureMessage = "Feature comparisons stopped because a measurement could not complete. Completed results are retained.";
 			batch.active = false;
 			break;
 		}
@@ -2972,7 +3038,6 @@ namespace
 	json FeatureCostMeasurementStatusJson(
 		std::string_view shortName,
 		const FeatureCostMeasurementState& state,
-		const Feature* feature,
 		double currentTime)
 	{
 		return {
@@ -2980,9 +3045,11 @@ namespace
 			{ "phase", GetFeatureCostPhaseName(state.phase) },
 			{ "phaseElapsedMs", std::max(0.0, currentTime - state.phaseStartTime) * 1000.0 },
 			{ "runElapsedMs", std::max(0.0, currentTime - state.runStartTime) * 1000.0 },
-			{ "comparisonWaitMs", GetFeatureCostComparisonWaitSeconds(feature) * 1000.0 },
-			{ "expectedRunMs", GetFeatureCostExpectedRunSeconds(feature) * 1000.0 },
-			{ "estimatedRemainingMs", GetFeatureCostRemainingSeconds(state, feature, currentTime) * 1000.0 },
+			{ "initialWaitMs", state.waits.current * 1000.0 },
+			{ "comparisonWaitMs", state.waits.comparison * 1000.0 },
+			{ "restoreWaitMs", state.waits.restoration * 1000.0 },
+			{ "expectedRunMs", state.waits.TotalSeconds(kFeatureCostMeasurementSeconds) * 1000.0 },
+			{ "estimatedRemainingMs", GetFeatureCostRemainingSeconds(state, currentTime) * 1000.0 },
 		};
 	}
 
@@ -3021,6 +3088,7 @@ namespace
 				{ "comparisonDetails", GetFeatureCostComparisonDetails(feature) },
 				{ "comparisonWaitMs", GetFeatureCostComparisonWaitSeconds(feature) * 1000.0 },
 				{ "expectedRunMs", GetFeatureCostExpectedRunSeconds(feature) * 1000.0 },
+				{ "batchTiming", BatchFeatureTimingJson(feature) },
 				{ "ready", feature->IsPerformanceCostMeasurementReady() },
 				{ "toggleBlockReason", GetFeatureToggleBlockReason(feature) ? json(GetFeatureToggleBlockReason(feature)) : json(nullptr) },
 			});
@@ -3034,8 +3102,7 @@ namespace
 		}
 
 		json measurement = activeMeasurement ?
-		                       FeatureCostMeasurementStatusJson(activeFeature, *activeMeasurement,
-								   FindFeatureByShortName(activeFeature), currentTime) :
+		                       FeatureCostMeasurementStatusJson(activeFeature, *activeMeasurement, currentTime) :
 		                       json(nullptr);
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -3079,6 +3146,9 @@ namespace
 		response["quickScan"] = QuickScanStatus();
 		response["featureBatch"] = {
 			{ "active", g_featureCostBatch.active },
+			{ "maximumMs", PerformanceTuningController::kFeatureBatchMaximumSeconds * 1000.0 },
+			{ "expectedRunMs", g_featureCostBatch.expectedSeconds * 1000.0 },
+			{ "postRunCooldownMs", PerformanceTuningController::kFeatureBatchCooldownSeconds * 1000.0 },
 			{ "features", g_featureCostBatch.features },
 			{ "startedCount", g_featureCostBatch.nextFeatureIndex },
 			{ "failure", g_featureCostBatch.failureMessage.empty() ? json(nullptr) : json(g_featureCostBatch.failureMessage) },
@@ -3359,10 +3429,12 @@ namespace
 		MenuUI::SectionHeading("Measurement");
 		if (RenderMeasureButton(GetFeatureCostStartError(ImGui::GetTime()) == nullptr && anyEnabled)) {
 			const char* error = StartFeatureCostBatch(false);
-			g_featureCostUiMessage = error ? "Measurement could not start. Check that a game is loaded, the editor is closed, and the features are ready." : "";
+			g_featureCostUiMessage = error ? std::string_view(error) == "feature_batch_exceeds_five_minutes" ? "The selected features cannot fit inside five minutes. Disable some features and retry." :
+			                                                                                                   "Measurement could not start. Check that a game is loaded, the editor is closed, and the features are ready." :
+			                                 "";
 		}
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::TextWrapped("CSX compares each active, editable feature with Off/None, skips inactive or scene/weather-controlled features, and restores exact settings after each comparison. The menu closes and reopens with results. Keep the scene still; allow about 41 seconds per feature. Cancel with the menu shortcut.");
+			ImGui::TextWrapped("CSX compares each active, editable feature with Off/None and restores exact settings after each comparison. Ordinary features take about 7.5 seconds; temporal features keep their own settling requirements. There is no extra gap after restoration. The full scan has a five-minute budget; delays preserve completed results and mark unfinished comparisons unavailable. Keep the scene still. Cancel with the menu shortcut.");
 		RenderMeasurementStatus(g_featureCostBatch.active);
 		if (!g_featureCostUiMessage.empty())
 			MenuUI::PageNotice(g_featureCostUiMessage, MenuUI::NoticeKind::Error);
@@ -3501,7 +3573,8 @@ void PerformanceTuningRenderer::UpdateClosedMenuMeasurement()
 			continue;
 		}
 
-		if (currentTime - state.runStartTime >= kFeatureCostMaximumRunSeconds) {
+		UpdateFeatureBatchBudget(feature, state, currentTime);
+		if (IsFeatureCostMeasurementActive(state) && currentTime - state.runStartTime >= kFeatureCostMaximumRunSeconds) {
 			if (state.phase == FeatureCostMeasurementPhase::Restoring && !state.failureMessage.empty()) {
 				state.failureMessage += " Restoring the runtime state did not finish before the timeout.";
 				state.phase = FeatureCostMeasurementPhase::Complete;
@@ -3594,8 +3667,8 @@ void PerformanceTuningRenderer::RenderClosedMenuMeasurementOverlay()
 	double remainingSeconds = 1.0;
 	float caseProgress = 0.0f;
 	if (activeState) {
-		const double estimatedTotalSeconds = GetFeatureCostExpectedRunSeconds(activeFeature);
-		remainingSeconds = GetFeatureCostRemainingSeconds(*activeState, activeFeature, currentTime);
+		const double estimatedTotalSeconds = activeState->waits.TotalSeconds(kFeatureCostMeasurementSeconds);
+		remainingSeconds = GetFeatureCostRemainingSeconds(*activeState, currentTime);
 		caseProgress = static_cast<float>(std::clamp(
 			1.0 - remainingSeconds / estimatedTotalSeconds,
 			0.0,
@@ -3767,7 +3840,7 @@ void PerformanceTuningRenderer::NotifyMenuClosed()
 			FeatureCostMeasurementPhase::PreparingCurrent,
 			state,
 			currentTime,
-			kFeatureCostInitialWaitSeconds);
+			state.waits.current);
 		startedMeasurement = true;
 	}
 	if (g_upscalingCostSweep.phase == UpscalingCostSweepPhase::AwaitingMenuClose) {

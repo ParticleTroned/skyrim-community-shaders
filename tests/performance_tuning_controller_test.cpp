@@ -277,6 +277,27 @@ namespace
 			"neural scan coverage must identify omitted evaluation queues");
 	}
 
+	void TestFullScanTiming()
+	{
+		using namespace PerformanceTuningController;
+		const auto ordinary = BatchFeatureWaits(2, 2, 2);
+		const auto upscaling = BatchFeatureWaits(2, 10, 2);
+		const auto skylighting = BatchFeatureWaits(5, 1, 2);
+		const auto terrain = BatchFeatureWaits(2, 3, 2);
+		Require(ordinary.current == 0.5 && ordinary.comparison == 0.5 && ordinary.restoration == 0.5,
+			"full scans must shorten generic settling after each state change");
+		Require(upscaling.comparison == 10 && skylighting.current == 5 && skylighting.restoration == 5 && terrain.comparison == 3,
+			"full scans must honor temporal feature settling on both disable and restoration");
+		Require(ordinary.TotalSeconds(3) == 7.5 && kFeatureBatchCooldownSeconds == 0,
+			"full scans must keep six half-second sample blocks without adding a redundant inter-feature delay");
+		Require(31 * ordinary.TotalSeconds(3) + upscaling.TotalSeconds(3) + skylighting.TotalSeconds(3) + terrain.TotalSeconds(3) < kFeatureBatchMaximumSeconds,
+			"the current maximum feature set must nominally fit inside five minutes");
+		Require(!BatchNeedsRestoration(293.9, 5) && BatchNeedsRestoration(294, 5) && BatchNeedsRestoration(299, 0.5),
+			"batch deadlines must reserve temporal restoration before five minutes");
+		Require(BatchFeatureWaits(std::numeric_limits<double>::quiet_NaN(), 2, 2).comparison == 3,
+			"invalid timing contracts must retain conservative waits");
+	}
+
 	struct DeferredFeature
 	{
 		std::string GetShortName() const { return "selected"; }
@@ -308,6 +329,7 @@ namespace
 int main()
 try {
 	TestQuickScan();
+	TestFullScanTiming();
 	TestWholeFrameCapture();
 	TestCaptureOwnership();
 	using namespace PerformanceTuningController;

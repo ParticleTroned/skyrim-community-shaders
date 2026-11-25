@@ -114,14 +114,14 @@ namespace
 			D3D11_SDK_VERSION, device.put(), nullptr, context.put()));
 		auto identity = context.as<IUnknown>();
 		Util::RegisterDeviceContextStateForHooks(context.get());
+		HookState hookState;
+		void* original = nullptr;
+		ContextView hooked(identity.get()), alternate(identity.get());
 		winrt::com_ptr<ID3D11DeviceContext1> context1;
 		std::unique_ptr<Util::IsolatedDeviceContextState> isolated;
 		Require(Util::CreateIsolatedDeviceContextState(device.get(), context.get(), context1, isolated, "ContextHookTest::DistinctView"),
 			"Could not establish native isolation before Context1 fallback");
 
-		HookState hookState;
-		void* original = nullptr;
-		ContextView hooked(identity.get()), alternate(identity.get());
 		const auto result = CompleteContextHook(&hooked,
 			InstallHook(hookState, &hooked, 131, kContext1Slots, ContextSlots, &original,
 				reinterpret_cast<void*>(Context1FallbackHook), RejectDetour, RejectProtection));
@@ -131,8 +131,34 @@ namespace
 		auto* cached = isolated.get();
 		Require(!Util::CreateIsolatedDeviceContextState(device.get(), &alternate, context1, isolated, "Invalid") && isolated.get() == cached,
 			"Context1 fallback admitted new native state through a different view");
-		const Util::ScopedDeviceContextState guard(&alternate, cached);
-		Require(!guard, "Context1 fallback admitted a cached native state through a different view");
+		{
+			const Util::ScopedDeviceContextState guard(&alternate, cached);
+			Require(!guard, "Context1 fallback admitted a cached native state through a different view");
+		}
+
+		struct RestoreRegistration
+		{
+			ID3D11DeviceContext* context;
+			~RestoreRegistration() { Util::RegisterDeviceContextStateForHooks(context); }
+		} restoreRegistration{ context.get() };
+		Util::RegisterDeviceContextStateForHooks(&alternate);
+		Require(!Util::CreateIsolatedDeviceContextState(device.get(), context.get(), context1, isolated, "Invalid") && isolated.get() == cached,
+			"Re-registering a context view admitted new native state through the original view");
+		{
+			const Util::ScopedDeviceContextState guard(context1.get(), cached);
+			Require(!guard, "Re-registering a context view admitted cached native state through the original view");
+		}
+
+		winrt::com_ptr<ID3D11Device> otherDevice;
+		winrt::com_ptr<ID3D11DeviceContext> otherContext;
+		winrt::check_hresult(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
+			D3D11_SDK_VERSION, otherDevice.put(), nullptr, otherContext.put()));
+		winrt::com_ptr<ID3D11DeviceContext1> otherContext1;
+		std::unique_ptr<Util::IsolatedDeviceContextState> otherIsolated;
+		Require(Util::CreateIsolatedDeviceContextState(otherDevice.get(), otherContext.get(), otherContext1, otherIsolated, "ContextHookTest::OtherContext"),
+			"A disabled renderer context blocked native isolation on an unrelated context");
+		const Util::ScopedDeviceContextState otherGuard(otherContext1.get(), otherIsolated.get());
+		Require(static_cast<bool>(otherGuard), "A disabled renderer context blocked a native scope on an unrelated context");
 	}
 
 	unsigned protectionCalls = 0;

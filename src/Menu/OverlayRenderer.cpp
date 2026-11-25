@@ -25,6 +25,7 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
+#include "Utils/ImGuiWindowOrder.h"
 
 #include "Features/PerformanceOverlay.h"
 #include "Features/PerformanceOverlay/ABTesting/ABTesting.h"
@@ -230,6 +231,8 @@ namespace
 
 		bool removedAny = false;
 		bool deferredAny = false;
+		const auto* statusWindow = deferShaderStatus ? ImGui::FindWindowByName("ShaderCompilationInfo") : nullptr;
+		auto* statusDrawList = statusWindow ? statusWindow->DrawList : nullptr;
 		int totalIdxCount = 0;
 		int totalVtxCount = 0;
 
@@ -245,7 +248,7 @@ namespace
 
 			totalIdxCount += cmdList->IdxBuffer.Size;
 			totalVtxCount += cmdList->VtxBuffer.Size;
-			if (deferShaderStatus && cmdList->_OwnerName && std::strcmp(cmdList->_OwnerName, "ShaderCompilationInfo") == 0) {
+			if (cmdList == statusDrawList) {
 				deferredAny = true;
 				continue;
 			}
@@ -255,26 +258,14 @@ namespace
 		if (!removedAny && !deferredAny) {
 			return drawData;
 		}
-		// Desktop-only status stays readable without affecting shared ImGui focus or HMD layout.
+		// Keep passive status below popup families and explicit foreground layers.
 		if (deferredAny) {
-			const int retainedCount = filteredDrawData.CmdLists.Size;
-			int statusIndex = retainedCount;
-			const auto* foreground = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
-			for (int index = 0; index < retainedCount; ++index) {
-				auto* list = filteredDrawData.CmdLists[index];
+			const auto* foreground = ImGui::GetCurrentContext()->Viewports[0]->BgFgDrawLists[1];
+			const auto statusPosition = std::find_if(filteredDrawData.CmdLists.begin(), filteredDrawData.CmdLists.end(), [&](const ImDrawList* list) {
 				const auto* window = list->_OwnerName ? ImGui::FindWindowByName(list->_OwnerName) : nullptr;
-				if (list == foreground || (window && (window->Flags & ImGuiWindowFlags_Tooltip))) {
-					statusIndex = index;
-					break;
-				}
-			}
-			for (auto* cmdList : drawData->CmdLists) {
-				if (cmdList->_OwnerName && std::strcmp(cmdList->_OwnerName, "ShaderCompilationInfo") == 0 &&
-					!(filterVROverlays && IsHiddenDesktopOverlayDrawList(cmdList, overlays)))
-					filteredDrawData.CmdLists.push_back(cmdList);
-			}
-			std::rotate(filteredDrawData.CmdLists.begin() + statusIndex,
-				filteredDrawData.CmdLists.begin() + retainedCount, filteredDrawData.CmdLists.end());
+				return list == foreground || Util::ImGuiWindowOrder::ShouldDrawAbovePassiveStatus(window);
+			});
+			filteredDrawData.CmdLists.insert(statusPosition, statusDrawList);
 		}
 
 		filteredDrawData.CmdListsCount = filteredDrawData.CmdLists.Size;

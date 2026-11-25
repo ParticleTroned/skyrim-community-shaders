@@ -7,6 +7,7 @@
 #include "State.h"
 #include "Util.h"
 #include "Utils/FileSystem.h"
+#include "Utils/ImGuiWindowOrder.h"
 #include "Utils/UI.h"
 #include "WeatherUtils.h"
 #include "imgui_internal.h"
@@ -575,7 +576,7 @@ void Widget::DrawSearchDropdown()
 			ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
 				ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
 				ImGuiWindowFlags_NoFocusOnAppearing)) {
-		ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+		Util::ImGuiWindowOrder::BringCurrentWindowToDisplayFront();
 
 		// Treat clicks on the search input itself as "inside" so typing/cursor
 		// positioning in the input doesn't dismiss the dropdown.

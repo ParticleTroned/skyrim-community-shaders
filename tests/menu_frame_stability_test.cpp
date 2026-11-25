@@ -1,6 +1,7 @@
 #include "Menu/HomePageRenderer.h"
 #include "Menu/Layout.h"
 #include "Menu/OverlayPolicy.h"
+#include "Utils/ImGuiWindowOrder.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -12,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -474,6 +476,185 @@ static bool CheckDockedStatusLayout()
 	return passed;
 }
 
+static bool DrawsWindowsInOrder(const ImDrawData* drawData, std::initializer_list<const ImGuiWindow*> windows)
+{
+	auto next = drawData->CmdLists.begin();
+	for (const auto* window : windows) {
+		if (!window)
+			return false;
+		next = std::find(next, drawData->CmdLists.end(), window->DrawList);
+		if (next == drawData->CmdLists.end())
+			return false;
+		++next;
+	}
+	return true;
+}
+
+static bool CheckDesktopStatusPopupLayering()
+{
+	enum class PopupKind
+	{
+		Combo,
+		Modal,
+		Floating
+	};
+	bool passed = true;
+	for (auto kind : { PopupKind::Combo, PopupKind::Modal, PopupKind::Floating }) {
+		ImGui::CreateContext();
+		auto& io = ImGui::GetIO();
+		io.IniFilename = nullptr;
+		io.DisplaySize = ImVec2(1920, 1620);
+		io.Fonts->AddFontDefault();
+		io.Fonts->Build();
+		Menu menu;
+		globals::menu = &menu;
+		REL::Module::vr = true;
+		globals::features::vr.compatible = true;
+		globals::features::vr.attachMode = VR::Settings::OverlayAttachMode::HMDOnly;
+		for (int frame = 0; frame < 6; ++frame) {
+			ImGui::NewFrame();
+			ImGui::SetNextWindowPos(ImVec2(8, 8));
+			ImGui::SetNextWindowSize(ImVec2(600, 240));
+			ImGui::Begin("ShaderCompilationInfo", nullptr, kShaderStatusWindowFlags);
+			ImGui::TextUnformatted("Compiling shaders");
+			auto* status = ImGui::GetCurrentWindow();
+			ImGui::End();
+			ImGui::SetNextWindowPos(ImVec2(0, 0));
+			ImGui::SetNextWindowSize(ImVec2(700, 700));
+			ImGui::Begin("Settings", nullptr, ImGuiWindowFlags_NoTitleBar);
+			auto* settings = ImGui::GetCurrentWindow();
+			ImGui::TextUnformatted("Log settings");
+			if (kind == PopupKind::Combo)
+				ImGui::SetCursorPos(ImVec2(20, 70));
+			ImGuiWindow* popup = nullptr;
+			ImGuiWindow* child = nullptr;
+			ImGuiWindow* ownedWindow = nullptr;
+			if (frame == 0 && kind != PopupKind::Floating)
+				ImGui::OpenPopup(kind == PopupKind::Modal ? ImGui::GetID("Log settings") : ImHashStr("##ComboPopup", 0, ImGui::GetID("Log Level")));
+			if (kind != PopupKind::Combo)
+				ImGui::SetNextWindowPos(ImVec2(20, 90));
+			const auto beginPopup = [&] {
+				switch (kind) {
+				case PopupKind::Combo:
+					return ImGui::BeginCombo("Log Level", "trace");
+				case PopupKind::Modal:
+					return ImGui::BeginPopupModal("Log settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+				default:
+					return ImGui::Begin("Search results", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing);
+				}
+			};
+			if (beginPopup()) {
+				popup = ImGui::GetCurrentWindow();
+				if (kind == PopupKind::Floating && frame < 4)
+					Util::ImGuiWindowOrder::BringCurrentWindowToDisplayFront();
+				ImGui::Selectable("trace", true);
+				ImGui::Selectable("debug");
+				ImGui::BeginChild("Log details", ImVec2(200, 40));
+				child = ImGui::GetCurrentWindow();
+				ImGui::TextUnformatted("Logging details");
+				ImGui::EndChild();
+				ImGui::SetNextWindowPos(ImVec2(30, 100));
+				ImGui::Begin("Popup-owned tool", nullptr, ImGuiWindowFlags_NoFocusOnAppearing);
+				ownedWindow = ImGui::GetCurrentWindow();
+				ImGui::TextUnformatted("Popup-owned content");
+				ImGui::End();
+				ImGui::BringWindowToDisplayBehind(ownedWindow, popup);
+				if (kind == PopupKind::Modal)
+					ImGui::EndPopup();
+				else if (kind == PopupKind::Combo)
+					ImGui::EndCombo();
+			}
+			if (kind == PopupKind::Floating)
+				ImGui::End();
+			ImGui::End();
+			if (frame % 2)
+				ImGui::BringWindowToDisplayFront(status);
+			else
+				ImGui::BringWindowToDisplayBack(status);
+			ImGui::Render();
+			if (frame < 2)
+				continue;
+			passed &= popup && child && ownedWindow && popup->Rect().Overlaps(status->Rect());
+			const auto* original = ImGui::GetDrawData();
+			const auto* foreground = ImGui::GetCurrentContext()->Viewports[0]->BgFgDrawLists[1];
+			const std::vector<ImDrawList*> sourceLists(original->CmdLists.begin(), original->CmdLists.end());
+			for (bool filter : { false, true }) {
+				filterDesktopOverlays = filter;
+				ImDrawData filtered;
+				const auto* desktop = BuildDesktopDrawData(ImGui::GetDrawData(), {}, filtered);
+				passed &= kind == PopupKind::Floating && frame >= 4 ?
+				              DrawsWindowsInOrder(desktop, { settings, ownedWindow, popup, child, status }) :
+				              DrawsWindowsInOrder(desktop, { settings, status, ownedWindow, popup, child });
+				passed &= desktop->TotalVtxCount == original->TotalVtxCount && desktop->TotalIdxCount == original->TotalIdxCount;
+				passed &= std::equal(sourceLists.begin(), sourceLists.end(), original->CmdLists.begin());
+				passed &= foreground == ImGui::GetCurrentContext()->Viewports[0]->BgFgDrawLists[1];
+			}
+		}
+		ImGui::DestroyContext();
+	}
+	globals::menu = nullptr;
+	REL::Module::vr = false;
+	if (!passed)
+		std::puts("FAIL: desktop compilation status covers a dropdown, modal, or floating window, or retains a stale ordering request");
+	return passed;
+}
+
+static bool CheckDesktopStatusWindowSwitching()
+{
+	bool passed = true;
+	for (bool raiseTarget : { false, true }) {
+		ImGui::CreateContext();
+		auto& io = ImGui::GetIO();
+		io.IniFilename = nullptr;
+		io.DisplaySize = ImVec2(1920, 1620);
+		io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+		io.DeltaTime = 0.1f;
+		io.Fonts->AddFontDefault();
+		io.Fonts->Build();
+		Menu menu;
+		globals::menu = &menu;
+		REL::Module::vr = true;
+		for (int frame = 0; frame < 8; ++frame) {
+			if (frame == 2) {
+				io.AddKeyEvent(ImGuiMod_Ctrl, true);
+				io.AddKeyEvent(ImGuiKey_Tab, true);
+			} else if (frame == 3) {
+				io.AddKeyEvent(ImGuiKey_Tab, false);
+			}
+			ImGui::NewFrame();
+			ImGui::Begin("ShaderCompilationInfo", nullptr, kShaderStatusWindowFlags);
+			ImGui::TextUnformatted("Compiling shaders");
+			auto* status = ImGui::GetCurrentWindow();
+			ImGui::End();
+			for (const auto* name : { "Settings", "Editor" }) {
+				ImGui::Begin(name, nullptr, raiseTarget ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoBringToFrontOnFocus);
+				ImGui::TextUnformatted("Focusable window");
+				ImGui::End();
+			}
+			ImGui::BringWindowToDisplayFront(status);
+			ImGui::Render();
+			if (frame < 4)
+				continue;
+			const auto* context = ImGui::GetCurrentContext();
+			const auto* target = context->NavWindowingTarget;
+			const auto* switcher = context->NavWindowingListWindow;
+			passed &= target && switcher;
+			for (bool filter : { false, true }) {
+				filterDesktopOverlays = filter;
+				ImDrawData filtered;
+				const auto* desktop = BuildDesktopDrawData(ImGui::GetDrawData(), {}, filtered);
+				passed &= raiseTarget ? DrawsWindowsInOrder(desktop, { status, target, switcher }) : DrawsWindowsInOrder(desktop, { target, status, switcher });
+			}
+		}
+		ImGui::DestroyContext();
+	}
+	globals::menu = nullptr;
+	REL::Module::vr = false;
+	if (!passed)
+		std::puts("FAIL: desktop compilation status covers Ctrl+Tab window switching or overrides NoBringToFrontOnFocus");
+	return passed;
+}
+
 static bool CheckPassiveDesktopStatus()
 {
 	bool passed = true;
@@ -585,6 +766,8 @@ int main()
 	passed &= CheckCombinedStatusStacking();
 	passed &= CheckDockedStatusLayout();
 	passed &= CheckPassiveDesktopStatus();
+	passed &= CheckDesktopStatusPopupLayering();
+	passed &= CheckDesktopStatusWindowSwitching();
 	for (float fontSize : { 21.0f, 27.0f, 42.0f, 54.0f }) {
 		for (float globalScale : { 0.0f, 0.5f }) {
 			for (bool traceOverlay : { false, true }) {

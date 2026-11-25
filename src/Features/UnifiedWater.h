@@ -161,6 +161,14 @@ private:
 	void SetShallowSettings(ShallowSettings value);
 	bool IsShallowSurfaceReady() const;
 
+	struct CacheBuildState
+	{
+		WaterCache::BuildProgressSnapshot progress{};
+		bool running = false;
+		bool failed = false;
+	};
+	std::mutex stagedCacheBuildMutex;
+	CacheBuildState stagedCacheBuild;
 	RE::NiPointer<RE::BSTriShape> waterMesh;
 	Flowmap* flowmap = nullptr;
 	WaterCache* waterCache = nullptr;
@@ -180,5 +188,6 @@ private:
 	bool IsWaterDataReady() const;
 	bool IsExteriorWorldspaceActive() const;
 	void UpdateWaterLODCull() const;
-	static bool LoadOrderChanged();
+	static bool LoadOrderChanged(uint64_t& hash);
+	static void PersistLoadOrderHash(uint64_t hash);
 };

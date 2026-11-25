@@ -192,7 +192,59 @@ namespace
 	void TestQuickScan()
 	{
 		using namespace PerformanceQuickScan;
+		struct GameMenu
+		{
+			bool onStack = true, menuContext = false, cursor = false, updateCursor = false;
+			bool OnStack() const { return onStack; }
+			bool UsesMenuContext() const { return menuContext; }
+			bool UsesCursor() const { return cursor; }
+			bool UpdateUsesCursor() const { return updateCursor; }
+		};
+		struct GameUI
+		{
+			bool paused = false, application = false, inventory = false, modal = false;
+			std::vector<GameMenu*> menuStack;
+			bool GameIsPaused() const { return paused; }
+			bool IsApplicationMenuOpen() const { return application; }
+			bool IsItemMenuOpen() const { return inventory; }
+			bool IsModalMenuOpen() const { return modal; }
+		};
+		GameUI gameplay;
+		GameMenu hud, passiveCursor;
+		gameplay.menuStack = { &hud, nullptr, &passiveCursor };
+		Require(!IsGameMenuOpen(&gameplay) && !IsGameMenuOpen<GameUI>(nullptr),
+			"gameplay with ordinary HUDs must remain eligible for quick scans");
+		for (auto menu : { GameUI{ .paused = true }, GameUI{ .application = true },
+				 GameUI{ .inventory = true }, GameUI{ .modal = true } })
+			Require(IsGameMenuOpen(&menu), "game menus must block scans even when inventory does not pause the game");
+		for (auto menu : { GameMenu{ .menuContext = true },
+				 GameMenu{ .cursor = true }, GameMenu{ .updateCursor = true } }) {
+			gameplay.menuStack.push_back(&menu);
+			Require(IsGameMenuOpen(&gameplay), "non-pausing dialogue, map and custom input windows must block quick scans");
+			menu.onStack = false;
+			Require(!IsGameMenuOpen(&gameplay), "a closed game window must allow retry without hiding ordinary HUDs");
+			gameplay.menuStack.pop_back();
+		}
 		const RenderConfiguration original{ true, true, 1, -1 };
+		for (bool batch : { false, true }) {
+			Controller blocked;
+			for (auto phase : { Phase::AwaitingMenuClose, Phase::Settling, Phase::BetweenScans, Phase::Capturing }) {
+				blocked.Begin(0, false, original, batch);
+				blocked.phase = phase;
+				Require(blocked.Poll(kMaximumSeconds, false, {}, false, true) == Action::GameMenuOpened,
+					"open game menus must report the cause before rendering, recorder or timeout failures in every active phase");
+			}
+			for (auto phase : { Phase::Idle, Phase::Complete, Phase::Failed, Phase::Cancelled }) {
+				blocked.phase = phase;
+				Require(blocked.Poll(kMaximumSeconds, false, {}, false, true) == Action::Wait,
+					"game menus must not alter completed or inactive scans");
+			}
+			blocked.Begin(10, true, original, batch);
+			blocked.MenuClosed(11);
+			Require(blocked.Poll(13.9, true, original, true, false) == Action::Wait &&
+						blocked.Poll(14, true, original, true, false) == Action::StartCapture,
+				"retry after closing a game menu must retain the full CSX menu-close settling floor");
+		}
 		for (const auto changed : { RenderConfiguration{ true, false, 1, -1 },
 				 RenderConfiguration{ false, true, 1, -1 }, RenderConfiguration{ true, true, 2, -1 },
 				 RenderConfiguration{ true, true, 1, 0 } }) {

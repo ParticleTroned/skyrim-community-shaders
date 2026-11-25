@@ -16,6 +16,24 @@ namespace PerformanceQuickScan
 	inline constexpr std::uint32_t kCaptureFrames = 300;
 	inline constexpr std::uint32_t kBatchScans = 3;
 	inline constexpr double kBatchGapSeconds = 3.0;
+	inline constexpr auto kGameMenuOpenError = "game_menu_open";
+	/** Input-owning game windows block scans even when menu mods remove their pause flag. */
+	template <class UI>
+	bool IsGameMenuOpen(UI* ui)
+	{
+		if (!ui)
+			return false;
+		if (ui->GameIsPaused() || ui->IsApplicationMenuOpen() || ui->IsItemMenuOpen() || ui->IsModalMenuOpen())
+			return true;
+		for (const auto& menu : ui->menuStack) {
+			if (!menu || !menu->OnStack())
+				continue;
+			if (menu->UsesMenuContext() || menu->UsesCursor() || menu->UpdateUsesCursor())
+				return true;
+		}
+		return false;
+	}
+
 	/** Collect the live panel's unique completed samples only within an active capture. */
 	struct FrameTimingCapture
 	{
@@ -104,7 +122,8 @@ namespace PerformanceQuickScan
 		StartCapture,
 		TimedOut,
 		Interrupted,
-		ConfigurationChanged
+		ConfigurationChanged,
+		GameMenuOpened
 	};
 
 	/** Require uninterrupted readiness before a bounded, independently owned capture. */
@@ -144,10 +163,12 @@ namespace PerformanceQuickScan
 			}
 		}
 		/** Recorder preparation may overlap settling but must finish before capture. */
-		Action Poll(double now, bool ready, RenderConfiguration configuration = {}, bool recorderReady = true)
+		Action Poll(double now, bool ready, RenderConfiguration configuration = {}, bool recorderReady = true, bool gameMenuOpen = false)
 		{
 			if (!Active())
 				return Action::Wait;
+			if (gameMenuOpen)
+				return Action::GameMenuOpened;
 			if (configuration != renderConfiguration)
 				return Action::ConfigurationChanged;
 			if (now - started >= kMaximumSeconds)

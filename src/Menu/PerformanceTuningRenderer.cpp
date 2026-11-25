@@ -1276,6 +1276,8 @@ namespace
 	try {
 		if (const auto* error = GetFeatureCostStartError(ImGui::GetTime()))
 			return error;
+		if (PerformanceQuickScan::IsGameMenuOpen(globals::game::ui))
+			return PerformanceQuickScan::kGameMenuOpenError;
 		if (!globals::profiler || !globals::profiler->IsInitialized())
 			return "profiler_unavailable";
 		if (!globals::shaderCache)
@@ -1322,12 +1324,20 @@ namespace
 		return "quick_scan_start_failed";
 	}
 
+	std::string QuickScanStartFailureMessage(const char* error, bool batch)
+	{
+		if (!error)
+			return {};
+		if (std::string_view(error) == PerformanceQuickScan::kGameMenuOpenError)
+			return "Quick scan not started: a game menu is open. Close the game menu, then start the scan again.";
+		return fmt::format("{} could not start: {}", batch ? "Scan batch" : "Quick scan", error);
+	}
+
 	bool QuickScanReady()
 	{
 		if (MenuUI::PerformanceResultsPage::GetStore().Busy())
 			return false;
-		if ((globals::game::ui && globals::game::ui->GameIsPaused()) ||
-			(globals::shaderCache && globals::shaderCache->IsCompiling()) ||
+		if ((globals::shaderCache && globals::shaderCache->IsCompiling()) ||
 			!globals::features::upscaling.IsPerformanceCostMeasurementReady())
 			return false;
 		for (auto* feature : Feature::GetFeatureList()) {
@@ -1378,27 +1388,29 @@ namespace
 		}
 		auto* profiler = globals::profiler;
 		const bool recorderReady = !g_scanFpsVR || g_scanFpsVR->Prepared();
-		if (g_scanFpsVR && !scan.fpsVrPrepared) {
-			if (!recorderReady) {
-				if (now - scan.controller.started >= PerformanceQuickScan::kMaximumSeconds) {
-					FinishQuickScan(Failed, "fpsVR preparation timed out.");
-					return;
-				}
-			} else {
-				scan.fpsVrPrepared = true;
-				scan.controller.started = now;
-			}
+		if (g_scanFpsVR && !scan.fpsVrPrepared && recorderReady) {
+			scan.fpsVrPrepared = true;
+			scan.controller.started = now;
 		}
-		const auto timing = ProfilingRenderer::CaptureFrameTimingSummary(false);
-		const auto action = scan.controller.Poll(now, QuickScanReady(), CaptureQuickScanRenderConfiguration(), recorderReady);
+		const auto action = scan.controller.Poll(now, QuickScanReady(), CaptureQuickScanRenderConfiguration(), recorderReady,
+			PerformanceQuickScan::IsGameMenuOpen(globals::game::ui));
+		if (action == GameMenuOpened) {
+			FinishQuickScan(Failed, "Quick scan stopped because a game menu opened. Close the game menu, then start the scan again.");
+			return;
+		}
 		if (action == ConfigurationChanged) {
 			FinishQuickScan(Failed, "Shader settings changed during the quick scan.");
 			return;
 		}
-		if (action == TimedOut || action == Interrupted) {
-			FinishQuickScan(Failed, action == TimedOut ? "The quick scan timed out." : "Rendering became unready during capture.");
+		if (action == TimedOut) {
+			FinishQuickScan(Failed, recorderReady ? "The quick scan timed out." : "fpsVR preparation timed out.");
 			return;
 		}
+		if (action == Interrupted) {
+			FinishQuickScan(Failed, "Rendering became unready during capture.");
+			return;
+		}
+		const auto timing = ProfilingRenderer::CaptureFrameTimingSummary(false);
 		if (action == StartCapture) {
 			if (!MenuUI::PerformanceResultsPage::GetStore().TryPause())
 				return;
@@ -3319,13 +3331,13 @@ namespace
 			}
 			if (ImGui::Button("Start quick scan")) {
 				const char* error = StartQuickScan(false, false, recordFpsVR);
-				g_featureCostUiMessage = error ? fmt::format("Quick scan could not start: {}", error) : "";
+				g_featureCostUiMessage = QuickScanStartFailureMessage(error, false);
 			}
 			Util::AddTooltip("Keep the scene and headset still. The menu closes, waits three seconds and captures 300 frames for all instrumented features, then reopens with results.");
 			ImGui::SameLine();
 			if (ImGui::Button("3 scans + automatic CSV")) {
 				const char* error = StartQuickScan(false, true, recordFpsVR);
-				g_featureCostUiMessage = error ? fmt::format("Scan batch could not start: {}", error) : "";
+				g_featureCostUiMessage = QuickScanStartFailureMessage(error, true);
 			}
 			Util::AddTooltip("Capture three scans with three-second gaps. Readiness settling occurs during each gap; delays extend the gap. CSV and JSON are saved beside the saved results, including commit, Build ID and capture times. Keep the scene and headset still throughout.");
 			const float resultsWidth = ImGui::CalcTextSize("Open results").x + ImGui::GetStyle().FramePadding.x * 2.0f;
@@ -3967,8 +3979,10 @@ nlohmann::json PerformanceTuningRenderer::StartApiQuickScan(bool batch, bool rec
 {
 	const auto* error = StartQuickScan(true, batch, recordFpsVR);
 	json response = { { "action", batch ? "start_quick_scan_batch" : "start_quick_scan" }, { "accepted", error == nullptr } };
-	if (error)
+	if (error) {
 		response["errorCode"] = error;
+		response["message"] = QuickScanStartFailureMessage(error, batch);
+	}
 	response["status"] = BuildMeasurementStatus(0, 128);
 	return response;
 }

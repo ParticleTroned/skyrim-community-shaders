@@ -330,6 +330,13 @@ the three scan means within that run, with three seconds of stable rendering
 between scans. The first scan also requires three seconds of stable rendering.
 Scene settling overlaps fpsVR preparation; recorder readiness gates capture
 without restarting the settling period.
+Quick scans and batches reject an open game menu before starting a run,
+with `accepted: false`, `errorCode: game_menu_open` and a readable `message`.
+Input-owning windows also block scans when a menu mod disables pausing;
+ordinary HUDs and passive cursor/fade layers remain eligible.
+The UI shows the same reason and leaves CSX open so the player can close
+the game menu and retry. Opening a game menu during settling or capture
+stops the scan with an explicit reason and preserves completed repeats.
 Repeated runs remain separate experiments; session reports compare them in
 adjacent columns. HTML comparisons are limited to the current game session;
 earlier sessions remain available as individual saved runs. Rows without a

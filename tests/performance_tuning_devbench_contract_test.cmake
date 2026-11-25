@@ -45,6 +45,7 @@ foreach(_schema_contract IN ITEMS
     "start_quick_scan"
     "start_quick_scan_batch"
     "recordFpsVR"
+    "game_menu_open"
     "invalidGpuFrames"
     "invalidCpuFrames"
     "renderConfiguration"
@@ -91,6 +92,42 @@ foreach(_schema_contract IN ITEMS
         )
     endif()
 endforeach()
+
+foreach(_rejection_field IN ITEMS errorCode message)
+    string(JSON _rejection_type ERROR_VARIABLE _rejection_type_error GET
+        "${_descriptor}" outputSchema properties ${_rejection_field} type
+    )
+    string(JSON _rejection_description ERROR_VARIABLE _rejection_error GET
+        "${_descriptor}" outputSchema properties ${_rejection_field} description
+    )
+    if(_rejection_type_error OR _rejection_error OR NOT _rejection_type STREQUAL "string" OR
+        _rejection_description STREQUAL "")
+        message(FATAL_ERROR "Scan rejection schema is missing ${_rejection_field}")
+    endif()
+endforeach()
+
+string(FIND "${_renderer}" "const char* StartQuickScan(" _scan_start)
+string(FIND "${_renderer}" "std::string QuickScanStartFailureMessage(" _scan_end)
+if(_scan_start EQUAL -1 OR _scan_end LESS _scan_start)
+    message(FATAL_ERROR "Quick scan admission function was not found")
+endif()
+math(EXPR _scan_length "${_scan_end} - ${_scan_start}")
+string(SUBSTRING "${_renderer}" ${_scan_start} ${_scan_length} _scan_source)
+string(FIND "${_scan_source}"
+    "PerformanceQuickScan::IsGameMenuOpen(globals::game::ui)" _menu_guard
+)
+string(FIND "${_scan_source}"
+    "g_featureCostVanityCameraSuppression.Acquire()" _camera_acquire
+)
+string(FIND "${_scan_source}"
+    "BeginSavedRun(\"quick_scan\")" _saved_run_start
+)
+if(_menu_guard EQUAL -1 OR _camera_acquire LESS _menu_guard OR
+    _saved_run_start LESS _menu_guard)
+    message(FATAL_ERROR
+        "Open game menus must reject quick scans before acquiring run resources"
+    )
+endif()
 
 string(JSON _fpsvr_description GET
     "${_descriptor}" inputSchema properties recordFpsVR description
@@ -254,7 +291,10 @@ foreach(_renderer_contract IN ITEMS
     "constexpr double kFeatureCostTraceIntervalSeconds = 0.1"
     "kFeatureCostMeasurementBlockCount == 6"
     "g_quickScan.controller.phase == PerformanceQuickScan::Phase::Complete"
-    "scan.controller.Poll(now, QuickScanReady(), CaptureQuickScanRenderConfiguration(), recorderReady)"
+    "scan.controller.Poll(now, QuickScanReady(), CaptureQuickScanRenderConfiguration(), recorderReady,"
+    "PerformanceQuickScan::IsGameMenuOpen(globals::game::ui));"
+    "if (action == GameMenuOpened)"
+    "Quick scan stopped because a game menu opened."
     "BuildNvidiaUpscalingCostSweepCases"
     "BuildAmdUpscalingCostSweepCases"
     "FidelityFX::GetFsrSelectionLabel(fsr4RuntimeEnabled)"

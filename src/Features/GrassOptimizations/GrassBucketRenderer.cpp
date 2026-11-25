@@ -791,20 +791,19 @@ namespace
 		}
 		static inline REL::Relocation<decltype(thunk)> original;
 	};
-	template <unsigned Index>
 	struct ModelHook
 	{
 		static RE::BSMultiStreamInstanceTriShape* thunk(RE::BGSGrassManager* manager, RE::GrassParam* param,
 			uint32_t x, uint32_t y, uint64_t* key, RE::BSFixedString* path)
 		{
-			auto shape = original(manager, param, x, y, key, path);
+			auto shape = func(manager, param, x, y, key, path);
 			if (shape && path) {
 				GrassPlacement::RecordModel(shape, path->c_str());
 				globals::features::grassOptimizations.GetRenderer().RecordModel(shape, path->c_str());
 			}
 			return shape;
 		}
-		static inline REL::Relocation<decltype(thunk)> original;
+		static inline REL::Relocation<decltype(thunk)> func;
 	};
 }
 
@@ -3612,35 +3611,12 @@ void GrassBucketRenderer::InstallHooks()
 	GeneratedHook::original = table.write_vfunc(REL::Relocate(0x3A, 0x3A, 0x3B), GeneratedHook::thunk);
 	DestroyHook::original = table.write_vfunc(0, DestroyHook::thunk);
 	PlacementBoundHook::original = table.write_vfunc(REL::Relocate(0x2F, 0x2F, 0x30), PlacementBoundHook::thunk);
-	const std::array<uintptr_t, 3> modelCalls{
-		REL::RelocationID(15204, 15372).address() + REL::Relocate(0x2F5, 0x2F5, 0x2F5),
-		REL::RelocationID(15205, 15373).address() + REL::Relocate(0x62B, 0x597, 0x62B),
-		REL::RelocationID(15206, 15374).address() + REL::Relocate(0x25C, 0x25C)
-	};
-	bool valid = true;
-	uintptr_t target = 0;
-	for (auto call : modelCalls) {
-		if (*reinterpret_cast<const uint8_t*>(call) != 0xE8) {
-			valid = false;
-			break;
-		}
-		int32_t offset = 0;
-		std::memcpy(&offset, reinterpret_cast<const void*>(call + 1), sizeof(offset));
-		const auto destination = call + 5 + offset;
-		if (target && destination != target) {
-			valid = false;
-			break;
-		}
-		target = destination;
-	}
-	if (valid) {
-		ModelHook<0>::original = SKSE::GetTrampoline().write_call<5>(modelCalls[0], ModelHook<0>::thunk);
-		ModelHook<1>::original = SKSE::GetTrampoline().write_call<5>(modelCalls[1], ModelHook<1>::thunk);
-		ModelHook<2>::original = SKSE::GetTrampoline().write_call<5>(modelCalls[2], ModelHook<2>::thunk);
-	} else
-		logger::warn("Grass model tracking unavailable; retaining full meshes");
+	// Direct plugin loads bypass the engine's grass task call sites.
+	const auto modelHookError = stl::detour_thunk<ModelHook>(REL::RelocationID(15214, 15383));
+	if (modelHookError != NO_ERROR)
+		logger::warn("Grass model tracking unavailable (error {}); retaining full meshes and disabling grass placement", modelHookError);
 	impl->installed = true;
-	GrassPlacement::SetHooksReady(valid);
+	GrassPlacement::SetHooksReady(modelHookError == NO_ERROR);
 	logger::info("Installed native grass bucket hooks");
 }
 

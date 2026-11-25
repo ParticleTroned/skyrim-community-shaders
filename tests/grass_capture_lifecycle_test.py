@@ -14,6 +14,145 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class GrassCaptureLifecycleTests(unittest.TestCase):
+    def test_direct_loader_tracks_models_and_retains_failure_fallback(self):
+        source = (ROOT / "src/Features/GrassOptimizations/GrassBucketRenderer.cpp").read_text(encoding="utf-8")
+        pch = (ROOT / "include/PCH.h").read_text(encoding="utf-8")
+        detour = "template <class T>\n" + block(pch, "long detour_thunk(")
+        hook = block(source, "struct ModelHook") + ";"
+        install = block(source, "void GrassBucketRenderer::InstallHooks(")
+        model_setup = install[install.index("const auto modelHookError"):install.rindex("}")]
+        driver = r'''
+#include <cstdint>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
+#include <utility>
+#include <vector>
+void Require(bool condition, const char* message) { if (!condition) throw std::runtime_error(message); }
+namespace RE {
+    struct BGSGrassManager {};
+    struct GrassParam {};
+    struct BSMultiStreamInstanceTriShape {};
+    struct BSFixedString {
+        std::string value;
+        const char* c_str() const { return value.c_str(); }
+    };
+}
+using Loader = RE::BSMultiStreamInstanceTriShape* (*)(RE::BGSGrassManager*, RE::GrassParam*,
+    uint32_t, uint32_t, uint64_t*, RE::BSFixedString*);
+namespace REL {
+    template<class T> struct Relocation {
+        std::add_pointer_t<T> value = nullptr;
+        template<class... Args> auto operator()(Args... args) const { return value(args...); }
+    };
+    struct RelocationID {
+        unsigned se, ae;
+        std::uintptr_t address() const;
+    };
+}
+using PVOID = void*;
+constexpr long NO_ERROR = 0;
+long attachError = NO_ERROR;
+unsigned errors = 0, warnings = 0, nativeCalls = 0;
+RE::BGSGrassManager expectedManager;
+RE::GrassParam expectedParam;
+RE::BSMultiStreamInstanceTriShape resultShape;
+RE::BSMultiStreamInstanceTriShape* nativeResult = &resultShape;
+std::string loadedPath;
+RE::BSMultiStreamInstanceTriShape* NativeLoader(RE::BGSGrassManager* m, RE::GrassParam* p,
+    uint32_t x, uint32_t y, uint64_t* key, RE::BSFixedString* path) {
+    Require(m == &expectedManager && p == &expectedParam && x == 0xFFFFFFF4u && y == 12, "Loader arguments changed");
+    ++nativeCalls;
+    *key = 42;
+    if (path) path->value = loadedPath;
+    return nativeResult;
+}
+Loader directLoader = NativeLoader;
+std::uintptr_t REL::RelocationID::address() const {
+    Require(se == 15214 && ae == 15383, "Hook must intercept the shared grass loader entry");
+    return reinterpret_cast<std::uintptr_t>(NativeLoader);
+}
+namespace Util {
+    struct DetourAttachResult { long error; };
+    DetourAttachResult InstallDetour(std::uintptr_t target, void** original, void* replacement) {
+        Require(target == reinterpret_cast<std::uintptr_t>(NativeLoader), "Wrong loader target");
+        Require(original && !*original && replacement, "Invalid original storage or replacement");
+        if (attachError == NO_ERROR) {
+            *original = reinterpret_cast<void*>(NativeLoader);
+            directLoader = reinterpret_cast<Loader>(replacement);
+        }
+        return {attachError};
+    }
+}
+namespace SKSE::log {
+    template<class... Args> void error(const char*, Args&&...) { ++errors; }
+}
+namespace stl { DETOUR }
+namespace logger {
+    template<class... Args> void warn(const char*, Args&&...) { ++warnings; }
+    void info(const char*) {}
+}
+using Records = std::vector<std::pair<RE::BSMultiStreamInstanceTriShape*, std::string>>;
+namespace GrassPlacement {
+    Records records;
+    bool hooksReady = false;
+    void SetHooksReady(bool ready) { hooksReady = ready; }
+    void RecordModel(RE::BSMultiStreamInstanceTriShape* object, const char* path) { records.emplace_back(object, path); }
+}
+struct Renderer {
+    Records records;
+    void RecordModel(RE::BSMultiStreamInstanceTriShape* object, const char* path) { records.emplace_back(object, path); }
+};
+namespace globals::features {
+    struct Feature {
+        Renderer renderer;
+        Renderer& GetRenderer() { return renderer; }
+    } grassOptimizations;
+}
+HOOK
+struct GrassBucketRenderer {
+    struct Impl { bool installed = false; } state;
+    Impl* impl = &state;
+    void InstallHooks() { MODEL_SETUP }
+};
+int main() {
+    auto& rendererRecords = globals::features::grassOptimizations.renderer.records;
+    for (long error : {5L, NO_ERROR}) {
+        attachError = error;
+        errors = warnings = nativeCalls = 0;
+        directLoader = NativeLoader;
+        ModelHook::func.value = nullptr;
+        GrassPlacement::records.clear();
+        rendererRecords.clear();
+        GrassBucketRenderer renderer;
+        renderer.InstallHooks();
+        Require(renderer.state.installed, "Model tracking failure must not disable visibility-based rendering");
+        Require(GrassPlacement::hooksReady == (error == NO_ERROR), "Placement readiness ignored attach failure");
+        Require(errors == (error == NO_ERROR ? 0u : 1u) && warnings == errors, "Attach failure was not reported");
+        Require((ModelHook::func.value != nullptr) == (error == NO_ERROR), "Original storage was not retained safely");
+        Records expected;
+        for (bool hasShape : {true, false}) for (bool hasPath : {true, false}) {
+            nativeResult = hasShape ? &resultShape : nullptr;
+            for (const char* model : {"grass/a.nif", "grass/a.nif", "grass/b.nif"}) {
+                loadedPath = model;
+                RE::BSFixedString path;
+                uint64_t key = 0;
+                const auto before = nativeCalls;
+                Require(directLoader(&expectedManager, &expectedParam, 0xFFFFFFF4u, 12, &key, hasPath ? &path : nullptr) == nativeResult,
+                    "Direct loader result changed");
+                Require(nativeCalls == before + 1 && key == 42, "Original loader was not called exactly once");
+                if (hasPath) Require(path.value == model, "Model output changed");
+                if (error == NO_ERROR && hasShape && hasPath) expected.emplace_back(&resultShape, model);
+                Require(GrassPlacement::records == expected && rendererRecords == expected,
+                    "Direct loads must publish the returned model to both consumers, including reused shapes");
+            }
+        }
+    }
+}
+'''.replace("DETOUR", detour).replace("HOOK", hook).replace("MODEL_SETUP", model_setup)
+        result = self.compile_and_run(driver, False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_native_settings_after_plugin_overrides(self):
         source = (ROOT / "src/Features/GrassOptimizations/GrassBucketRenderer.cpp").read_text(encoding="utf-8")
         method = block(source, "void GrassBucketRenderer::Impl::ReadNativeSettings(")

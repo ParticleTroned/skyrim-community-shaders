@@ -28,9 +28,9 @@ namespace PerformanceResults
 	std::string SceneLabel(const Json& context);
 	/** Matches measurement identity and units; never adds independent feature costs. */
 	Json Compare(const Json& first, const Json& second);
-	/** Self-contained offline report, including settings and optional run comparison. */
+	/** Offline charts, sorting, explicit median bases and linked settings/detail tables. */
 	std::string Html(const Json& record, const Json* comparison = nullptr);
-	/** Combined report with independent settings and context for every run. */
+	/** Combined report with separate compatible chart groups and each run's own statistics. */
 	std::string HtmlSession(const Json& records);
 	/** Spreadsheet-safe metric rows with context and optional comparison differences. */
 	std::string Csv(const Json& record, const Json* comparison = nullptr);

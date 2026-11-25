@@ -1,5 +1,6 @@
 #include "Menu/PerformanceFpsVR.h"
 #include "Menu/PerformanceResults.h"
+#include "Utils/Statistics.h"
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -45,6 +46,118 @@ namespace
 			{ "results", Json::array({ { { "id", "test" }, { "label", "=test,<script>alert(1)</script>\"\nline" }, { "relativeTo", "Off" },
 							 { "metrics", { { "gpu", { { "unit", "ms" }, { "value", 0.0 }, { "standardError", 0.05 } } },
 											  { "cpu", { { "unit", "ms" }, { "value", nullptr } } } } } } }) } };
+	}
+
+	std::string TestGraphicalOverview()
+	{
+		Require(std::abs(Util::Median(std::vector<double>{ 1.0000000001, 1.0000000003 }) - 1.0000000002) < 1e-14,
+			"report medians must retain double precision");
+		auto cost = Record();
+		cost["context"]["cellName"] = "Dragonsreach";
+		auto& feature = cost["results"][0];
+		feature["label"] = "Shadow cost";
+		feature["metrics"]["gpu"].update({ { "value", 1.5 }, { "standardError", 1.0 }, { "current", 9.0 }, { "comparison", 7.5 } });
+		feature["metrics"]["cpu"].update({ { "value", 2.0 }, { "standardError", 0.0 }, { "current", 3.0 }, { "comparison", 1.0 } });
+		for (const auto* phase : { "currentSamples", "comparisonSamples" }) {
+			feature[phase] = { { "sampledDurationMs", 3000.0 } };
+			for (const auto* metric : { "cpu", "gpu" }) {
+				auto blocks = Json::array();
+				for (unsigned index = 0; index < 6; ++index) {
+					const bool current = std::string_view(phase) == "currentSamples";
+					const double value = std::string_view(metric) == "gpu" ? current ? (index == 5 ? 14.0 : 8.0) : 7.5 : current ? 3.0 :
+					                                                                                                               1.0;
+					blocks.push_back({ { "sum", value }, { "sampleWeight", 1.0 } });
+				}
+				feature[phase][metric] = { { "blocks", blocks }, { "accumulationValid", true }, { "missingSampleCount", 0 } };
+			}
+		}
+		Require(Metrics(cost)[1]["median"] == 0.5 && Metrics(cost)[1]["value"] == 1.5,
+			"a difference of block medians must be distinguished from the recorded mean difference");
+		auto legacy = cost;
+		legacy["results"][0].erase("currentSamples");
+		Require(Metrics(legacy)[1]["median"].is_null(), "missing saved samples must not invent a median");
+		auto unavailable = cost;
+		unavailable["results"][0]["metrics"]["gpu"]["available"] = false;
+		Require(Metrics(unavailable)[1]["value"].is_null() && Metrics(unavailable)[1]["median"].is_null(),
+			"explicitly unavailable metrics must not become measured zeroes or medians");
+		Require(Html(cost).find("<th>CSX FPS</th>") == std::string::npos,
+			"cost-only reports must omit wholly unavailable whole-frame columns");
+		auto malformed = cost;
+		malformed["results"][0]["currentSamples"]["gpu"]["blocks"][0]["sampleWeight"] = 0;
+		Require(Metrics(malformed)[1]["median"].is_null(), "an incomplete sampling block must invalidate the median");
+		auto otherSource = cost;
+		otherSource["results"][0]["source"] = "csx_whole_frame";
+		Require(Compare(cost, otherSource)["rows"][1]["difference"].is_null(), "different timing sources must not produce a comparison difference");
+		otherSource = cost;
+		otherSource["results"][0]["coverage"] = "different instrumented passes";
+		Require(Compare(cost, otherSource)["rows"][1]["difference"].is_null(), "different coverage must not produce a comparison difference");
+		auto negative = cost;
+		negative["id"] = NewId();
+		negative["settings"]["Shadows"] = false;
+		negative["results"][0]["metrics"]["gpu"].update({ { "value", -0.25 }, { "standardError", 0.0 }, { "current", 7.25 } });
+		negative["results"][0]["metrics"]["cpu"]["value"] = nullptr;
+		for (auto& block : negative["results"][0]["currentSamples"]["gpu"]["blocks"]) block["sum"] = 7.25;
+		auto quick = Record();
+		quick["kind"] = "quick_scan";
+		quick["scanCount"] = 3;
+		quick["context"]["cellName"] = "Outdoor scene";
+		quick["results"] = Json::array();
+		for (unsigned index = 1; index <= 3; ++index) {
+			quick["results"].push_back({ { "id", std::to_string(index) + ":gpu" }, { "label", "GPU-heavy" }, { "scanIndex", index },
+				{ "metrics", { { "gpu", { { "unit", "ms" }, { "value", index == 3 ? 9.0 : index * 1.0 } } }, { "cpu", { { "unit", "ms" }, { "value", 0.0 } } } } } });
+			quick["results"].push_back({ { "id", std::to_string(index) + ":cpu" }, { "label", "CPU-heavy" }, { "scanIndex", index },
+				{ "metrics", { { "gpu", { { "unit", "ms" }, { "value", 1.0 } } }, { "cpu", { { "unit", "ms" }, { "value", 9.0 } } } } } });
+		}
+		const auto rows = SummaryMetrics(quick);
+		Require(rows[3]["median"] == 2.0 && rows[3]["value"] == 4.0, "triplicate median must use scan means");
+		auto next = quick;
+		next["id"] = NewId();
+		for (auto& row : next["results"]) {
+			if (row["label"] == "GPU-heavy")
+				row["metrics"]["gpu"]["value"] = row["scanIndex"];
+			else
+				row["metrics"]["cpu"]["value"] = nullptr;
+		}
+		const auto report = HtmlSession(Json::array({ cost, negative, quick, next }));
+		Require(report.find("id=\"graphical-overview\"") < report.find("<h2>Session overview"), "charts must precede the existing measurement overview");
+		Require(report.find("median-marker") != std::string::npos && report.find("difference of current and comparison block medians") != std::string::npos &&
+					report.find("data-value=\"-0.25\"") != std::string::npos && report.find("data-value=\"0.0\"") != std::string::npos,
+			"charts must retain signed values, zeroes and explicit median definitions");
+		Require(report.find("data-control=\"sort\"") != std::string::npos && report.find("#run-4") != std::string::npos &&
+					report.find("Run context or settings differ") != std::string::npos && report.find("Feature costs versus Off/None") != std::string::npos &&
+					report.find("Quick-scan instrumented self-times") != std::string::npos,
+			"sortable comparisons must retain detail links and distinguish incompatible measurement sources");
+		Require(Csv(cost).find("median_basis") != std::string::npos && Html(legacy).find("valid saved samples required") != std::string::npos,
+			"HTML and CSV must preserve median availability and its basis");
+		Require(report.find("--accent:rgb(250,186,56)") != std::string::npos && report.find("--background:rgb(9,10,10)") != std::string::npos,
+			"legacy results must use the shared charcoal and gold CSX palette");
+		auto themed = cost;
+		themed["presentation"]["theme"] = { { "Colors", { { "WindowBg", Json::array({ 0.1, 0.2, 0.3, 0.4 }) } } },
+			{ "StatusPalette", { { "InfoColor", Json::array({ 0.25, 0.5, 0.75, 1.0 }) } } } };
+		const auto themedReport = Html(themed);
+		Require(themedReport.find("--background:rgb(26,51,77)") != std::string::npos && themedReport.find("--accent:rgb(64,128,191)") != std::string::npos,
+			"saved themes must control offline report colors without an ImGui dependency");
+		themed["presentation"]["theme"]["Colors"]["WindowBg"] = "</style><script>alert(1)</script>";
+		Require(Html(themed).find("--background:rgb(9,10,10)") != std::string::npos,
+			"invalid saved colors must fall back to safe palette values");
+		auto extreme = legacy;
+		extreme["results"][0]["metrics"]["gpu"]["value"] = 1e308;
+		extreme["results"][0]["metrics"]["gpu"]["standardError"] = 1e308;
+		const auto extremeReport = Html(extreme);
+		Require(extremeReport.find("x=\"null\"") == std::string::npos && extremeReport.find("M null") == std::string::npos,
+			"finite measurement inputs must not overflow SVG coordinates");
+		auto negativeExtreme = extreme;
+		negativeExtreme["results"][0]["metrics"]["gpu"]["value"] = -1e308;
+		Require(Compare(negativeExtreme, extreme)["rows"][1]["difference"].is_null(), "overflowing run differences must remain unavailable");
+		for (int issue = 0; issue < 2; ++issue) {
+			auto invalid = cost;
+			if (issue == 0)
+				invalid["results"][0]["metrics"]["gpu"]["standardError"] = -1;
+			else
+				invalid["results"][0]["source"] = Json::object();
+			Require(Rejects([&] { Html(invalid); }), "malformed chart input must fail validation");
+		}
+		return report;
 	}
 
 	void TestTriplicateSummary()
@@ -326,6 +439,7 @@ namespace
 
 int main(int argc, char** argv)
 try {
+	const auto chartsPreview = TestGraphicalOverview();
 	TestRecordingOwnership();
 	TestTriplicateSummary();
 	const auto root = std::filesystem::temp_directory_path() / ("csx-performance-test-" + NewId());
@@ -341,7 +455,9 @@ try {
 	} cleanup{ root };
 	auto record = Record();
 	Validate(record);
-	Require(Html(record).find("<script>") == std::string::npos, "HTML injection");
+	const auto escapedReport = Html(record);
+	Require(escapedReport.find("<script>alert") == std::string::npos && escapedReport.find("&lt;script&gt;alert(1)&lt;/script&gt;") != std::string::npos,
+		"user-supplied labels must be escaped outside the trusted sorting script");
 	Require(Html(record).find("&lt;script&gt;") != std::string::npos, "HTML escaping missing");
 	Require(Csv(record).find("\"'=test") != std::string::npos, "CSV formula injection");
 	Require(Csv(record).find("Unavailable") != std::string::npos, "missing replaced with zero");
@@ -421,13 +537,13 @@ try {
 		const auto report = HtmlSession(Json::array({ indoor, outdoor }));
 		Require(report.find("Indoor lights") != std::string::npos && report.find("Outdoor water and grass") != std::string::npos &&
 					report.find("Settings for this run") != std::string::npos && report.find("false") != std::string::npos && report.find("true") != std::string::npos &&
-					report.find("fpsVR whole-frame timings") != std::string::npos && report.find("<script>") == std::string::npos,
+					report.find("fpsVR whole-frame timings") != std::string::npos && report.find("<script>alert") == std::string::npos,
 			"session reports must preserve independent settings, fpsVR omissions and escaped labels");
 		Require(report.find("stop unconfirmed") != std::string::npos && report.find("p95 ms") != std::string::npos,
 			"recording cleanup failures must remain visible without discarding valid fpsVR measurements");
 		if (argc == 2) {
 			std::ofstream preview(std::filesystem::path(reinterpret_cast<const char8_t*>(argv[1])), std::ios::binary);
-			preview << report;
+			preview << chartsPreview;
 			Require(static_cast<bool>(preview), "could not write requested report preview");
 		}
 	}

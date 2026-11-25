@@ -342,6 +342,30 @@ invalidate the native whole-frame aggregate instead of mixing clocks.
 Missing or invalid native samples invalidate the affected metric. Desktop
 samples wait for GPU resolution before entering their matched window.
 
+HTML exports begin with offline CPU/GPU bar charts and links to the existing
+measurement details. Filter to one run or compare visible runs, and sort
+features by GPU/CPU mean, absolute change from the first compatible run,
+standard error, or name. Sorting uses visible values within each compatible
+measurement group. Missing references and mismatched coverage do not yield a
+change. Scales remain fixed while filtering.
+Self-times, whole-frame timings and measured On/Off costs remain separate;
+different runtimes, definitions, sources or coverage are not subtracted.
+
+Bars show the recorded mean and whiskers show one standard error. Median
+markers use the retained sampling basis: quick-scan means across repeats,
+current-minus-comparison block medians for cost scans, or the stored fpsVR
+sample median for a single capture. Missing or incomplete samples do not
+produce a median. CSV exports append `median` and `median_basis`. Values and
+settings remain available without JavaScript; only sorting and run filtering
+require it. Large chart sets have a disclosed rendering limit, with complete
+values retained in the detailed tables and metadata.
+
+Measurements capture the active CSX UI theme as presentation metadata.
+Reports use the last included theme, flattening translucent surfaces to
+opaque colors for offline readability. Older records fall back to the
+default palette shared with the CSX menu. Exporting performs no live ImGui
+access and adds no idle render work.
+
 The full feature-cost scan measures current and Off states for three seconds
 each, retaining six 500 ms blocks per state for uncertainty. Generic initial,
 Off and restoration settling take 0.5 seconds each. Feature-specific temporal

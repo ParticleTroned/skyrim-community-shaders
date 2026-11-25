@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <concepts>
 #include <numeric>
 #include <vector>
 
@@ -15,10 +16,11 @@ namespace Util
 	}
 
 	/** Median of the samples, averaging the two middle values for even counts. */
-	inline float Median(std::vector<float> values)
+	template <std::floating_point Number = float>
+	inline Number Median(std::vector<Number> values)
 	{
 		if (values.empty())
-			return 0.0f;
+			return Number{};
 		const auto middle = values.begin() + values.size() / 2;
 		std::nth_element(values.begin(), middle, values.end());
 		return values.size() % 2 ? *middle :

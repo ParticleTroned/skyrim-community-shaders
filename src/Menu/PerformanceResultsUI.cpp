@@ -93,7 +93,7 @@ namespace MenuUI::PerformanceResultsPage
 			const bool quick = record.at("kind") == "quick_scan";
 			SectionHeading(quick ? "Scan results" : "Measured cost", quick ?
 																		 "Whole-frame CSX metrics and instrumented feature work are separate rows. Standard error uses only this run's repeat scans." :
-																		 "Current minus Off/None, with standard error. FPS reports the loss relative to Off/None. Independent feature costs do not add up to a total.");
+																		 "Current minus Off/None, with standard error. Negative FPS differences mean fewer frames per second with the feature enabled. Independent feature costs do not add up to a total.");
 			if (record.contains("failure") && !record.at("failure").is_null())
 				PageNotice(record.at("failure").get<std::string>(), NoticeKind::Error);
 			static std::shared_ptr<const nlohmann::json> previousFirst, previousSecond;

@@ -1,7 +1,9 @@
 
 #pragma once
+
 #include "Feature.h"
 #include "Menu/ThemeManager.h"
+#include "Menu/ThemePalette.h"
 #include "Utils/Input.h"
 #include "Utils/Serialize.h"
 #include "Utils/VanityCamera.h"
@@ -319,23 +321,23 @@ public:
 		} ScrollbarOpacity;
 		struct PaletteColors
 		{
-			ImVec4 Background{ 0.035f, 0.038f, 0.040f, 0.40f };
-			ImVec4 Text{ 0.92f, 0.91f, 0.86f, 1.0f };
+			ImVec4 Background = MenuUI::ThemePalette::As<ImVec4>(MenuUI::ThemePalette::Background);
+			ImVec4 Text = MenuUI::ThemePalette::As<ImVec4>(MenuUI::ThemePalette::Text);
 			// Separated border controls for better theming granularity
-			ImVec4 WindowBorder{ 0.42f, 0.40f, 0.35f, 0.80f };    // Outer window borders
-			ImVec4 FrameBorder{ 0.082f, 0.086f, 0.089f, 0.62f };  // Button, slider, input field backgrounds
-			ImVec4 Separator{ 0.34f, 0.33f, 0.30f, 0.62f };       // Internal separators and dividers
-			ImVec4 ResizeGrip{ 0.78f, 0.74f, 0.64f, 0.70f };      // Window resize grips
+			ImVec4 WindowBorder = MenuUI::ThemePalette::As<ImVec4>(MenuUI::ThemePalette::WindowBorder);  // Outer window borders
+			ImVec4 FrameBorder = MenuUI::ThemePalette::As<ImVec4>(MenuUI::ThemePalette::FrameBorder);    // Button, slider, input field backgrounds
+			ImVec4 Separator = MenuUI::ThemePalette::As<ImVec4>(MenuUI::ThemePalette::Separator);        // Internal separators and dividers
+			ImVec4 ResizeGrip = MenuUI::ThemePalette::As<ImVec4>(MenuUI::ThemePalette::ResizeGrip);      // Window resize grips
 		} Palette;
 		struct StatusPaletteColors
 		{
-			ImVec4 Disable{ 0.52f, 0.51f, 0.48f, 0.90f };
-			ImVec4 Error{ 0.95f, 0.34f, 0.32f, 1.0f };
-			ImVec4 Warning{ 1.00f, 0.64f, 0.18f, 1.0f };
-			ImVec4 RestartNeeded{ 0.70f, 0.76f, 0.80f, 1.0f };
-			ImVec4 CurrentHotkey{ 1.00f, 0.78f, 0.28f, 1.0f };
-			ImVec4 SuccessColor{ 0.76f, 0.78f, 0.72f, 1.0f };
-			ImVec4 InfoColor{ 0.98f, 0.73f, 0.22f, 1.0f };
+			ImVec4 Disable = MenuUI::ThemePalette::As<ImVec4>(MenuUI::ThemePalette::Disable);
+			ImVec4 Error = MenuUI::ThemePalette::As<ImVec4>(MenuUI::ThemePalette::Error);
+			ImVec4 Warning = MenuUI::ThemePalette::As<ImVec4>(MenuUI::ThemePalette::Warning);
+			ImVec4 RestartNeeded = MenuUI::ThemePalette::As<ImVec4>(MenuUI::ThemePalette::RestartNeeded);
+			ImVec4 CurrentHotkey = MenuUI::ThemePalette::As<ImVec4>(MenuUI::ThemePalette::CurrentHotkey);
+			ImVec4 SuccessColor = MenuUI::ThemePalette::As<ImVec4>(MenuUI::ThemePalette::Success);
+			ImVec4 InfoColor = MenuUI::ThemePalette::As<ImVec4>(MenuUI::ThemePalette::Info);
 		} StatusPalette;
 		struct FeatureHeadingColors
 		{

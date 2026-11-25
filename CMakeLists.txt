@@ -2049,6 +2049,8 @@ if(BUILD_CONTROLLER_TESTS)
         settings_ui_test
         PRIVATE
             src/Menu/PerformanceResults.cpp
+            src/Menu/PerformanceResultsReport.cpp
+            src/Menu/PerformanceResultsCharts.cpp
             src/PresetCompatibility.cpp
             src/Presets/SettingsDomains.cpp
     )
@@ -4041,7 +4043,11 @@ if(BUILD_CONTROLLER_TESTS)
     )
     target_sources(
         performance_results_test
-        PRIVATE src/Menu/PerformanceResults.cpp src/Menu/PerformanceFpsVR.cpp
+        PRIVATE
+            src/Menu/PerformanceResults.cpp
+            src/Menu/PerformanceResultsReport.cpp
+            src/Menu/PerformanceResultsCharts.cpp
+            src/Menu/PerformanceFpsVR.cpp
     )
     target_link_libraries(
         performance_results_test

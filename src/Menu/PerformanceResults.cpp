@@ -1,7 +1,9 @@
 #include "PerformanceResults.h"
 #include "PerformanceFpsVR.h"
 #include "PerformanceQuickScan.h"
+#include "PerformanceResultsFormatting.h"
 #include "PerformanceTuningStatistics.h"
+#include "Utils/Statistics.h"
 #include "Utils/StringUtils.h"
 
 #include <algorithm>
@@ -19,6 +21,8 @@
 
 namespace PerformanceResults
 {
+	using ReportFormatting::Semantics;
+	using ReportFormatting::Text;
 	namespace
 	{
 		constexpr std::uintmax_t MaximumFileBytes = 8 * 1024 * 1024;
@@ -27,39 +31,6 @@ namespace PerformanceResults
 			return !id.empty() && id.size() <= 100 && std::ranges::all_of(id, [](char c) {
 				return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-';
 			});
-		}
-
-		std::string Text(const Json& value)
-		{
-			return value.is_null() ? "Unavailable" : value.is_string() ? value.get<std::string>() :
-			                                                             value.dump();
-		}
-
-		std::string Display(const Json& value)
-		{
-			if (!value.is_number_float())
-				return Text(value);
-			std::ostringstream number;
-			const auto magnitude = std::abs(value.get<double>());
-			if (magnitude > 0 && magnitude < 0.000001)
-				number << std::scientific << std::setprecision(3);
-			else
-				number << std::fixed << std::setprecision(magnitude > 0 && magnitude < 0.01 ? 6 : 3);
-			number << value.get<double>();
-			return number.str();
-		}
-
-		Json WholeFrameStatistics(const Json& record, const char* metric)
-		{
-			const auto scans = record.value("fpsVR", Json::object()).value("scans", Json::array());
-			std::vector<PerformanceTuningStatistics::Moments> moments;
-			for (const auto& scan : scans) moments.push_back({ scan.at(metric).at("meanMs").get<double>(), 1.0 });
-			double mean = 0, meanVariance = 0;
-			const bool complete = moments.size() == record.value("scanCount", scans.size());
-			const bool repeated = complete && PerformanceTuningStatistics::TryGetBlockMeanStatistics(moments, mean, meanVariance);
-			return { { "value", repeated ? Json(mean) : complete && moments.size() == 1 ? Json(moments.front().sum) :
-																						  Json(nullptr) },
-				{ "standardError", repeated ? Json(std::sqrt(meanVariance)) : Json(nullptr) } };
 		}
 
 		void OptionalObject(const Json& value, const char* key)
@@ -119,34 +90,6 @@ namespace PerformanceResults
 				throw std::runtime_error("Unavailable fpsVR results contain timing samples.");
 		}
 
-		std::string Escape(std::string_view text)
-		{
-			std::string result;
-			for (char c : text) {
-				switch (c) {
-				case '&':
-					result += "&amp;";
-					break;
-				case '<':
-					result += "&lt;";
-					break;
-				case '>':
-					result += "&gt;";
-					break;
-				case '"':
-					result += "&quot;";
-					break;
-				case '\'':
-					result += "&#39;";
-					break;
-				default:
-					result += c;
-					break;
-				}
-			}
-			return result;
-		}
-
 		std::string Cell(const Json& value)
 		{
 			auto text = Text(value);
@@ -168,12 +111,31 @@ namespace PerformanceResults
 				{ "kind", record.at("kind") }, { "status", record.at("status") }, { "rows", record.at("results").size() } };
 		}
 
-		const char* Semantics(const Json& record)
+		Json BlockMedian(const Json& samples, const std::string& metric)
 		{
-			return record.at("kind") == "quick_scan" ?
-			           "Feature rows show instrumented self-time per frame. CSX and fpsVR whole-frame timings are listed separately; shared and uninstrumented work is excluded from feature rows." :
-			           "Current minus comparison (Off/None), with standard error. FPS uses comparison minus current. Independent feature costs must not be added together.";
+			if (!samples.is_object() || !samples.contains(metric) || !samples.at(metric).is_object())
+				return nullptr;
+			const auto& channel = samples.at(metric);
+			if (!channel.value("accumulationValid", Json(false)).is_boolean() || channel.value("accumulationValid", Json(false)) != true ||
+				!channel.contains("blocks") || !channel.at("blocks").is_array() || channel.at("blocks").size() < 2 || channel.at("blocks").size() > 64)
+				return nullptr;
+			std::vector<double> values;
+			for (const auto& block : channel.at("blocks")) {
+				if (!block.is_object() || !block.value("sum", Json(nullptr)).is_number() || !block.value("sampleWeight", Json(nullptr)).is_number())
+					return nullptr;
+				const auto sum = block.at("sum").get<double>(), weight = block.at("sampleWeight").get<double>();
+				if (!std::isfinite(sum) || !std::isfinite(weight) || sum < 0 || weight <= 0 || !std::isfinite(sum / weight))
+					return nullptr;
+				values.push_back(sum / weight);
+			}
+			return Util::Median(std::move(values));
 		}
+
+		Json MeasuredValue(const Json& metric)
+		{
+			return metric.value("available", Json(true)) == false ? Json(nullptr) : metric.value("value", Json(nullptr));
+		}
+
 	}
 
 	std::string Timestamp()
@@ -216,10 +178,15 @@ namespace PerformanceResults
 		std::set<std::string> keys;
 		for (const auto& row : record.at("results")) {
 			if (!row.is_object() || !row.at("label").is_string() || row.at("label").get_ref<const std::string&>().size() > 1024 ||
+				!row.at("id").is_string() || row.at("id").get_ref<const std::string&>().size() > 1024 ||
 				(row.contains("failure") && !row["failure"].is_null() && !row["failure"].is_string()) ||
 				!row.at("metrics").is_object() ||
 				!keys.insert(row.at("id").get<std::string>()).second)
 				throw std::runtime_error("Invalid or duplicate result row.");
+			if (row.contains("source") && (!row.at("source").is_string() || row.at("source").get_ref<const std::string&>().size() > 1024))
+				throw std::runtime_error("Invalid measurement source.");
+			OptionalText(row, "relativeTo");
+			OptionalText(row, "coverage");
 			OptionalObject(row, "sampling");
 			if (row.contains("sampling")) {
 				OptionalText(row["sampling"], "captureRequestedUtc");
@@ -231,11 +198,16 @@ namespace PerformanceResults
 				if ((name != "frame" && name != "gpu" && name != "cpu" && name != "fps") || !metric.is_object() ||
 					(metric.at("unit") != (name == "fps" ? "fps" : "ms")))
 					throw std::runtime_error("Invalid measurement metric.");
+				if (metric.contains("available") && !metric.at("available").is_boolean())
+					throw std::runtime_error("Invalid measurement availability.");
 				for (const auto* field : { "value", "standardError", "current", "comparison", "pValue" }) {
 					if (metric.contains(field) && !metric[field].is_null() &&
 						(!metric[field].is_number() || !std::isfinite(metric[field].get<double>())))
 						throw std::runtime_error("Non-finite measurement metric.");
 				}
+				if ((metric.value("standardError", Json(nullptr)).is_number() && metric.at("standardError") < 0) ||
+					(metric.value("pValue", Json(nullptr)).is_number() && (metric.at("pValue") < 0 || metric.at("pValue") > 1)))
+					throw std::runtime_error("Invalid measurement uncertainty.");
 			}
 		}
 	}
@@ -246,6 +218,7 @@ namespace PerformanceResults
 		for (const auto& row : record.at("results")) {
 			for (const auto& [name, metric] : row.at("metrics").items()) {
 				auto entry = metric;
+				entry["value"] = MeasuredValue(metric);
 				entry["id"] = row.at("id");
 				entry["label"] = row.at("label");
 				entry["metric"] = name;
@@ -257,6 +230,16 @@ namespace PerformanceResults
 				if (record.value("scanCount", 1u) > 1 && entry["scanIndex"].is_number_integer())
 					entry["label"] = "Scan " + entry["scanIndex"].dump() + " / " + row.at("label").get<std::string>();
 				entry["sampling"] = row.value("sampling", record.value("capture", Json{ { "current", row.value("currentSamples", Json(nullptr)) }, { "comparison", row.value("comparisonSamples", Json(nullptr)) } }));
+				entry["median"] = nullptr;
+				entry["medianBasis"] = nullptr;
+				if (record.at("kind") != "quick_scan" && name != "fps" && entry.value("value", Json(nullptr)).is_number()) {
+					const auto current = BlockMedian(row.value("currentSamples", Json(nullptr)), name);
+					const auto comparison = BlockMedian(row.value("comparisonSamples", Json(nullptr)), name);
+					if (current.is_number() && comparison.is_number()) {
+						entry["median"] = current.get<double>() - comparison.get<double>();
+						entry["medianBasis"] = "difference of current and comparison block medians";
+					}
+				}
 				result.push_back(std::move(entry));
 			}
 		}
@@ -308,7 +291,7 @@ namespace PerformanceResults
 						{ "coverage", row.value("coverage", Json(nullptr)) }, { "scanIndex", nullptr }, { "relativeTo", nullptr }, { "source", row.value("source", "instrumented") } };
 				if (group.row.at("source") != row.value("source", Json("instrumented")))
 					throw std::runtime_error("Measurement sources differ within a triplicate.");
-				if (!group.values.emplace(index, metric.value("value", Json(nullptr))).second)
+				if (!group.values.emplace(index, MeasuredValue(metric)).second)
 					throw std::runtime_error("Duplicate feature metric within a repeat.");
 			}
 		}
@@ -328,6 +311,10 @@ namespace PerformanceResults
 			                      PerformanceTuningStatistics::TryGetBlockMeanStatistics(moments, mean, meanVariance);
 			group.row["value"] = complete ? Json(mean) : Json(nullptr);
 			group.row["standardError"] = complete ? Json(std::sqrt(meanVariance)) : Json(nullptr);
+			std::vector<double> medianValues;
+			for (const auto& moment : moments) medianValues.push_back(moment.sum);
+			group.row["median"] = complete ? Json(Util::Median(std::move(medianValues))) : Json(nullptr);
+			group.row["medianBasis"] = complete ? Json("scan means") : Json(nullptr);
 			group.row["repeatValues"] = values;
 			group.row["validRepeats"] = moments.size();
 			group.row["sampling"] = { { "kind", "within_run_repeats" }, { "repeatValues", std::move(values) },
@@ -363,10 +350,12 @@ namespace PerformanceResults
 			const auto av = a ? a->value("value", Json(nullptr)) : Json(nullptr);
 			const auto bv = b ? b->value("value", Json(nullptr)) : Json(nullptr);
 			const bool comparable = sameSemantics && a && b && a->at("unit") == b->at("unit") &&
-			                        a->at("relativeTo") == b->at("relativeTo") && av.is_number() && bv.is_number();
+			                        a->at("relativeTo") == b->at("relativeTo") && a->at("source") == b->at("source") &&
+			                        a->at("coverage") == b->at("coverage") && av.is_number() && bv.is_number();
+			const double difference = comparable ? bv.get<double>() - av.get<double>() : 0;
 			result["rows"].push_back({ { "id", id }, { "label", (a ? a : b)->at("label") }, { "metric", name },
 				{ "unit", (a ? a : b)->at("unit") }, { "first", av }, { "second", bv },
-				{ "difference", comparable ? Json(bv.get<double>() - av.get<double>()) : Json(nullptr) } });
+				{ "difference", comparable && std::isfinite(difference) ? Json(difference) : Json(nullptr) } });
 		}
 		return result;
 	}
@@ -374,7 +363,7 @@ namespace PerformanceResults
 	std::string Csv(const Json& record, const Json* comparison)
 	{
 		Validate(record);
-		std::string text = "run,kind,status,feature,metric,unit,value,standard_error,current,comparison,p_value,missing_samples,failure,relative_to,coverage,sampling,difference_to_first,semantics,context,settings,source_commit,build_id,source_dirty,scan_index,scan_count,capture_requested_utc,capture_resolved_utc,run_failure,fpsvr_status,fpsvr_scan,fpsvr_metadata,measurement_source\r\n";
+		std::string text = "run,kind,status,feature,metric,unit,value,standard_error,current,comparison,p_value,missing_samples,failure,relative_to,coverage,sampling,difference_to_first,semantics,context,settings,source_commit,build_id,source_dirty,scan_index,scan_count,capture_requested_utc,capture_resolved_utc,run_failure,fpsvr_status,fpsvr_scan,fpsvr_metadata,measurement_source,median,median_basis\r\n";
 		const auto compared = comparison ? Compare(record, *comparison) : Json{};
 		for (const auto* run : { &record, comparison }) {
 			if (!run)
@@ -418,209 +407,14 @@ namespace PerformanceResults
 				externalMetadata.erase("scans");
 				cells.push_back(externalMetadata);
 				cells.push_back(row.value("source", "instrumented"));
+				cells.push_back(row.value("median", Json(nullptr)));
+				cells.push_back(row.value("medianBasis", Json(nullptr)));
 				for (std::size_t i = 0; i < cells.size(); ++i) text += (i ? "," : "") + Cell(cells[i]);
 				text += "\r\n";
 			}
 		}
 		return text;
 	}
-
-	static std::string FpsVrStatus(const Json& run)
-	{
-		const auto fpsvr = run.value("fpsVR", Json::object());
-		return fpsvr.value("status", "not requested") + std::string(fpsvr.contains("recordingStopped") && !fpsvr.at("recordingStopped").get<bool>() ? " / stop unconfirmed" : "");
-	}
-
-	static std::string QuickScanTable(const Json& run, bool wholeFrame)
-	{
-		const auto count = run.value("scanCount", 1u);
-		auto rows = SummaryMetrics(run);
-		std::erase_if(rows.get_ref<Json::array_t&>(), [&](const Json& row) {
-			const auto values = row.value("repeatValues", Json::array({ row.value("value", Json(nullptr)) }));
-			return (row.value("source", "instrumented") == "csx_whole_frame") != wholeFrame ||
-			       std::ranges::none_of(values, [](const Json& value) { return value.is_number(); });
-		});
-		if (rows.empty())
-			return {};
-		std::string text = wholeFrame ? "<h3>CSX Performance Tuning whole-frame timings</h3>" : "<h3>Instrumented feature self-times</h3>";
-		text += "<p>Mean and standard error use only the repeats within this experiment. SE = sample standard deviation / square root of repeat count. Incomplete triplicates have no aggregate.</p><div class=\"scroll\"><table><tr><th>Feature</th><th>Metric</th>";
-		for (unsigned index = 1; index <= count; ++index)
-			text += "<th>Scan " + std::to_string(index) + "</th>";
-		text += "<th>Mean</th><th>SE</th><th>Unit</th><th>Coverage</th></tr>";
-		for (const auto& row : rows) {
-			text += "<tr><td>" + Escape(Text(row.at("label"))) + "</td><td>" + Escape(Text(row.at("metric"))) + "</td>";
-			for (const auto& value : row.value("repeatValues", Json::array({ row.value("value", Json(nullptr)) })))
-				text += "<td>" + Escape(Display(value)) + "</td>";
-			for (const auto* key : { "value", "standardError", "unit", "coverage" })
-				text += "<td>" + Escape(Display(row.value(key, Json(nullptr)))) + "</td>";
-			text += "</tr>";
-		}
-		return text + "</table></div>";
-	}
-
-	static std::string ExperimentTable(const Json& records)
-	{
-		std::vector<std::pair<std::size_t, Json>> experiments;
-		std::map<std::pair<std::string, std::string>, Json> keys;
-		for (std::size_t i = 0; i < records.size(); ++i) {
-			if (records[i].at("kind") != "quick_scan")
-				continue;
-			auto rows = SummaryMetrics(records[i]);
-			if (records[i].value("fpsVR", Json::object()).value("status", "omitted") == "complete")
-				for (const auto* metric : { "cpu", "gpu" }) {
-					auto row = WholeFrameStatistics(records[i], metric);
-					row["id"] = "wholeframe";
-					row["label"] = "Whole frame (fpsVR)";
-					row["metric"] = metric;
-					row["unit"] = "ms";
-					rows.push_back(std::move(row));
-				}
-			for (const auto& row : rows)
-				if (row.value("value", Json(nullptr)).is_number())
-					keys.emplace(std::make_pair(row.at("id").get<std::string>(), row.at("metric").get<std::string>()), row);
-			experiments.emplace_back(i, std::move(rows));
-		}
-		if (experiments.size() < 2 || keys.empty())
-			return {};
-		std::string text = "<h2>Experiments side by side</h2><p>Each column is a separate run. Each SE uses only that run's triplicate; experiments are never pooled. Check each run's scene and settings before comparing.</p><div class=\"scroll\"><table><tr><th>Feature / source</th><th>Metric</th><th>Unit</th>";
-		for (const auto& [index, rows] : experiments)
-			text += "<th><a href=\"#run-" + std::to_string(index + 1) + "\">Experiment " + std::to_string(index + 1) + "</a><br><small>" + Escape(SceneLabel(records[index].at("context"))) + "</small><br>Mean &plusmn; SE</th>";
-		text += "</tr>";
-		for (const auto& [key, rowInfo] : keys) {
-			text += "<tr><td>" + Escape(Text(rowInfo.at("label"))) + "</td><td>" + Escape(key.second) + "</td><td>" + Escape(Text(rowInfo.at("unit"))) + "</td>";
-			for (const auto& [index, rows] : experiments) {
-				const auto row = std::find_if(rows.begin(), rows.end(), [&](const Json& value) { return value.at("id") == key.first && value.at("metric") == key.second; });
-				text += "<td>";
-				if (row == rows.end() || !row->value("value", Json(nullptr)).is_number())
-					text += "Unavailable";
-				else {
-					text += Escape(Display(row->at("value")));
-					if (row->value("standardError", Json(nullptr)).is_number())
-						text += " &plusmn; " + Escape(Display(row->at("standardError")));
-				}
-				text += "</td>";
-			}
-			text += "</tr>";
-		}
-		return text + "</table></div>";
-	}
-
-	static std::string Report(const Json& records, bool comparison)
-	{
-		if (!records.is_array() || records.empty())
-			throw std::runtime_error("No measurements in this session yet.");
-		std::string text = R"html(<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>CSX performance report</title><style>
-:root{color-scheme:dark;font:15px system-ui;--line:#344358;--muted:#a6b6cb;--accent:#75d6cc}body{margin:0;background:#0e1521;color:#e7edf6}main{max-width:1440px;margin:auto;padding:32px 24px}header{padding:20px 0 28px}h1{font-size:36px;margin:8px 0}h2{margin:0 0 12px}h3{margin-top:28px}p{line-height:1.6}a{color:var(--accent)}small,.muted{color:var(--muted)}.eyebrow{text-transform:uppercase;letter-spacing:.15em;color:var(--accent)}.run{background:#172233;border:1px solid var(--line);border-radius:14px;padding:24px;margin:24px 0;scroll-margin-top:16px}.scroll{overflow:auto}table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}td,th{padding:12px 10px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}tbody tr:hover{background:#203049}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:550px;overflow:auto;font-size:12px}details{margin:16px 0;padding:14px;background:#101a29;border:1px solid var(--line);border-radius:8px}summary{cursor:pointer;color:var(--accent);font-weight:600}.metadata{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}.metadata details{margin:0}meter{display:block;width:100%;min-width:70px;height:8px;margin-top:5px;accent-color:var(--accent)}@media(max-width:700px){main{padding:16px 10px}.run{padding:14px}h1{font-size:28px}}@media print{body{background:white;color:black}.run{break-inside:avoid}details{background:white}a{color:#245e59}}
-</style></head><body><main><header><div class="eyebrow">Community Shaders Expanded</div><h1>Performance report</h1><p class="muted">Compare recorded costs, check whole-frame timings, and inspect the settings behind every run.</p></header><h2>Session overview</h2><p>Each row is a separate measurement. Lower times mean less work, but compare matching scenes, settings and rendering resolutions. Independent On/Off feature costs must not be added together.</p><div class="scroll"><table><thead><tr><th>Run</th><th>Scene</th><th>Measurement</th><th>Status</th><th>CSX FPS</th><th>CSX Frame mean ms</th><th>CSX CPU mean ms</th><th>CSX GPU mean ms</th><th>fpsVR</th><th>fpsVR CPU mean ms</th><th>fpsVR GPU mean ms</th><th>Source commit</th></tr></thead><tbody>)html";
-		for (std::size_t i = 0; i < records.size(); ++i) {
-			const auto& run = records[i];
-			Validate(run);
-			const auto& context = run.at("context");
-			const auto summary = SummaryMetrics(run);
-			const auto nativeMean = [&](const char* metric) -> Json {
-				for (const auto& row : summary)
-					if (row.value("source", "instrumented") == "csx_whole_frame" && row.at("metric") == metric)
-						return row.value("value", Json(nullptr));
-				return nullptr;
-			};
-			text += "<tr><td><a href=\"#run-" + std::to_string(i + 1) + "\">Run " + std::to_string(i + 1) + "</a><br><small>" + Escape(Text(run.at("started"))) + "</small></td>";
-			for (const auto& value : { Json(SceneLabel(context)), run.at("kind"), run.value("sourceUnavailable", false) ? Json("Data unavailable") : run.at("status"),
-					 nativeMean("fps"), nativeMean("frame"), nativeMean("cpu"), nativeMean("gpu"),
-					 Json(FpsVrStatus(run)), WholeFrameStatistics(run, "cpu").at("value"), WholeFrameStatistics(run, "gpu").at("value"), context.value("build", Json::object()).value("sourceCommit", Json(nullptr)) })
-				text += "<td>" + Escape(Display(value)) + "</td>";
-			text += "</tr>";
-		}
-		text += "</tbody></table></div>";
-		text += ExperimentTable(records);
-		for (std::size_t i = 0; i < records.size(); ++i) {
-			const auto* run = &records[i];
-			Validate(*run);
-			text += "<section class=\"run\" id=\"run-" + std::to_string(i + 1) + "\"><div class=\"eyebrow\">Run " + std::to_string(i + 1) + "</div><h2>" + Escape(SceneLabel(run->at("context"))) + "</h2><p>" + Escape(Text(run->at("started"))) + " · " + Escape(Text(run->at("status"))) + "</p><p>" + Semantics(*run) + "</p>";
-			if (run->contains("failure") && !run->at("failure").is_null())
-				text += "<p>" + Escape(Text(run->at("failure"))) + "</p>";
-			const auto build = run->at("context").value("build", Json::object());
-			text += "<p>Commit: " + Escape(Text(build.value("sourceCommit", Json(nullptr)))) + " · Build ID: " +
-			        Escape(Text(build.value("buildId", Json(nullptr)))) + " · Modified source: " + Escape(Text(build.value("sourceDirty", Json(nullptr)))) + "</p>";
-			text += "<div class=\"metadata\"><details><summary>Settings for this run</summary>";
-			for (const auto& [feature, settings] : run->at("settings").items())
-				text += "<details><summary>" + Escape(feature) + "</summary><pre>" + Escape(settings.dump(2)) + "</pre></details>";
-			text += "</details><details><summary>Scene, hardware and build</summary><pre>" + Escape(run->at("context").dump(2)) + "</pre></details></div>";
-			if (run->at("kind") == "quick_scan")
-				text += QuickScanTable(*run, true);
-			if (run->contains("fpsVR")) {
-				const auto& fpsvr = run->at("fpsVR");
-				text += "<h3>fpsVR whole-frame timings</h3><p>" + Escape(fpsvr.value("status", "omitted")) + " · " + Escape(fpsvr.value("reason", "")) + "</p>";
-				if (!fpsvr.value("scans", Json::array()).empty()) {
-					text += "<div class=\"scroll\"><table><tr><th>Metric</th><th>Mean of scan means ms</th><th>Within-run SE ms</th></tr>";
-					for (const auto* metric : { "cpu", "gpu" }) {
-						const auto summary = WholeFrameStatistics(*run, metric);
-						text += "<tr><td>" + std::string(metric) + "</td><td>" + Escape(Display(summary.at("value"))) + "</td><td>" + Escape(Display(summary.at("standardError"))) + "</td></tr>";
-					}
-					text += "</table></div>";
-					text += "<p>Matched using the latest completed SteamVR timestamps at capture request and resolution. Boundaries are approximate and include profiler query completion latency. Warm-up and gaps outside those boundaries are excluded. CPU and GPU times overlap and must not be added to the profiler totals.</p>";
-					text += "<div class=\"scroll\"><table><tr><th>Scan</th><th>Samples</th><th>Metric</th><th>Mean ms</th><th>Median ms</th><th>p95 ms</th><th>p99 ms</th></tr>";
-					for (const auto& scan : fpsvr.value("scans", Json::array())) {
-						for (const auto* metric : { "cpu", "gpu" }) {
-							text += "<tr><td>" + Escape(Text(scan.at("scanIndex"))) + "</td><td>" + Escape(Text(scan.at("samples"))) + "</td><td>" + metric + "</td>";
-							for (const auto* key : { "meanMs", "medianMs", "p95Ms", "p99Ms" }) text += "<td>" + Escape(Display(scan.at(metric).at(key))) + "</td>";
-							text += "</tr>";
-						}
-					}
-					text += "</table></div>";
-				}
-			}
-			if (run->at("kind") == "quick_scan")
-				text += QuickScanTable(*run, false);
-			else {
-				text += "<h3>Measured On/Off costs</h3><div class=\"scroll\"><table><tr><th>Feature / case</th><th>Metric</th><th>Value</th><th>Unit</th><th>Standard error</th><th>Current</th><th>Comparison</th><th>p-value</th><th>Compared with</th><th>Coverage</th></tr>";
-				auto rows = Metrics(*run);
-				double maximum = 0;
-				for (const auto& row : rows)
-					if (row.value("value", Json(nullptr)).is_number() && row.at("unit") == "ms")
-						maximum = std::max(maximum, std::abs(row.at("value").get<double>()));
-				for (const auto& row : rows) {
-					text += "<tr>";
-					for (const auto* key : { "label", "metric", "value", "unit", "standardError", "current", "comparison", "pValue", "relativeTo", "coverage" }) {
-						text += "<td>" + Escape(Display(row.value(key, Json(nullptr))));
-						if (std::string_view(key) == "value" && maximum > 0 && row.at("unit") == "ms" && row.value(key, Json(nullptr)).is_number())
-							text += "<meter title=\"Magnitude relative to this run's largest ms value\" min=\"0\" max=\"" + std::to_string(maximum) + "\" value=\"" + std::to_string(std::abs(row.at(key).get<double>())) + "\"></meter>";
-						text += "</td>";
-					}
-					text += "</tr>";
-				}
-				text += "</table></div>";
-			}
-			text += "<details><summary>Complete run metadata and sample validity</summary><pre>" + Escape(run->dump(2)) + "</pre></details></section>";
-		}
-		if (comparison) {
-			const auto compared = Compare(records.at(0), records.at(1));
-			text += "<h2>Comparison: second minus first</h2><p>These are differences between recorded measurements, not predictions or a new significance test. Check scene, hardware and settings before interpreting them.</p>";
-			if (!compared.at("compatible").get<bool>())
-				text += "<p>Different measurement definitions; differences are unavailable.</p>";
-			if (!compared.at("contextMatches").get<bool>() || !compared.at("settingsMatch").get<bool>())
-				text += "<p>Context or settings differ.</p>";
-			text += "<table><tr><th>Feature / case</th><th>Metric</th><th>First</th><th>Second</th><th>Difference</th><th>Unit</th></tr>";
-			for (const auto& row : compared.at("rows")) {
-				if (!row.at("first").is_number() && !row.at("second").is_number())
-					continue;
-				text += "<tr>";
-				for (const auto* key : { "label", "metric", "first", "second", "difference", "unit" }) text += "<td>" + Escape(Display(row.at(key))) + "</td>";
-				text += "</tr>";
-			}
-			text += "</table>";
-		}
-		return text + "</main></body></html>";
-	}
-
-	std::string Html(const Json& record, const Json* comparison)
-	{
-		auto records = Json::array({ record });
-		if (comparison)
-			records.push_back(*comparison);
-		return Report(records, comparison != nullptr);
-	}
-
-	std::string HtmlSession(const Json& records) { return Report(records, false); }
 
 	Store::Store(std::filesystem::path logDirectory, Writer write, FolderPicker pick) :
 		folder(logDirectory / "CSX" / "Performance"), logPath(logDirectory / "CSX-Performance.log"), writer(std::move(write)), picker(std::move(pick))

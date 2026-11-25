@@ -67,6 +67,8 @@ foreach(_schema_contract IN ITEMS
     "no extra inter-feature cooldown"
     "five-minute total budget"
     "availableFeatureCosts.batchTiming"
+    "offline CPU/GPU charts"
+    "median_basis"
     "five-second inter-case cooldown"
     "timingDefinitionVersion 2"
     "metricDefinitions"

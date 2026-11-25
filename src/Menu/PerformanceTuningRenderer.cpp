@@ -1137,6 +1137,15 @@ namespace
 				{ "shadersRequested", globals::shaderCache->IsEnableRequested() }, { "blockedShader", globals::shaderCache->blockedKeyIndex },
 				{ "definesGeneration", globals::state->GetShaderDefinesGeneration() } };
 			g_savedRunStart = ImGui::GetTime();
+			const auto& theme = globals::menu->GetTheme();
+			json reportTheme;
+			Menu::PaletteToJson(reportTheme, theme.FullPalette);
+			reportTheme["Palette"] = { { "Background", theme.Palette.Background }, { "Text", theme.Palette.Text },
+				{ "FrameBorder", theme.Palette.FrameBorder }, { "Separator", theme.Palette.Separator }, { "ResizeGrip", theme.Palette.ResizeGrip } };
+			reportTheme["StatusPalette"] = { { "InfoColor", theme.StatusPalette.InfoColor }, { "Warning", theme.StatusPalette.Warning },
+				{ "Disable", theme.StatusPalette.Disable }, { "RestartNeeded", theme.StatusPalette.RestartNeeded },
+				{ "SuccessColor", theme.StatusPalette.SuccessColor }, { "Error", theme.StatusPalette.Error } };
+			g_savedRun["presentation"] = { { "theme", std::move(reportTheme) } };
 			g_savedRows.clear();
 			return true;
 		} catch (const std::exception& error) {

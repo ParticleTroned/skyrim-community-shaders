@@ -3873,7 +3873,7 @@ int main()
 				text = GImGui->LogBuffer.c_str();
 				ImGui::LogFinish();
 			});
-			require(text.find("Instrumented self-time") != text.npos && text.find("Saved feature") != text.npos &&
+			require(text.find("Scan results") != text.npos && text.find("Saved feature") != text.npos &&
 						text.find("0.000") != text.npos && text.find("--") != text.npos,
 				"history UI distinguishes true zero from unavailable self-time");
 			record["results"][0]["metrics"]["gpu"]["value"] = 2.5;

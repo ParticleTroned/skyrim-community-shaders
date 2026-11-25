@@ -28,6 +28,7 @@ namespace MenuUI::PerformancePage
 	/** Copy all CSX settings, including globals and unavailable feature sections, and persist them. */
 	nlohmann::json CaptureCurrentSettings();
 	nlohmann::json SetBase(std::string_view a_profile);
+	/** Report saved snapshots and whether effective performance choices match. */
 	nlohmann::json Status();
 	/** Import saved choices and settings without applying them to the game. */
 	nlohmann::json ImportProfile(const std::filesystem::path& source);

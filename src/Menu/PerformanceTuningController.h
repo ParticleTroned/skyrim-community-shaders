@@ -6,6 +6,7 @@
 #include <exception>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -42,6 +43,12 @@ namespace PerformanceTuningController
 		nlohmann::json disabledState;
 	};
 
+	/** Distinguishes incomplete native restoration from an application failure. */
+	struct SettingsRollbackError : std::runtime_error
+	{
+		using std::runtime_error::runtime_error;
+	};
+
 	/** Roll back native state and toggle history; successful replacements discard only their own history. */
 	template <class Feature, class Apply>
 	bool ApplyTransaction(const std::vector<Feature*>& features,
@@ -63,8 +70,15 @@ namespace PerformanceTuningController
 				}
 			}
 			configurations = previousConfigurations;
-			if (failure)
-				std::rethrow_exception(failure);
+			if (failure) {
+				try {
+					std::rethrow_exception(failure);
+				} catch (const std::exception& error) {
+					throw SettingsRollbackError(std::string("Feature settings rollback failed: ") + error.what());
+				} catch (...) {
+					throw SettingsRollbackError("Feature settings rollback failed unexpectedly.");
+				}
+			}
 		};
 		try {
 			if (apply()) {

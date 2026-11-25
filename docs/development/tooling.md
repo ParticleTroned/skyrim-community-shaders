@@ -305,7 +305,16 @@ MyPerformance, including global settings and retained unavailable feature
 sections, and saves normal settings. The profile excludes its own container
 to prevent recursive snapshots. Version 2 profile exchange includes these
 settings; version 1 selection-only files remain readable. Applying saved
-settings uses native loaders and retains restart requirements.
+settings uses native loaders and retains restart requirements. A saved
+feature section supersedes its named quality preset in application and
+choice status. Applying a replacement discards that feature's earlier
+toggle configuration so enabling it cannot restore superseded settings.
+Unchanged choices do not require ownership of a temporarily blocked
+control; actual changes still honor its native and scene ownership guards.
+Feature availability is checked again after applying saved startup switches.
+Rollback touches only changed choices and reports native restoration failures
+without claiming success. Choice status covers switches, upscaling and named
+presets; it does not assert equality of every custom setting.
 
 Production builds expose `csx.performance` 1.0 through the public registry
 in `include/VRAPI/CSserviceapi.h`. `CSperformanceapi.h` defines its bounded

@@ -7,6 +7,7 @@
 #include "Globals.h"
 #include "Menu.h"
 #include "PerformanceProfiles.h"
+#include "PerformanceTuningController.h"
 #include "PerformanceTuningRenderer.h"
 #include "Presets/LookPack.h"
 #include "Presets/LookProfileState.h"
@@ -26,6 +27,7 @@
 #include <array>
 #include <cmath>
 #include <exception>
+#include <stdexcept>
 #include <vector>
 
 namespace MenuUI::PerformancePage
@@ -56,19 +58,32 @@ namespace MenuUI::PerformancePage
 			return a_feature && a_feature->loaded && globals::state && !globals::state->IsFeatureDisabled(a_feature->GetShortName());
 		}
 
-		const char* SelectionBlockReason(Feature* a_feature)
+		bool IsSelectable(Feature* a_feature)
+		{
+			return a_feature && !a_feature->GetPerformanceProfileReadOnlyReason() && !a_feature->IsHiddenFromUserView() && a_feature->IsInMenu() &&
+			       (a_feature == &globals::features::upscaling || a_feature->SupportsPerformanceProfileToggle());
+		}
+
+		const char* SelectionAvailabilityBlockReason(Feature* a_feature)
 		{
 			if (!IsAvailable(a_feature))
 				return "Feature is unavailable or disabled for the next startup.";
 			if (const auto* reason = a_feature->GetPerformanceProfileReadOnlyReason())
+				return reason;
+			if (!IsSelectable(a_feature))
+				return "Feature is unavailable for performance selections.";
+			return nullptr;
+		}
+
+		const char* SelectionBlockReason(Feature* a_feature)
+		{
+			if (const auto* reason = SelectionAvailabilityBlockReason(a_feature))
 				return reason;
 			if (a_feature == &globals::features::upscaling) {
 				if (const auto* reason = globals::features::upscaling.GetUpscalingSelectionBlockReason())
 					return reason;
 				return PerformanceTuningRenderer::GetFeatureSceneControlBlockReason(a_feature);
 			}
-			if (!a_feature->SupportsPerformanceProfileToggle() || a_feature->IsHiddenFromUserView() || !a_feature->IsInMenu())
-				return "Feature is unavailable for performance selections.";
 			return PerformanceTuningRenderer::GetFeatureControlBlockReason(a_feature);
 		}
 
@@ -106,12 +121,6 @@ namespace MenuUI::PerformancePage
 			return result;
 		}
 
-		bool IsSelectable(Feature* a_feature)
-		{
-			return a_feature && !a_feature->GetPerformanceProfileReadOnlyReason() && !a_feature->IsHiddenFromUserView() && a_feature->IsInMenu() &&
-			       (a_feature == &globals::features::upscaling || a_feature->SupportsPerformanceProfileToggle());
-		}
-
 		bool IsIncludedFeature(Feature* a_feature)
 		{
 			return IsAvailable(a_feature) && !a_feature->IsHiddenFromUserView() &&
@@ -135,7 +144,15 @@ namespace MenuUI::PerformancePage
 
 		json Resolve(std::string_view a_profile)
 		{
-			return (a_profile == PerformanceProfiles::Names[3] || a_profile == "User defined") ? user.Resolve() : PerformanceProfiles::BuiltIn(a_profile);
+			if (a_profile != PerformanceProfiles::Names[3] && a_profile != "User defined")
+				return PerformanceProfiles::BuiltIn(a_profile);
+			auto choices = user.Resolve();
+			// A feature's saved settings replace its named quality preset.
+			if (choices.contains("presets"))
+				for (auto* feature : Feature::GetFeatureList())
+					if (user.settings.contains(feature->GetName()))
+						choices["presets"].erase(feature->GetShortName());
+			return choices;
 		}
 
 		const char* IncludedFeaturesBlockReason()
@@ -186,7 +203,7 @@ namespace MenuUI::PerformancePage
 			globals::menu->ApplyFeatureMenuSettings(a_feature->GetName(), &a_snapshot.at("menu"));
 		}
 
-		bool Matches(const json& a_choices)
+		bool MatchesUpscaling(const json& a_choices)
 		{
 			if (a_choices.contains("upscaling") && IsAvailable(&globals::features::upscaling)) {
 				const auto current = CaptureUpscaling();
@@ -198,6 +215,13 @@ namespace MenuUI::PerformancePage
 					if (key != "upscaleMethod" && key != "upscaleMethodNoDLSS" && current.at(key) != value)
 						return false;
 			}
+			return true;
+		}
+
+		bool Matches(const json& a_choices)
+		{
+			if (!MatchesUpscaling(a_choices))
+				return false;
 			for (const auto* category : { "features", "presets" }) {
 				if (!a_choices.contains(category))
 					continue;
@@ -210,6 +234,52 @@ namespace MenuUI::PerformancePage
 				}
 			}
 			return true;
+		}
+
+		bool CollectFeatureTargets(const json& a_choices, std::vector<Feature*>& a_targets, json& a_skipped, std::string& a_error)
+		{
+			a_targets.clear();
+			a_skipped = json::array();
+			for (const auto* category : { "features", "presets" }) {
+				if (!a_choices.contains(category))
+					continue;
+				for (const auto& [name, value] : a_choices[category].items()) {
+					auto* feature = FindFeature(name);
+					if (!IsAvailable(feature)) {
+						if (std::ranges::find(a_skipped, json(name)) == a_skipped.end())
+							a_skipped.push_back(name);
+						continue;
+					}
+					if (const auto* reason = SelectionAvailabilityBlockReason(feature)) {
+						a_error = name + ": " + reason;
+						return false;
+					}
+					if (std::string_view(category) == "presets") {
+						const auto names = feature->GetPerformancePresetNames();
+						if (std::ranges::find(names, value.get<std::string>()) == names.end()) {
+							a_error = "Unsupported feature preset: " + name;
+							return false;
+						}
+					}
+					if (std::ranges::find(a_targets, feature) == a_targets.end())
+						a_targets.push_back(feature);
+				}
+			}
+			return true;
+		}
+
+		bool NeedsPresetChange(Feature* a_feature, const json& a_choices)
+		{
+			const auto name = a_feature->GetShortName();
+			return a_choices.contains("presets") && a_choices["presets"].contains(name) &&
+			       a_feature->GetPerformancePresetName() != a_choices["presets"][name].get<std::string>();
+		}
+
+		bool NeedsToggleChange(Feature* a_feature, const json& a_choices)
+		{
+			const auto name = a_feature->GetShortName();
+			return a_choices.contains("features") && a_choices["features"].contains(name) &&
+			       a_feature->IsPerformanceToggleEnabled() != a_choices["features"][name].get<bool>();
 		}
 
 		void Report(const json& a_result)
@@ -289,6 +359,8 @@ namespace MenuUI::PerformancePage
 						}
 						for (const auto& [key, value] : values.items()) {
 							auto* feature = FindFeature(key);
+							if (category == "presets" && feature && user.settings.contains(feature->GetName()))
+								continue;
 							const auto label = feature ? feature->GetDisplayName() : key;
 							if (category == "features")
 								ImGui::TextWrapped("%s: %s", label.c_str(), value.get<bool>() ? "On" : "Off");
@@ -302,7 +374,7 @@ namespace MenuUI::PerformancePage
 					}
 					if (!user.settings.empty())
 						ImGui::TextWrapped("Custom settings saved for %zu sections.", user.settings.size());
-					if (!Matches(user.Resolve())) {
+					if (!Matches(Resolve(PerformanceProfiles::Names[3]))) {
 						PageNotice("MyPerformance performance choices differ from current settings.", NoticeKind::Pending,
 							"Use Apply MyPerformance to apply its base, choices and custom settings, then Save settings to keep the result.");
 					}
@@ -540,37 +612,12 @@ namespace MenuUI::PerformancePage
 		std::vector<Feature*> targets;
 		const auto settings = a_profile == "MyPerformance" || a_profile == "User defined" ? user.settings : json::object();
 		auto skipped = json::array();
-		for (const auto* category : { "features", "presets" }) {
-			if (!choices.contains(category))
-				continue;
-			for (const auto& [name, value] : choices[category].items()) {
-				auto* feature = FindFeature(name);
-				if (!IsAvailable(feature)) {
-					if (std::ranges::find(skipped, json(name)) == skipped.end())
-						skipped.push_back(name);
-					continue;
-				}
-				if (const auto* reason = SelectionBlockReason(feature))
-					return { { "accepted", false }, { "error", name + ": " + reason } };
-				if (std::string_view(category) == "presets") {
-					const auto names = feature->GetPerformancePresetNames();
-					if (std::ranges::find(names, value.get<std::string>()) == names.end())
-						return { { "accepted", false }, { "error", "Unsupported feature preset: " + name } };
-				}
-				if (std::ranges::find(targets, feature) == targets.end())
-					targets.push_back(feature);
-			}
-		}
-		auto& upscaling = globals::features::upscaling;
-		const bool applyUpscaling = choices.contains("upscaling") && IsAvailable(&upscaling);
-		if (applyUpscaling) {
-			if (const auto* reason = SelectionBlockReason(&upscaling))
-				return { { "accepted", false }, { "error", std::string("Upscaling: ") + reason } };
-		} else if (choices.contains("upscaling")) {
-			skipped.push_back("Upscaling");
-		}
 		std::string error;
+		if (!CollectFeatureTargets(choices, targets, skipped, error))
+			return { { "accepted", false }, { "error", error } };
+		auto& upscaling = globals::features::upscaling;
 		bool applied = false;
+		bool transactionRestored = true;
 		json previousSettings;
 		const auto previousToggleHistory = PerformanceTuningRenderer::CaptureFeatureToggleHistory();
 		try {
@@ -579,19 +626,36 @@ namespace MenuUI::PerformancePage
 					PerformanceTuningRenderer::RestoreFeatureToggleHistory(previousToggleHistory);
 					return { { "accepted", false }, { "error", error } };
 				}
+				if (!CollectFeatureTargets(choices, targets, skipped, error))
+					throw std::runtime_error(error);
 			}
+			const bool applyUpscaling = choices.contains("upscaling") && IsAvailable(&upscaling);
+			if (choices.contains("upscaling") && !IsAvailable(&upscaling))
+				skipped.push_back("Upscaling");
+			auto history = PerformanceTuningRenderer::CaptureFeatureToggleHistory();
+			for (auto* feature : targets)
+				if (settings.contains(feature->GetName()) || (choices.contains("presets") && choices["presets"].contains(feature->GetShortName())))
+					history.erase(feature->GetShortName());
+			std::erase_if(targets, [&](Feature* feature) { return !NeedsPresetChange(feature, choices) && !NeedsToggleChange(feature, choices); });
+			for (auto* feature : targets)
+				if (const auto* reason = SelectionBlockReason(feature))
+					throw std::runtime_error(feature->GetShortName() + ": " + reason);
 			applied = PerformanceTuningRenderer::ApplyFeatureSettingsTransaction(targets, [&] {
+				PerformanceTuningRenderer::RestoreFeatureToggleHistory(history);
 				for (auto* feature : targets) {
 					const auto name = feature->GetShortName();
-					if ((!settings.contains(feature->GetName()) && choices.contains("presets") && choices["presets"].contains(name) &&
-							!feature->ApplyPerformancePreset(choices["presets"][name].get<std::string>())) ||
-						(choices.contains("features") && choices["features"].contains(name) &&
+					if ((NeedsPresetChange(feature, choices) && !feature->ApplyPerformancePreset(choices["presets"][name].get<std::string>())) ||
+						(NeedsToggleChange(feature, choices) &&
 							!PerformanceTuningRenderer::SetFeatureEnabled(feature, choices["features"][name]))) {
 						error = "Feature rejected its selections: " + name;
 						return false;
 					}
 				}
-				if (applyUpscaling) {
+				if (applyUpscaling && !MatchesUpscaling(choices)) {
+					if (const auto* reason = SelectionBlockReason(&upscaling)) {
+						error = std::string("Upscaling: ") + reason;
+						return false;
+					}
 					auto desiredUpscaling = CaptureUpscaling();
 					desiredUpscaling.update(choices["upscaling"]);
 					const auto method = Upscaling::ResolvePerformanceCostMeasurementMethod(desiredUpscaling["upscaleMethod"], desiredUpscaling["upscaleMethodNoDLSS"]);
@@ -604,13 +668,16 @@ namespace MenuUI::PerformancePage
 				}
 				return true;
 			});
+		} catch (const PerformanceTuningController::SettingsRollbackError& exception) {
+			transactionRestored = false;
+			error = exception.what();
 		} catch (const std::exception& exception) {
 			error = std::string("Performance preset failed: ") + exception.what();
 		} catch (...) {
 			error = "Performance preset failed unexpectedly.";
 		}
 		if (!applied) {
-			bool restored = true;
+			bool restored = transactionRestored;
 			if (!previousSettings.is_null()) {
 				std::string restoreError;
 				try {
@@ -626,6 +693,7 @@ namespace MenuUI::PerformancePage
 					error += "; rollback failed: " + restoreError;
 			}
 			PerformanceTuningRenderer::RestoreFeatureToggleHistory(previousToggleHistory);
+			globals::menu->RequestSettingsDirtyCheck();
 			return { { "accepted", false }, { "error", error + (restored ? " Previous feature settings and toggle history were restored." : "") } };
 		}
 		globals::menu->RequestSettingsDirtyCheck();
@@ -904,7 +972,7 @@ namespace MenuUI::PerformancePage
 						continue;
 					}
 					const auto names = feature->GetPerformancePresetNames();
-					if (std::string_view(category) == "presets" && std::ranges::find(names, value.get<std::string>()) == names.end())
+					if (std::string_view(category) == "presets" && !candidate.settings.contains(feature->GetName()) && std::ranges::find(names, value.get<std::string>()) == names.end())
 						throw std::runtime_error(id + ": unsupported quality preset.");
 				}
 			}

@@ -12,7 +12,7 @@ struct Feature
 	std::string name;
 	bool loaded = true, sceneOwned = false, rejectToggle = false, measurable = true, profileToggle = true, presetEnables = false;
 	bool inMenu = true;
-	int loadFailures = 0;
+	int loadFailures = 0, restoreFailures = 0, restores = 0;
 	const char* profileReadOnlyReason = nullptr;
 	nlohmann::json settings{ { "enabled", true }, { "preset", "Quality" }, { "tint", 0.75 } };
 	nlohmann::json transient = nlohmann::json::object();
@@ -50,7 +50,15 @@ struct Feature
 			settings["enabled"] = a_enabled;
 	}
 	virtual nlohmann::json CapturePerformanceCostMeasurementState() const { return settings; }
-	void RestorePerformanceToggleState(const nlohmann::json& a_settings) { settings = a_settings; }
+	void RestorePerformanceToggleState(const nlohmann::json& a_settings)
+	{
+		++restores;
+		if (restoreFailures > 0) {
+			--restoreFailures;
+			throw std::runtime_error("Native restoration failed");
+		}
+		settings = a_settings;
+	}
 	std::vector<std::string> GetPerformancePresetNames() const { return { "Performance", "Balanced", "Quality", "Hoshipa" }; }
 	std::string GetPerformancePresetName() const { return settings["preset"]; }
 	bool ApplyPerformancePreset(std::string_view a_name)
@@ -134,12 +142,15 @@ namespace globals
 		bool CaptureSettingsSnapshot(nlohmann::json& result, std::string&)
 		{
 			result = globalSettings;
+			result["Disable at Boot"] = disabled;
 			for (auto* feature : Feature::features)
 				result[feature->name] = feature->settings;
 			return true;
 		}
 		bool ApplySettingsSnapshot(const nlohmann::json& settings, std::string&)
 		{
+			if (settings.contains("Disable at Boot"))
+				disabled = settings["Disable at Boot"].get<decltype(disabled)>();
 			for (auto* feature : Feature::features)
 				if (settings.contains(feature->name))
 					feature->settings = settings[feature->name];
@@ -162,8 +173,9 @@ namespace globals
 	struct Menu
 	{
 		std::string selectedPage;
+		int dirtyChecks = 0;
 		void SelectFeatureMenu(const std::string& page) { selectedPage = page; }
-		void RequestSettingsDirtyCheck() {}
+		void RequestSettingsDirtyCheck() { ++dirtyChecks; }
 		void OpenMenu() {}
 		bool PrepareSettingsMutation() { return true; }
 		void CaptureFeatureMenuSettings(const std::string&, nlohmann::json&) {}
@@ -403,6 +415,41 @@ void TestProfileApplication()
 		"loading or restoring one feature discards only its own stale toggle history");
 	require(PerformanceTuningRenderer::SetFeatureEnabled(&grass, true) && grass.settings["tint"] == 0.2,
 		"enabling a replaced feature must retain the newly loaded settings");
+	Load(json::object());
+	require(PerformanceTuningRenderer::SetFeatureEnabled(&sky, true), "prepare enabled configuration");
+	sky.settings["preset"] = "Quality";
+	require(PerformanceTuningRenderer::SetFeatureEnabled(&sky, false), "retain the old enabled configuration");
+	sky.settings["preset"] = "Performance";
+	PerformanceTuningRenderer::configurations.at(sky.name)->disabledState = sky.settings;
+	user.choices["presets"][sky.name] = "Performance";
+	user.choices["features"][sky.name] = true;
+	const auto retainedHistory = PerformanceTuningRenderer::CaptureFeatureToggleHistory();
+	const auto retainedSky = sky.settings;
+	upscaling.rejectTransition = true;
+	user.choices["upscaling"]["qualityMode"] = 6;
+	require(!Apply("MyPerformance")["accepted"] && sky.settings == retainedSky &&
+				PerformanceTuningRenderer::CaptureFeatureToggleHistory() == retainedHistory,
+		"late rejection restores the superseded configuration and complete toggle history");
+	upscaling.rejectTransition = false;
+	require(Apply("MyPerformance")["accepted"] && sky.IsPerformanceToggleEnabled() && sky.settings["preset"] == "Performance",
+		"enabling a saved preset must not restore a superseded configuration from toggle history");
+	Load(json::object());
+	globals::state->disabled.clear();
+	const auto beforeBrokenRollback = grass.settings;
+	const auto beforeBrokenSky = sky.settings;
+	const auto checksBeforeBrokenRollback = globals::menu->dirtyChecks;
+	grass.settings["enabled"] = false;
+	PerformanceTuningRenderer::configurations.erase(grass.name);
+	grass.restoreFailures = 1;
+	upscaling.rejectTransition = true;
+	user.choices["upscaling"]["qualityMode"] = 5;
+	const auto brokenRollback = Apply("MyPerformance");
+	require(!brokenRollback["accepted"] && brokenRollback["error"].get<std::string>().find("rollback failed") != std::string::npos &&
+				brokenRollback["error"].get<std::string>().find("were restored") == std::string::npos && sky.settings == beforeBrokenSky &&
+				globals::menu->dirtyChecks > checksBeforeBrokenRollback,
+		"a failed native rollback must not claim complete restoration");
+	grass.settings = beforeBrokenRollback;
+	upscaling.rejectTransition = false;
 
 	Load(json::object());
 	globals::state->disabled.clear();
@@ -513,6 +560,49 @@ void TestProfileApplication()
 	globals::state->globalSettings["Menu"]["zoom"] = 2;
 	require(Apply("MyPerformance")["accepted"] && grass.settings["tint"] == 0.42 && globals::state->globalSettings["Menu"]["zoom"] == 1.25,
 		"applying a full preset restores arbitrary feature tuning and global settings");
+	sky.sceneOwned = true;
+	grass.settings["tint"] = 0.88;
+	require(Apply("MyPerformance")["accepted"] && grass.settings["tint"] == 0.42,
+		"an unchanged scene-owned choice must not reject unrelated saved settings");
+	const auto untouchedRestores = sky.restores;
+	user.choices["upscaling"]["qualityMode"] = 4;
+	upscaling.rejectTransition = true;
+	const auto noOpRollback = Apply("MyPerformance");
+	require(!noOpRollback["accepted"] && sky.restores == untouchedRestores,
+		"late rejection must not restore or touch unchanged scene-owned controls");
+	upscaling.rejectTransition = false;
+	Load({ { "Performance Profiles", allSettingsProfile } });
+	sky.sceneOwned = false;
+	user.settings[sky.name]["preset"] = "Custom";
+	user.choices["presets"][sky.name] = "Obsolete preset";
+	require(Apply("MyPerformance")["accepted"] && sky.settings["preset"] == "Custom" && Status()["profiles"][3]["matches"],
+		"custom settings supersede stale named presets in both application and status");
+	sky.settings["enabled"] = !sky.IsPerformanceToggleEnabled();
+	require(!Status()["profiles"][3]["matches"], "status still detects a real changed performance choice");
+	sky.settings["enabled"] = !sky.IsPerformanceToggleEnabled();
+	Load({ { "Performance Profiles", allSettingsProfile } });
+	const auto beforeBlockedApply = grass.settings;
+	user.choices["features"][sky.name] = !sky.IsPerformanceToggleEnabled();
+	sky.sceneOwned = true;
+	require(!Apply("MyPerformance")["accepted"] && grass.settings == beforeBlockedApply,
+		"a real scene-owned change still rejects the profile and restores other settings");
+	sky.sceneOwned = false;
+	Load({ { "Performance Profiles", allSettingsProfile } });
+	user.settings["Disable at Boot"][sky.name] = true;
+	user.settings[sky.name]["enabled"] = true;
+	user.choices["features"][sky.name] = false;
+	const auto disabledByPreset = Apply("MyPerformance");
+	require(disabledByPreset["accepted"] && globals::state->disabled[sky.name] && sky.IsPerformanceToggleEnabled() &&
+				std::ranges::find(disabledByPreset["skippedUnavailableFeatures"], json(sky.name)) != disabledByPreset["skippedUnavailableFeatures"].end(),
+		"snapshot startup switches must be honored before applying feature selections");
+	Load({ { "Performance Profiles", allSettingsProfile } });
+	user.settings[sky.name]["enabled"] = true;
+	user.choices["features"][sky.name] = false;
+	const auto enabledByPreset = Apply("MyPerformance");
+	require(enabledByPreset["accepted"] && !globals::state->IsFeatureDisabled(sky.name) && !sky.IsPerformanceToggleEnabled() &&
+				std::ranges::find(enabledByPreset["skippedUnavailableFeatures"], json(sky.name)) == enabledByPreset["skippedUnavailableFeatures"].end(),
+		"loaded features made available by a snapshot must receive their explicit saved choices");
+	Load({ { "Performance Profiles", allSettingsProfile } });
 	PerformanceProfiles::UserProfile exchanged;
 	require(PerformanceProfiles::ReadExport(PerformanceProfiles::MakeExport(user, "test"), exchanged) && exchanged.Save() == allSettingsProfile,
 		"full settings survive profile export and import");

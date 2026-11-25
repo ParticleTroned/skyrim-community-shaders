@@ -116,6 +116,21 @@ namespace
 	ID3D11RasterizerState* g_boundRasterState = nullptr;
 	bool g_reverseTargetBound = false;
 	bool g_standardSceneDepthBound = false;
+	struct SceneDepthAlias
+	{
+		winrt::com_ptr<ID3D11DepthStencilView> view;
+		winrt::com_ptr<ID3D11Resource> resource;
+	};
+	// Retained views prevent address reuse; only immutable resource identity is cached.
+	std::array<SceneDepthAlias, std::size(kReverseTargets)> g_sceneDepthAliases;
+	size_t g_nextSceneDepthAlias = 0;
+
+	void ResetSceneDepthAliases()
+	{
+		g_sceneDepthAliases = {};
+		g_nextSceneDepthAlias = 0;
+	}
+
 	bool g_projectionReversed = false;
 	bool g_nearMaskBound = false;
 	std::atomic<bool> g_reversalActive{ false };
@@ -614,6 +629,7 @@ void ReverseZ::SetupResources() {}
 
 bool ReverseZ::PrepareDepthTargets()
 {
+	ResetSceneDepthAliases();
 	g_preparedOcclusionDepthRange = {};
 	LatchBootState();
 	if (!requestedThisBoot || activationRejectedThisBoot)
@@ -1196,6 +1212,24 @@ namespace
 			const auto& target = targets[index];
 			for (size_t i = 0; i < std::size(target.views); ++i)
 				if (a_view == REX::W32::AsReal(target.views[i]) || a_view == REX::W32::AsReal(target.readOnlyViews[i]))
+					return true;
+		}
+		auto alias = std::find_if(g_sceneDepthAliases.begin(), g_sceneDepthAliases.end(),
+			[a_view](const auto& entry) { return entry.view.get() == a_view; });
+		if (alias == g_sceneDepthAliases.end()) {
+			alias = g_sceneDepthAliases.begin() + g_nextSceneDepthAlias;
+			g_nextSceneDepthAlias = (g_nextSceneDepthAlias + 1) % g_sceneDepthAliases.size();
+			*alias = {};
+			alias->view.copy_from(a_view);
+			D3D11_DEPTH_STENCIL_VIEW_DESC desc{};
+			a_view->GetDesc(&desc);
+			if (desc.ViewDimension == D3D11_DSV_DIMENSION_TEXTURE2D && desc.Texture2D.MipSlice == 0)
+				a_view->GetResource(alias->resource.put());
+		}
+		if (alias->resource) {
+			// Recheck live targets so a retained view cannot inherit ownership across recreation.
+			for (const auto index : kReverseTargets)
+				if (alias->resource.get() == REX::W32::AsReal(targets[index].texture))
 					return true;
 		}
 		return false;

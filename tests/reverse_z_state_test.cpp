@@ -110,6 +110,7 @@ struct ReverseZ
 	json GetDiagnostics() const;
 	bool HasPendingBootChange() const;
 	bool PrepareDepthTargets();
+	ID3D11DepthStencilView* ResolveCubemapFaceDepthView(ID3D11RenderTargetView*, ID3D11DepthStencilView* view) { return view; }
 	bool IsConvertedDepthTarget(uint32_t) const;
 	bool IsReverseDepthView(ID3D11DepthStencilView*) const;
 	void RegisterSceneDepthView(ID3D11DepthStencilView*);
@@ -283,7 +284,6 @@ namespace
 #include "reverse_z_state_hooks.h"
 #undef GetReversedRasterizerState
 #undef GetReversedState
-	ID3D11RenderTargetView* g_lastClearedCubeFace = nullptr;
 	ID3D11VertexShader* g_boundVertexShader = nullptr;
 #include "reverse_z_state_clear.h"
 
@@ -412,14 +412,15 @@ namespace
 
 namespace
 {
-	void CreateSceneTargets(Renderer& renderer, ID3D11Device* device)
+	void CreateSceneTargets(Renderer& renderer, ID3D11Device* device, UINT mipLevels = 1)
 	{
 		for (auto index : { RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN, RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_COPY,
 				 RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN_DOWNSAMPLE }) {
 			auto& target = renderer.data.depthStencils[index];
 			D3D11_TEXTURE2D_DESC desc{};
 			desc.Width = desc.Height = 4;
-			desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+			desc.MipLevels = mipLevels;
+			desc.ArraySize = desc.SampleDesc.Count = 1;
 			desc.Format = kStandardDepthTypeless;
 			desc.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
 			Require(SUCCEEDED(device->CreateTexture2D(&desc, nullptr, &target.texture)), "Scene fixture allocation failed");
@@ -441,12 +442,122 @@ namespace
 		}
 	}
 
+	winrt::com_ptr<ID3D11DepthStencilView> CreateSceneDepthAlias(ID3D11Device* device, ID3D11DepthStencilView* source, UINT mip = 0, bool array = false)
+	{
+		winrt::com_ptr<ID3D11Resource> resource;
+		source->GetResource(resource.put());
+		D3D11_DEPTH_STENCIL_VIEW_DESC desc{};
+		source->GetDesc(&desc);
+		desc.Flags = D3D11_DSV_READ_ONLY_DEPTH | D3D11_DSV_READ_ONLY_STENCIL;
+		if (array) {
+			desc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2DARRAY;
+			desc.Texture2DArray = { mip, 0, 1 };
+		} else {
+			desc.Texture2D.MipSlice = mip;
+		}
+		winrt::com_ptr<ID3D11DepthStencilView> alias;
+		Require(SUCCEEDED(device->CreateDepthStencilView(resource.get(), &desc, alias.put())), "Scene depth alias creation failed");
+		Util::SetResourceName(alias.get(), "ReverseZStateTest::SceneDepthAlias");
+		return alias;
+	}
+
+	struct CountedDepthView final : Microsoft::WRL::RuntimeClass<Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>, ID3D11DepthStencilView>
+	{
+		explicit CountedDepthView(ID3D11DepthStencilView* source) { view.copy_from(source); }
+		void STDMETHODCALLTYPE GetDevice(ID3D11Device** device) override { view->GetDevice(device); }
+		HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid, UINT* size, void* data) override { return view->GetPrivateData(guid, size, data); }
+		HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid, UINT size, const void* data) override { return view->SetPrivateData(guid, size, data); }
+		HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID guid, const IUnknown* data) override { return view->SetPrivateDataInterface(guid, data); }
+		void STDMETHODCALLTYPE GetResource(ID3D11Resource** resource) override
+		{
+			++resourceReads;
+			view->GetResource(resource);
+		}
+		void STDMETHODCALLTYPE GetDesc(D3D11_DEPTH_STENCIL_VIEW_DESC* desc) override
+		{
+			++descriptionReads;
+			view->GetDesc(desc);
+		}
+		winrt::com_ptr<ID3D11DepthStencilView> view;
+		unsigned resourceReads = 0, descriptionReads = 0;
+	};
+
+	void TestSceneDepthAliasCache(ID3D11Device* device)
+	{
+		Renderer renderer, other;
+		CreateSceneTargets(renderer, device, 2);
+		CreateSceneTargets(other, device);
+		auto* previousRenderer = std::exchange(globals::game::renderer, &renderer);
+		auto& target = renderer.data.depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+		auto& otherTarget = other.data.depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+		auto alias = Microsoft::WRL::Make<CountedDepthView>(target.views[0]);
+		auto unrelated = Microsoft::WRL::Make<CountedDepthView>(otherTarget.views[0]);
+		ResetSceneDepthAliases();
+		{
+			const RejectHeapAllocations rejectAllocations;
+			for (unsigned repeat = 0; repeat < 100; ++repeat) {
+				Require(IsNativeSceneDepthView(alias.Get()), "Same-resource depth alias was rejected");
+				Require(!IsNativeSceneDepthView(unrelated.Get()), "Unrelated depth resource was admitted");
+			}
+		}
+		Require(alias->resourceReads == 1 && alias->descriptionReads == 1 &&
+					unrelated->resourceReads == 1 && unrelated->descriptionReads == 1,
+			"Repeated depth aliases inspected immutable metadata again");
+		auto swapTargets = [&] {
+			std::swap(target.texture, otherTarget.texture);
+			std::swap(target.views, otherTarget.views);
+			std::swap(target.readOnlyViews, otherTarget.readOnlyViews);
+			std::swap(target.depthSRV, otherTarget.depthSRV);
+			std::swap(target.stencilSRV, otherTarget.stencilSRV);
+		};
+		swapTargets();
+		Require(!IsNativeSceneDepthView(alias.Get()) && IsNativeSceneDepthView(unrelated.Get()), "Target replacement retained a stale alias verdict");
+		swapTargets();
+		Require(IsNativeSceneDepthView(alias.Get()) && !IsNativeSceneDepthView(unrelated.Get()), "Target restoration retained a negative alias verdict");
+		for (bool array : { false, true }) {
+			auto rejected = CreateSceneDepthAlias(device, target.views[0], array ? 0 : 1, array);
+			Require(!IsNativeSceneDepthView(rejected.get()), "Non-scene depth subresource was admitted");
+		}
+		Require(!IsNativeSceneDepthView(nullptr), "Null depth view was admitted");
+		globals::game::renderer = nullptr;
+		Require(!IsNativeSceneDepthView(alias.Get()), "Alias survived missing renderer ownership");
+		globals::game::renderer = &renderer;
+		ResetSceneDepthAliases();
+		globals::game::renderer = previousRenderer;
+	}
+
 	struct ViewLifetime final : Microsoft::WRL::RuntimeClass<Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>, IUnknown>
 	{
 		explicit ViewLifetime(unsigned* count) : destroyed(count) {}
 		~ViewLifetime() { ++*destroyed; }
 		unsigned* destroyed;
 	};
+
+	void TestSceneDepthAliasLifetime(ID3D11Device* device)
+	{
+		Renderer renderer;
+		CreateSceneTargets(renderer, device);
+		auto* previousRenderer = std::exchange(globals::game::renderer, &renderer);
+		auto& target = renderer.data.depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+		ResetSceneDepthAliases();
+		unsigned destroyed = 0;
+		const auto capacity = g_sceneDepthAliases.size();
+		for (size_t created = 0; created < capacity + 2; ++created) {
+			auto alias = CreateSceneDepthAlias(device, target.views[0]);
+			Require(alias.get() != target.readOnlyViews[0], "Alias fixture reused the native view");
+			auto lifetime = Microsoft::WRL::Make<ViewLifetime>(&destroyed);
+			Require(SUCCEEDED(alias->SetPrivateDataInterface(__uuidof(IUnknown), lifetime.Get())), "Alias lifetime marker failed");
+			lifetime.Reset();
+			Require(IsNativeSceneDepthView(alias.get()), "New depth alias was rejected");
+			alias = nullptr;
+			Require(destroyed == (created < capacity ? 0 : created + 1 - capacity), "Depth alias retention exceeded its bound");
+		}
+		ReverseZ standard;
+		standard.requestedThisBoot = false;
+		Require(standard.PrepareDepthTargets(), "Standard target preparation failed");
+		Require(destroyed == capacity + 2, "Target recreation retained external depth views");
+		globals::game::renderer = previousRenderer;
+	}
 
 	void TestFeatureViewRetirement(ID3D11Device* device)
 	{
@@ -1177,6 +1288,7 @@ namespace
 		auto* previousRenderer = std::exchange(globals::game::renderer, &renderer);
 		auto& target = renderer.data.depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 		auto* customView = other.data.depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].views[0];
+		auto alias = CreateSceneDepthAlias(device, target.views[0]);
 		std::swap(target.readOnlyViews[0], target.readOnlyViews[7]);
 		ShadowState shadow;
 		const D3D11_VIEWPORT scene{ 0, 0, 4, 4, 0, .999998f };
@@ -1201,12 +1313,32 @@ namespace
 			ID3D11DeviceContext_RSGetViewports::thunk(context, &count, &actual);
 			Require(std::memcmp(&actual, &requested, sizeof(actual)) == 0, "Target transition changed the logical viewport");
 		};
-		auto bind = [&](ID3D11DepthStencilView* view) {
-			context->OMSetRenderTargets(0, nullptr, view);
-			UpdateBoundDepthTarget(context, view);
+		auto bind = [&](ID3D11DepthStencilView* view, bool unordered = false) {
+			if (unordered)
+				ID3D11DeviceContext_OMSetRenderTargetsAndUnorderedAccessViews::thunk(context, 0, nullptr, view, 0, 0, nullptr, nullptr);
+			else
+				ID3D11DeviceContext_OMSetRenderTargets::thunk(context, 0, nullptr, view);
 		};
 		verify(false);
 		bind(target.views[0]);
+		verify(true);
+		bind(alias.get());
+		verify(true);
+		bind(customView, true);
+		verify(false);
+		bind(alias.get(), true);
+		verify(true);
+		ID3D11DeviceContext_OMSetRenderTargetsAndUnorderedAccessViews::thunk(context,
+			D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 0, 0, nullptr, nullptr);
+		verify(true);
+		winrt::com_ptr<ID3D11DepthStencilView> bound;
+		context->OMGetRenderTargets(0, nullptr, bound.put());
+		Require(bound == alias, "Keep-target binding replaced the scene alias");
+		winrt::com_ptr<ID3D11DeviceContext> deferred;
+		Require(SUCCEEDED(device->CreateDeferredContext(0, deferred.put())), "Deferred context creation failed");
+		Util::SetResourceName(deferred.get(), "ReverseZStateTest::DeferredContext");
+		ID3D11DeviceContext_OMSetRenderTargets::thunk(deferred.get(), 0, nullptr, customView);
+		ID3D11DeviceContext_OMSetRenderTargetsAndUnorderedAccessViews::thunk(deferred.get(), 0, nullptr, nullptr, 0, 0, nullptr, nullptr);
 		verify(true);
 		const auto forwards = stateForwards;
 		const auto reads = std::pair{ nativeViewportBiasReads, publishedViewportReads };
@@ -1215,6 +1347,7 @@ namespace
 			for (unsigned repeat = 0; repeat < 100; ++repeat) {
 				bind(target.views[0]);
 				bind(target.readOnlyViews[7]);
+				bind(alias.get(), true);
 			}
 		}
 		Require(stateForwards == forwards && reads == std::pair{ nativeViewportBiasReads, publishedViewportReads },
@@ -1224,7 +1357,7 @@ namespace
 		verify(false);
 		bind(nullptr);
 		verify(false);
-		bind(target.views[0]);
+		bind(alias.get(), true);
 		verify(true);
 		for (bool manual : { false, true }) {
 			Util::UseManualDeviceContextState(manual);
@@ -1240,6 +1373,8 @@ namespace
 				bind(target.views[0]);
 				ID3D11DeviceContext_RSSetViewports::thunk(context, 1, &requested);
 				verify(false);
+				bind(alias.get(), true);
+				verify(false);
 			}
 			Require(g_standardSceneDepthBound && !g_isolatedContext, "Standard isolation lost the scene domain");
 			verify(true);
@@ -1247,10 +1382,22 @@ namespace
 		Util::captureDeviceContextState = nullptr;
 		Util::UseManualDeviceContextState(false);
 		globals::game::renderer = &other;
+		bind(alias.get());
+		verify(false);
 		bind(target.views[0]);
 		verify(false);
 		bind(customView);
 		verify(true);
+		globals::game::renderer = &renderer;
+		for (bool runtimeVR : { false, true }) {
+			globals::game::isVR = runtimeVR;
+			for (bool reversed : { false, true }) {
+				globals::features::reverseZ.activeThisBoot = reversed;
+				bind(alias.get());
+				verify(runtimeVR && !reversed);
+				Require(!g_reverseTargetBound, "Standard alias changed reverse-depth registration");
+			}
+		}
 		ID3D11DeviceContext_ClearState::thunk(context);
 		Require(!g_standardSceneDepthBound && !g_nativeViewportCorrection, "ClearState retained standard scene ownership");
 		globals::game::shadowState = nullptr;
@@ -1322,8 +1469,8 @@ namespace
 		CreateSceneTargets(renderer, device);
 		auto* previousRenderer = std::exchange(globals::game::renderer, &renderer);
 		auto* view = renderer.data.depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].views[0];
-		context->OMSetRenderTargets(0, nullptr, view);
-		UpdateBoundDepthTarget(context, view);
+		auto alias = CreateSceneDepthAlias(device, view);
+		ID3D11DeviceContext_OMSetRenderTargets::thunk(context, 0, nullptr, view);
 		D3D11_DEPTH_STENCIL_DESC desc{};
 		desc.DepthEnable = TRUE;
 		desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
@@ -1369,6 +1516,10 @@ namespace
 				Require(visibleSamples() == 4, "Standard wall prepass failed");
 				context->OMSetDepthStencilState(equal.get(), 0);
 				Require(visibleSamples() == 4, "Standard correction broke equal-depth shading");
+				ID3D11DeviceContext_OMSetRenderTargetsAndUnorderedAccessViews::thunk(context, 0, nullptr, alias.get(), 0, 0, nullptr, nullptr);
+				Require(visibleSamples() == 4, "External scene-depth replay lost equal-depth coverage");
+				ID3D11DeviceContext_OMSetRenderTargets::thunk(context, 0, nullptr, view);
+				Require(visibleSamples() == 4, "Scene-depth replay restoration lost equal-depth coverage");
 				context->OMSetDepthStencilState(read.get(), 0);
 				setMode(6);
 				setDepth(sample[1]);
@@ -2074,6 +2225,11 @@ int main()
 		ID3D11DeviceContext_RSSetState::func = [](ID3D11DeviceContext* ctx, ID3D11RasterizerState* state) { ++stateForwards[1]; ctx->RSSetState(state); };
 		ID3D11DeviceContext_ClearState::func = [](ID3D11DeviceContext* ctx) { ctx->ClearState(); };
 		ID3D11DeviceContext_RSSetViewports::func = [](ID3D11DeviceContext* ctx, UINT count, const D3D11_VIEWPORT* viewports) { ++stateForwards[2]; ctx->RSSetViewports(count, viewports); };
+		ID3D11DeviceContext_OMSetRenderTargets::func = [](ID3D11DeviceContext* ctx, UINT count, ID3D11RenderTargetView* const* targets, ID3D11DepthStencilView* depth) { ctx->OMSetRenderTargets(count, targets, depth); };
+		ID3D11DeviceContext_OMSetRenderTargetsAndUnorderedAccessViews::func = [](ID3D11DeviceContext* ctx, UINT count, ID3D11RenderTargetView* const* targets, ID3D11DepthStencilView* depth,
+																				  UINT start, UINT unorderedCount, ID3D11UnorderedAccessView* const* unordered, const UINT* initialCounts) {
+			ctx->OMSetRenderTargetsAndUnorderedAccessViews(count, targets, depth, start, unorderedCount, unordered, initialCounts);
+		};
 		UseNative<ID3D11DeviceContext_ClearDepthStencilView, 53>(context.get());
 		// Native dispatch can change when the first isolated context state is activated.
 		ID3D11DeviceContext_OMGetDepthStencilState::func = [](ID3D11DeviceContext* ctx, ID3D11DepthStencilState** state, UINT* ref) { ctx->OMGetDepthStencilState(state, ref); };
@@ -2083,6 +2239,8 @@ int main()
 		TestPreparationAdmission(device.get(), context.get());
 		TestPreparationTransaction(device.get(), context.get());
 		TestFeatureViewRetirement(device.get());
+		TestSceneDepthAliasCache(device.get());
+		TestSceneDepthAliasLifetime(device.get());
 		TestMenuTargetRefresh(device.get(), context.get());
 
 		D3D11_DEPTH_STENCIL_DESC depthDesc{};

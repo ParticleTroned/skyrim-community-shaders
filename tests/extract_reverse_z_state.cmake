@@ -11,7 +11,7 @@ extract_between("${source}" "\tD3D11_COMPARISON_FUNC FlipComparison("
 extract_between("${source}" "void ReverseZ::RecordFailure("
     "void ReverseZ::ApplyReverseProjection(" "reverse_z_state_creation.h")
 extract_between("${source}" "\tID3D11DepthStencilState* ResolveRequestedDepthState()"
-    "\n\tID3D11RenderTargetView* g_lastClearedCubeFace" "reverse_z_state_hooks.h")
+    "\n\tstruct ID3D11DeviceContext_OMGetDepthStencilState" "reverse_z_state_hooks.h")
 extract_between("${source}" "\tvoid ResetTrackedContextState("
     "\n}\n\nvoid ReverseZ::InstallRuntimeHooks" "reverse_z_state_clear.h")
 extract_between("${source}" "\tstruct ID3D11DeviceContext_OMGetDepthStencilState"

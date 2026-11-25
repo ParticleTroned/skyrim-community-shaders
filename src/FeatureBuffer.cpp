@@ -99,5 +99,6 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::rainRefraction.GetCommonBufferData(),
 		globals::features::proceduralAurora.GetCommonBufferData(),
 		globals::features::unifiedWater.GetRuntimeData(),
+		globals::features::unifiedWater.GetShallowSettings(),
 		globals::features::snowCover.GetCommonBufferData(a_inWorld));
 }

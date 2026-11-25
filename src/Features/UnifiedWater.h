@@ -1,9 +1,11 @@
 ﻿#pragma once
 #include "OverlayFeature.h"
 #include "UnifiedWater/Flowmap.h"
+#include "UnifiedWater/ShallowSettings.h"
 #include "UnifiedWater/WaterCache.h"
 
 #include <atomic>
+#include <mutex>
 
 /** @brief Replaces distant water tiles with LOD0 water to eliminate water LOD mismatch. */
 struct UnifiedWater : OverlayFeature
@@ -109,7 +111,7 @@ struct UnifiedWater : OverlayFeature
 
 	virtual bool HasDebugSection() const override { return true; }
 
-	/** @brief Draws the Debug section (flowmap and water cache regeneration). */
+	/** @brief Draws diagnostic surface controls and flowmap/cache regeneration. */
 	virtual void DrawDebugSection() override;
 
 	/** @brief Draws the debug overlay showing water cache build progress. */
@@ -136,8 +138,29 @@ struct UnifiedWater : OverlayFeature
 	/** @brief Supplies readiness to both shader stages without changing compile defines. */
 	RuntimeData GetRuntimeData() const { return { loaded && IsWaterDataReady() ? 1u : 0u }; }
 
+	using ShallowSettings = UnifiedWaterSurface::Settings;
+
+	/** @brief Publishes surface controls only while unified-water resources are usable. */
+	UnifiedWaterSurface::CommonBufferData GetShallowSettings() const;
+	/** @brief Draws the appearance and shore controls. */
+	void DrawSettings() override;
+	/** @brief Loads and normalizes shallow-surface controls. */
+	void LoadSettings(json& value) override;
+	/** @brief Saves selected controls independently of runtime readiness. */
+	void SaveSettings(json& value) override;
+	/** @brief Restores the CSX surface defaults. */
+	void RestoreDefaultSettings() override;
+	/** @brief Reports selected and effective surface strength for devbench. */
+	json GetDiagnostics() override;
+
 private:
 	std::atomic_bool waterDataReady{ false };
+	mutable std::mutex shallowSettingsMutex;
+	ShallowSettings shallowSettings;
+	ShallowSettings GetSelectedShallowSettings() const;
+	void SetShallowSettings(ShallowSettings value);
+	bool IsShallowSurfaceReady() const;
+
 	RE::NiPointer<RE::BSTriShape> waterMesh;
 	Flowmap* flowmap = nullptr;
 	WaterCache* waterCache = nullptr;

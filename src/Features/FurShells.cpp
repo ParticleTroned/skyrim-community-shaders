@@ -117,12 +117,23 @@ namespace
 		return accumulator && static_cast<uint32_t>(accumulator->GetRuntimeData().renderMode) == FirstPersonRenderMode;
 	}
 
-	bool CanDrawShells(RE::BSGeometry* a_geometry)
+	bool CanDrawShells(const RE::BSRenderPass& a_pass)
 	{
-		if (a_geometry->GetGeometryRuntimeData().skinInstance)
+		auto* geometry = a_pass.geometry;
+		const auto* property = a_pass.shaderProperty;
+		const auto* material = property ? static_cast<const RE::BSLightingShaderMaterialBase*>(property->material) : nullptr;
+		if (!geometry || !material || !std::isfinite(property->alpha) || property->alpha < 1.0f ||
+			!std::isfinite(material->materialAlpha) || material->materialAlpha < 1.0f)
+			return false;
+
+		const auto& geometryData = geometry->GetGeometryRuntimeData();
+		// A solid depth prepass cannot preserve blended coverage, even with alpha testing.
+		if (geometryData.alphaProperty && geometryData.alphaProperty->GetAlphaBlending())
+			return false;
+		if (geometryData.skinInstance)
 			return true;
 
-		const auto type = a_geometry->GetType().get();
+		const auto type = geometry->GetType().get();
 		return type == RE::BSGeometry::Type::kTriShape || type == RE::BSGeometry::Type::kMeshLODTriShape;
 	}
 
@@ -813,7 +824,7 @@ void FurShells::BeginPass(RE::BSShader* a_shader, RE::BSRenderPass* a_pass)
 		return;
 
 	auto* geometry = a_pass->geometry;
-	if (!geometry)
+	if (!geometry || !a_pass->shaderProperty || !a_pass->shaderProperty->material)
 		return;
 
 	if (const auto* body = FindFrameBody(geometry)) {
@@ -825,9 +836,11 @@ void FurShells::BeginPass(RE::BSShader* a_shader, RE::BSRenderPass* a_pass)
 	GET_INSTANCE_MEMBER(depthStencilDepthMode, shadowState)
 	if (depthStencilDepthMode != kTestEqual && depthStencilDepthMode != kTestWrite)
 		return;
+	if (!CanDrawShells(*a_pass))
+		return;
 
 	const float distance = IsFirstPersonPass() ? 0.0f : std::max(0.0f, geometry->worldBound.center.GetDistance(Util::GetEyePosition(0)) - geometry->worldBound.radius);
-	if (!std::isfinite(distance) || distance >= std::max(settings.FadeEnd, overrideFadeEnd) || !CanDrawShells(geometry))
+	if (!std::isfinite(distance) || distance >= std::max(settings.FadeEnd, overrideFadeEnd))
 		return;
 
 	auto* skinInstance = geometry->GetGeometryRuntimeData().skinInstance.get();

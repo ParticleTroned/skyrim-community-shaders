@@ -135,6 +135,7 @@ struct FurShells : Feature
 
 	/**
 	 * @brief Starts a fur pass for the render pass the engine just set up, or defers it when covered-fur hiding is on.
+	 * @details Primary shells require non-blended materials with fully opaque scalar alpha; cutouts and matched body overlays retain their existing paths.
 	 * @param a_shader The lighting shader that set up the pass.
 	 * @param a_pass The render pass about to draw.
 	 */

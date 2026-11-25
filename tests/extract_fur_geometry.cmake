@@ -1,0 +1,7 @@
+include("${PROJECT_ROOT}/tests/extract_source_region.cmake")
+file(READ "${PROJECT_ROOT}/src/Features/FurShells.cpp" source)
+file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
+extract_between("${source}" "\tbool CanDrawShells(" "\n\tbool IsFurTechnique(" "fur_geometry_under_test.h")
+extract_between("${source}" "const FurShells::FrameBody* FurShells::FindFrameBody(" "\nvoid FurShells::RecordFrameBody(" "fur_body_under_test.h")
+extract_between("${source}" "void FurShells::BeginPass(" "\nvoid FurShells::FillTouch(" "fur_pass_under_test.h")
+extract_between("${source}" "void FurShells::BeginOverlayPass(" "\nvoid FurShells::BindPass(" "fur_overlay_under_test.h")

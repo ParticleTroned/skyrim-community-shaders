@@ -1822,6 +1822,38 @@ if(BUILD_CONTROLLER_TESTS)
         endif()
     endforeach()
     add_controller_test(shader_descriptor_test ShaderDescriptor tests/shader_descriptor_test.cpp)
+    add_controller_test(rigid_motion_history_test RigidMotionHistory tests/rigid_motion_history_test.cpp)
+    set(_rigid_motion_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/rigid-motion-test"
+    )
+    add_custom_command(
+        OUTPUT "${_rigid_motion_test_dir}/rigid_motion_runtime_under_test.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_rigid_motion_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_rigid_motion_runtime.cmake"
+        DEPENDS
+            src/EngineFixes/VRRigidMotionHistory.cpp
+            tests/extract_rigid_motion_runtime.cmake
+        VERBATIM
+    )
+    add_controller_test(rigid_motion_runtime_test RigidMotionRuntime tests/rigid_motion_runtime_test.cpp)
+    target_sources(
+        rigid_motion_runtime_test
+        PRIVATE "${_rigid_motion_test_dir}/rigid_motion_runtime_under_test.h"
+    )
+    target_include_directories(
+        rigid_motion_runtime_test
+        PRIVATE "${_rigid_motion_test_dir}"
+    )
+    target_link_libraries(
+        rigid_motion_runtime_test
+        PRIVATE unordered_dense::unordered_dense
+    )
+    target_compile_options(
+        rigid_motion_runtime_test
+        PRIVATE "$<$<AND:$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:/fp:fast>"
+    )
     add_controller_test(texture_alpha_test TextureAlpha tests/texture_alpha_test.cpp)
     target_link_libraries(
         texture_alpha_test

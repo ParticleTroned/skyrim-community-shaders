@@ -1,0 +1,8 @@
+file(READ "${PROJECT_ROOT}/src/EngineFixes/VRRigidMotionHistory.cpp" source)
+string(FIND "${source}" "\nnamespace\n{" start)
+if(start EQUAL -1)
+    message(FATAL_ERROR "Rigid motion runtime namespace was not found")
+endif()
+string(SUBSTRING "${source}" ${start} -1 runtime)
+file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
+file(WRITE "${OUTPUT_DIRECTORY}/rigid_motion_runtime_under_test.h" "${runtime}")

@@ -39,6 +39,7 @@
 
 #include "Deferred.h"
 #include "EngineFixes/LODBlendRingFix.h"
+#include "EngineFixes/VRRigidMotionHistory.h"
 #include "FeatureIssues.h"
 #include "Features/AdaptiveBrightness.h"
 #include "Features/CSEditor.h"
@@ -950,6 +951,8 @@ void State::Reset()
 	std::memset(&permutationDataPrevious, 0xFF, sizeof(PermutationCB));
 	frameCount++;
 	frameCountAtomic.store(frameCount, std::memory_order_relaxed);
+	if (globals::game::isVR)
+		VRRigidMotionHistory::Reset(frameCount, IsMainOrLoadingMenuOpen() || IsWorldLoadTransitionActive());
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	CSX::Diagnostics::GpuCrash::Checkpoint("Frame::Reset");
 #endif

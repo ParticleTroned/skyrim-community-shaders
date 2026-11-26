@@ -8,6 +8,7 @@
 #include "Deferred.h"
 #include "EngineFixes/VRAlphaPassListFix.h"
 #include "EngineFixes/VRAlphaSort.h"
+#include "EngineFixes/VRRigidMotionHistory.h"
 #include "EngineFixes/VRShadowBatch.h"
 #include "Features/TerrainSeams.h"
 
@@ -1581,7 +1582,11 @@ namespace LightingExtensions
 					BuildRenderMapGeometryBoundary(shader, pass, renderFlags, RE::BSShader::Type::Lighting));
 			}
 #endif
-			func(shader, pass, renderFlags);
+			auto* geometryOwner = globals::game::isVR && pass && pass->geometry ? pass->geometry->GetUserData() : nullptr;
+			if (geometryOwner && geometryOwner->Is(RE::FormType::ActorCharacter))
+				VRRigidMotionHistory::SetupGeometry(shader, pass, renderFlags, geometryOwner, func.get());
+			else
+				func(shader, pass, renderFlags);
 
 			auto state = globals::state;
 
@@ -1593,8 +1598,10 @@ namespace LightingExtensions
 			if (globals::features::detailMaps.IsEnabled())
 				globals::features::detailMaps.BeginPass(shader, pass);
 
-			if (auto userData = pass->geometry->GetUserData())
-				if (auto baseObject = userData->GetBaseObject())
+			if (!globals::game::isVR)
+				geometryOwner = pass->geometry->GetUserData();
+			if (geometryOwner)
+				if (auto baseObject = geometryOwner->GetBaseObject())
 					if (baseObject->As<RE::TESObjectTREE>())
 						state->permutationData.ExtraShaderDescriptor |= static_cast<uint32_t>(State::ExtraShaderDescriptors::IsTree);
 			if (globals::game::isVR)

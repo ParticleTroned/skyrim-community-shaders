@@ -19,6 +19,7 @@
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Skinned.hlsli"
+#include "Common/SpecularAntialiasing.hlsli"
 #include "Common/Triplanar.hlsli"
 
 #if defined(FUR_SHELLS)
@@ -2625,7 +2626,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		sampledCoatColor.rgb *= Color::Diffuse(sampledCoatProperties.rgb);
 		sampledCoatColor.a *= sampledCoatProperties.a;
 	}
-#			if !defined(FACEGEN)
+#			if !defined(FACEGEN) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
 	[branch] if (SharedData::extendedMaterialSettings.EnableParallax && (PBRFlags & PBR::Flags::HasDisplacement) != 0)
 	{
 		PBRParallax = parallaxDepthEnabled;
@@ -2666,7 +2667,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			}
 		}
 	}
-#			endif  // !FACEGEN
+#			endif  // Tangent-space displacement
 #		endif      // TRUE_PBR
 
 #	elif defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
@@ -4138,6 +4139,33 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		postRainPuddleReflectionOverrideScale,
 		vrWetnessDirectDetailWeight,
 		vrWetnessDirectDetailEnabled);
+#	endif
+
+#	if defined(TRUE_PBR)
+	// Filter the finished shading surface after snow and physical wetness preparation.
+#		if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
+	[branch] if ((PBRFlags & PBR::Flags::HairMarschner) == 0)
+#		endif
+	{
+		float3 filterNormal = worldNormal;
+#		if defined(MODELSPACENORMALS) && !defined(SKINNED)
+		filterNormal = SafeNormalize3(filterNormal, float3(0, 0, 1));
+#		endif
+		float kernelVariance = SpecularAntialiasing::GetKernelVariance(ddx(filterNormal), ddy(filterNormal));
+		material.Roughness = SpecularAntialiasing::FilterRoughness(material.Roughness, kernelVariance);
+#		if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
+		[branch] if ((PBRFlags & (PBR::Flags::Subsurface | PBR::Flags::TwoLayer)) == PBR::Flags::TwoLayer)
+		{
+			float coatKernelVariance = kernelVariance;
+			[branch] if ((PBRFlags & PBR::Flags::CoatNormal) != 0)
+			{
+				float3 filterCoatNormal = SafeNormalize3(coatWorldNormal, filterNormal);
+				coatKernelVariance = SpecularAntialiasing::GetKernelVariance(ddx(filterCoatNormal), ddy(filterCoatNormal));
+			}
+			material.CoatRoughness = SpecularAntialiasing::FilterRoughness(material.CoatRoughness, coatKernelVariance);
+		}
+#		endif
+	}
 #	endif
 
 #	if defined(TRUE_PBR) && defined(GLINT)

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ComIdentity.h"
 #include "ManualDeviceContextState.h"
 #include "ResourceName.h"
 #include <cstddef>
@@ -53,6 +54,7 @@ namespace Util
 	namespace detail
 	{
 		inline winrt::com_ptr<ID3D11DeviceContext> registeredStateContext;
+		inline Microsoft::WRL::ComPtr<IUnknown> registeredStateIdentity;
 		inline bool contextStateIsolationAvailable = false;
 		inline bool useManualContextState = false;
 
@@ -62,9 +64,8 @@ namespace Util
 				return true;
 			if (context == registeredStateContext.get())
 				return false;
-			winrt::com_ptr<ID3D11DeviceContext> canonical;
-			return SUCCEEDED(context->QueryInterface(__uuidof(ID3D11DeviceContext), canonical.put_void())) &&
-			       canonical.get() != registeredStateContext.get();
+			const auto identity = GetComIdentity(context);
+			return identity && registeredStateIdentity && identity.Get() != registeredStateIdentity.Get();
 		}
 	}
 
@@ -166,14 +167,26 @@ namespace Util
 	{
 		if (!context || detail::registeredStateContext.get() == context)
 			return;
+		auto identity = GetComIdentity(context);
+		const bool sameContext = identity && identity.Get() == detail::registeredStateIdentity.Get();
 		detail::registeredStateContext.copy_from(context);
-		detail::contextStateIsolationAvailable = true;
+		detail::registeredStateIdentity = std::move(identity);
+		if (!sameContext)
+			detail::contextStateIsolationAvailable = true;
 	}
 
 	/** Disables swaps that would invalidate native table hooks; existing isolated states also become unusable. */
 	inline void DisableDeviceContextStateIsolation(ID3D11DeviceContext* context)
 	{
-		if (context == detail::registeredStateContext.get())
+		if (!context || !detail::registeredStateContext || !detail::contextStateIsolationAvailable)
+			return;
+		if (context == detail::registeredStateContext.get()) {
+			detail::contextStateIsolationAvailable = false;
+			return;
+		}
+		// Only IUnknown identity is shared by every interface view of the context.
+		const auto identity = GetComIdentity(context);
+		if (identity && identity.Get() == detail::registeredStateIdentity.Get())
 			detail::contextStateIsolationAvailable = false;
 	}
 }

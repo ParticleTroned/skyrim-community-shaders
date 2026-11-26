@@ -266,6 +266,16 @@ If you want an example CMakeUserPreset to start off with you can copy the `CMake
 -   Make sure `"AUTO_PLUGIN_DEPLOYMENT"` is set to `"ON"` in `CMakeUserPresets.json`
 -   Change the `"CommunityShadersOutputDir"` value to match your desired outputs, if you want multiple folders you can separate them by `;` is shown in the template example
 
+#### NVIDIA binding workaround
+
+VR-capable builds always include the NVIDIA binding workaround, independently
+of `DEVBENCH_BRIDGE`. In Skyrim VR it activates only for the exact verified
+616.92, 621.01, 621.14 and 621.24 driver binaries and retains its allocation
+safety checks. None, TAA, FSR and DLSS all receive the same protection; DLSS
+support is not required. Flat-only builds omit the workaround, and universal
+builds do not activate it in SE or AE. `CSX_NVIDIA_BINDING_WORKAROUND` is a
+derived build value, not an opt-in setting.
+
 #### TRACY_SUPPORT
 
 -   This option is default `"OFF"`

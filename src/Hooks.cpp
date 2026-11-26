@@ -19,6 +19,7 @@
 #include "Utils/D3DContextProtection.h"
 #include "Utils/ExternalEmittance.h"
 #include "Utils/GraphicsDriverInfo.h"
+#include "Utils/NvidiaBindingWorkaround.h"
 #include "Utils/TracyVRFrameTiming.h"
 #include "Utils/VRLoadingMenuClear.h"
 #include "Utils/VanityCamera.h"
@@ -2495,6 +2496,10 @@ namespace Hooks
 				stl::report_and_fail("The graphics context cannot support renderer-owned access. See CSX.log.");
 			}
 			logger::info("D3D11 immediate context validated; auxiliary access uses native renderer ownership");
+
+			// The driver workaround also covers disabled or unavailable upscaling backends.
+			if (globals::game::isVR)
+				Util::NvidiaBindingWorkaround::Initialize();
 
 			logger::info("Detouring virtual function tables");
 			stl::detour_vfunc<8, IDXGISwapChain_Present>(globals::d3d::swapChain);

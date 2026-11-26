@@ -248,6 +248,9 @@ try {
 				Status().installationError == ERROR_MOD_NOT_FOUND,
 		"missing driver was accepted or mislabeled");
 	Reset();
+	Initialize();
+	Require(Status().installed && Status().enabled && Status().refresh && Status().installationError == NO_ERROR,
+		"renderer initialization retried an already installed hook");
 	Require(Run() == 0 && firstCalls == 1 && secondCalls == 1 && Status().applied == 1, "eligible refresh failed");
 	Require(GetLastError() == 79 && !inside, "native error/reentrancy state was not restored");
 	Require(!Select(false), "mode changed after replacement");
@@ -269,6 +272,7 @@ try {
 
 	Reset();
 	Require(Select(false), "control selection failed");
+	Initialize();
 	Run();
 	Require(firstCalls == 1 && secondCalls == 0 && Status().candidates == 1 && Status().locked, "control altered native growth");
 
@@ -337,6 +341,8 @@ try {
 	Run();
 	Require(secondCalls == 0 && std::string_view(Status().reason) == "shutdown", "shutdown was ignored or overwritten");
 	Disable("later_failure");
+	Initialize();
+	Require(!Status().enabled && secondCalls == 0, "renderer initialization rearmed a stopped hook");
 	Require(std::string_view(Status().reason) == "shutdown", "first failure was overwritten");
 	Reset();
 	afterFirst = [] { std::thread stop([] { Disable("concurrent_stop"); }); stop.join(); };

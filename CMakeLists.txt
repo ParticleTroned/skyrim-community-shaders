@@ -148,22 +148,6 @@ option(
 option(TRACY_SUPPORT "Enable support for tracy profiler" OFF)
 option(NVPERF_SUPPORT "Build developer-only NVIDIA D3D11 hardware counters" OFF)
 option(
-    CSX_NVIDIA_BINDING_WORKAROUND
-    "Build the pinned minimal NVIDIA binding workaround test"
-    OFF
-)
-if(CSX_NVIDIA_BINDING_WORKAROUND)
-    if(NOT ENABLE_SKYRIM_VR OR ENABLE_SKYRIM_SE OR ENABLE_SKYRIM_AE)
-        message(FATAL_ERROR "CSX_NVIDIA_BINDING_WORKAROUND requires VR-only")
-    endif()
-    if(NOT DEVBENCH_BRIDGE)
-        message(
-            FATAL_ERROR
-            "CSX_NVIDIA_BINDING_WORKAROUND requires DEVBENCH_BRIDGE=ON"
-        )
-    endif()
-endif()
-option(
     CSX_GPU_CRASH_LOGGING
     "Enable GPU crash diagnostics at startup in developer builds"
     OFF
@@ -256,6 +240,14 @@ message("\tCommunity Shaders Expanded version: ${CSX_BUILD_LABEL}")
 # # Add CMake features
 # #######################################################################################################################
 include(XSEPlugin)
+
+# CommonLib resolves runtime defaults; every VR-capable DLL includes the guard.
+set(CSX_NVIDIA_BINDING_WORKAROUND
+    "${ENABLE_SKYRIM_VR}"
+    CACHE INTERNAL
+    "Include the verified NVIDIA VR binding workaround"
+    FORCE
+)
 
 # Refresh provenance immediately before every DLL compilation. This is an
 # always-run target by design: configure-time git metadata becomes stale after

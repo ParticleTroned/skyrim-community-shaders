@@ -135,8 +135,8 @@ namespace Skin
 			float fuzzG = BRDF::Vis_Neubelt(NdotV, NdotL);
 			float3 fuzzF = BRDF::F_Schlick(FuzzF0, VdotH);
 			float3 fuzzSpecular = fuzzD * fuzzG * fuzzF * context.lightColor * NdotL;
-			float2 fuzzSpecularBRDF = BRDF::EnvBRDFApproxLazarov(material.FuzzRoughness, NdotV);
-			fuzzSpecular *= 1 + material.FuzzColor * (1 / (fuzzSpecularBRDF.x + fuzzSpecularBRDF.y) - 1);
+			// Lazarov's opposite a004 terms cancel in the coefficient sum.
+			fuzzSpecular *= 1 + material.FuzzColor * (rcp(1 - 0.55 * material.FuzzRoughness) - 1);
 
 			float3 retainedEnergy = 1.0f - saturate(fuzzF * material.FuzzWeight);
 			lightingOutput.diffuse *= retainedEnergy;

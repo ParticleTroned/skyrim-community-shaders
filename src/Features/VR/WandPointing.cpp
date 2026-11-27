@@ -639,18 +639,23 @@ void VR::UpdateCursorFromWandPointing(bool a_forceCursorUpdate, ControllerDevice
 			g_wandPoseHistory[GetControllerSlot(controller)] = {};
 		UpdateWandScreenPosition(*this, controller, sampleSeconds, pressed && activeWandController == controller);
 	}
-	const auto& primary = wandHandStates[GetControllerSlot(ControllerDevice::Primary)];
-	const auto& secondary = wandHandStates[GetControllerSlot(ControllerDevice::Secondary)];
-	const WandInteractionPolicy::Candidate primaryCandidate{ primary.isIntersecting, primary.moved, primary.hitDistance, primary.poseValid };
-	const WandInteractionPolicy::Candidate secondaryCandidate{ secondary.isIntersecting, secondary.moved, secondary.hitDistance, secondary.poseValid };
+	// Arbitration can deny a geometrically valid hit; select only after it resolves.
+	UpdateOCUPointerOwnership();
+	const auto candidate = [&](ControllerDevice controller) {
+		const auto& hand = wandHandStates[GetControllerSlot(controller)];
+		const bool eligible = hand.poseValid && (!ocuPointerAvailable || hand.ocuOwnsInput);
+		return WandInteractionPolicy::Candidate{ eligible && hand.isIntersecting, hand.moved, hand.hitDistance, eligible };
+	};
+	const auto previousController = activeWandController;
 	activeWandController = FromPolicyHand(WandInteractionPolicy::SelectActiveHand(
 		ToPolicyHand(capturedWandController),
 		ToPolicyHand(a_preferredController),
 		ToPolicyHand(activeWandController),
-		primaryCandidate,
-		secondaryCandidate));
+		candidate(ControllerDevice::Primary),
+		candidate(ControllerDevice::Secondary)));
 
-	UpdateOCUPointerOwnership();
+	if (ocuPointerAvailable && activeWandController != previousController)
+		UpdateOCUPointerOwnership();
 	if (!IsIndividualController(activeWandController)) {
 		wandState = {};
 		return;
@@ -801,6 +806,20 @@ bool VR::ShouldShowWandBeam(ControllerDevice a_controller) const
 	const auto& hand = wandHandStates[GetControllerSlot(a_controller)];
 	return (!ocuPointerAvailable || hand.ocuOwnsInput) &&
 	       WandInteractionPolicy::ShouldShowBeam(ToPolicyHand(a_controller), ToPolicyHand(activeWandController), hand.poseValid, settings.ShowBothWandLasers);
+}
+
+bool VR::ShouldSuppressNativeMenuPointer(const RE::BSGeometry* a_geometry) const
+{
+	if (!globals::game::isVR || !a_geometry || !customVRCursorVisible || !wandState.isIntersecting ||
+		!IsMenuPointerInHeadset() || !ShouldPresentOverlayInHeadset() ||
+		!ShouldShowWandBeam(activeWandController))
+		return false;
+	if (customVRCursorOverlayType == OverlayType::Controller ? !menuControllerTexture : !menuTexture)
+		return false;
+	auto* player = RE::PlayerCharacter::GetSingleton();
+	auto* nodes = player ? player->GetVRNodeData() : nullptr;
+	// Match the engine-owned object, leaving mod pointers and node visibility untouched.
+	return nodes && nodes->UIPointerGeo.get() == a_geometry;
 }
 
 void VR::UpdateOCUPointerOwnership()

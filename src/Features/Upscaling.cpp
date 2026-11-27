@@ -16109,7 +16109,8 @@ ID3D11ShaderResourceView* Upscaling::GetCurrentVRMenuPointerOverlay(uint32_t a_f
 		return nullptr;
 	auto* player = RE::PlayerCharacter::GetSingleton();
 	auto* nodes = player ? player->GetVRNodeData() : nullptr;
-	if (!nodes || nodes->UIPointerGeo.get() != vrMenuPointerGeometry)
+	if (!nodes || nodes->UIPointerGeo.get() != vrMenuPointerGeometry ||
+		globals::features::vr.ShouldSuppressNativeMenuPointer(nodes->UIPointerGeo.get()))
 		return nullptr;
 	vrMenuPointerPresentationVisible = IsVRMenuPointerVisible(nodes->UIPointerGeo.get());
 	return vrMenuPointerPresentationVisible ? layer : nullptr;

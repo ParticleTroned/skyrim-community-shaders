@@ -5572,6 +5572,7 @@ if(BUILD_CONTROLLER_TESTS)
         tests/vr_wand_mouse_queue_test.cpp
     )
     target_link_libraries(vr_wand_mouse_queue_test PRIVATE imgui::imgui)
+    include(tests/vr_wand_input.cmake)
     add_controller_test(
         vr_wand_beam_test
         VRWandBeam

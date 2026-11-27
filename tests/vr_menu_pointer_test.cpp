@@ -35,6 +35,7 @@ namespace RE
 		bool GetAppCulled() const { return culled; }
 	};
 	using NiAVObject = Geometry;
+	using BSGeometry = Geometry;
 	struct PlayerCharacter
 	{
 		struct Nodes
@@ -56,6 +57,29 @@ namespace RE
 		Nodes* GetVRNodeData() { return hasNodes ? &nodes : nullptr; }
 	};
 }
+
+struct VR
+{
+	enum class OverlayType
+	{
+		HMD,
+		Controller
+	};
+	OverlayType customVRCursorOverlayType = OverlayType::HMD;
+	bool customVRCursorVisible = false;
+	struct
+	{
+		bool isIntersecting = true;
+	} wandState;
+	bool headsetPointer = true, presenting = true, showBeam = true;
+	const void* menuTexture = this;
+	const void* menuControllerTexture = nullptr;
+	int activeWandController = 0;
+	bool IsMenuPointerInHeadset() const { return headsetPointer; }
+	bool ShouldPresentOverlayInHeadset() const { return presenting; }
+	bool ShouldShowWandBeam(int) const { return showBeam; }
+	bool ShouldSuppressNativeMenuPointer(const RE::BSGeometry*) const;
+};
 
 struct Upscaling
 {
@@ -112,6 +136,7 @@ namespace globals
 	namespace features
 	{
 		Upscaling upscaling;
+		VR vr;
 	}
 }
 bool explicitMenu = true;
@@ -125,6 +150,7 @@ bool IsVRMenuPointerVisible(const RE::NiAVObject*);
 #include "vr_menu_pointer_presentation_under_test.h"
 #include "vr_menu_pointer_under_test.h"
 #include "vr_menu_pointer_visibility_under_test.h"
+#include "vr_native_pointer_suppression_under_test.h"
 
 void TestPointerAdmission()
 {
@@ -267,7 +293,52 @@ void TestPointerStereoPresentation()
 	Require(!Upscaling::TryCaptureVRMenuPointerDraw(globals::d3d::context, 12, 2, 0, 0, 0, true) && upscaling.captures == 0,
 		"late capture changed the frozen stereo presentation");
 	geometryScope.End(&pass);
+	upscaling.vrMenuPointerOverlay.layer = layer;
+	globals::features::vr.customVRCursorVisible = true;
+	Require(upscaling.GetCurrentVRMenuPointerOverlay(16) == nullptr, "native overlay duplicated the active CSX pointer");
+	globals::features::vr.customVRCursorVisible = false;
+	Require(upscaling.GetCurrentVRMenuPointerOverlay(16) == nullptr, "CSX pointer closure changed only the second eye");
+	Require(upscaling.GetCurrentVRMenuPointerOverlay(17) == layer, "native overlay did not recover after CSX relinquished the target");
+	globals::features::vr.customVRCursorVisible = true;
+	Require(upscaling.GetCurrentVRMenuPointerOverlay(17) == layer, "CSX acquisition changed only the second eye");
+	Require(upscaling.GetCurrentVRMenuPointerOverlay(18) == nullptr, "new stereo frame did not suppress the replaced pointer");
+	globals::features::vr.customVRCursorVisible = false;
 	RE::PlayerCharacter::player = nullptr;
+}
+
+void TestNativePointerSuppression()
+{
+	RE::Geometry pointer, unrelated;
+	RE::PlayerCharacter player;
+	player.nodes.UIPointerGeo.value = &pointer;
+	RE::PlayerCharacter::player = &player;
+	auto& vr = globals::features::vr;
+	vr.customVRCursorVisible = true;
+	Require(vr.ShouldSuppressNativeMenuPointer(&pointer), "active CSX target left the native beam visible");
+	Require(!vr.ShouldSuppressNativeMenuPointer(&unrelated) && !vr.ShouldSuppressNativeMenuPointer(nullptr), "unrelated geometry was suppressed");
+	for (bool* flag : { &vr.customVRCursorVisible, &vr.wandState.isIntersecting, &vr.headsetPointer, &vr.presenting, &vr.showBeam, &globals::game::isVR }) {
+		*flag = false;
+		const auto lookups = RE::PlayerCharacter::lookups;
+		Require(!vr.ShouldSuppressNativeMenuPointer(&pointer), "inactive CSX replacement hid the native pointer");
+		Require(RE::PlayerCharacter::lookups == lookups, "inactive pointer replacement inspected player geometry");
+		*flag = true;
+	}
+	vr.menuTexture = nullptr;
+	Require(!vr.ShouldSuppressNativeMenuPointer(&pointer), "missing CSX texture hid the fallback pointer");
+	vr.menuControllerTexture = &vr;
+	Require(!vr.ShouldSuppressNativeMenuPointer(&pointer), "an unrelated controller texture replaced a missing HMD target");
+	vr.customVRCursorOverlayType = VR::OverlayType::Controller;
+	Require(vr.ShouldSuppressNativeMenuPointer(&pointer), "controller-only presentation kept the duplicate native pointer");
+	vr.menuTexture = &vr;
+	vr.menuControllerTexture = nullptr;
+	Require(!vr.ShouldSuppressNativeMenuPointer(&pointer), "an unrelated HMD texture replaced a missing controller target");
+	vr.customVRCursorOverlayType = VR::OverlayType::HMD;
+	player.hasNodes = false;
+	Require(!vr.ShouldSuppressNativeMenuPointer(&pointer), "missing VR nodes were admitted");
+	player.hasNodes = true;
+	RE::PlayerCharacter::player = nullptr;
+	Require(!vr.ShouldSuppressNativeMenuPointer(&pointer), "missing player was admitted");
+	vr.customVRCursorVisible = false;
 }
 
 int main()
@@ -275,6 +346,7 @@ try {
 	TestPointerAdmission();
 	TestPointerVisibility();
 	TestPointerStereoPresentation();
+	TestNativePointerSuppression();
 	std::cout << "VR menu pointer: identity, scope, outside-interface capture, stereo arguments, freshness and visibility passed\n";
 } catch (const std::exception& e) {
 	std::cerr << e.what() << '\n';

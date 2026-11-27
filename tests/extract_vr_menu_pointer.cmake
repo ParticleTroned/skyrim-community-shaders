@@ -4,7 +4,14 @@ endif()
 include("${CMAKE_CURRENT_LIST_DIR}/extract_source_region.cmake")
 file(READ "${PROJECT_ROOT}/src/Api/AcceptedDrawService.cpp" _service)
 file(READ "${PROJECT_ROOT}/src/Features/Upscaling.cpp" _upscaling)
+file(READ "${PROJECT_ROOT}/src/Features/VR/WandPointing.cpp" _wand)
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
+extract_between(
+    "${_wand}"
+    "bool VR::ShouldSuppressNativeMenuPointer("
+    "void VR::UpdateOCUPointerOwnership("
+    "vr_native_pointer_suppression_under_test.h"
+)
 extract_between(
     "${_service}"
     "const void* GetCurrentAcceptedDrawGeometry("

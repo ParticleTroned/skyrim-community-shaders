@@ -4,6 +4,7 @@ set(_pointer_test_headers
     "${_pointer_test_dir}/vr_menu_pointer_under_test.h"
     "${_pointer_test_dir}/vr_menu_pointer_visibility_under_test.h"
     "${_pointer_test_dir}/vr_menu_pointer_presentation_under_test.h"
+    "${_pointer_test_dir}/vr_native_pointer_suppression_under_test.h"
 )
 add_custom_command(
     OUTPUT ${_pointer_test_headers}
@@ -14,6 +15,7 @@ add_custom_command(
     DEPENDS
         src/Api/AcceptedDrawService.cpp
         src/Features/Upscaling.cpp
+        src/Features/VR/WandPointing.cpp
         tests/extract_source_region.cmake
         tests/extract_vr_menu_pointer.cmake
     VERBATIM

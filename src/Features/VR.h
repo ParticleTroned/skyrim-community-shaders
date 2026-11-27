@@ -526,6 +526,8 @@ public:
 	void ResetMenuInputRuntimeState();
 	/** Whether a headset controller currently owns menu pointer input. */
 	bool IsMenuPointerInHeadset() const;
+	/** Render-thread predicate for replacing only the native beam at an active CSX target. */
+	bool ShouldSuppressNativeMenuPointer(const RE::BSGeometry* a_geometry) const;
 	void RequestFixedWorldMenuReanchor();
 
 	void EnsureOverlayInitialized();

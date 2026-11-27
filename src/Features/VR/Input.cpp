@@ -878,9 +878,14 @@ void VR::ProcessControllerInputForWandPointingPath(bool testMode, float mouseDea
 		}
 		gLastObservedMouseButtonDown[button] = mouseButtonDown;
 	}
-	if (gWandClaimedCursorThisFrame) {
+	const bool wandOwnsDrag = !testMode && CanUseWandPointing() &&
+	                          (capturedWandController != ControllerDevice::Both ||
+								  std::any_of(std::begin(gDispatchedWandMouseButtonDown), std::end(gDispatchedWandMouseButtonDown), [](bool down) { return down; }));
+	if (gWandClaimedCursorThisFrame || wandOwnsDrag) {
+		// Cursor ownership lasts through the release frame, including queued short taps.
 		desktopMouseMoved = false;
 		desktopMouseClicked = false;
+		gCursorOwner = CursorOwner::Wand;
 	}
 
 	if (desktopCursorUsable) {

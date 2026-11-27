@@ -3046,6 +3046,9 @@ namespace Hooks
 
 	static void DrawFeatureRenderPass(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags, void (*a_draw)(RE::BSRenderPass*, uint32_t, bool, uint32_t))
 	{
+		if (globals::game::isVR && a_pass && globals::features::vr.customVRCursorVisible &&
+			globals::features::vr.ShouldSuppressNativeMenuPointer(a_pass->geometry))
+			return;
 #ifdef DEVBENCH_BRIDGE_ENABLED
 		if (a_pass && a_pass->shader)
 			CSX::Diagnostics::GpuCrash::RecordDraw(a_pass->shader->fxpFilename, a_technique, reinterpret_cast<uintptr_t>(a_pass->geometry));

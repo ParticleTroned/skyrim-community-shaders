@@ -3549,6 +3549,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				float complexMaterialRoughness = 1.0 - complexMaterialColor.y;
 				material.Roughness = lerp(material.Roughness, complexMaterialRoughness, complexMaterial);
 				material.F0 = lerp(material.F0, complexSpecular, complexMaterial);
+#				if defined(DETAIL_MAPS) && !defined(MODELSPACENORMALS) && !defined(LANDSCAPE) && !defined(FUR_SHELLS)
+				material.Roughness = saturate(material.Roughness + detailSample.Roughness * complexMaterial);
+#				endif
 #			endif
 			}
 		}

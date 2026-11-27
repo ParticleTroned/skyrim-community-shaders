@@ -91,6 +91,8 @@ namespace
 							if (extended)
 								for (const char* feature : { "EXTENDED_MATERIALS", "WETTERNESS", "SNOW_COVER", "TERRAIN_VARIATION" })
 									defines.push_back({ feature, "1" });
+							if (extended && !pbr && std::string_view(material) == "ENVMAP")
+								defines.push_back({ "DYNAMIC_CUBEMAPS", "1" });
 							if (deferred) {
 								defines.push_back({ "DEFERRED", "1" });
 								defines.push_back({ "CHARACTER_CATEGORY", "1" });

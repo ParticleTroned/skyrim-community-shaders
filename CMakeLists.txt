@@ -1761,6 +1761,24 @@ if(BUILD_CONTROLLER_TESTS)
         set_tests_properties(${TEST_NAME} PROPERTIES LABELS "ControllerTests")
     endfunction()
 
+    set(_water_taa_test_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/water-taa")
+    set(_water_taa_test_header "${_water_taa_test_dir}/water_taa_under_test.h")
+    add_custom_command(
+        OUTPUT "${_water_taa_test_header}"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_water_taa_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_water_taa.cmake"
+        DEPENDS
+            src/Features/Upscaling.cpp
+            tests/extract_water_taa.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(water_taa_test WaterTAA tests/water_taa_test.cpp)
+    target_sources(water_taa_test PRIVATE "${_water_taa_test_header}")
+    target_include_directories(water_taa_test PRIVATE "${_water_taa_test_dir}")
+
     add_controller_test(settings_search_test SettingsSearch tests/settings_search_test.cpp)
     add_test(
         NAME ControlCatalog

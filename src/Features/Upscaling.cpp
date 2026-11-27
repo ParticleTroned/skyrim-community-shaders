@@ -52043,20 +52043,36 @@ void UpdateCameraData();
 
 void Upscaling::ConfigureTAA()
 {
-	auto upscaleMethod = GetRuntimeUpscaleMethod();
-
-	// When no upscaling method is active, preserve vanilla TAA state.
-	// UpdateJitter (called immediately after this hook) owns the non-upscaling path.
+	const auto upscaleMethod = GetRuntimeUpscaleMethod();
+	// Vanilla owns TAA state when CSX is not replacing the temporal pass.
 	if (upscaleMethod == UpscaleMethod::kNONE)
 		return;
 
 	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
+	if (!imageSpaceManager)
+		return;
 	GET_INSTANCE_MEMBER(BSImagespaceShaderISTemporalAA, imageSpaceManager);
+	if (!BSImagespaceShaderISTemporalAA)
+		return;
 
-	// CSX TAA replaces vanilla TAA, so disable water TAA there.
-	// FSR/DLSS keep water TAA enabled.
 	bool* enableWaterTAA = reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(BSImagespaceShaderISTemporalAA) + 0x38LL);
-	*enableWaterTAA = upscaleMethod != UpscaleMethod::kTAA;
+	bool useWaterTAA = upscaleMethod == UpscaleMethod::kFSR || upscaleMethod == UpscaleMethod::kDLSS;
+	if (useWaterTAA) {
+		static RE::Setting* waterTAASetting = nullptr;
+		if (!waterTAASetting)
+			waterTAASetting = RE::GetINISetting("bTAAWater:Display");
+		const auto renderer = globals::game::renderer;
+		useWaterTAA = waterTAASetting && waterTAASetting->data.b && renderer;
+		if (useWaterTAA) {
+			// Skyrim can omit or recreate these targets independently of the upscaler.
+			const auto& targets = renderer->GetRuntimeData().renderTargets;
+			for (const auto target : { RE::RENDER_TARGETS::kTEMPORAL_AA_WATER_1, RE::RENDER_TARGETS::kTEMPORAL_AA_WATER_2 }) {
+				const auto& history = targets[target];
+				useWaterTAA &= history.texture && history.RTV && history.SRV;
+			}
+		}
+	}
+	*enableWaterTAA = useWaterTAA;
 
 	BSImagespaceShaderISTemporalAA->taaEnabled = true;
 }

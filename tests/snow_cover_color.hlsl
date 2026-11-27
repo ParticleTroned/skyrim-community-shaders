@@ -15,6 +15,7 @@ cbuffer Samples : register(b0)
 	uint ProjectedTexel;
 	float3 SelectionNormals;
 	float3 SelectionPosition;
+	uint FootprintScenario;
 };
 
 struct ColorOutput
@@ -149,6 +150,51 @@ float4 ObjectFadeCoverage(float4 position : SV_Position) : SV_Target0
 	float coverage = SnowCover::ApplySnow(material, normal, 0, footprint, viewDist, 0, fireMelt);
 #endif
 	return float4(footprint.scale, SnowCover::GetCoverage(footprint, 0, 0), coverage, 1);
+}
+
+float4 FootprintGate(float4 position : SV_Position) : SV_Target0
+{
+	bool odd = ((uint)position.x + (uint)position.y) & 1u;
+	float skylight = FootprintScenario == 0 && odd || FootprintScenario == 4 ? 0 : 1;
+	if (FootprintScenario == 5 && odd)
+		skylight = 1e-6;
+	float3 normal = float3(0, 0, FootprintScenario == 1 && odd ? .2 : 1);
+	float distance = FootprintScenario == 2 && odd ? 300 : 0;
+	float3 p = float3(position.xy * 125, 1);
+	float scale = SnowCover::GetSurfaceScale(normal, skylight, distance);
+	float coverage = 0;
+	MaterialProperties material = (MaterialProperties)0;
+	material.BaseColor = float3(.2, .3, .4);
+	SnowCover::CoverageInputs footprint = (SnowCover::CoverageInputs)0;
+	footprint.position = p;
+	SnowCover::FireMeltSample fire = (SnowCover::FireMeltSample)0;
+#if defined(WETTERNESS)
+	float2 melt = 0;
+#endif
+#if !defined(SNOW_SCALE_REFERENCE)
+	[branch] if (scale != 0)
+#endif
+	{
+		float environment = SnowCover::GetEnvironmentalMultiplier(p);
+#if defined(SNOW_SCALE_REFERENCE)
+		footprint = SnowCover::GetSurfaceFootprint(normal, 0, p, skylight, 100, distance, 0, environment);
+#else
+		footprint = SnowCover::GetSurfaceFootprintWithScale(normal, 0, p, 100, distance, 0, environment, scale);
+#endif
+#if defined(WETTERNESS)
+		melt = Wetterness::GetSnowMeltWetness(footprint, float3(0, 1, 0), fire);
+#endif
+	}
+#if defined(WETTERNESS)
+	return float4(melt, ddx_fine(melt.x), ddy_fine(melt.y));
+#else
+#	if defined(TRUE_PBR)
+	coverage = SnowCover::ApplySnowPBR(material, normal, 0, footprint, distance, 0, fire);
+#	else
+	coverage = SnowCover::ApplySnow(material, normal, 0, footprint, distance, 0, fire);
+#	endif
+	return float4(material.BaseColor.r, coverage, ddx_fine(coverage), ddy_fine(coverage));
+#endif
 }
 
 #if defined(TRUE_PBR)

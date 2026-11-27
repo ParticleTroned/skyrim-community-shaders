@@ -4,6 +4,7 @@
 #include <limits>
 #include <optional>
 
+#include "Features/LightLimitFix.h"
 #include "Features/LightLimitFix/ShadowCulling.h"
 #include "Features/LightLimitFix/ShadowCullingDrawScope.h"
 #include "Features/TerrainBlending.h"
@@ -250,7 +251,7 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
-			const ParaboloidShadow::Scope clipScope{ globals::d3d::context, false };
+			const ParaboloidShadow::Scope clipScope{ globals::d3d::context, ParaboloidShadow::Mode::Off };
 			const Util::ScopedFlag carriedScope{ globals::state->permutationData.ExtraShaderDescriptor,
 				static_cast<uint32_t>(State::ExtraShaderDescriptors::CarriedShadowLight), false };
 			const LightLimitFixDetail::ShadowCulling::DrawScope shadowScope{
@@ -274,7 +275,7 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
-			const ParaboloidShadow::Scope clipScope{ globals::d3d::context, false };
+			const ParaboloidShadow::Scope clipScope{ globals::d3d::context, ParaboloidShadow::Mode::Off };
 			const Util::ScopedFlag carriedScope{ globals::state->permutationData.ExtraShaderDescriptor,
 				static_cast<uint32_t>(State::ExtraShaderDescriptors::CarriedShadowLight), false };
 			const LightLimitFixDetail::ShadowCulling::DrawScope shadowScope{ light };
@@ -295,7 +296,7 @@ namespace FrameAnnotations
 	{
 		static void thunk(RE::BSShadowLight* light, void* a2)
 		{
-			const ParaboloidShadow::Scope clipScope{ globals::d3d::context, true };
+			const ParaboloidShadow::Scope clipScope{ globals::d3d::context, globals::features::lightLimitFix.GetEffectivePointShadowCorrection() };
 			const Util::ScopedFlag carriedScope{ globals::state->permutationData.ExtraShaderDescriptor,
 				static_cast<uint32_t>(State::ExtraShaderDescriptors::CarriedShadowLight),
 				LightLimitFixDetail::ShadowCulling::UseCarriedLightNearCutoff(light) };

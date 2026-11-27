@@ -1975,6 +1975,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_grass_under_test.h"
             "${_settings_ui_dir}/settings_shadow_culling_under_test.h"
             "${_settings_ui_dir}/settings_llf_shadows_under_test.h"
+            "${_settings_ui_dir}/settings_point_shadow_correction_under_test.h"
             "${_settings_ui_dir}/settings_model_resolution_under_test.h"
             "${_settings_ui_dir}/menu_settings_under_test.h"
             "${_settings_ui_dir}/settings_footer_under_test.h"
@@ -2056,6 +2057,7 @@ if(BUILD_CONTROLLER_TESTS)
             "${_settings_ui_dir}/settings_grass_under_test.h"
             "${_settings_ui_dir}/settings_shadow_culling_under_test.h"
             "${_settings_ui_dir}/settings_llf_shadows_under_test.h"
+            "${_settings_ui_dir}/settings_point_shadow_correction_under_test.h"
             "${_settings_ui_dir}/settings_model_resolution_under_test.h"
             "${_settings_ui_dir}/menu_settings_under_test.h"
             "${_settings_ui_dir}/settings_footer_under_test.h"
@@ -5542,6 +5544,54 @@ if(BUILD_CONTROLLER_TESTS)
     )
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_runtime.cmake")
     add_controller_test(runtime_toggle_test RuntimeToggle tests/runtime_toggle_test.cpp)
+    set(_point_shadow_settings_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/point_shadow_settings_test"
+    )
+    set(_point_shadow_settings_headers
+        "${_point_shadow_settings_dir}/point_shadow_api.h"
+        "${_point_shadow_settings_dir}/point_shadow_accessors.h"
+        "${_point_shadow_settings_dir}/point_shadow_settings.h"
+        "${_point_shadow_settings_dir}/point_shadow_performance.h"
+        "${_point_shadow_settings_dir}/point_shadow_constants.h"
+        "${_point_shadow_settings_dir}/point_shadow_sanitize.h"
+        "${_point_shadow_settings_dir}/point_shadow_serialization.h"
+        "${_point_shadow_settings_dir}/point_shadow_publication.h"
+        "${_point_shadow_settings_dir}/point_shadow_capture.h"
+        "${_point_shadow_settings_dir}/point_shadow_load.h"
+        "${_point_shadow_settings_dir}/point_shadow_dispatch_start.h"
+        "${_point_shadow_settings_dir}/point_shadow_dispatch_action.h"
+    )
+    add_custom_command(
+        OUTPUT ${_point_shadow_settings_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${CMAKE_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_point_shadow_settings_dir}" -P
+            "${CMAKE_SOURCE_DIR}/tests/extract_point_shadow_settings.cmake"
+        DEPENDS
+            tests/extract_point_shadow_settings.cmake
+            tests/extract_source_region.cmake
+            src/Features/LightLimitFix.h
+            src/Features/LightLimitFix.cpp
+            src/Api/FeatureDevBenchBridge.cpp
+            src/State.cpp
+        VERBATIM
+    )
+    add_controller_test(point_shadow_settings_test PointShadowSettings
+        tests/point_shadow_settings_test.cpp
+    )
+    target_sources(
+        point_shadow_settings_test
+        PRIVATE ${_point_shadow_settings_headers} src/Api/ServiceFoundation.cpp
+    )
+    target_include_directories(
+        point_shadow_settings_test
+        PRIVATE "${_point_shadow_settings_dir}"
+    )
+    target_link_libraries(
+        point_shadow_settings_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_composite.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/shader_include.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/standalone_shader_cache.cmake")

@@ -724,6 +724,7 @@ namespace
 
 	void SanitizeSettings(LightLimitFix::Settings& a_settings)
 	{
+		PointShadowCorrection::Validate(a_settings.PointShadowCorrection);
 		a_settings.LightAttachRefreshFrames = std::clamp(a_settings.LightAttachRefreshFrames,
 			LightLimitFixDetail::LightAttach::MinimumRefreshFrames, LightLimitFixDetail::LightAttach::MaximumRefreshFrames);
 		LightLimitFixDetail::ShadowCulling::Validate(a_settings.ShadowCulling);
@@ -1104,6 +1105,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	JsonPlacedLightsInteriorsOnly,
 	JsonPlacedLightsPortalStrictOnly,
 	EnableContactShadows,
+	PointShadowCorrection,
 	ContactShadowsInteriorsOnly,
 	EnableParticleContactShadows,
 	ContactShadowQuality,
@@ -1287,6 +1289,7 @@ void LightLimitFix::DrawSettings()
 				}
 			}
 			ImGui::Spacing();
+			DrawPointShadowCorrectionSettings();
 			LightLimitFixDetail::ShadowCulling::DrawSettings(settings.ShadowCulling, true);
 		}
 	}
@@ -1344,6 +1347,28 @@ void LightLimitFix::DrawSettings()
 	}
 }
 
+void LightLimitFix::DrawPointShadowCorrectionSettings()
+{
+	static constexpr std::array choices{
+		MenuUI::Choice{ "off", "Off", "Keep point-light shadows; disable this geometry correction.", "Keep native point-light shadows without geometry correction." },
+		MenuUI::Choice{ "clip_only", "Clip only", "Correct geometry at the boundary between the two shadow halves.", "Clip at the boundary only. Shadow shape and depth accuracy near lights can differ from Full." },
+		MenuUI::Choice{ "full", "Full", "Also improve the shape and depth accuracy of shadows near lights.", "Default: retain the full correction while Light Limit Fix is available." }
+	};
+	int selected = static_cast<int>(GetRequestedPointShadowCorrection());
+	if (MenuUI::ChoiceSetting("Point-light shadow correction", &selected, choices))
+		SetPointShadowCorrection(static_cast<PointShadowMode>(selected));
+}
+
+bool LightLimitFix::IsPointShadowCorrectionAvailable() const
+{
+	return loaded && globals::state && !globals::state->IsFeatureDisabled("LightLimitFix");
+}
+
+void LightLimitFix::ApplyPointShadowCorrection()
+{
+	pointShadowCorrection.Apply(settings.PointShadowCorrection, globals::state);
+}
+
 void LightLimitFix::DrawPerformanceSettings(bool a_advanced)
 {
 	Util::Widgets::Checkbox("Enable Particle Lights", &settings.EnableParticleLights);
@@ -1353,6 +1378,7 @@ void LightLimitFix::DrawPerformanceSettings(bool a_advanced)
 		SetContactShadowsEnabled(contactShadows);
 	Util::Widgets::Checkbox("Interiors Only", &settings.ContactShadowsInteriorsOnly);
 
+	DrawPointShadowCorrectionSettings();
 	LightLimitFixDetail::ShadowCulling::DrawSettings(settings.ShadowCulling, a_advanced);
 	if (!a_advanced) {
 		return;
@@ -1393,13 +1419,15 @@ void LightLimitFix::DrawPerformanceSettings(bool a_advanced)
 
 bool LightLimitFix::IsPerformanceCostMeasurementReady() const
 {
-	return !Util::IsRuntimeToggleBlocked(globals::state) && (settings.EnableContactShadows != 0) == IsContactShadowsRequested();
+	return !Util::IsRuntimeToggleBlocked(globals::state) && !IsPointShadowCorrectionPending() &&
+	       (settings.EnableContactShadows != 0) == IsContactShadowsRequested();
 }
 
 json LightLimitFix::CapturePerformanceSettingsState() const
 {
 	json captured = settings;
 	captured["EnableContactShadows"] = IsContactShadowsRequested();
+	captured["PointShadowCorrection"] = GetRequestedPointShadowCorrection();
 	return captured;
 }
 
@@ -1668,11 +1696,17 @@ void LightLimitFix::PruneParticleLightCache(std::uint32_t a_frame)
 	particleLightDiagnostics.cacheEntries.store(particleLightsReferences.size(), std::memory_order_relaxed);
 }
 
+void LightLimitFix::ReplaceSettings(Settings updated)
+{
+	SanitizeSettings(updated);
+	pointShadowCorrection.ReplaceSetting(updated.PointShadowCorrection);
+	runtimeToggle.ReplaceSettings(settings, std::move(updated), &Settings::EnableContactShadows);
+	LightLimitFixDetail::LightAttach::Invalidate();
+}
+
 void LightLimitFix::LoadSettings(json& o_json)
 {
-	runtimeToggle.ReplaceSettings(settings, o_json.get<Settings>(), &Settings::EnableContactShadows);
-	SanitizeSettings(settings);
-	LightLimitFixDetail::LightAttach::Invalidate();
+	ReplaceSettings(o_json.get<Settings>());
 }
 
 void LightLimitFix::SaveSettings(json& o_json)
@@ -1680,13 +1714,12 @@ void LightLimitFix::SaveSettings(json& o_json)
 	SanitizeSettings(settings);
 	o_json = settings;
 	o_json["EnableContactShadows"] = IsContactShadowsRequested();
+	o_json["PointShadowCorrection"] = GetRequestedPointShadowCorrection();
 }
 
 void LightLimitFix::RestoreDefaultSettings()
 {
-	runtimeToggle.ReplaceSettings(settings, Settings{}, &Settings::EnableContactShadows);
-	SanitizeSettings(settings);
-	LightLimitFixDetail::LightAttach::Invalidate();
+	ReplaceSettings(Settings{});
 }
 
 RE::NiNode* GetParentRoomNode(RE::NiAVObject* object)

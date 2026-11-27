@@ -157,6 +157,14 @@ try {
 		const auto restored = ReadLookPack(root, skinPack.id, skinSchemas);
 		Require(restored.IsCompatible() && restored.baseline["Skin"] == appearance, "Advanced Skin pack round trip preserves wetness and lighting");
 	}
+	{
+		const Json settings{ { "PointShadowCorrection", 1 }, { "ParticleBrightness", 1.f } };
+		Require(Classify("LightLimitFix", "PointShadowCorrection") == SettingsDomain::Local,
+			"Point-shadow correction is local to LLF");
+		const auto changed = ReplaceAppearance("LightLimitFix", settings, Json{ { "ParticleBrightness", 2.f }, { "PointShadowCorrection", 0 } });
+		Require(changed.at("PointShadowCorrection") == 1 && changed.at("ParticleBrightness") == 2.f,
+			"Appearance changes preserve point-shadow correction");
+	}
 	const Json schemas = { { "Advanced", { { "Refraction Scale", 1.f } } }, { "Skylighting", { { "EnableSkylighting", true }, { "ProbeGridQuality", 2 }, { "MinDiffuseVisibility", .3f }, { "MinSpecularVisibility", .4f } } } };
 	Save(root / "Example" / "preset.json", { { "name", "Example" }, { "type", "CS" }, { "description", "Shared profile" } });
 	Save(root / "Example" / "Baseline" / "Skylighting.json", { { "EnableSkylighting", false }, { "ProbeGridQuality", 0 }, { "MinDiffuseVisibility", .7f } });

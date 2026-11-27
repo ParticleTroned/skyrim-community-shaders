@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Utils/PointShadowCorrection.h"
 #include "Utils/RuntimeToggle.h"
 
 #include "Buffer.h"
@@ -27,6 +28,8 @@ struct LightLimitFix : OverlayFeature
 {
 private:
 	Util::RuntimeToggle runtimeToggle{ false };
+	PointShadowCorrection::RuntimeState pointShadowCorrection;
+	void DrawPointShadowCorrectionSettings();
 	static constexpr std::string_view MOD_ID = "99548";
 	eastl::hash_map<RE::BSLight*, RE::NiLight*> effectLightValidationCache;
 	using SceneLightSnapshot = LightLimitFixDetail::SceneLightSnapshot<RE::NiPointer<RE::BSLight>>;
@@ -41,6 +44,17 @@ public:
 	/** @brief Read or stage the preference without touching render-owned settings. */
 	bool IsContactShadowsRequested() const { return runtimeToggle.Get(); }
 	void SetContactShadowsEnabled(bool enabled) { runtimeToggle.Set(enabled); }
+
+	using PointShadowMode = PointShadowCorrection::Mode;
+	/** Stage only this preference; rendering publishes it at a safe frame boundary. */
+	void SetPointShadowCorrection(PointShadowMode mode) { pointShadowCorrection.Request(mode); }
+	PointShadowMode GetRequestedPointShadowCorrection() const { return pointShadowCorrection.Requested(); }
+	PointShadowMode GetAppliedPointShadowCorrection() const { return pointShadowCorrection.Applied(); }
+	PointShadowMode GetEffectivePointShadowCorrection() const { return pointShadowCorrection.Effective(IsPointShadowCorrectionAvailable()); }
+	bool IsPointShadowCorrectionPending() const { return pointShadowCorrection.Pending(); }
+	bool IsPointShadowCorrectionAvailable() const;
+	/** Runs even when LLF is unavailable, so saved preferences can settle independently. */
+	void ApplyPointShadowCorrection();
 
 	virtual inline std::string GetName() override { return "Light Limit Fix"; }
 	virtual inline std::string GetShortName() override { return "LightLimitFix"; }
@@ -317,12 +331,13 @@ public:
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
 	virtual json CapturePerformanceSettingsState() const override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
-	/** Includes deferred contact-shadow requests in the overview state. */
-	bool IsPerformanceToggleEnabled() const override { return settings.EnableParticleLights || IsContactShadowsRequested() || settings.EnableParticleContactShadows || settings.ShadowCulling.Active() || settings.SkipRedundantLightAttach; }
+	/** Includes deferred shadow requests in the overview state. */
+	bool IsPerformanceToggleEnabled() const override { return GetRequestedPointShadowCorrection() != PointShadowMode::Off || settings.EnableParticleLights || IsContactShadowsRequested() || settings.EnableParticleContactShadows || settings.ShadowCulling.Active() || settings.SkipRedundantLightAttach; }
 	/** Changes effect switches while retaining particle and shadow quality controls. */
 	void SetPerformanceToggleEnabled(bool a_enabled) override
 	{
 		const Settings defaults{};
+		SetPointShadowCorrection(a_enabled ? defaults.PointShadowCorrection : PointShadowMode::Off);
 		settings.EnableParticleLights = a_enabled && defaults.EnableParticleLights;
 		SetContactShadowsEnabled(a_enabled && defaults.EnableContactShadows);
 		settings.EnableParticleContactShadows = a_enabled && defaults.EnableParticleContactShadows;
@@ -336,10 +351,11 @@ public:
 		LightLimitFixDetail::LightAttach::Invalidate();
 	}
 	virtual bool IsPerformanceCostMeasurementReady() const override;
-	virtual bool IsPerformanceCostMeasurementEnabled() const override { return settings.EnableParticleLights || settings.EnableContactShadows || settings.EnableParticleContactShadows || settings.ShadowCulling.Active() || settings.SkipRedundantLightAttach; }
+	virtual bool IsPerformanceCostMeasurementEnabled() const override { return GetEffectivePointShadowCorrection() != PointShadowMode::Off || settings.EnableParticleLights || settings.EnableContactShadows || settings.EnableParticleContactShadows || settings.ShadowCulling.Active() || settings.SkipRedundantLightAttach; }
 	virtual void SetPerformanceCostMeasurementEnabled(bool a_enabled) override
 	{
 		const Settings defaults{};
+		SetPointShadowCorrection(a_enabled ? defaults.PointShadowCorrection : PointShadowMode::Off);
 		settings.SkipRedundantLightAttach = a_enabled && defaults.SkipRedundantLightAttach;
 		LightLimitFixDetail::LightAttach::Invalidate();
 		if (a_enabled) {
@@ -382,6 +398,7 @@ public:
 			{ "MaxParticleDistance", settings.MaxParticleDistance },
 			{ "EnableParticleLightsOptimization", settings.EnableParticleLightsOptimization },
 			{ "EnableContactShadows", IsContactShadowsRequested() },
+			{ "PointShadowCorrection", GetRequestedPointShadowCorrection() },
 			{ "ContactShadowsInteriorsOnly", settings.ContactShadowsInteriorsOnly },
 			{ "EnableParticleContactShadows", settings.EnableParticleContactShadows },
 			{ "ContactShadowQuality", settings.ContactShadowQuality },
@@ -398,26 +415,27 @@ public:
 		if (!a_state.is_object())
 			return;
 
-		settings.EnableParticleLights = a_state.value("EnableParticleLights", settings.EnableParticleLights);
-		settings.EnableParticleLightsCulling = a_state.value("EnableParticleLightsCulling", settings.EnableParticleLightsCulling);
-		settings.EnableParticleLightsDetection = a_state.value("EnableParticleLightsDetection", settings.EnableParticleLightsDetection);
-		settings.ParticleClusterThreshold = a_state.value("ParticleClusterThreshold", settings.ParticleClusterThreshold);
-		settings.MaxParticlesPerEmitter = a_state.value("MaxParticlesPerEmitter", settings.MaxParticlesPerEmitter);
-		settings.MaxParticleDistance = a_state.value("MaxParticleDistance", settings.MaxParticleDistance);
-		settings.EnableParticleLightsOptimization = a_state.value("EnableParticleLightsOptimization", settings.EnableParticleLightsOptimization);
-		SetContactShadowsEnabled(a_state.value("EnableContactShadows", IsContactShadowsRequested()));
-		settings.ContactShadowsInteriorsOnly = a_state.value("ContactShadowsInteriorsOnly", settings.ContactShadowsInteriorsOnly);
-		settings.EnableParticleContactShadows = a_state.value("EnableParticleContactShadows", settings.EnableParticleContactShadows);
-		settings.ContactShadowQuality = a_state.value("ContactShadowQuality", settings.ContactShadowQuality);
-		settings.ContactShadowClusterBudget = a_state.value("ContactShadowClusterBudget", settings.ContactShadowClusterBudget);
-		settings.ParticleContactShadowBudget = a_state.value("ParticleContactShadowBudget", settings.ParticleContactShadowBudget);
-		settings.StrictContactShadowBudget = a_state.value("StrictContactShadowBudget", settings.StrictContactShadowBudget);
+		Settings updated = settings;
+		updated.PointShadowCorrection = a_state.value("PointShadowCorrection", GetRequestedPointShadowCorrection());
+		updated.EnableParticleLights = a_state.value("EnableParticleLights", settings.EnableParticleLights);
+		updated.EnableParticleLightsCulling = a_state.value("EnableParticleLightsCulling", settings.EnableParticleLightsCulling);
+		updated.EnableParticleLightsDetection = a_state.value("EnableParticleLightsDetection", settings.EnableParticleLightsDetection);
+		updated.ParticleClusterThreshold = a_state.value("ParticleClusterThreshold", settings.ParticleClusterThreshold);
+		updated.MaxParticlesPerEmitter = a_state.value("MaxParticlesPerEmitter", settings.MaxParticlesPerEmitter);
+		updated.MaxParticleDistance = a_state.value("MaxParticleDistance", settings.MaxParticleDistance);
+		updated.EnableParticleLightsOptimization = a_state.value("EnableParticleLightsOptimization", settings.EnableParticleLightsOptimization);
+		updated.EnableContactShadows = a_state.value("EnableContactShadows", IsContactShadowsRequested());
+		updated.ContactShadowsInteriorsOnly = a_state.value("ContactShadowsInteriorsOnly", settings.ContactShadowsInteriorsOnly);
+		updated.EnableParticleContactShadows = a_state.value("EnableParticleContactShadows", settings.EnableParticleContactShadows);
+		updated.ContactShadowQuality = a_state.value("ContactShadowQuality", settings.ContactShadowQuality);
+		updated.ContactShadowClusterBudget = a_state.value("ContactShadowClusterBudget", settings.ContactShadowClusterBudget);
+		updated.ParticleContactShadowBudget = a_state.value("ParticleContactShadowBudget", settings.ParticleContactShadowBudget);
+		updated.StrictContactShadowBudget = a_state.value("StrictContactShadowBudget", settings.StrictContactShadowBudget);
 		if (a_state.contains("ShadowCulling"))
-			settings.ShadowCulling = LightLimitFixDetail::ShadowCulling::Parse(a_state.at("ShadowCulling"));
-		settings.SkipRedundantLightAttach = a_state.value("SkipRedundantLightAttach", settings.SkipRedundantLightAttach);
-		settings.LightAttachRefreshFrames = std::clamp(a_state.value("LightAttachRefreshFrames", settings.LightAttachRefreshFrames),
-			LightLimitFixDetail::LightAttach::MinimumRefreshFrames, LightLimitFixDetail::LightAttach::MaximumRefreshFrames);
-		LightLimitFixDetail::LightAttach::Invalidate();
+			updated.ShadowCulling = LightLimitFixDetail::ShadowCulling::Parse(a_state.at("ShadowCulling"));
+		updated.SkipRedundantLightAttach = a_state.value("SkipRedundantLightAttach", settings.SkipRedundantLightAttach);
+		updated.LightAttachRefreshFrames = a_state.value("LightAttachRefreshFrames", settings.LightAttachRefreshFrames);
+		ReplaceSettings(std::move(updated));
 	}
 	virtual void DrawOverlay() override;
 	virtual bool IsOverlayVisible() const override { return settings.EnableLightsVisualisation; }
@@ -476,6 +494,7 @@ public:
 		float JsonPlacedLightIntensity = 1.0f;
 		bool JsonPlacedLightsInteriorsOnly = false;
 		bool JsonPlacedLightsPortalStrictOnly = false;
+		PointShadowMode PointShadowCorrection = PointShadowMode::Full;
 		bool EnableContactShadows = false;
 		bool ContactShadowsInteriorsOnly = false;
 		bool EnableParticleContactShadows = false;
@@ -492,6 +511,11 @@ public:
 
 	Settings settings;
 
+private:
+	/** Validate and replace once, preserving both render-owned applied values. */
+	void ReplaceSettings(Settings updated);
+
+public:
 	bool AddParticleLight(RE::BSRenderPass* a_pass, const ParticleLightReference& a_reference);
 	/** Reports whether effect processing requires fresh material admission before drawing. */
 	bool CheckParticleLights(RE::BSRenderPass* a_pass, uint32_t a_technique, bool* a_admissionInvalidated = nullptr);

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Utils/PointShadowCorrectionMode.h"
+
 #include <array>
 #include <atomic>
 #include <barrier>
@@ -29,6 +31,7 @@ struct Resource
 {
 	std::atomic_uint references{ 1 }, releases{ 0 };
 	std::string name;
+	std::array<Resource*, 3> companions{};
 	void AddRef()
 	{
 		const auto previous = references.fetch_add(1);
@@ -42,8 +45,12 @@ struct Resource
 			resource.onRelease();
 		++releases;
 		++resource.releases;
-		if (previous == 1)
+		if (previous == 1) {
+			for (auto* companion : companions)
+				if (companion)
+					companion->Release();
 			--resource.live;
+		}
 	}
 };
 namespace winrt
@@ -130,23 +137,44 @@ namespace logger
 	void warn(const char*, T&&...)
 	{}
 }
-winrt::com_ptr<ID3D11GeometryShader> PrepareParaboloidClip(const RE::BSShader&, uint32_t)
-{
-	assert(false && "Draw publication must not prepare auxiliary shaders");
-	return {};
-}
 namespace ParaboloidShadow
 {
-	int Attach(ID3D11VertexShader&, ID3D11GeometryShader*)
+	using Mode = PointShadowCorrection::Mode;
+	int Attach(ID3D11VertexShader& vertex, ID3D11GeometryShader* geometry, Mode mode)
 	{
-		assert(false && "Water publication must not attach a clipping shader");
-		return -1;
+		auto& slot = vertex.companions[static_cast<std::size_t>(mode)];
+		if (geometry)
+			geometry->AddRef();
+		if (slot)
+			slot->Release();
+		slot = geometry;
+		return 0;
 	}
-	winrt::com_ptr<ID3D11GeometryShader> Retain(ID3D11VertexShader*)
+	winrt::com_ptr<ID3D11GeometryShader> Retain(ID3D11VertexShader* vertex, Mode mode)
 	{
-		assert(false && "Water publication must not retain a clipping shader");
-		return {};
+		winrt::com_ptr<ID3D11GeometryShader> retained;
+		auto* slot = vertex->companions[static_cast<std::size_t>(mode)];
+		if (slot) {
+			slot->AddRef();
+			*retained.put() = slot;
+		}
+		return retained;
 	}
+}
+bool prepareCompanions = false;
+std::array<Resource*, 3> prepared{};
+std::function<void()> onPrepare;
+winrt::com_ptr<ID3D11GeometryShader> PrepareParaboloidClip(const RE::BSShader&, uint32_t, ParaboloidShadow::Mode mode)
+{
+	assert(prepareCompanions && "Draw publication must not prepare auxiliary shaders");
+	winrt::com_ptr<ID3D11GeometryShader> result;
+	if (auto* shader = prepared[static_cast<std::size_t>(mode)]) {
+		shader->AddRef();
+		*result.put() = shader;
+	}
+	if (onPrepare)
+		onPrepare();
+	return result;
 }
 namespace magic_enum
 {
@@ -163,7 +191,7 @@ struct Device
 	{
 		assert(resource.live == 0);
 		for (const auto& created : resources)
-			assert(created->references == 0 && created->releases == 1);
+			assert(created->references == 0 && created->releases >= 1);
 		resources.clear();
 		creates = resource.releases = resource.named = 0;
 		resource.onRelease = nullptr;

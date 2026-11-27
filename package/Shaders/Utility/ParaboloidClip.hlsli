@@ -64,6 +64,12 @@ VS_OUTPUT ParaboloidIntersection(VS_OUTPUT a, VS_OUTPUT b)
 
 void EmitParaboloidTriangle(VS_OUTPUT a, VS_OUTPUT b, VS_OUTPUT c, inout TriangleStream<VS_OUTPUT> stream)
 {
+#	if defined(PARABOLOID_CLIP_ONLY)
+	stream.Append(a);
+	stream.Append(b);
+	stream.Append(c);
+	stream.RestartStrip();
+#	else
 	const VS_OUTPUT ab = ParaboloidMidpoint(a, b);
 	const VS_OUTPUT ac = ParaboloidMidpoint(a, c);
 	const VS_OUTPUT bc = ParaboloidMidpoint(b, c);
@@ -77,10 +83,18 @@ void EmitParaboloidTriangle(VS_OUTPUT a, VS_OUTPUT b, VS_OUTPUT c, inout Triangl
 	stream.Append(b);
 	stream.Append(bc);
 	stream.RestartStrip();
+#	endif
 }
 
 void EmitParaboloidQuad(VS_OUTPUT a, VS_OUTPUT b, VS_OUTPUT c, VS_OUTPUT d, inout TriangleStream<VS_OUTPUT> stream)
 {
+#	if defined(PARABOLOID_CLIP_ONLY)
+	stream.Append(b);
+	stream.Append(c);
+	stream.Append(a);
+	stream.Append(d);
+	stream.RestartStrip();
+#	else
 	const VS_OUTPUT ab = ParaboloidMidpoint(a, b);
 	const VS_OUTPUT bc = ParaboloidMidpoint(b, c);
 	const VS_OUTPUT cd = ParaboloidMidpoint(c, d);
@@ -101,38 +115,44 @@ void EmitParaboloidQuad(VS_OUTPUT a, VS_OUTPUT b, VS_OUTPUT c, VS_OUTPUT d, inou
 	stream.Append(c);
 	stream.Append(bc);
 	stream.RestartStrip();
+#	endif
 }
 
-[maxvertexcount(12)] void main(triangle VS_OUTPUT input[3], inout TriangleStream<VS_OUTPUT> stream) {
-	if (!all(isfinite(ParabolaParam)) || ParabolaParam.x <= 0 || abs(ParabolaParam.y) != 1)
-		return;
-	// Explicit local copies preserve defined system values when repairing origin vertices.
-	VS_OUTPUT vertices[3] = { input[0], input[1], input[2] };
-	float side[3] = { 0, 0, 0 };
-	[unroll] for (uint i = 0; i < 3; ++i)
-	{
-		const float radiusSquared = dot(vertices[i].ParaboloidViewPos, vertices[i].ParaboloidViewPos);
-		if (!isfinite(radiusSquared) || !isfinite(vertices[i].PositionCS.w))
+#	if defined(PARABOLOID_CLIP_ONLY)
+[maxvertexcount(4)]
+#	else
+[maxvertexcount(12)]
+#	endif
+	void main(triangle VS_OUTPUT input[3], inout TriangleStream<VS_OUTPUT> stream) {
+		if (!all(isfinite(ParabolaParam)) || ParabolaParam.x <= 0 || abs(ParabolaParam.y) != 1)
 			return;
-		if (radiusSquared == 0)
-			vertices[i] = ParaboloidProject(vertices[i]);
-		side[i] = ParabolaParam.y * vertices[i].ParaboloidViewPos.z;
+		// Explicit local copies preserve defined system values when repairing origin vertices.
+		VS_OUTPUT vertices[3] = { input[0], input[1], input[2] };
+		float side[3] = { 0, 0, 0 };
+		[unroll] for (uint i = 0; i < 3; ++i)
+		{
+			const float radiusSquared = dot(vertices[i].ParaboloidViewPos, vertices[i].ParaboloidViewPos);
+			if (!isfinite(radiusSquared) || !isfinite(vertices[i].PositionCS.w))
+				return;
+			if (radiusSquared == 0)
+				vertices[i] = ParaboloidProject(vertices[i]);
+			side[i] = ParabolaParam.y * vertices[i].ParaboloidViewPos.z;
+		}
+		if (side[0] < 0 && side[1] < 0 && side[2] < 0)
+			return;
+		if (side[0] >= 0 && side[1] >= 0 && side[2] >= 0) {
+			EmitParaboloidTriangle(vertices[0], vertices[1], vertices[2], stream);
+			return;
+		}
+		const bool front0 = side[0] >= 0, front1 = side[1] >= 0, front2 = side[2] >= 0;
+		const uint lone = front0 != front1 && front0 != front2 ? 0 : front1 != front0 && front1 != front2 ? 1 :
+	                                                                                                        2;
+		const VS_OUTPUT a = vertices[lone], b = vertices[(lone + 1) % 3], c = vertices[(lone + 2) % 3];
+		const VS_OUTPUT ab = ParaboloidIntersection(a, b);
+		const VS_OUTPUT ac = ParaboloidIntersection(a, c);
+		if (side[lone] >= 0)
+			EmitParaboloidTriangle(a, ab, ac, stream);
+		else
+			EmitParaboloidQuad(ab, b, c, ac, stream);
 	}
-	if (side[0] < 0 && side[1] < 0 && side[2] < 0)
-		return;
-	if (side[0] >= 0 && side[1] >= 0 && side[2] >= 0) {
-		EmitParaboloidTriangle(vertices[0], vertices[1], vertices[2], stream);
-		return;
-	}
-	const bool front0 = side[0] >= 0, front1 = side[1] >= 0, front2 = side[2] >= 0;
-	const uint lone = front0 != front1 && front0 != front2 ? 0 : front1 != front0 && front1 != front2 ? 1 :
-	                                                                                                    2;
-	const VS_OUTPUT a = vertices[lone], b = vertices[(lone + 1) % 3], c = vertices[(lone + 2) % 3];
-	const VS_OUTPUT ab = ParaboloidIntersection(a, b);
-	const VS_OUTPUT ac = ParaboloidIntersection(a, c);
-	if (side[lone] >= 0)
-		EmitParaboloidTriangle(a, ab, ac, stream);
-	else
-		EmitParaboloidQuad(ab, b, c, ac, stream);
-}
 #endif

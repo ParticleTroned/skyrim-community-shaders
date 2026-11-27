@@ -957,6 +957,7 @@ void State::Reset()
 	CSX::Diagnostics::GpuCrash::Checkpoint("Frame::Reset");
 #endif
 	UpdateSaveLoadSafeMode();
+	globals::features::lightLimitFix.ApplyPointShadowCorrection();
 	GrassPlacement::UpdateFrame();
 	LODBlendRingFix::GetInstance().Update();
 

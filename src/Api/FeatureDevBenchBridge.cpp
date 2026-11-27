@@ -31,6 +31,8 @@
 #	include "Features/LightLimitFix/LightAttach.h"
 #	include "Features/TextureStreaming/Settings.h"
 #	include "Api/ServiceFoundation.h"
+#	include "Menu/PerformanceTuningRenderer.h"
+#	include "Profiler.h"
 #	include "BuildProvenance.h"
 #	include "FeatureIssues.h"
 #	include "Globals.h"
@@ -51,7 +53,7 @@ namespace
 {
 	using json = nlohmann::json;
 	using namespace CSX::FeatureAPI;
-	constexpr auto DevBenchSchemaRevision = 44;
+	constexpr auto DevBenchSchemaRevision = 45;
 	std::atomic_bool g_registered{ false };
 
 	CSX::Api::ServiceFoundation& Foundation()
@@ -209,9 +211,58 @@ namespace
 								   { "lastOperation", status.operation }, { "sessionOnly", true }, { "latencyMeasured", false }, { "fpsLimit", 0 } } } };
 	}
 
+	json ControlPointShadowCorrection(const json& args)
+	{
+		for (const auto& [name, value] : args.items()) {
+			(void)value;
+			if (name != "action" && name != "contractMajor" && name != "clientId" && name != "commandId" &&
+				name != "expectedBuildId" && name != "pointShadowCorrection")
+				throw std::invalid_argument("Unknown point_shadow_correction argument");
+		}
+		auto& feature = globals::features::lightLimitFix;
+		if (const auto patch = args.find("pointShadowCorrection"); patch != args.end()) {
+			if (!patch->is_object() || patch->size() != 1 || !patch->contains("mode") || !patch->at("mode").is_string())
+				throw std::invalid_argument("pointShadowCorrection requires exactly one string mode field");
+			const auto mode = PointShadowCorrection::Parse(patch->at("mode").get<std::string>());
+			if (!feature.IsPointShadowCorrectionAvailable())
+				return { { "error", "Point-shadow correction requires available Light Limit Fix" }, { "errorCode", "feature_unavailable" } };
+			if (PerformanceTuningRenderer::HasActiveMeasurements())
+				return { { "error", "Wait for the active performance measurement to finish" }, { "errorCode", "measurement_busy" } };
+			if (globals::profiler && globals::profiler->GetBoundedCaptureProgress().state == Profiler::CaptureSessionState::Running)
+				return { { "error", "Wait for the active profiler capture to finish" }, { "errorCode", "profiler_busy" } };
+			feature.SetPointShadowCorrection(mode);
+		}
+		return { { "pointShadowCorrection", { { "available", feature.IsPointShadowCorrectionAvailable() },
+												{ "requested", PointShadowCorrection::Name(feature.GetRequestedPointShadowCorrection()) },
+												{ "applied", PointShadowCorrection::Name(feature.GetAppliedPointShadowCorrection()) },
+												{ "effective", PointShadowCorrection::Name(feature.GetEffectivePointShadowCorrection()) },
+												{ "pending", feature.IsPointShadowCorrectionPending() } } } };
+	}
+
+	void AddPointShadowCorrectionSchema(json& spec)
+	{
+		const json mode{ { "type", "string" }, { "enum", { "off", "clip_only", "full" } } };
+		spec["inputSchema"]["properties"]["action"]["enum"].push_back("point_shadow_correction");
+		spec["inputSchema"]["properties"]["pointShadowCorrection"] = {
+			{ "type", "object" }, { "additionalProperties", false }, { "required", { "mode" } },
+			{ "properties", { { "mode", mode } } }
+		};
+		spec["outputSchema"]["properties"]["result"]["properties"]["pointShadowCorrection"] = {
+			{ "type", "object" }, { "additionalProperties", false },
+			{ "required", { "available", "requested", "applied", "effective", "pending" } },
+			{ "properties", { { "available", { { "type", "boolean" } } },
+								{ "requested", mode }, { "applied", mode }, { "effective", mode }, { "pending", { { "type", "boolean" } } } } }
+		};
+		spec["description"] = spec["description"].get<std::string>() +
+		                      " point_shadow_correction queries LLF point-light shadow correction or stages pointShadowCorrection.mode (off, clip_only, full). Full is the compatibility default when LLF is available; unavailable LLF uses Off while retaining the preference. Clip only clips at the hemisphere boundary without subdivision and changes shadow coverage/depth accuracy. Off retains native shadows and receiver/filter/carried-light fixes. requested is the saved preference, applied is the render-applied preference, effective includes availability, and pending tracks preference application at a safe frame boundary. A settled Full request can have effective Off when unavailable. Status does not prove a companion drew or a shadow map was refreshed. Mutations require available LLF and no active performance measurement or profiler capture; queries remain available. Mutations do not enable other components, compile shaders, start captures or save files; Menu Save persists the request.";
+	}
+
 	json BuildResult(const json& args)
 	{
 		const auto action = args.value("action", std::string{});
+		if (args.contains("pointShadowCorrection") && action != "point_shadow_correction")
+			return Foundation().MakeError(args, "invalid_settings", "pointShadowCorrection requires the point_shadow_correction action", "validation", false, "pointShadowCorrection");
+
 		if (args.contains("alphaPassIntegrity") && action != "vr_alpha_list")
 			return Foundation().MakeError(args, "invalid_settings", "alphaPassIntegrity requires the vr_alpha_list action", "validation", false, "alphaPassIntegrity");
 		if (args.contains("wetterness")) {
@@ -282,6 +333,21 @@ namespace
 			});
 			if (result.contains("error"))
 				return Foundation().MakeError(args, result.value("errorCode", std::string("main_thread_dispatch_failed")), result.at("error"), "request", false);
+			auto response = Foundation().MakeEnvelope(args, true);
+			response["result"] = std::move(result);
+			return response;
+		}
+		if (action == "point_shadow_correction") {
+			auto result = OnMain([args] {
+				try {
+					return ControlPointShadowCorrection(args);
+				} catch (const std::invalid_argument& error) {
+					return json{ { "error", error.what() }, { "errorCode", "invalid_settings" } };
+				}
+			});
+			if (result.contains("error"))
+				return Foundation().MakeError(args, result.value("errorCode", std::string("main_thread_dispatch_failed")),
+					result.value("detail", result.at("error").get<std::string>()), "request", false, "pointShadowCorrection");
 			auto response = Foundation().MakeEnvelope(args, true);
 			response["result"] = std::move(result);
 			return response;
@@ -500,6 +566,7 @@ namespace
 			response["result"]["actions"].push_back("vr_alpha_list");
 			response["result"]["actions"].push_back("vr_alpha_sort");
 			response["result"]["actions"].push_back("light_attach");
+			response["result"]["actions"].push_back("point_shadow_correction");
 			response["result"]["actions"].push_back("anti_lag2");
 			response["result"]["actions"].push_back("wetterness");
 			response["result"]["actions"].push_back("skin");
@@ -788,6 +855,7 @@ namespace CSX::Api::FeatureDevBenchBridge
 			};
 			spec["description"] = spec["description"].get<std::string>() +
 			                      " performance_costs inspects or stages independent DevBench-only optimization references. Optional performanceCosts is a partial object: true selects the optimized path, false its previous calculation. Settings are session-only and apply together at the next render-frame boundary; active measurements and shader compilation defer application without cancelling work. Feature enablement, visual parameters and temporal histories are preserved. GPU changes invalidate memory shader caches; default optimized permutations reuse production inputs, but first reference use may compile. Wait for pending=false and shaderCompiling=false, then settle before measuring total frame time. ready reports this control/compilation barrier only; requiredConditions explains scene applicability and is not proof of observed work. failedShaderTasks reports compiler failures separately. These controls do not start measurements, change weather, save settings, or clear disk caches.";
+			AddPointShadowCorrectionSchema(spec);
 			spec["inputSchema"]["properties"]["action"]["enum"].push_back("light_attach");
 			spec["inputSchema"]["properties"]["lightAttach"] = lightAttachSchemas.at("settings");
 			spec["outputSchema"]["properties"]["result"]["properties"]["lightAttach"] = lightAttachSchemas.at("status");

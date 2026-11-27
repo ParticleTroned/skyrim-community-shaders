@@ -1490,6 +1490,51 @@ int main() {
         result = compile_fixture(driver)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_paraboloid_companion_publication(self):
+        source = (ROOT / "src/ShaderCache.cpp").read_text(encoding="utf-8")
+        methods = block(source, "RE::BSGraphics::VertexShader* ShaderCache::MakeAndAddVertexShader(")
+        methods += publication_generation_methods((ROOT / "src/ShaderCache.h").read_text(encoding="utf-8"))
+        driver = r'''
+#include "shader_publication_fixture.h"
+METHODS
+int main() {
+    prepareCompanions = true;
+    RE::BSShader shader;
+    using Mode = ParaboloidShadow::Mode;
+    for (unsigned present = 0; present < 4; ++present) {
+        {
+            ShaderCache cache;
+            for (unsigned mode = 1; mode <= 2; ++mode) {
+                if (present & (1u << (mode - 1)))
+                    testDevice.CreateVertexShader(nullptr, 0, nullptr, &prepared[mode]);
+            }
+            auto* resident = cache.MakeAndAddVertexShader(shader, 7);
+            assert(resident && !resident->shader->companions[1] && !resident->shader->companions[2]);
+            auto* augmented = cache.MakeAndAddVertexShader(shader, 7, {}, true);
+            assert(resident == augmented);
+            for (unsigned mode = 1; mode <= 2; ++mode)
+                assert(resident->shader->companions[mode] == prepared[mode]);
+            const auto before = cache.compilationSet.LiveGeneration(RE::BSShader::Type::Water);
+            onPrepare = [&] { cache.compilationSet.generation.fetch_add(1); };
+            assert(!cache.MakeAndAddVertexShader(shader, 8, before, true));
+            onPrepare = {};
+            assert(!cache.vertexShaders[0].contains(8));
+            cache.ReleaseResources();
+            auto* fresh = cache.MakeAndAddVertexShader(shader, 7);
+            assert(fresh && !fresh->shader->companions[1] && !fresh->shader->companions[2]);
+            for (unsigned mode = 1; mode <= 2; ++mode) {
+                if (prepared[mode]) prepared[mode]->Release();
+                prepared[mode] = nullptr;
+            }
+        }
+        assert(resource.live == 0);
+        testDevice.Reset();
+    }
+}
+'''.replace("METHODS", methods)
+        result = compile_fixture(driver)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_concurrent_graphics_shader_publication(self):
         source = (ROOT / "src/ShaderCache.cpp").read_text(encoding="utf-8")
         methods = "\n".join(block(source, signature) for signature in (

@@ -20,6 +20,7 @@
 #include "Presets/SettingsDomains.h"
 #include "Utils/FeatureProfiling.h"
 #include "Utils/NumericEntry.h"
+#include "Utils/PointShadowCorrection.h"
 #include "Utils/StringUtils.h"
 #include "Utils/UISmoothing.h"
 #include "Utils/VRFrameTiming.h"
@@ -635,6 +636,11 @@ namespace LightLimitFixDetail::ShadowCulling
 }
 struct LLFShadowsFixture
 {
+	using PointShadowMode = PointShadowCorrection::Mode;
+	PointShadowMode correction = PointShadowMode::Full;
+	PointShadowMode GetRequestedPointShadowCorrection() const { return correction; }
+	void SetPointShadowCorrection(PointShadowMode mode) { correction = mode; }
+	void DrawPointShadowCorrectionSettings();
 	struct
 	{
 		bool ContactShadowsInteriorsOnly = false, EnableParticleContactShadows = false;
@@ -656,6 +662,8 @@ struct LLFShadowsFixture
 #include "settings_llf_shadows_under_test.h"
 	}
 };
+
+#include "settings_point_shadow_correction_under_test.h"
 
 struct GrassOptimizations
 {
@@ -2882,6 +2890,13 @@ int main()
 					const auto draw = [&] { shadows.Draw(); };
 					frame(draw);
 					frame(draw);
+					for (const auto& [help, mode] : std::array{
+							 std::pair{ "Keep native point-light shadows without geometry correction.", PointShadowCorrection::Mode::Off },
+							 std::pair{ "Clip at the boundary only. Shadow shape and depth accuracy near lights can differ from Full.", PointShadowCorrection::Mode::ClipOnly },
+							 std::pair{ "Default: retain the full correction while Light Limit Fix is available.", PointShadowCorrection::Mode::Full } }) {
+						click(Util::controls.at(help).GetCenter(), draw);
+						require(shadows.correction == mode && shadows.contact == contact, "One correction choice stays editable independently of contact shadows and SPS");
+					}
 					const auto original = shadows.settings.ShadowCulling;
 					for (const char* slider : { "Sun shadow distance", "Torch shadow distance", "NPC distance" }) {
 						const auto observed = shadowControls.at(slider);

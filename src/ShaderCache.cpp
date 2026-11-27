@@ -5732,7 +5732,7 @@ namespace SIE
 
 	namespace
 	{
-		winrt::com_ptr<ID3D11GeometryShader> PrepareParaboloidClip(const RE::BSShader& shader, uint32_t descriptor)
+		winrt::com_ptr<ID3D11GeometryShader> PrepareParaboloidClip(const RE::BSShader& shader, uint32_t descriptor, ParaboloidShadow::Mode mode)
 		{
 			if (shader.shaderType.get() != RE::BSShader::Type::Utility)
 				return {};
@@ -5752,11 +5752,13 @@ namespace SIE
 			}
 			if (!paraboloid)
 				return {};
+			if (mode == ParaboloidShadow::Mode::ClipOnly)
+				defines.emplace_back("PARABOLOID_CLIP_ONLY", "1");
 			winrt::com_ptr<ID3D11GeometryShader> geometry;
 			const auto path = SShaderCache::GetShaderPath(shader.fxpFilename);
 			geometry.attach(static_cast<ID3D11GeometryShader*>(Util::CompileShader(path.c_str(), defines, "gs_5_0")));
 			if (!geometry)
-				logger::warn("Utility {:X}: paraboloid clip preparation failed; preserving native projection until shader reload", descriptor);
+				logger::warn("Utility {:X}: paraboloid {} preparation failed; preserving native projection until shader reload", descriptor, PointShadowCorrection::Name(mode));
 			return geometry;
 		}
 	}
@@ -5787,9 +5789,19 @@ namespace SIE
 			Util::SetResourceName(driverShader.get(), "ShaderCache::Vertex %u:%X",
 				static_cast<unsigned>(shader.shaderType.get()), descriptor);
 			// Only startup, explicit compilation and existing worker tasks prepare the companion.
-			const auto clip = a_prepareAuxiliary ? PrepareParaboloidClip(shader, descriptor) : winrt::com_ptr<ID3D11GeometryShader>{};
-			if (clip && FAILED(ParaboloidShadow::Attach(*driverShader.get(), clip.get())))
-				logger::warn("Utility {:X}: could not attach prepared paraboloid clip shader", descriptor);
+			constexpr std::array modes{ ParaboloidShadow::Mode::Full, ParaboloidShadow::Mode::ClipOnly };
+			std::array<winrt::com_ptr<ID3D11GeometryShader>, modes.size()> companions;
+			if (a_prepareAuxiliary) {
+				for (std::size_t i = 0; i < modes.size(); ++i)
+					companions[i] = PrepareParaboloidClip(shader, descriptor, modes[i]);
+			}
+			const auto attachCompanions = [&](ID3D11VertexShader* vertex) {
+				for (std::size_t i = 0; i < modes.size(); ++i) {
+					if (companions[i] && !ParaboloidShadow::Retain(vertex, modes[i]) &&
+						FAILED(ParaboloidShadow::Attach(*vertex, companions[i].get(), modes[i])))
+						logger::warn("Utility {:X}: could not attach prepared paraboloid {} shader", descriptor, PointShadowCorrection::Name(modes[i]));
+				}
+			};
 
 			std::lock_guard lockGuard(vertexShadersMutex);
 			if (IsTaskStale(a_taskGeneration, shader.shaderType.get())) {
@@ -5804,10 +5816,10 @@ namespace SIE
 			auto& typeCache = vertexShaders[static_cast<size_t>(shader.shaderType.get())];
 			if (const auto existing = typeCache.find(descriptor); existing != typeCache.end()) {
 				auto* vertex = reinterpret_cast<ID3D11VertexShader*>(existing->second->shader);
-				if (clip && !ParaboloidShadow::Retain(vertex) && FAILED(ParaboloidShadow::Attach(*vertex, clip.get())))
-					logger::warn("Utility {:X}: could not attach prepared paraboloid clip shader", descriptor);
+				attachCompanions(vertex);
 				return existing->second.get();
 			}
+			attachCompanions(driverShader.get());
 			auto& entry = typeCache[descriptor];
 			entry = std::move(newShader);
 			entry->shader = reinterpret_cast<decltype(entry->shader)>(driverShader.detach());

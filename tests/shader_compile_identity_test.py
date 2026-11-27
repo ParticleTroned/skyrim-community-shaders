@@ -49,6 +49,12 @@ class ShaderCompileIdentityTests(unittest.TestCase):
                         reverse_z_enabled=reversed_depth, engine_tasks=engine)
                     geometry = [request for request in requests if request["profile"] == "gs_5_0"]
                     self.assertTrue(geometry)
+                    full = [request for request in geometry if ("PARABOLOID_CLIP_ONLY", "1") not in request["defines"]]
+                    clip = [request for request in geometry if ("PARABOLOID_CLIP_ONLY", "1") in request["defines"]]
+                    self.assertEqual(len(full), len(clip))
+                    self.assertTrue(full)
+                    self.assertEqual({standalone.serialize_defines(request["defines"]) for request in full},
+                        {standalone.serialize_defines([(name, value) for name, value in request["defines"] if name != "PARABOLOID_CLIP_ONLY"]) for request in clip})
                     for request in geometry:
                         names = {name for name, _ in request["defines"]}
                         self.assertIn("RENDER_SHADOWMAP_PB", names)

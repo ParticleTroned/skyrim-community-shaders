@@ -80,6 +80,8 @@ struct Feature {
     bool IsCore() const { return false; }
     void DisableForConflict(std::string_view);
     bool SupportsVR() const { return supportsVR; }
+    bool hidden = false;
+    bool IsHiddenFromUserView() const { return hidden; }
     static bool IsFeatureKnown(const std::string&, REL::Version* = nullptr);
     static const std::vector<Feature*>& GetFeatureList();
     static Feature* FindRegisteredFeatureByShortName(const std::string&);
@@ -185,6 +187,13 @@ int main(int argc, char** argv) {
         ScanForOrphanedFeatureINIs(true);
         Check(issues.size() == 1 && issues[0].shortName == "FoliageLighting" &&
             issues[0].issueType == Type::VERSION_MISMATCH, "Failed loaded-feature issue was lost");
+        issues.clear();
+        foliage.hidden = true;
+        foliage.conflictMessage = "Hidden conflict";
+        ScanForOrphanedFeatureINIs(true);
+        Check(issues.empty(), "Hidden feature failures and conflicts must not reappear during rescans");
+        foliage.hidden = false;
+        foliage.conflictMessage.clear();
         foliage.loaded = true;
         foliage.failedLoadedMessage.clear();
         issues.clear();

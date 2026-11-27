@@ -358,15 +358,22 @@ namespace
 		int quality = 7;
 		bool reject = false;
 		bool failRestore = false;
+		bool failToggle = false;
+		mutable unsigned capturesUntilFailure = 0;
+		unsigned restoresUntilFailure = 0;
 		bool IsPerformanceToggleEnabled() const { return enabled.Get(); }
 		nlohmann::json CapturePerformanceCostMeasurementState() const
 		{
+			if (capturesUntilFailure && --capturesUntilFailure == 0)
+				throw std::runtime_error("capture failed");
 			return { { "Enabled", enabled.Get() }, { "Quality", quality } };
 		}
 		void SetPerformanceToggleEnabled(bool value)
 		{
 			if (!reject)
 				enabled.Set(value);
+			if (failToggle)
+				throw std::runtime_error("toggle failed");
 		}
 		void RestorePerformanceToggleState(const nlohmann::json& state)
 		{
@@ -374,6 +381,10 @@ namespace
 				throw std::runtime_error("restore failed");
 			enabled.Set(state.at("Enabled").get<bool>());
 			quality = state.at("Quality").get<int>();
+			if (restoresUntilFailure && --restoresUntilFailure == 0) {
+				quality = 99;
+				throw std::runtime_error("partial restore failed");
+			}
 		}
 	};
 }
@@ -410,6 +421,42 @@ try {
 	const auto before = feature.CapturePerformanceCostMeasurementState();
 	Require(!SetEnabled(feature, false, saved), "a rejected toggle must report failure");
 	Require(feature.CapturePerformanceCostMeasurementState() == before && !saved, "rejected disable must leave no snapshot or settings change");
+	feature.reject = false;
+	for (const bool disable : { true, false }) {
+		for (const bool captureFailure : { true, false }) {
+			feature.enabled.Set(true);
+			saved.reset();
+			if (!disable)
+				Require(SetEnabled(feature, false, saved), "enable failure requires a retained disabled configuration");
+			const auto previous = feature.CapturePerformanceCostMeasurementState();
+			const auto previousSaved = saved;
+			feature.failToggle = !captureFailure;
+			feature.capturesUntilFailure = captureFailure ? (disable ? 2u : 1u) : 0u;
+			feature.restoresUntilFailure = !disable && !captureFailure ? 1u : 0u;
+			bool threw = false;
+			try {
+				SetEnabled(feature, !disable, saved);
+			} catch (const std::exception&) {
+				threw = true;
+			}
+			feature.failToggle = feature.failRestore = false;
+			Require(threw && feature.CapturePerformanceCostMeasurementState() == previous &&
+						saved.has_value() == previousSaved.has_value() && (!saved || (saved->enabledState == previousSaved->enabledState && saved->disabledState == previousSaved->disabledState)),
+				"toggle exceptions must preserve the previous native state and reversible history");
+		}
+	}
+	feature.enabled.Set(true);
+	saved.reset();
+	feature.failToggle = feature.failRestore = true;
+	bool failedToggleRollback = false;
+	try {
+		SetEnabled(feature, false, saved);
+	} catch (const SettingsRollbackError&) {
+		failedToggleRollback = true;
+	}
+	Require(failedToggleRollback && !saved, "failed native rollback must be distinguished from a rejected toggle without committing history");
+	feature.failToggle = feature.failRestore = false;
+	feature.enabled.Set(true);
 
 	std::unordered_map<std::string, std::optional<DisabledConfiguration>> configurations;
 	configurations["selected"] = original;
@@ -460,6 +507,19 @@ try {
 	const auto restored = RestoreToggleChanges(enabled, disabled, edited);
 	Require(restored.at("effects").at("a") == true && restored.at("effects").at("b") == true, "mixed toggles must restore owned changes and retain user edits");
 	Require(restored.at("quality") == 13 && restored.at("newSetting") == 2, "restoration must retain unrelated and new fields");
+	const json enabledWithKeys = { { "effects", { { "enabled", true }, { "removedByDisable", 9 } } }, { "quality", 7 } };
+	const json disabledWithKeys = { { "effects", { { "enabled", false }, { "addedByDisable", 3 } } }, { "quality", 7 } };
+	auto editedWithKeys = disabledWithKeys;
+	editedWithKeys["quality"] = 13;
+	const auto restoredKeys = RestoreToggleChanges(enabledWithKeys, disabledWithKeys, editedWithKeys);
+	Require(restoredKeys["effects"]["enabled"] == true && restoredKeys["effects"]["removedByDisable"] == 9 &&
+				!restoredKeys["effects"].contains("addedByDisable") && restoredKeys["quality"] == 13,
+		"reenabling must reverse toggle-owned key additions and removals without losing unrelated edits");
+	editedWithKeys["effects"]["addedByDisable"] = 4;
+	editedWithKeys["effects"]["removedByDisable"] = 10;
+	const auto restoredEditedKeys = RestoreToggleChanges(enabledWithKeys, disabledWithKeys, editedWithKeys);
+	Require(restoredEditedKeys["effects"]["addedByDisable"] == 4 && restoredEditedKeys["effects"]["removedByDisable"] == 10,
+		"user edits to keys changed by a toggle must remain authoritative");
 	Require(RestoreToggleChanges(enabled, disabled, disabled) == enabled, "unchanged disabled settings must restore exactly");
 	Require(RestoreToggleChanges(json(3), json(0), json(5)) == 5, "an edited scalar must not be overwritten");
 

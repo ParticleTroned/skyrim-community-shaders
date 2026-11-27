@@ -100,6 +100,13 @@ namespace MenuUI::PerformancePage
 			return nullptr;
 		}
 
+		const char* PrepareProfileMutation()
+		{
+			if (const auto* reason = MutationBlockReason())
+				return reason;
+			return globals::menu->PrepareSettingsMutation() ? nullptr : "Could not preserve saved settings.";
+		}
+
 		Upscaling::UpscaleMethod CurrentUpscalingMethod()
 		{
 			auto& upscaling = globals::features::upscaling;
@@ -515,7 +522,7 @@ namespace MenuUI::PerformancePage
 	{
 		if (PerformanceProfiles::BuiltIn(a_profile).is_null())
 			return { { "accepted", false }, { "error", "Unknown base profile." } };
-		if (const auto* reason = MutationBlockReason())
+		if (const auto* reason = PrepareProfileMutation())
 			return { { "accepted", false }, { "error", reason } };
 		user.base = a_profile;
 		globals::menu->RequestSettingsDirtyCheck();
@@ -524,7 +531,7 @@ namespace MenuUI::PerformancePage
 
 	nlohmann::json Capture(std::string_view a_name)
 	{
-		if (const auto* reason = MutationBlockReason())
+		if (const auto* reason = PrepareProfileMutation())
 			return { { "accepted", false }, { "error", reason } };
 		auto* feature = FindFeature(a_name);
 		if (const auto* reason = SelectionBlockReason(feature))
@@ -541,7 +548,7 @@ namespace MenuUI::PerformancePage
 
 	nlohmann::json CaptureAll()
 	{
-		if (const auto* reason = MutationBlockReason())
+		if (const auto* reason = PrepareProfileMutation())
 			return { { "accepted", false }, { "error", reason } };
 		auto candidate = user.choices;
 		auto captured = json::array();
@@ -574,7 +581,7 @@ namespace MenuUI::PerformancePage
 
 	nlohmann::json CaptureCurrentSettings()
 	{
-		if (const auto* reason = MutationBlockReason())
+		if (const auto* reason = PrepareProfileMutation())
 			return { { "accepted", false }, { "error", reason } };
 		const auto previous = user;
 		try {
@@ -604,7 +611,7 @@ namespace MenuUI::PerformancePage
 
 	nlohmann::json Apply(std::string_view a_profile)
 	{
-		if (const auto* reason = MutationBlockReason())
+		if (const auto* reason = PrepareProfileMutation())
 			return { { "accepted", false }, { "error", reason } };
 		const auto choices = Resolve(a_profile);
 		if (choices.is_null() || !PerformanceProfiles::ValidateChoices(choices))
@@ -644,10 +651,14 @@ namespace MenuUI::PerformancePage
 				PerformanceTuningRenderer::RestoreFeatureToggleHistory(history);
 				for (auto* feature : targets) {
 					const auto name = feature->GetShortName();
-					if ((NeedsPresetChange(feature, choices) && !feature->ApplyPerformancePreset(choices["presets"][name].get<std::string>())) ||
-						(NeedsToggleChange(feature, choices) &&
-							!PerformanceTuningRenderer::SetFeatureEnabled(feature, choices["features"][name]))) {
-						error = "Feature rejected its selections: " + name;
+					if (NeedsPresetChange(feature, choices) && !feature->ApplyPerformancePreset(choices["presets"][name].get<std::string>())) {
+						error = "Feature rejected its preset: " + name;
+						return false;
+					}
+					if (NeedsToggleChange(feature, choices) && !PerformanceTuningRenderer::SetFeatureEnabled(feature, choices["features"][name])) {
+						error = "Feature rejected its toggle: " + name;
+						if (const auto* reason = PerformanceTuningRenderer::GetFeatureToggleFailureReason(feature))
+							error += ": " + std::string(reason);
 						return false;
 					}
 				}
@@ -777,6 +788,8 @@ namespace MenuUI::PerformancePage
 		}
 		if (!PerformanceProfiles::ValidateChoices(candidate))
 			return { { "accepted", false }, { "error", "These feature selections cannot be stored in MyPerformance." } };
+		if (!globals::menu->PrepareSettingsMutation())
+			return { { "accepted", false }, { "error", "Could not preserve saved settings." } };
 		user.choices = std::move(candidate);
 		globals::menu->RequestSettingsDirtyCheck();
 		return { { "accepted", true }, { "message", "Feature choices stored in MyPerformance. Save settings to keep them." } };
@@ -786,15 +799,13 @@ namespace MenuUI::PerformancePage
 
 	nlohmann::json BeginFeatureEdit(std::string_view a_name)
 	{
-		if (const auto* reason = MutationBlockReason())
+		if (const auto* reason = PrepareProfileMutation())
 			return { { "accepted", false }, { "error", reason } };
 		auto* feature = FindFeature(a_name);
 		if (!IsAvailable(feature) || !IsSelectable(feature))
 			return { { "accepted", false }, { "error", "This feature is unavailable for profile editing." } };
 		if (const auto* reason = SelectionBlockReason(feature))
 			return { { "accepted", false }, { "error", reason } };
-		if (!globals::menu->PrepareSettingsMutation())
-			return { { "accepted", false }, { "error", "Could not preserve saved settings." } };
 		try {
 			auto baseline = json::object();
 			for (auto* item : Feature::GetFeatureList()) {
@@ -952,7 +963,7 @@ namespace MenuUI::PerformancePage
 	}
 	nlohmann::json ImportProfile(const std::filesystem::path& source)
 	{
-		if (const auto* reason = MutationBlockReason())
+		if (const auto* reason = PrepareProfileMutation())
 			return { { "accepted", false }, { "error", reason } };
 		try {
 			const auto document = Presets::ReadProfileDocument(source);
@@ -976,8 +987,6 @@ namespace MenuUI::PerformancePage
 						throw std::runtime_error(id + ": unsupported quality preset.");
 				}
 			}
-			if (!globals::menu->PrepareSettingsMutation())
-				throw std::runtime_error("Could not preserve saved settings.");
 			user = std::move(candidate);
 			selectedProfile = 3;
 			includedFeatureChoices = nullptr;

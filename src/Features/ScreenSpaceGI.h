@@ -51,6 +51,10 @@ public:
 	virtual void DrawSettings() override;
 	virtual bool HasPerformanceSettings() const override { return true; }
 	virtual void DrawPerformanceSettings(bool a_advanced) override;
+	/** Native presets retain the requested On/Off state and runtime-specific defaults. */
+	std::vector<std::string> GetPerformancePresetNames() const override;
+	std::string GetPerformancePresetName() const override;
+	bool ApplyPerformancePreset(std::string_view a_name) override;
 	virtual json CapturePerformanceSettingsState() const override;
 	virtual bool SupportsPerformanceCostMeasurement() const override { return true; }
 	/** Reports staged changes before the next render pass applies them. */

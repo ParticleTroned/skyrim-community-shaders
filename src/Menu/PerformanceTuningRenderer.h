@@ -15,7 +15,7 @@ class PerformanceTuningRenderer
 {
 public:
 	static void Render();
-	/** Apply a preset switch through the existing reversible runtime control. */
+	/** Preserve the saved baseline and reversible history; reject unsafe runtime states. */
 	static bool SetFeatureEnabled(Feature* a_feature, bool a_enabled);
 	/** Shared admission reason for a runtime feature switch. */
 	static const char* GetFeatureControlBlockReason(Feature* a_feature);

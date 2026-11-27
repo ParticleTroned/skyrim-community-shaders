@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace PerformanceTuningController
@@ -49,6 +50,20 @@ namespace PerformanceTuningController
 		using std::runtime_error::runtime_error;
 	};
 
+	namespace detail
+	{
+		[[noreturn]] inline void ThrowRollbackError(std::exception_ptr failure)
+		{
+			try {
+				std::rethrow_exception(failure);
+			} catch (const std::exception& error) {
+				throw SettingsRollbackError(std::string("Feature settings rollback failed: ") + error.what());
+			} catch (...) {
+				throw SettingsRollbackError("Feature settings rollback failed unexpectedly.");
+			}
+		}
+	}
+
 	/** Roll back native state and toggle history; successful replacements discard only their own history. */
 	template <class Feature, class Apply>
 	bool ApplyTransaction(const std::vector<Feature*>& features,
@@ -70,15 +85,8 @@ namespace PerformanceTuningController
 				}
 			}
 			configurations = previousConfigurations;
-			if (failure) {
-				try {
-					std::rethrow_exception(failure);
-				} catch (const std::exception& error) {
-					throw SettingsRollbackError(std::string("Feature settings rollback failed: ") + error.what());
-				} catch (...) {
-					throw SettingsRollbackError("Feature settings rollback failed unexpectedly.");
-				}
-			}
+			if (failure)
+				detail::ThrowRollbackError(failure);
 		};
 		try {
 			if (apply()) {
@@ -106,9 +114,16 @@ namespace PerformanceTuningController
 			return current;
 		auto restored = current;
 		for (const auto& [key, value] : enabled.items()) {
-			if (disabled.contains(key) && current.contains(key))
-				restored[key] = RestoreToggleChanges(value, disabled.at(key), current.at(key));
+			if (disabled.contains(key)) {
+				if (current.contains(key))
+					restored[key] = RestoreToggleChanges(value, disabled.at(key), current.at(key));
+			} else if (!current.contains(key)) {
+				restored[key] = value;
+			}
 		}
+		for (const auto& [key, value] : disabled.items())
+			if (!enabled.contains(key) && current.contains(key) && current.at(key) == value)
+				restored.erase(key);
 		return restored;
 	}
 
@@ -119,23 +134,33 @@ namespace PerformanceTuningController
 		if (feature.IsPerformanceToggleEnabled() == enabled)
 			return true;
 		const auto current = feature.CapturePerformanceCostMeasurementState();
-		if (!enabled) {
-			feature.SetPerformanceToggleEnabled(false);
-			saved = DisabledConfiguration{ current, feature.CapturePerformanceCostMeasurementState() };
-		} else if (saved) {
-			feature.RestorePerformanceToggleState(RestoreToggleChanges(saved->enabledState, saved->disabledState, current));
-		} else {
-			feature.SetPerformanceToggleEnabled(true);
+		std::optional<DisabledConfiguration> candidate;
+		const auto restore = [&] {
+			try {
+				feature.RestorePerformanceToggleState(current);
+			} catch (...) {
+				detail::ThrowRollbackError(std::current_exception());
+			}
+		};
+		try {
+			if (!enabled) {
+				feature.SetPerformanceToggleEnabled(false);
+				candidate = DisabledConfiguration{ current, feature.CapturePerformanceCostMeasurementState() };
+			} else if (saved) {
+				feature.RestorePerformanceToggleState(RestoreToggleChanges(saved->enabledState, saved->disabledState, current));
+			} else {
+				feature.SetPerformanceToggleEnabled(true);
+			}
+			if (feature.IsPerformanceToggleEnabled() == enabled) {
+				saved = enabled ? std::nullopt : std::move(candidate);
+				return true;
+			}
+		} catch (...) {
+			restore();
+			throw;
 		}
-		if (feature.IsPerformanceToggleEnabled() != enabled) {
-			feature.RestorePerformanceToggleState(current);
-			if (!enabled)
-				saved.reset();
-			return false;
-		}
-		if (enabled)
-			saved.reset();
-		return true;
+		restore();
+		return false;
 	}
 
 	enum class BatchAction

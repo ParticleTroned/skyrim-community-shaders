@@ -23,6 +23,25 @@ void TestSsgiPresets()
 	using namespace SsgiPresetTest;
 	for (bool vr : { false, true }) {
 		REL::Module::vr = vr;
+		ScreenSpaceGI feature;
+		feature.settings.Enabled = false;
+		Require(feature.GetPerformancePresetNames() == std::vector<std::string>{ "AO only", "AO + GI", "Reference" },
+			"profile capture exposes all native SSGI presets on each runtime");
+		for (const auto& name : feature.GetPerformancePresetNames()) {
+			feature.recompileFlag = false;
+			Require(feature.ApplyPerformancePreset(name) && feature.GetPerformancePresetName() == name &&
+						!feature.settings.Enabled && feature.recompileFlag,
+				"native profile presets preserve disabled state and match runtime-specific defaults");
+			feature.settings.Enabled = true;
+			Require(feature.ApplyPerformancePreset(name) && feature.settings.Enabled,
+				"native profile presets preserve enabled state");
+			feature.settings.Enabled = false;
+		}
+		feature.recompileFlag = false;
+		const auto before = feature.GetPerformancePresetName();
+		Require(!feature.ApplyPerformancePreset("Unknown") && feature.GetPerformancePresetName() == before && !feature.recompileFlag,
+			"an unknown preset preserves settings and shader state");
+
 		for (int preset = 0; preset < 3; ++preset) {
 			ScreenSpaceGI::Settings settings;
 			settings.Enabled = false;

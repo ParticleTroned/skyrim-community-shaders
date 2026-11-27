@@ -288,6 +288,7 @@ namespace
 	static FeatureCostBatchState g_featureCostBatch;
 	static std::string g_featureCostUiMessage;
 	static Feature* failedToggleFeature = nullptr;
+	static std::string g_featureToggleFailure;
 	static int tuningView = 0;
 
 	struct QuickScanRow
@@ -2693,20 +2694,46 @@ namespace
 
 	bool SetRuntimeFeatureEnabled(Feature* feature, bool enabled)
 	{
-		if (!feature || !feature->loaded || !feature->SupportsPerformanceProfileToggle() ||
-			GetFeatureToggleBlockReason(feature) || PerformanceTuningRenderer::HasActiveMeasurements())
+		g_featureToggleFailure.clear();
+		failedToggleFeature = nullptr;
+		const auto reject = [feature](const char* reason) {
+			failedToggleFeature = feature;
+			g_featureToggleFailure = reason;
 			return false;
+		};
+		if (!feature || !feature->loaded || !feature->SupportsPerformanceProfileToggle())
+			return reject("This feature is unavailable for runtime toggling.");
+		if (PerformanceTuningRenderer::HasActiveMeasurements())
+			return reject("Finish the active measurement before changing feature settings.");
+		if (Util::IsRuntimeToggleBlocked(globals::state))
+			return reject("Load a game and finish loading or saving before changing feature settings.");
+		if (const auto* reason = GetFeatureToggleBlockReason(feature))
+			return reject(reason);
 		if (feature->IsPerformanceToggleEnabled() == enabled)
 			return true;
+		if (!globals::menu)
+			return reject("The settings menu is unavailable.");
+		if (!globals::menu->PrepareSettingsMutation())
+			return reject("Could not preserve saved settings.");
 		const auto shortName = feature->GetShortName();
 		auto& saved = g_disabledFeatureConfigurations[shortName];
-		if (!PerformanceTuningController::SetEnabled(*feature, enabled, saved))
-			return false;
+		bool applied = false;
+		try {
+			applied = PerformanceTuningController::SetEnabled(*feature, enabled, saved);
+		} catch (const std::exception& error) {
+			logger::warn("Feature toggle failed for {}: {}", shortName, error.what());
+			g_featureToggleFailure = error.what();
+		} catch (...) {
+			logger::warn("Feature toggle failed unexpectedly for {}", shortName);
+			g_featureToggleFailure = "The feature toggle failed unexpectedly. Check CSX.log.";
+		}
 		if (!saved)
 			g_disabledFeatureConfigurations.erase(shortName);
 		InvalidateFeatureCostResults();
 		globals::menu->RequestSettingsDirtyCheck();
-		return true;
+		if (!applied)
+			failedToggleFeature = feature;
+		return applied;
 	}
 
 	bool StartNextFeatureCostBatchMeasurement(double currentTime)
@@ -3277,7 +3304,7 @@ void PerformanceTuningRenderer::RestoreFeatureToggleHistory(const json& a_histor
 const char* PerformanceTuningRenderer::GetFeatureToggleFailureReason(Feature* a_feature)
 {
 	return a_feature && failedToggleFeature == a_feature ?
-	           "This feature could not change state. Check its settings and runtime requirements." :
+	           (g_featureToggleFailure.empty() ? "This feature could not change state. Check its settings and runtime requirements." : g_featureToggleFailure.c_str()) :
 	           nullptr;
 }
 
@@ -3291,7 +3318,6 @@ void PerformanceTuningRenderer::RenderFeatureEnabledControl(Feature* a_feature, 
 		auto guard = Util::DisableGuard(!a_feature->loaded || !supported || reason || busy);
 		if (Util::Widgets::Checkbox("Enabled", &enabled)) {
 			const bool applied = SetRuntimeFeatureEnabled(a_feature, enabled);
-			failedToggleFeature = applied ? nullptr : a_feature;
 			g_featureCostUiMessage = applied ? "" : GetFeatureToggleFailureReason(a_feature);
 		}
 	}
@@ -3480,7 +3506,7 @@ namespace
 				ImGui::BeginDisabled(busy || blockReason != nullptr);
 				if (Util::Widgets::Checkbox("##Enabled", &enabled)) {
 					const bool applied = SetRuntimeFeatureEnabled(feature, enabled);
-					g_featureCostUiMessage = applied ? "" : "This feature could not change state. Check its settings and runtime requirements.";
+					g_featureCostUiMessage = applied ? "" : PerformanceTuningRenderer::GetFeatureToggleFailureReason(feature);
 				}
 				ImGui::EndDisabled();
 				if (blockReason) {
@@ -4009,9 +4035,11 @@ nlohmann::json PerformanceTuningRenderer::SetApiFeatureEnabled(std::string_view 
 		response["errorCode"] = "not_in_game";
 	else if (GetFeatureToggleBlockReason(feature))
 		response["errorCode"] = "feature_controlled";
-	else if (!SetRuntimeFeatureEnabled(feature, a_enabled))
+	else if (!SetRuntimeFeatureEnabled(feature, a_enabled)) {
 		response["errorCode"] = "feature_toggle_failed";
-	else
+		if (const auto* reason = GetFeatureToggleFailureReason(feature))
+			response["message"] = reason;
+	} else
 		response["accepted"] = true;
 	response["status"] = BuildMeasurementStatus(0, 128);
 	return response;

@@ -1678,6 +1678,11 @@ void AdaptiveBrightness::RegisterWeatherVariables()
 	registerFloat("water.ParallaxStrength", "Water Parallax Strength", weatherProfile.water.ParallaxStrength, WaterAppearance::kWaterAmountMin, WaterAppearance::kWaterAmountMax);
 }
 
+void AdaptiveBrightness::ClearShaderCache()
+{
+	UnderwaterDepthOfField::ClearShaderCache();
+}
+
 void AdaptiveBrightness::SetupResources()
 {
 	vanillaPointLightCB = new ConstantBuffer(

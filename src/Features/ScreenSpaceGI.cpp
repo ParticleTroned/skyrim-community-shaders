@@ -396,6 +396,33 @@ void ScreenSpaceGI::RestoreDefaultSettings()
 	recompileFlag = true;
 }
 
+std::vector<std::string> ScreenSpaceGI::GetPerformancePresetNames() const
+{
+	return { "AO only", "AO + GI", "Reference" };
+}
+
+std::string ScreenSpaceGI::GetPerformancePresetName() const
+{
+	const bool isVR = REL::Module::IsVR();
+	return IsAOOnlyPreset(settings, isVR) ? "AO only" : IsAOGIPreset(settings, isVR)  ? "AO + GI" :
+	                                                IsReferencePreset(settings, isVR) ? "Reference" :
+	                                                                                    "";
+}
+
+bool ScreenSpaceGI::ApplyPerformancePreset(std::string_view a_name)
+{
+	if (a_name == "AO only")
+		ApplyAOOnlyPreset(settings);
+	else if (a_name == "AO + GI")
+		ApplyAOGIPreset(settings);
+	else if (a_name == "Reference")
+		ApplyReferencePreset(settings);
+	else
+		return false;
+	recompileFlag = true;
+	return true;
+}
+
 void ScreenSpaceGI::DrawSettings()
 {
 	ApplyPlatformSettingOverrides(settings);
@@ -438,9 +465,10 @@ void ScreenSpaceGI::DrawSettings()
 		auto presetsAndQualityGuard = Util::DisableGuard(!settings.Enabled);
 
 		if (page.Is("preset")) {
-			const int selected = IsAOOnlyPreset(settings, isVR) ? 0 : IsAOGIPreset(settings, isVR)  ? 1 :
-			                                                      IsReferencePreset(settings, isVR) ? 2 :
-			                                                                                          3;
+			const auto preset = GetPerformancePresetName();
+			const int selected = preset == "AO only" ? 0 : preset == "AO + GI" ? 1 :
+			                                           preset == "Reference"   ? 2 :
+			                                                                     3;
 			const MenuUI::Choice choices[] = {
 				{ "ao", "AO only", "Full resolution ambient shadows", "Full resolution with GI disabled." },
 				{ "gi", "AO + GI", "Ambient shadows and bounced light", "Full resolution, 4 slices and 6 steps." },
@@ -448,15 +476,9 @@ void ScreenSpaceGI::DrawSettings()
 				{ "user", "User", "Start from AO + GI and customise", "Copies AO + GI. Custom settings remain unrestricted." }
 			};
 			const int chosen = MenuUI::ChoiceCards("SSGIPreset", selected, choices);
-			if (chosen >= 0) {
-				if (chosen == 0)
-					ApplyAOOnlyPreset(settings);
-				else if (chosen == 2)
-					ApplyReferencePreset(settings);
-				else
-					ApplyAOGIPreset(settings);
-				recompileFlag = true;
-			}
+			if (chosen >= 0)
+				ApplyPerformancePreset(chosen == 0 ? "AO only" : chosen == 2 ? "Reference" :
+																			   "AO + GI");
 		}
 		if (page.Is("coverage")) {
 			MenuUI::SectionHeading("Effects and coverage");

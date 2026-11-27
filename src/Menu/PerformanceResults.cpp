@@ -74,7 +74,7 @@ namespace PerformanceResults
 			for (const auto& scan : fpsvr.value("scans", Json::array())) {
 				const auto& index = scan.at("scanIndex");
 				const auto& count = scan.at("samples");
-				if (!index.is_number_integer() || index < 1 || index > record.value("scanCount", PerformanceQuickScan::kBatchScans) || !indices.insert(index.get<unsigned>()).second ||
+				if (!index.is_number_integer() || index < 1 || index > record.value("scanCount", 1u) || !indices.insert(index.get<unsigned>()).second ||
 					!count.is_number_integer() || count < 3 || count > PerformanceFpsVR::kMaximumWindowSamples)
 					throw std::runtime_error("Invalid fpsVR scan identity or sample count.");
 				for (const auto* mode : { "cpu", "gpu" })
@@ -136,6 +136,18 @@ namespace PerformanceResults
 			return metric.value("available", Json(true)) == false ? Json(nullptr) : metric.value("value", Json(nullptr));
 		}
 
+		std::string ScanMetricId(const Json& row)
+		{
+			auto id = row.at("id").get<std::string>();
+			const auto index = row.value("scanIndex", Json(nullptr));
+			if (index.is_number_integer()) {
+				const auto prefix = std::to_string(index.get<unsigned>()) + ":";
+				if (id.starts_with(prefix))
+					id.erase(0, prefix.size());
+			}
+			return id;
+		}
+
 	}
 
 	std::string Timestamp()
@@ -176,6 +188,12 @@ namespace PerformanceResults
 			throw std::runtime_error("Unknown measurement status.");
 		ValidateScanMetadata(record);
 		std::set<std::string> keys;
+		struct ScanMetric
+		{
+			Json semantics;
+			std::set<unsigned> scans;
+		};
+		std::map<std::pair<std::string, std::string>, ScanMetric> scanMetrics;
 		for (const auto& row : record.at("results")) {
 			if (!row.is_object() || !row.at("label").is_string() || row.at("label").get_ref<const std::string&>().size() > 1024 ||
 				!row.at("id").is_string() || row.at("id").get_ref<const std::string&>().size() > 1024 ||
@@ -192,8 +210,10 @@ namespace PerformanceResults
 				OptionalText(row["sampling"], "captureRequestedUtc");
 				OptionalText(row["sampling"], "captureResolvedUtc");
 			}
-			if (row.contains("scanIndex") && (!row["scanIndex"].is_number_integer() || row["scanIndex"] < 1 || row["scanIndex"] > record.value("scanCount", PerformanceQuickScan::kBatchScans)))
+			if (row.contains("scanIndex") && (!row["scanIndex"].is_number_integer() || row["scanIndex"] < 1 || row["scanIndex"] > record.value("scanCount", 1u)))
 				throw std::runtime_error("Invalid result scan index.");
+			if (kind == "quick_scan" && record.value("scanCount", 1u) > 1 && !row.contains("scanIndex"))
+				throw std::runtime_error("Missing result scan index.");
 			for (const auto& [name, metric] : row.at("metrics").items()) {
 				if ((name != "frame" && name != "gpu" && name != "cpu" && name != "fps") || !metric.is_object() ||
 					(metric.at("unit") != (name == "fps" ? "fps" : "ms")))
@@ -208,6 +228,17 @@ namespace PerformanceResults
 				if ((metric.value("standardError", Json(nullptr)).is_number() && metric.at("standardError") < 0) ||
 					(metric.value("pValue", Json(nullptr)).is_number() && (metric.at("pValue") < 0 || metric.at("pValue") > 1)))
 					throw std::runtime_error("Invalid measurement uncertainty.");
+				if (kind == "quick_scan") {
+					auto& group = scanMetrics[{ ScanMetricId(row), name }];
+					const Json semantics = Json::array({ row.value("source", Json("instrumented")),
+						row.value("coverage", Json(nullptr)), row.value("relativeTo", Json(nullptr)) });
+					if (group.semantics.is_null())
+						group.semantics = semantics;
+					if (group.semantics != semantics)
+						throw std::runtime_error("Measurement semantics differ within a scan batch.");
+					if (!group.scans.insert(row.value("scanIndex", 1u)).second)
+						throw std::runtime_error("Duplicate feature metric within a scan.");
+				}
 			}
 		}
 	}
@@ -268,8 +299,14 @@ namespace PerformanceResults
 	Json SummaryMetrics(const Json& record)
 	{
 		Validate(record);
-		if (record.at("kind") != "quick_scan" || record.value("scanCount", 1u) == 1)
+		if (record.at("kind") != "quick_scan")
 			return Metrics(record);
+		if (record.value("scanCount", 1u) == 1) {
+			auto result = Metrics(record);
+			for (auto& row : result)
+				row["id"] = ScanMetricId(row);
+			return result;
+		}
 		struct Repeats
 		{
 			Json row;
@@ -277,22 +314,15 @@ namespace PerformanceResults
 		};
 		std::map<std::pair<std::string, std::string>, Repeats> groups;
 		for (const auto& row : record.at("results")) {
-			if (!row.contains("scanIndex"))
-				continue;
 			const auto index = row.at("scanIndex").get<unsigned>();
-			auto id = row.at("id").get<std::string>();
-			const auto prefix = std::to_string(index) + ":";
-			if (id.starts_with(prefix))
-				id.erase(0, prefix.size());
+			const auto id = ScanMetricId(row);
 			for (const auto& [name, metric] : row.at("metrics").items()) {
 				auto& group = groups[{ id, name }];
 				if (group.row.is_null())
-					group.row = { { "id", "summary:" + id }, { "label", row.at("label") }, { "metric", name }, { "unit", metric.at("unit") },
-						{ "coverage", row.value("coverage", Json(nullptr)) }, { "scanIndex", nullptr }, { "relativeTo", nullptr }, { "source", row.value("source", "instrumented") } };
-				if (group.row.at("source") != row.value("source", Json("instrumented")))
-					throw std::runtime_error("Measurement sources differ within a triplicate.");
-				if (!group.values.emplace(index, MeasuredValue(metric)).second)
-					throw std::runtime_error("Duplicate feature metric within a repeat.");
+					group.row = { { "id", id }, { "label", row.at("label") }, { "metric", name }, { "unit", metric.at("unit") },
+						{ "coverage", row.value("coverage", Json(nullptr)) }, { "scanIndex", nullptr },
+						{ "relativeTo", row.value("relativeTo", Json(nullptr)) }, { "source", row.value("source", "instrumented") } };
+				group.values.emplace(index, MeasuredValue(metric));
 			}
 		}
 		auto result = Json::array();
@@ -326,27 +356,21 @@ namespace PerformanceResults
 
 	Json Compare(const Json& first, const Json& second)
 	{
-		Validate(first);
-		Validate(second);
+		const auto left = SummaryMetrics(first), right = SummaryMetrics(second);
 		const bool sameSemantics = (first.at("kind") == "quick_scan") == (second.at("kind") == "quick_scan") &&
 		                           (first.at("kind") == "upscaling_sweep") == (second.at("kind") == "upscaling_sweep") &&
 		                           first.at("context").value("timingDefinitions", Json{}) == second.at("context").value("timingDefinitions", Json{}) &&
 		                           first.at("context").value("runtime", Json{}) == second.at("context").value("runtime", Json{});
 		Json result = { { "compatible", sameSemantics }, { "contextMatches", first.at("context") == second.at("context") },
 			{ "settingsMatch", first.at("settings") == second.at("settings") }, { "rows", Json::array() } };
-		const auto left = SummaryMetrics(first), right = SummaryMetrics(second);
-		std::set<std::pair<std::string, std::string>> keys;
-		for (const auto* rows : { &left, &right })
-			for (const auto& row : *rows) keys.emplace(row.at("id"), row.at("metric"));
-		for (const auto& [id, name] : keys) {
-			const auto find = [&](const Json& rows) -> const Json* {
-				for (const auto& row : rows)
-					if (row.at("id") == id && row.at("metric") == name)
-						return &row;
-				return nullptr;
-			};
-			const auto* a = find(left);
-			const auto* b = find(right);
+		std::map<std::pair<std::string, std::string>, std::pair<const Json*, const Json*>> pairs;
+		for (const auto& row : left)
+			pairs[{ row.at("id"), row.at("metric") }].first = &row;
+		for (const auto& row : right)
+			pairs[{ row.at("id"), row.at("metric") }].second = &row;
+		for (const auto& [key, rows] : pairs) {
+			const auto& [id, name] = key;
+			const auto [a, b] = rows;
 			const auto av = a ? a->value("value", Json(nullptr)) : Json(nullptr);
 			const auto bv = b ? b->value("value", Json(nullptr)) : Json(nullptr);
 			const bool comparable = sameSemantics && a && b && a->at("unit") == b->at("unit") &&

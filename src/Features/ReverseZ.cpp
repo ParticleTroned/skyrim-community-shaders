@@ -6,6 +6,7 @@
 #include "Features/VRDepthCullingTemporal.h"
 #include "Globals.h"
 #include "Menu.h"
+#include "Menu/PerformanceTuningRenderer.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
@@ -559,7 +560,11 @@ bool ReverseZ::SetEnabledAtStartup(bool enabled, std::string* error)
 		return reject("Reverse Z was not changed because its feature package is unavailable. Restore the package and restart the game.");
 	if (settings.EnableReverseZBuffer == enabled && (!globals::state || !globals::state->GetDisabledFeatures().contains("ReverseZ")))
 		return true;
-	if (globals::menu && !globals::menu->PrepareSettingsMutation())
+	if (!globals::menu || !globals::state)
+		return reject("Reverse Z settings are not ready yet.");
+	if (globals::state->IsPersistentMutationBlocked() || PerformanceTuningRenderer::HasActiveMeasurements())
+		return reject("Finish the active settings operation or performance measurement before changing Reverse Z.");
+	if (!globals::menu->PrepareSettingsMutation())
 		return reject("Reverse Z was not changed because the saved settings baseline could not be preserved.");
 	settings.EnableReverseZBuffer = enabled;
 	if (globals::state)

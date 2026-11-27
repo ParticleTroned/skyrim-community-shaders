@@ -211,7 +211,27 @@ namespace
 		}
 		auto mixedSources = run;
 		mixedSources["results"][1]["source"] = "csx_whole_frame";
+		Require(Rejects([&] { Validate(mixedSources); }), "stored repeats with mixed sources must fail validation before reaching the UI");
 		Require(Rejects([&] { SummaryMetrics(mixedSources); }), "different timing sources must not be pooled into a triplicate");
+		for (const auto* field : { "coverage", "relativeTo" }) {
+			auto inconsistent = run;
+			inconsistent["results"][1][field] = "different";
+			Require(Rejects([&] { Validate(inconsistent); }), "repeats must agree on coverage and comparison semantics at the storage boundary");
+		}
+		auto duplicate = run;
+		duplicate["results"].push_back(duplicate["results"][0]);
+		duplicate["results"].back()["id"] = "Upscaling";
+		Require(Rejects([&] { Validate(duplicate); }), "aliased repeat identities must be rejected before summary rendering");
+		auto missingIndex = run;
+		missingIndex["results"][0].erase("scanIndex");
+		Require(Rejects([&] { Validate(missingIndex); }), "repeat rows without an index must not disappear from summaries");
+		auto legacy = run;
+		legacy.erase("scanCount");
+		Require(Rejects([&] { Validate(legacy); }), "an omitted scan count denotes one scan and must not admit multiple repeats");
+		legacy["results"] = Json::array({ run["results"][0] });
+		Validate(legacy);
+		Require(SummaryMetrics(legacy).size() == 2 && SummaryMetrics(legacy)[0]["id"] == "Upscaling",
+			"legacy single scans remain readable with canonical metric identities");
 		auto precise = run;
 		for (unsigned i = 0; i < 3; ++i)
 			precise["results"][i]["metrics"]["gpu"]["value"] = 0.001 + i * 0.0000001;
@@ -225,6 +245,18 @@ namespace
 					nativeReport.find("CSX FPS") != std::string::npos && nativeReport.find("200.000") != std::string::npos &&
 					Csv(wholeFrame).find("csx_whole_frame") != std::string::npos,
 			"native frame, FPS, CPU and GPU timings must survive summary, HTML and CSV independently of fpsVR");
+		auto single = wholeFrame;
+		single["scanCount"] = 1;
+		single["results"] = Json::array({ wholeFrame["results"][0], wholeFrame["results"][3] });
+		single["results"][0]["id"] = "Upscaling";
+		const auto comparison = Compare(single, wholeFrame);
+		Require(comparison["compatible"] == true && comparison["rows"].size() == 6,
+			"single and repeated scans must match native feature and whole-frame identities");
+		for (const auto& row : comparison["rows"]) {
+			Require(row["difference"].is_number(), "single-to-triplicate comparisons must retain every measured channel");
+			if (row["id"] == "Upscaling" && row["metric"] == "gpu")
+				Require(row["difference"] == 1.0, "single-to-triplicate deltas must compare the scan with the repeat mean");
+		}
 		run["results"][2]["metrics"]["gpu"]["value"] = nullptr;
 		Require(SummaryMetrics(run)[1]["value"].is_null() && SummaryMetrics(run)[1]["standardError"].is_null(),
 			"a missing repeat must not be replaced with zero or produce a complete triplicate");
@@ -464,11 +496,19 @@ try {
 	record["context"]["build"] = { { "sourceCommit", "commit-under-test" }, { "buildId", "build-under-test" }, { "sourceDirty", true } };
 	Require(Csv(record).find("source_commit,build_id,source_dirty") != std::string::npos && Csv(record).find("commit-under-test") != std::string::npos,
 		"explicit build identity columns are required");
+	record["scanCount"] = 3u;
 	const Json captures = Json::array({ { { "scanIndex", 1u }, { "phase", "complete" }, { "startSteamVrSeconds", 2.0 }, { "endSteamVrSeconds", 4.0 } },
 		{ { "scanIndex", 2u }, { "phase", "complete" }, { "startSteamVrSeconds", 5.0 }, { "endSteamVrSeconds", 7.0 } } });
 	const std::string raw = "sep=,\r\nFrametimes/test\r\nSteamVR Time, GPU frametime, CPU frametime\r\n1,99,99\r\n2,1,2\r\n3,2,4\r\n4,3,6\r\n5,0,0\r\n6,4,8\r\n7,5,10\r\n8,99,99\r\n";
 	std::istringstream csv(raw);
 	const auto matched = PerformanceFpsVR::Correlate(csv, captures);
+	auto legacyFpsVR = record;
+	legacyFpsVR.erase("scanCount");
+	legacyFpsVR["fpsVR"] = { { "status", "complete" }, { "scans", matched } };
+	Require(Rejects([&] { Validate(legacyFpsVR); }), "legacy fpsVR metadata cannot claim more scans than the record");
+	legacyFpsVR["fpsVR"]["scans"] = Json::array({ matched[0] });
+	Validate(legacyFpsVR);
+
 	Require(matched.size() == 2 && matched[0]["samples"] == 3 && matched[0]["gpu"]["meanMs"] == 2.0 && matched[1]["gpu"]["meanMs"] == 3.0,
 		"fpsVR matching must exclude warm-up/gaps and retain valid zero samples");
 	Require(matched[0]["cpu"]["p95Ms"].get<double>() > 5.7 && matched[0]["cpu"]["p95Ms"].get<double>() < 5.9, "fpsVR percentile interpolation");
@@ -531,6 +571,7 @@ try {
 		indoor["settings"]["NeuralRendering"] = { { "Enabled", false } };
 		outdoor["settings"]["NeuralRendering"] = { { "Enabled", true }, { "Mode", "Full" } };
 		indoor["settings"]["Upscaling"] = outdoor["settings"]["Upscaling"] = { { "Method", "DLSS" }, { "RenderScale", 0.77 } };
+		indoor["scanCount"] = 3u;
 		indoor["fpsVR"] = { { "status", "complete" }, { "scans", matched } };
 		indoor["fpsVR"]["recordingStopped"] = false;
 		outdoor["fpsVR"] = { { "status", "omitted" }, { "reason", "fpsVR was not running" }, { "scans", Json::array() } };
@@ -563,6 +604,7 @@ try {
 	Require(difference["rows"][0]["difference"].is_null(), "unavailable comparison invented");
 	Require(difference["rows"][1]["difference"] == 2.0, "zero baseline lost");
 	second["kind"] = "quick_scan";
+	second["scanCount"] = 1u;
 	Require(!Compare(record, second)["compatible"].get<bool>(), "mixed scan and cost semantics");
 	second = record;
 	second["context"]["runtime"] = "AE";

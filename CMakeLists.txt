@@ -2244,12 +2244,14 @@ if(BUILD_CONTROLLER_TESTS)
         OUTPUT
             "${_performance_profiles_dir}/performance_profile_actions_under_test.h"
             "${_performance_profiles_dir}/ssgi_presets_under_test.h"
+            "${_performance_profiles_dir}/performance_feature_toggle_under_test.h"
         COMMAND
             ${CMAKE_COMMAND} -DPROJECT_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
             -DOUTPUT_DIRECTORY=${_performance_profiles_dir} -P
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/extract_performance_profiles.cmake"
         DEPENDS
             src/Menu/PerformancePage.cpp
+            src/Menu/PerformanceTuningRenderer.cpp
             src/Features/ScreenSpaceGI.cpp
             src/Features/ScreenSpaceGI.h
             tests/extract_performance_profiles.cmake
@@ -2261,6 +2263,7 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE
             "${_performance_profiles_dir}/performance_profile_actions_under_test.h"
             "${_performance_profiles_dir}/ssgi_presets_under_test.h"
+            "${_performance_profiles_dir}/performance_feature_toggle_under_test.h"
     )
     target_include_directories(
         performance_profiles_test
@@ -3819,6 +3822,19 @@ if(BUILD_CONTROLLER_TESTS)
         PROPERTIES
             LABELS "ControllerTests"
             ENVIRONMENT "CXX=${CMAKE_CXX_COMPILER}"
+    )
+    add_test(
+        NAME ReverseZSettingsMutation
+        COMMAND
+            ${_settings_test_launcher} "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/reverse_z_settings_mutation_test.py"
+    )
+    set_tests_properties(
+        ReverseZSettingsMutation
+        PROPERTIES
+            LABELS "ControllerTests"
+            ENVIRONMENT
+                "CXX=${CMAKE_CXX_COMPILER};CSX_JSON_INCLUDE=$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>"
     )
     add_test(
         NAME FeatureVersionRegistry

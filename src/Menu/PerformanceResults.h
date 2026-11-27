@@ -22,7 +22,7 @@ namespace PerformanceResults
 	void Validate(const Json& record);
 	/** One row per metric; unavailable values remain null. */
 	Json Metrics(const Json& record);
-	/** Summarize only the repeats within one run, retaining each value and its scan index. */
+	/** Summarize one run using stable metric identities across single and repeated scans. */
 	Json SummaryMetrics(const Json& record);
 	/** Resolve a stored scene name, retaining a cell identity when no display name exists. */
 	std::string SceneLabel(const Json& context);

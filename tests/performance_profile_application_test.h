@@ -12,7 +12,7 @@ struct Feature
 	std::string name;
 	bool loaded = true, sceneOwned = false, rejectToggle = false, measurable = true, profileToggle = true, presetEnables = false;
 	bool inMenu = true;
-	int loadFailures = 0, restoreFailures = 0, restores = 0;
+	int loadFailures = 0, restoreFailures = 0, restores = 0, toggleFailures = 0;
 	const char* profileReadOnlyReason = nullptr;
 	nlohmann::json settings{ { "enabled", true }, { "preset", "Quality" }, { "tint", 0.75 } };
 	nlohmann::json transient = nlohmann::json::object();
@@ -48,6 +48,10 @@ struct Feature
 	{
 		if (!rejectToggle)
 			settings["enabled"] = a_enabled;
+		if (toggleFailures > 0) {
+			--toggleFailures;
+			throw std::runtime_error("Feature toggle failed");
+		}
 	}
 	virtual nlohmann::json CapturePerformanceCostMeasurementState() const { return settings; }
 	void RestorePerformanceToggleState(const nlohmann::json& a_settings)
@@ -177,7 +181,13 @@ namespace globals
 		void SelectFeatureMenu(const std::string& page) { selectedPage = page; }
 		void RequestSettingsDirtyCheck() { ++dirtyChecks; }
 		void OpenMenu() {}
-		bool PrepareSettingsMutation() { return true; }
+		bool baselineAvailable = true;
+		int preparations = 0;
+		bool PrepareSettingsMutation()
+		{
+			++preparations;
+			return baselineAvailable;
+		}
 		void CaptureFeatureMenuSettings(const std::string&, nlohmann::json&) {}
 		void ApplyFeatureMenuSettings(const std::string&, const nlohmann::json*) {}
 		std::string GetSettingsSaveMessage() const { return "Save failed"; }
@@ -218,20 +228,31 @@ public:
 	}
 	static const char* GetFeatureSceneControlBlockReason(Feature* a_feature) { return a_feature->sceneOwned ? "scene owned" : nullptr; }
 	static const char* GetFeatureControlBlockReason(Feature* a_feature) { return GetFeatureSceneControlBlockReason(a_feature); }
-	static bool SetFeatureEnabled(Feature* a_feature, bool a_enabled)
-	{
-		return PerformanceTuningController::SetEnabled(*a_feature, a_enabled, configurations[a_feature->name]);
-	}
+	static bool SetFeatureEnabled(Feature* a_feature, bool a_enabled);
+	static const char* GetFeatureToggleFailureReason(Feature* feature);
 	static bool ApplyFeatureSettingsTransaction(const std::vector<Feature*>& a_features, const std::function<bool()>& a_apply, bool a_replaceToggleHistory = false)
 	{
 		return PerformanceTuningController::ApplyTransaction(a_features, configurations, a_apply, a_replaceToggleHistory);
 	}
 };
 
+inline auto& g_disabledFeatureConfigurations = PerformanceTuningRenderer::configurations;
+inline const char* GetFeatureToggleBlockReason(Feature* feature) { return PerformanceTuningRenderer::GetFeatureControlBlockReason(feature); }
+inline void InvalidateFeatureCostResults() {}
+inline std::string g_featureToggleFailure;
+inline Feature* failedToggleFeature = nullptr;
 namespace logger
 {
-	inline void warn(const char*) {}
+	template <class... Args>
+	inline void warn(const char*, Args&&...)
+	{}
 }
+#include "performance_feature_toggle_under_test.h"
+inline bool PerformanceTuningRenderer::SetFeatureEnabled(Feature* feature, bool enabled)
+{
+	return SetRuntimeFeatureEnabled(feature, enabled);
+}
+
 namespace MenuUI
 {
 	inline const char* GetFeatureSettingsActionBlockReason(Feature* feature) { return PerformanceTuningRenderer::busy ? "busy" : feature ? nullptr :
@@ -296,6 +317,67 @@ void TestProfileApplication()
 	Feature::features = { &grass, &gi, &shadows, &sky, &terrain, &wet, &upscaling };
 	const auto originalGrass = grass.settings;
 	const auto originalSky = sky.settings;
+	json originalProfile, rejectedProfile;
+	Save(originalProfile);
+	globals::menu->baselineAvailable = false;
+	for (const auto& action : std::vector<std::function<json()>>{
+			 [] { return SetBase("Quality"); }, [] { return Capture("Skylighting"); },
+			 [] { return CaptureAll(); }, [] { return CaptureCurrentSettings(); },
+			 [] { return Apply("Quality"); }, [] { return BeginFeatureEdit("Skylighting"); } }) {
+		const auto before = globals::menu->preparations;
+		require(!action()["accepted"], "profile mutations must reject an unavailable saved baseline");
+		require(globals::menu->preparations > before, "profile mutation must preserve the baseline before changing settings");
+		Save(rejectedProfile);
+		require(rejectedProfile == originalProfile && grass.settings == originalGrass && sky.settings == originalSky &&
+					upscaling.transitions == 0 && globals::state->saves == 0,
+			"baseline failure must preserve profile, live settings and pending transitions");
+	}
+	require(!PerformanceTuningRenderer::SetFeatureEnabled(&grass, false) && grass.settings == originalGrass &&
+				PerformanceTuningRenderer::configurations.empty(),
+		"direct feature toggles must preserve settings when the baseline is unavailable");
+	require(failedToggleFeature == &grass && g_featureToggleFailure.find("saved settings") != std::string::npos,
+		"baseline capture rejection must retain its actual diagnostic");
+	require(SelectIncludedFeature(grass.name, false)["accepted"], "included-feature selection can be staged without changing settings");
+	require(!SaveIncludedFeatures()["accepted"], "saving included features requires the saved baseline");
+	Save(rejectedProfile);
+	require(rejectedProfile == originalProfile && grass.settings == originalGrass, "failed inclusion saves preserve profile and live settings");
+	globals::menu->baselineAvailable = true;
+	for (int boundary = 0; boundary < 6; ++boundary) {
+		const auto preparations = globals::menu->preparations;
+		const auto checks = globals::menu->dirtyChecks;
+		if (boundary == 0)
+			globals::state = nullptr;
+		if (boundary == 1)
+			globals::stateStorage.saving = true;
+		if (boundary == 2)
+			globals::stateStorage.pendingPostLoadRuntimeReset = true;
+		if (boundary == 3)
+			globals::stateStorage.isLoadingMenuOpen = true;
+		if (boundary == 4)
+			globals::stateStorage.isMainMenuOpen = true;
+		if (boundary == 5)
+			PerformanceTuningRenderer::busy = true;
+		require(!PerformanceTuningRenderer::SetFeatureEnabled(&grass, false) && grass.settings == originalGrass &&
+					PerformanceTuningRenderer::configurations.empty() && globals::menu->preparations == preparations && globals::menu->dirtyChecks == checks,
+			"unsafe direct toggles must reject before baseline capture, settings mutation or history changes");
+		require(failedToggleFeature == &grass && !g_featureToggleFailure.empty(),
+			"every blocked toggle must provide a diagnostic to UI and API callers");
+		globals::state = &globals::stateStorage;
+		globals::stateStorage.saving = globals::stateStorage.pendingPostLoadRuntimeReset = false;
+		globals::stateStorage.isLoadingMenuOpen = globals::stateStorage.isMainMenuOpen = false;
+		PerformanceTuningRenderer::busy = false;
+	}
+	grass.toggleFailures = 1;
+	require(!PerformanceTuningRenderer::SetFeatureEnabled(&grass, false) && grass.settings == originalGrass &&
+				PerformanceTuningRenderer::configurations.empty() && failedToggleFeature == &grass && !g_featureToggleFailure.empty(),
+		"direct toggles must report exceptions without escaping the menu or losing the previous settings");
+	require(PerformanceTuningRenderer::SetFeatureEnabled(&grass, true) && !failedToggleFeature && g_featureToggleFailure.empty(),
+		"a successful no-op must clear stale toggle diagnostics");
+	grass.toggleFailures = 1;
+	const auto failedProfile = Apply("Performance");
+	require(!failedProfile["accepted"] && failedProfile["error"].get<std::string>().find("Feature toggle failed") != std::string::npos &&
+				grass.settings == originalGrass && sky.settings == originalSky && PerformanceTuningRenderer::configurations.empty() && upscaling.transitions == 0,
+		"profiles must preserve the native toggle diagnostic and restore state before returning a failure");
 	require(!Apply("Performance")["accepted"], "rejected upscaling rejects the profile");
 	require(grass.settings == originalGrass && sky.settings == originalSky && PerformanceTuningRenderer::configurations.empty(),
 		"a late rejection restores native settings and removes newly created toggle history");

@@ -771,6 +771,8 @@ namespace FeatureIssues
 		// If requested, check loaded features for issues (e.g., features that failed to load)
 		if (checkLoadedFeatures) {
 			for (auto* feature : features) {
+				if (feature->IsHiddenFromUserView())
+					continue;
 				// Re-add issues for features that were not successfully loaded
 				if (!feature->loaded && !feature->failedLoadedMessage.empty()) {
 					FeatureFileInfo fileInfo = GetFeatureFileInfo(feature->GetShortName());

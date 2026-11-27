@@ -11,11 +11,19 @@ file(READ "${OUTPUT_DIRECTORY}/profile_actions.h" actions)
 file(WRITE "${OUTPUT_DIRECTORY}/performance_profile_actions_under_test.h"
     "namespace MenuUI::PerformancePage { namespace {\n${helpers}\n}\n${actions}\n}\n")
 
+file(READ "${PROJECT_ROOT}/src/Menu/PerformanceTuningRenderer.cpp" source)
+extract_between("${source}" "\tbool SetRuntimeFeatureEnabled(" "\tbool StartNextFeatureCostBatchMeasurement(" "performance_feature_toggle_under_test.h")
+extract_between("${source}" "const char* PerformanceTuningRenderer::GetFeatureToggleFailureReason(" "void PerformanceTuningRenderer::RenderFeatureEnabledControl(" "performance_feature_toggle_failure.h")
+file(READ "${OUTPUT_DIRECTORY}/performance_feature_toggle_failure.h" failure_accessor)
+file(APPEND "${OUTPUT_DIRECTORY}/performance_feature_toggle_under_test.h" "\n${failure_accessor}")
+
 file(READ "${PROJECT_ROOT}/src/Features/ScreenSpaceGI.h" ssgi_header)
 file(READ "${PROJECT_ROOT}/src/Features/ScreenSpaceGI.cpp" ssgi_source)
 extract_between("${ssgi_header}" "\tstruct Settings" "\n\tint activeResourceProfile" "ssgi_preset_fields.h")
 extract_between("${ssgi_source}" "\tvoid DisableGIEffects(" "\tvoid ClampSampleCounts(" "ssgi_preset_functions.h")
+extract_between("${ssgi_source}" "std::vector<std::string> ScreenSpaceGI::GetPerformancePresetNames()" "void ScreenSpaceGI::DrawSettings()" "ssgi_preset_methods.h")
+file(READ "${OUTPUT_DIRECTORY}/ssgi_preset_methods.h" methods)
 file(READ "${OUTPUT_DIRECTORY}/ssgi_preset_fields.h" fields)
 file(READ "${OUTPUT_DIRECTORY}/ssgi_preset_functions.h" functions)
 file(WRITE "${OUTPUT_DIRECTORY}/ssgi_presets_under_test.h"
-    "namespace SsgiPresetTest { using uint = unsigned int; using float2 = std::array<float, 2>; namespace REL { struct Module { static inline bool vr = false; static bool IsVR() { return vr; } }; } struct ScreenSpaceGI { static constexpr int kResourceProfileAOOnly = 0, kResourceProfileFullGI = 1; ${fields} }; ${functions} }\n")
+    "namespace SsgiPresetTest { using uint = unsigned int; using float2 = std::array<float, 2>; namespace REL { struct Module { static inline bool vr = false; static bool IsVR() { return vr; } }; } struct ScreenSpaceGI { static constexpr int kResourceProfileAOOnly = 0, kResourceProfileFullGI = 1; ${fields} bool recompileFlag = false; std::vector<std::string> GetPerformancePresetNames() const; std::string GetPerformancePresetName() const; bool ApplyPerformancePreset(std::string_view); }; ${functions} ${methods} }\n")

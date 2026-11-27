@@ -6551,6 +6551,10 @@ if(BUILD_CONTROLLER_TESTS)
     # Derive the aggregate from this block so new test executables cannot be omitted.
     get_property(_controller_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
     list(REMOVE_ITEM _controller_targets ${_targets_before_controller_tests})
+    # Platform workaround tests are declared before the optional controller group.
+    if(TARGET nvidia_binding_workaround_test)
+        list(APPEND _controller_targets nvidia_binding_workaround_test)
+    endif()
     add_custom_target(controller_tests)
     foreach(_target IN LISTS _controller_targets)
         get_target_property(_type ${_target} TYPE)

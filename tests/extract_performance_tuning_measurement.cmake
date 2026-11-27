@@ -17,6 +17,10 @@ extract_between("${source}" "constexpr double kFeatureCostMeasurementSeconds"
     "constexpr std::array<std::string_view," "measurement_constants.h")
 extract_between("${source}" "using FeatureCostMoments"
     "enum class UpscalingCostSweepPhase" "measurement_types.h")
+extract_between("${source}" "struct FeatureCostBatchState"
+    "static std::unordered_map<std::string, std::optional<DisabledFeatureConfiguration>>" "measurement_batch_type.h")
+extract_between("${source}" "static FeatureCostBatchState g_featureCostBatch;"
+    "static std::string g_featureCostUiMessage;" "measurement_batch_state.h")
 extract_between("${source}" "bool IsFeatureCostMeasurementActive"
     "bool IsAnyFeatureCostMeasurementActive" "measurement_active.h")
 extract_between("${source}" "double GetFeatureCostRestartCooldownRemaining"
@@ -50,7 +54,7 @@ file(READ "${OUTPUT_DIRECTORY}/measurement_upscaling_settle.h" settle)
 file(READ "${OUTPUT_DIRECTORY}/measurement_summary.h" summary)
 file(WRITE "${OUTPUT_DIRECTORY}/performance_tuning_measurement_under_test.h"
     "#pragma once\nstruct Upscaling : Feature {\n${settle}\n};\nstruct ProfilingRenderer {\n${summary}\n};\n")
-foreach(part IN ITEMS timing_validity cadence constants types active cooldown validity statistics samples phases phase_names trace_types trace_state trace_helpers)
+foreach(part IN ITEMS timing_validity cadence constants types batch_type batch_state active cooldown validity statistics samples phases phase_names trace_types trace_state trace_helpers)
     file(READ "${OUTPUT_DIRECTORY}/measurement_${part}.h" section)
     file(APPEND "${OUTPUT_DIRECTORY}/performance_tuning_measurement_under_test.h"
         "${section}\n")

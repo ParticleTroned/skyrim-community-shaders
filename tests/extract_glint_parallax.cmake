@@ -4,7 +4,7 @@ file(READ "${PROJECT_ROOT}/package/Shaders/Lighting.hlsl" _lighting)
 extract_between(
     "${_lighting}"
     "\t\tfloat2 glintUV = uv;"
-    "\n\t}\n#\tendif\n\n\t// Directiontal Lighting"
+    "\n\t}\n#\tendif"
     glint_precompute.hlsli
 )
 file(READ "${OUTPUT_DIRECTORY}/glint_precompute.hlsli" GLINT_PRECOMPUTE)

@@ -27,7 +27,7 @@ extract_between("${source}" "enum class EShaderPropertyFlag :" "enum class EShad
 file(READ "${PROJECT_ROOT}/extern/CommonLibSSE-NG/include/RE/B/BSShaderMaterial.h" source)
 extract_between("${source}" "enum class Feature" "virtual ~BSShaderMaterial()" "streaming_features_under_test.h")
 file(READ "${PROJECT_ROOT}/src/Menu/SettingsPage.h" source)
-extract_between("${source}" "struct Section" "struct Choice" "streaming_sections_under_test.h")
+extract_between("${source}" "enum class SectionContent" "struct Choice" "streaming_sections_under_test.h")
 
 file(READ "${PROJECT_ROOT}/extern/CommonLibSSE-NG/include/RE/B/BSGeometry.h" source)
 extract_between("${source}" "enum class Type" "struct MODEL_DATA" "streaming_geometry_types_under_test.h")

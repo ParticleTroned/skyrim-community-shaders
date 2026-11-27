@@ -81,6 +81,7 @@ namespace
 		FeatureCostMeasurementState state;
 		state.originalState = feature.settings;
 		state.runStartTime = now;
+		state.waits = GetFeatureCostWaits(&feature, false);
 		PrepareFeatureCostPhase(Phase::PreparingCurrent, state, now, kFeatureCostInitialWaitSeconds);
 		return state;
 	}
@@ -101,7 +102,7 @@ namespace
 		auto state = Begin(feature);
 		std::uint32_t frame = 1;
 		Near(GetFeatureCostExpectedRunSeconds(&feature), totalSeconds, "nominal duration must match the protocol");
-		Near(GetFeatureCostRemainingSeconds(state, &feature, 0.0), totalSeconds, "initial countdown must include every phase");
+		Near(GetFeatureCostRemainingSeconds(state, 0.0), totalSeconds, "initial countdown must include every phase");
 
 		UpdateFeatureCostMeasurement(&feature, state, Timing(frame), 1.999);
 		Require(state.phase == Phase::PreparingCurrent, "current measurement must wait two seconds");
@@ -115,7 +116,7 @@ namespace
 		Near(state.currentSample.sampledDurationMs, 3000.0, "current condition must contain exactly three measured seconds");
 		Require(!feature.settings["enabled"].get<bool>(), "comparison must disable the feature");
 		Near(state.phaseDeadlineTime, 5.0 + comparisonWait, "comparison settling must use the feature protocol");
-		Near(GetFeatureCostRemainingSeconds(state, &feature, 5.0), comparisonWait + 4.0, "comparison countdown must use the actual wait");
+		Near(GetFeatureCostRemainingSeconds(state, 5.0), comparisonWait + 4.0, "comparison countdown must use the actual wait");
 
 		const double comparisonStart = 5.0 + comparisonWait;
 		UpdateFeatureCostMeasurement(&feature, state, Timing(frame), comparisonStart - 0.001);
@@ -147,7 +148,7 @@ namespace
 		Require(NextBatchAction(1, 2, false, true, false,
 					GetFeatureCostRestartCooldownRemaining(totalSeconds + 5.0)) == BatchAction::StartNext,
 			"the next feature must become eligible after five seconds");
-		Near(GetFeatureCostRemainingSeconds(state, &feature, totalSeconds), 0.0, "completed run must have no measurement countdown");
+		Near(GetFeatureCostRemainingSeconds(state, totalSeconds), 0.0, "completed run must have no measurement countdown");
 	}
 
 	void TestBlockBoundaries(bool flatTiming)
@@ -278,7 +279,7 @@ namespace
 			Feature& feature = std::string_view(name) == "Upscaling" ? upscaling : ordinary;
 			feature.shortName = name;
 			auto state = Begin(feature, 100.0);
-			const auto status = FeatureCostMeasurementStatusJson(name, state, &feature, 100.5);
+			const auto status = FeatureCostMeasurementStatusJson(name, state, 100.5);
 			Near(status.at("comparisonWaitMs").get<double>(), waitMs, "active status must report the actual Off or None wait");
 			Near(status.at("expectedRunMs").get<double>(), totalMs, "active status must report the actual feature duration");
 			Near(status.at("estimatedRemainingMs").get<double>(), totalMs - 500.0, "active countdown must use the same protocol");

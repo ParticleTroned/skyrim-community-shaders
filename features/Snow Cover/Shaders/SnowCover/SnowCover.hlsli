@@ -161,8 +161,19 @@ namespace SnowCover
 		return saturate(footprint.scale * coverage * (1 - fire));
 	}
 
-	CoverageInputs GetSurfaceFootprint(float3 normal, float disp, float3 p, float skylight,
-		float waterDist, float viewDist, float lift, float environment)
+	/// Final surface scale also bounds all historical snow coverage.
+	float GetSurfaceScale(float3 normal, float skylight, float viewDist)
+	{
+		float scale = skylight * smoothstep(SharedData::snowCoverSettings.minAngle, SharedData::snowCoverSettings.maxAngle, normal.z);
+#	if !defined(LANDSCAPE) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE) && !defined(WORLD_MAP)
+		scale *= GetObjectFade(viewDist);
+#	endif
+		return scale;
+	}
+
+	/// The caller supplies the scale of the final snow normal and view distance.
+	CoverageInputs GetSurfaceFootprintWithScale(float3 normal, float disp, float3 p,
+		float waterDist, float viewDist, float lift, float environment, float scale)
 	{
 		CoverageInputs footprint;
 		footprint.position = p;
@@ -170,11 +181,16 @@ namespace SnowCover
 		footprint.weatherRange = GetWeatherRange(p, viewDist);
 		footprint.weatherUpness = max(SharedData::snowCoverSettings.minAngle, normal.z);
 		footprint.waterFade = smoothstep(-WaterFadeDepth, WaterFadeHeight, -waterDist - disp);
-		footprint.scale = skylight * smoothstep(SharedData::snowCoverSettings.minAngle, SharedData::snowCoverSettings.maxAngle, normal.z);
-#	if !defined(LANDSCAPE) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE) && !defined(WORLD_MAP)
-		footprint.scale *= GetObjectFade(viewDist);
-#	endif
+		footprint.scale = scale;
 		footprint.foliage = 0;
+		return footprint;
+	}
+
+	CoverageInputs GetSurfaceFootprint(float3 normal, float disp, float3 p, float skylight,
+		float waterDist, float viewDist, float lift, float environment)
+	{
+		CoverageInputs footprint = GetSurfaceFootprintWithScale(normal, disp, p, waterDist, viewDist, lift, environment, 0);
+		footprint.scale = GetSurfaceScale(normal, skylight, viewDist);
 		return footprint;
 	}
 

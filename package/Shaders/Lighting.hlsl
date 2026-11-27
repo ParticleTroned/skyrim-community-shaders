@@ -3682,7 +3682,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		else
 			float disp = 0;
 #		endif
+#		if defined(TREE_ANIM) || defined(DO_ALPHA_TEST)
 			float snowEnvironment = SnowCover::GetEnvironmentalMultiplier(adjustedWorldPos);
+#		endif
 			float3 snowNormal = worldNormal;
 #		if defined(TREE_ANIM)
 			snowNormal = normalize(snowNormal + float3(0, 0, SnowCover::FoliageNormalBias));
@@ -3709,27 +3711,44 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(LODLANDSCAPE) || defined(LODLANDNOISE)
 			snowNormal = normalize(lerp(snowNormal, float3(0, 0, 1), 0.5));
 #		endif
-			float rooftopLift = 0;
-#		if !defined(LANDSCAPE) && !defined(LOD) && !defined(TREE_ANIM) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE)
-			if (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SnowRooftop)
-				rooftopLift = SnowCover::GetRooftopLift(input.ModelPosition.z, snowSkyVisibility);
-#		endif
 			float snowViewDist = length(viewPosition.xyz);
-			SnowCover::CoverageInputs footprint = SnowCover::GetSurfaceFootprint(snowNormal, disp,
-				adjustedWorldPos, snowOcclusion, input.WorldPosition.z - waterHeight,
-				snowViewDist, rooftopLift, snowEnvironment);
+			SnowCover::CoverageInputs footprint = (SnowCover::CoverageInputs)0;
+			footprint.position = adjustedWorldPos;
 			SnowCover::FireMeltSample fireMelt = (SnowCover::FireMeltSample)0;
-#		if defined(WETTERNESS) && !defined(SKIN) && !defined(HAIR) && !defined(SKINNED)
-			[branch] if (SharedData::snowMeltSettings.enabled && CS_WETNESS_SETTINGS.EnableWetnessEffects && !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::NoSnowMelt))
+#		if !defined(TREE_ANIM) && !defined(DO_ALPHA_TEST)
+			float snowScale = SnowCover::GetSurfaceScale(snowNormal, snowOcclusion, snowViewDist);
+			[branch] if (snowScale != 0)
 			{
-				float dryRoughness = material.Roughness;
+				float snowEnvironment = SnowCover::GetEnvironmentalMultiplier(adjustedWorldPos);
+#		endif
+				float rooftopLift = 0;
+#		if !defined(LANDSCAPE) && !defined(LOD) && !defined(TREE_ANIM) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE)
+				if (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SnowRooftop)
+					rooftopLift = SnowCover::GetRooftopLift(input.ModelPosition.z, snowSkyVisibility);
+#		endif
+#		if !defined(TREE_ANIM) && !defined(DO_ALPHA_TEST)
+				footprint = SnowCover::GetSurfaceFootprintWithScale(snowNormal, disp,
+					adjustedWorldPos, input.WorldPosition.z - waterHeight,
+					snowViewDist, rooftopLift, snowEnvironment, snowScale);
+#		else
+			footprint = SnowCover::GetSurfaceFootprint(snowNormal, disp, adjustedWorldPos,
+				snowOcclusion, input.WorldPosition.z - waterHeight, snowViewDist, rooftopLift, snowEnvironment);
+#		endif
+#		if defined(WETTERNESS) && !defined(SKIN) && !defined(HAIR) && !defined(SKINNED)
+				[branch] if (SharedData::snowMeltSettings.enabled && CS_WETNESS_SETTINGS.EnableWetnessEffects && !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::NoSnowMelt))
+				{
+					float dryRoughness = material.Roughness;
 #			if !defined(TRUE_PBR)
-				dryRoughness = 1.0 - saturate(material.Glossiness);
+					dryRoughness = 1.0 - saturate(material.Glossiness);
 #			endif
-				snowMeltWetness = Wetterness::GetSnowMeltWetness(footprint,
-					Wetterness::GetSurfaceDryingWeights(saturate(material.BaseColor), dryRoughness), fireMelt);
+					snowMeltWetness = Wetterness::GetSnowMeltWetness(footprint,
+						Wetterness::GetSurfaceDryingWeights(saturate(material.BaseColor), dryRoughness), fireMelt);
+				}
+#		endif
+#		if !defined(TREE_ANIM) && !defined(DO_ALPHA_TEST)
 			}
 #		endif
+			// Implicit material sampling needs reconverged lanes and their original positions.
 #		if defined(TRUE_PBR)
 			snowFactor = SnowCover::ApplySnowPBR(material, snowNormal, disp, footprint, snowViewDist, uv - uvOriginal, fireMelt);
 #		else

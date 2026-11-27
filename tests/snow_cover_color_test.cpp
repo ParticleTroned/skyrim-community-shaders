@@ -40,16 +40,18 @@ namespace
 		return bytecode;
 	}
 
-	struct Target
+	template <UINT Width, UINT Height>
+	struct RenderTarget
 	{
 		ComPtr<ID3D11Texture2D> texture, staging;
 		ComPtr<ID3D11RenderTargetView> view;
 
-		explicit Target(ID3D11Device* device)
+		explicit RenderTarget(ID3D11Device* device)
 		{
 			D3D11_TEXTURE2D_DESC desc{};
-			desc.Width = 3;
-			desc.Height = desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+			desc.Width = Width;
+			desc.Height = Height;
+			desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
 			desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
 			desc.BindFlags = D3D11_BIND_RENDER_TARGET;
 			Check(device->CreateTexture2D(&desc, nullptr, texture.GetAddressOf()));
@@ -67,24 +69,26 @@ namespace
 		{
 			context->ClearState();
 			context->OMSetRenderTargets(1, view.GetAddressOf(), nullptr);
-			const D3D11_VIEWPORT viewport{ 0, 0, 3, 1, 0, 1 };
+			const D3D11_VIEWPORT viewport{ 0, 0, float(Width), float(Height), 0, 1 };
 			context->RSSetViewports(1, &viewport);
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 			context->VSSetShader(vertex, nullptr, 0);
 			context->PSSetShader(pixel, nullptr, 0);
 		}
 
-		Results Read(ID3D11DeviceContext* context)
+		std::array<Color, Width * Height> Read(ID3D11DeviceContext* context)
 		{
 			context->CopyResource(staging.Get(), texture.Get());
 			D3D11_MAPPED_SUBRESOURCE mapped{};
 			Check(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped));
-			Results result;
-			std::memcpy(result.data(), mapped.pData, sizeof(result));
+			std::array<Color, Width * Height> result{};
+			for (UINT row = 0; row < Height; ++row)
+				std::memcpy(result.data() + row * Width, static_cast<const std::byte*>(mapped.pData) + row * mapped.RowPitch, Width * sizeof(Color));
 			context->Unmap(staging.Get(), 0);
 			return result;
 		}
 	};
+	using Target = RenderTarget<3, 1>;
 
 	ComPtr<ID3D11ShaderResourceView> Texture(ID3D11Device* device, const Color& color)
 	{
@@ -421,6 +425,7 @@ namespace
 
 namespace
 {
+#include "snow_cover_footprint_gpu.h"
 #include "snow_cover_material_gpu.h"
 }
 
@@ -437,6 +442,15 @@ int main()
 		ComPtr<ID3D11VertexShader> vertex;
 		Check(device->CreateVertexShader(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), nullptr, vertex.GetAddressOf()));
 		Util::SetResourceName(vertex.Get(), "SnowColorTest::VS");
+		for (bool vr : { false, true })
+			for (bool pbr : { false, true })
+				for (const auto* technique : { "", "MODELSPACENORMALS", "LANDSCAPE", "LODLANDSCAPE", "LODLANDNOISE", "WORLD_MAP" })
+					CheckFootprintGate(device.Get(), context.Get(), vertex.Get(), vr, pbr, technique);
+		for (bool vr : { false, true })
+			for (bool pbr : { false, true })
+				for (const auto* technique : { "", "LANDSCAPE" })
+					CheckFootprintGate(device.Get(), context.Get(), vertex.Get(), vr, pbr, technique, true);
+		std::cout << "Snow footprint: mixed quads, implicit mip sampling and coverage derivatives passed on WARP\n";
 		for (bool vr : { false, true })
 			for (bool pbr : { false, true })
 				for (UINT flags : { 0u, UINT(D3DCOMPILE_PARTIAL_PRECISION), UINT(D3DCOMPILE_AVOID_FLOW_CONTROL), UINT(D3DCOMPILE_PARTIAL_PRECISION | D3DCOMPILE_AVOID_FLOW_CONTROL) })

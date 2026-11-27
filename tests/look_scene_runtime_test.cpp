@@ -1,3 +1,4 @@
+#include "Presets/LocationSkyLighting.h"
 #include "Presets/LookSceneRuntime.h"
 #include "Presets/LookScenes.h"
 #include <algorithm>
@@ -5,6 +6,7 @@
 #include <chrono>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -277,6 +279,83 @@ void CheckPreparedFields()
 		"Cached partial failure must roll back all features and restore authored ownership");
 	Use(nullptr);
 }
+void CheckLocationSkyLighting()
+{
+	using namespace Presets;
+	using namespace Presets::LookSceneRuntime;
+	std::string error;
+	Require(LocationSkyLighting::Validate(Json::object(), error), "Empty sky overrides must inherit");
+	Require(LocationSkyLighting::Validate({ { "MinShadowElevation", 45.f }, { "HorizonFadeHours", 0.f } }, error), "Inclusive sky bounds rejected");
+	Json packAppearance{ { "locationOverrides", Json::array({ { { "key", "0x1~Test.esm" },
+													{ "skyLighting", { { "MinShadowElevation", 4.f } } } } }) } };
+	auto inherited = packAppearance;
+	inherited["locationOverrides"][0]["skyLighting"] = Json::object();
+	const auto savedEdits = Json::parse(PersonalSettings("AdaptiveBrightness", inherited, packAppearance).dump());
+	Overlay(packAppearance, SelectDomain("AdaptiveBrightness", savedEdits, SettingsDomain::Appearance));
+	Require(packAppearance == inherited, "Saving and reloading an inherit reset must not resurrect the pack's sky override");
+	for (const auto& invalid : std::vector<Json>{ Json::array(), { { "MinShadowElevation", -1 } },
+			 { { "MinShadowElevation", 46 } }, { { "HorizonFadeHours", 1.6 } }, { { "HorizonFadeHours", "1" } },
+			 { { "SunPath", 1 } }, { { "MinShadowElevation", std::numeric_limits<double>::infinity() } } }) {
+		Require(!LocationSkyLighting::Validate(invalid, error), "Invalid sky override accepted");
+		const Json schema{ { "MinShadowElevation", 0.f }, { "HorizonFadeHours", 0.f } };
+		for (const auto mode : { ValidationMode::ClosedPatch, ValidationMode::SettingsSnapshot })
+			Require(!ValidatePatch(invalid, schema, error, "/AdaptiveBrightness/locationOverrides/0/skyLighting", mode),
+				"Preset validation must reject invalid sky values before applying a profile");
+	}
+
+	const Json base{ { "SkySync", { { "MinShadowElevation", 1.f }, { "HorizonFadeHours", .7f } } } };
+	LookSceneContext context;
+	context.locations = { "parent", "child" };
+	context.periods = { 0, 0, 1, 0, 0, 0 };
+	std::map<std::string, Json> packLayers{
+		{ "Locations/child/Day", { { "SkySync", { { "HorizonFadeHours", 1.f } } } } }
+	};
+	std::map<std::string, Json> personal{
+		{ "parent", { { "SkySync", { { "MinShadowElevation", 3.f }, { "HorizonFadeHours", .2f } } } } },
+		{ "child", { { "SkySync", { { "MinShadowElevation", 4.f } } } } }
+	};
+	auto resolved = ResolveLookLocations(packLayers, context, base, {}, personal);
+	Require(resolved["SkySync"]["MinShadowElevation"] == 4.f && resolved["SkySync"]["HorizonFadeHours"] == 1.f,
+		"Personal settings must respect narrower pack scopes and preserve periodic settings");
+	personal.erase("child");
+	resolved = ResolveLookLocations(packLayers, context, base, {}, personal);
+	Require(resolved["SkySync"]["MinShadowElevation"] == 3.f, "Reset must inherit the broader location");
+
+	Util::interior = false;
+	WeatherManager::GetSingleton()->active = false;
+	auto* sky = Feature::FindFeatureByShortName("SkySync");
+	sky->settings = base.at("SkySync");
+	Use(nullptr);
+	SetLocationOverrides({ { "0x1~test.esm", { { "SkySync", { { "MinShadowElevation", 4.f } } } } } });
+	++globals::state->frameCount;
+	Update();
+	Require(sky->settings["MinShadowElevation"] == 4.f && sky->settings["HorizonFadeHours"] == .7f,
+		"Saved locations must work without a selected pack and preserve omitted settings");
+	Json exported;
+	sky->SaveBaseSettings(exported);
+	Require(exported == base.at("SkySync"), "Transient local lighting must not leak into the exported base");
+	const auto loads = sky->loads;
+	++globals::state->frameCount;
+	Update();
+	Require(sky->loads == loads, "Unchanged location must not reload Sky Sync each frame");
+	Suspend();
+	Require(sky->settings == base.at("SkySync"), "Settings transaction must restore inherited sky values");
+	Resume();
+	++globals::state->frameCount;
+	Update();
+	Require(sky->settings["MinShadowElevation"] == 4.f, "Location must resume after the settings transaction");
+	SetLocationOverrides({ { "0x2~test.esm", { { "SkySync", { { "MinShadowElevation", 4.f } } } } } });
+	++globals::state->frameCount;
+	Update();
+	Require(sky->settings == base.at("SkySync"), "A nonmatching location must restore the inherited values");
+	SetLocationOverrides({});
+	++globals::state->frameCount;
+	Update();
+	Require(sky->settings == base.at("SkySync") && !Controls("SkySync"), "Disabling or deleting overrides must release ownership");
+	Use(nullptr);
+	WeatherManager::GetSingleton()->active = true;
+}
+
 int main()
 try {
 	using namespace Presets::LookSceneRuntime;
@@ -347,6 +426,7 @@ try {
 	CheckPreparedFields();
 	CheckPreparationGates();
 	LookSceneApplyTests::Run();
+	CheckLocationSkyLighting();
 	std::cout << "Visuals scene transaction and restoration tests passed\n";
 	return 0;
 } catch (const std::exception& error) {

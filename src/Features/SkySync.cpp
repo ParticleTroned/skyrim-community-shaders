@@ -68,7 +68,7 @@ void SkySync::DrawSettings()
 		}
 	}
 	if (page.Is("lighting")) {
-		Util::Widgets::SliderFloat("Min Shadow Elevation", &settings.MinShadowElevation, 0.0f, 45.0f, "%.1f deg", ImGuiSliderFlags_AlwaysClamp);
+		Util::Widgets::SliderFloat("Min Shadow Elevation", &settings.MinShadowElevation, 0.0f, MaxShadowElevation, "%.1f deg", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("The minimum angle sunlight will set to. Caps shadow length. Higher = shorter shadows at sunset/sunrise.");
 		}
@@ -234,7 +234,7 @@ void SkySync::LoadSettings(json& o_json)
 	settings.SunriseEndOffset = Util::ClampFinite(settings.SunriseEndOffset, -5.0f, 5.0f, defaults.SunriseEndOffset);
 	settings.SunsetBeginOffset = Util::ClampFinite(settings.SunsetBeginOffset, -5.0f, 5.0f, defaults.SunsetBeginOffset);
 	settings.SunsetEndOffset = Util::ClampFinite(settings.SunsetEndOffset, -5.0f, 5.0f, defaults.SunsetEndOffset);
-	settings.MinShadowElevation = Util::ClampFinite(settings.MinShadowElevation, 0.0f, 45.0f, defaults.MinShadowElevation);
+	settings.MinShadowElevation = Util::ClampFinite(settings.MinShadowElevation, 0.0f, MaxShadowElevation, defaults.MinShadowElevation);
 	settings.HorizonFadeHours = Util::ClampFinite(settings.HorizonFadeHours, 0.0f, MaxHorizonFadeHours, DefaultHorizonFadeHours);
 	if (!settings.Enabled) {
 		ResetRuntimeState();

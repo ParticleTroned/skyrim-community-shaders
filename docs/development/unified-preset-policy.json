@@ -2,7 +2,7 @@
     "schemaVersion": 4,
     "status": "provisional-calibration-v2",
     "generatedAtEvidenceDate": "2026-08-30",
-    "packageVersion": "d2026.11.24.1",
+    "packageVersion": "d2026.11.27.1",
     "policy": "one vendor-neutral base with three explicit graphics tiers and capability-selected DLSS or FSR",
     "presetCompatibility": {
         "contractVersion": 1,
@@ -18,8 +18,8 @@
         "sha256": "F4A3DECC2ED2C44055F4FCABD1AD3B539E986791CF6783630FF72DE4F393B22B"
     },
     "runtimeSettingsContract": {
-        "revision": 36,
-        "sourceTreeSha256": "07B692C239DEAFA13F164747C90B89F8F38E2B8632D5983A00D06345996CD68F",
+        "revision": 37,
+        "sourceTreeSha256": "A778B4C0FFD22B4C78B6955DAEE765EB1EFF0AC43A599EDF7A750E05F998EB2D",
         "inventory": {
             "fixedSources": [
                 "src/Api/FeatureDevBenchBridge.cpp",
@@ -64,6 +64,7 @@
                 "src/Menu/SettingsActions.cpp",
                 "src/PresetCompatibility.cpp",
                 "src/PresetCompatibility.h",
+                "src/Presets/LocationSkyLighting.h",
                 "src/SettingsMigrations.cpp",
                 "src/SettingsMigrations.h",
                 "src/SettingsOverrideManager.cpp",
@@ -211,6 +212,7 @@
             "src/MenuDepthOfFieldSettingsPolicy.h",
             "src/PresetCompatibility.cpp",
             "src/PresetCompatibility.h",
+            "src/Presets/LocationSkyLighting.h",
             "src/SettingsMigrations.cpp",
             "src/SettingsMigrations.h",
             "src/SettingsOverrideManager.cpp",

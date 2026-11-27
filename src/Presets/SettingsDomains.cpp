@@ -1,4 +1,5 @@
 #include "SettingsDomains.h"
+#include "LocationSkyLighting.h"
 
 #include <algorithm>
 #include <array>
@@ -323,6 +324,9 @@ namespace Presets
 
 	bool ValidatePatch(const Json& patch, const Json& schema, std::string& error, const std::string& path, ValidationMode mode)
 	{
+		if (path.starts_with("/AdaptiveBrightness/locationOverrides/") && path.ends_with("/skyLighting") &&
+			!LocationSkyLighting::Validate(patch, error))
+			return false;
 		if (std::count(path.begin(), path.end(), '/') > 64) {
 			error = "Settings are nested too deeply";
 			return false;

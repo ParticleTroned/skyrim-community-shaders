@@ -157,6 +157,7 @@ struct AdaptiveBrightness : Feature
 		std::string cocCode;
 		ProfileSettings profile;
 		bool layered = false;
+		json skyLighting = json::object();
 	};
 
 	struct LocationOverrideTarget
@@ -311,6 +312,7 @@ struct AdaptiveBrightness : Feature
 	std::atomic<const char*> locationTeleportStatus{ nullptr };
 	std::string locationOverrideEditKey;
 	std::optional<ProfileSettings> locationOverrideEditProfile;
+	json locationOverrideEditSkyLighting = json::object();
 	ProfileTabSyncState profileTabSyncState{};
 	std::string contextSectionSyncKey;
 	bool contextSectionSyncInitialized = false;
@@ -364,6 +366,8 @@ struct AdaptiveBrightness : Feature
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	/** Inspect or edit a global/location placement layer without persisting it. */
 	json GrassPlacementControls(const json& request);
+	/** Inspects or replaces optional sky lighting values for a saved location. */
+	json LocationSkyLightingControls(const json& request);
 #endif
 	void DrawGrassPlacementSettings(GrassPlacement::Settings& placement);
 	/** Return smooth volumetric haze suppression, or zero while Adaptive Balance is bypassed. */
@@ -475,6 +479,10 @@ struct AdaptiveBrightness : Feature
 	std::size_t ResolveWorldspaceHierarchyOverrideIndex(const RE::TESWorldSpace* a_worldspace) const;
 	std::size_t ResolveLocationHierarchyOverrideIndex(const RE::BGSLocation* a_location) const;
 	void NormalizeLocationOverrides();
+	/** Stages saved sky values for the shared location-rule evaluator. */
+	void SyncLocationSkyLighting();
+	/** Edits optional absolute values; absent fields inherit the broader scene. */
+	void DrawLocationSkyLighting(json& values, bool allowEdits);
 	void MarkLocationOverrideLookupDirty();
 	void EnsureLocationOverrideLookup() const;
 

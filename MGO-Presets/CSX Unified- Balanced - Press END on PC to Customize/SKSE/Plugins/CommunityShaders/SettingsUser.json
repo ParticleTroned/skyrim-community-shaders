@@ -79,15 +79,15 @@
   "Preset Compatibility": {
     "contractVersion": 1,
     "presetId": "csx-unified-balanced",
-    "presetVersion": "d2026.11.24.1",
+    "presetVersion": "d2026.11.27.1",
     "target": {
       "runtime": "VR",
       "minimumVersion": "3.21",
       "maximumVersionExclusive": "3.22"
     },
     "settingsContract": {
-      "revision": 36,
-      "sourceTreeSha256": "07B692C239DEAFA13F164747C90B89F8F38E2B8632D5983A00D06345996CD68F"
+      "revision": 37,
+      "sourceTreeSha256": "A778B4C0FFD22B4C78B6955DAEE765EB1EFF0AC43A599EDF7A750E05F998EB2D"
     }
   },
   "Upscaling": {

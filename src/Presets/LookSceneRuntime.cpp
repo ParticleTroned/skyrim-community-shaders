@@ -38,6 +38,8 @@ namespace Presets::LookSceneRuntime
 		};
 		using PreparedFields = std::map<std::string, PreparedFeature>;
 		std::map<std::string, Json> layers;
+		std::map<std::string, Json> locationOverrides;
+		bool locationOverridesChanged = false;
 		std::map<std::string, bool> periodicContexts;
 		std::optional<LookSceneContext> lastContext;
 		Json manifest = Json::object(), saved = Json::object(), transitionFrom = Json::object();
@@ -83,6 +85,22 @@ namespace Presets::LookSceneRuntime
 			saved = Json::object();
 			previousFields.clear();
 			previousLocations = Json::object();
+		}
+
+		void ResetResolution()
+		{
+			lastContext.reset();
+			cachedBase = Json::object();
+			features.clear();
+			for (const auto* source : { &layers, &locationOverrides })
+				for (const auto& [context, values] : *source)
+					for (const auto& [name, settings] : values.items()) features.insert(name);
+			lastLocations.clear();
+			transitionFrom = Json::object();
+			lastTick = {};
+			failure.clear();
+			lastFrame = ~uint32_t{ 0 };
+			locationOverridesChanged = false;
 		}
 
 		LookSceneContext Context()
@@ -290,16 +308,14 @@ namespace Presets::LookSceneRuntime
 		periodicContexts.clear();
 		if (pack)
 			for (const auto& [key, enabled] : pack->periodicContexts) periodicContexts.emplace(contextKey(key), enabled);
-		lastContext.reset();
-		cachedBase = Json::object();
-		features.clear();
-		for (const auto& [context, values] : layers)
-			for (const auto& [name, settings] : values.items()) features.insert(name);
-		lastLocations.clear();
-		transitionFrom = Json::object();
-		lastTick = {};
-		failure.clear();
-		lastFrame = ~uint32_t{ 0 };
+		ResetResolution();
+	}
+	void SetLocationOverrides(std::map<std::string, Json> overrides)
+	{
+		if (locationOverrides != overrides) {
+			locationOverrides = std::move(overrides);
+			locationOverridesChanged = true;
+		}
 	}
 	void OverlayBase(const std::string& feature, Json& settings)
 	{
@@ -321,14 +337,19 @@ namespace Presets::LookSceneRuntime
 	const std::string& Error() { return failure; }
 	void Update()
 	{
-		if (suspended || layers.empty() || !failure.empty() || globals::state->isMapMenuOpen)
+		if (suspended || (!locationOverridesChanged && layers.empty() && locationOverrides.empty()) || globals::state->isMapMenuOpen)
 			return;
-		if (lastFrame == globals::state->frameCount)
-			return;
-		lastFrame = globals::state->frameCount;
-		const auto now = std::chrono::steady_clock::now();
-		const bool resolveDue = now - lastTick >= std::chrono::milliseconds(33);
 		try {
+			if (locationOverridesChanged) {
+				locationOverridesChanged = false;
+				Restore();
+				ResetResolution();
+			}
+			if ((layers.empty() && locationOverrides.empty()) || !failure.empty() || lastFrame == globals::state->frameCount)
+				return;
+			lastFrame = globals::state->frameCount;
+			const auto now = std::chrono::steady_clock::now();
+			const bool resolveDue = now - lastTick >= std::chrono::milliseconds(33);
 			if (!RE::PlayerCharacter::GetSingleton() || globals::state->isLoadingMenuOpen || globals::state->isMainMenuOpen) {
 				Restore();
 				lastContext.reset();
@@ -360,7 +381,7 @@ namespace Presets::LookSceneRuntime
 			auto resolved = ResolveLookScenes(layers, globalContext, base, periodicContexts);
 			auto locationBase = base;
 			OverlayScene(locationBase, resolved);
-			auto locations = ResolveLookLocations(layers, context, locationBase, periodicContexts);
+			auto locations = ResolveLookLocations(layers, context, locationBase, periodicContexts, locationOverrides);
 			cachedBase = base;
 			if (lastLocations != context.locations) {
 				transitionFrom = previousLocations;

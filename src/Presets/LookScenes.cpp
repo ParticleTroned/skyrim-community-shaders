@@ -207,13 +207,16 @@ namespace Presets
 		}
 	}
 
-	Json ResolveLookLocations(const std::map<std::string, Json>& layers, const LookSceneContext& context, const Json& base, const std::map<std::string, bool>& periodicContexts)
+	Json ResolveLookLocations(const std::map<std::string, Json>& layers, const LookSceneContext& context, const Json& base, const std::map<std::string, bool>& periodicContexts, const std::map<std::string, Json>& locationOverrides)
 	{
 		Json result = Json::object();
 		for (const auto& key : context.locations) {
 			auto locationBase = base;
 			OverlayScene(locationBase, result);
 			OverlayScene(result, PeriodLayer(layers, "Locations/" + key, context, locationBase, periodicContexts));
+			// Personal values win at their scope; more specific locations still inherit and refine them.
+			if (const auto found = locationOverrides.find(key); found != locationOverrides.end())
+				OverlayScene(result, found->second);
 		}
 		return result;
 	}

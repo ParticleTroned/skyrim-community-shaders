@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "Presets/LocationSkyLighting.h"
 #include "RE/M/Moon.h"
 #include "RE/N/NiColor.h"
 #include "RE/N/NiDirectionalLight.h"
@@ -19,7 +20,8 @@ struct SkySync : Feature
 {
 public:
 	static constexpr float DefaultHorizonFadeHours = 0.7f;
-	static constexpr float MaxHorizonFadeHours = 1.5f;
+	static constexpr float MaxHorizonFadeHours = Presets::LocationSkyLighting::MaxHorizonFadeHours;
+	static constexpr float MaxShadowElevation = Presets::LocationSkyLighting::MaxShadowElevation;
 	static constexpr size_t MaxDisabledWorldspaces = 128;
 	static constexpr size_t MaxWorldspaceEditorIDLength = 256;
 

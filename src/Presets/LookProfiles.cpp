@@ -119,7 +119,8 @@ namespace Presets
 			auto& ab = schemas["AdaptiveBrightness"];
 			// Dynamic location lists need an entry shape even before the first authored location.
 			ab["locationOverrides"] = Json::array({ Json{ { "key", "" }, { "name", "" }, { "type", "Location" },
-				{ "cocCode", "" }, { "layered", false }, { "profile", ab.at("globalProfile") } } });
+				{ "cocCode", "" }, { "layered", false }, { "profile", ab.at("globalProfile") },
+				{ "skyLighting", { { "MinShadowElevation", 0.f }, { "HorizonFadeHours", 0.f } } } } });
 		}
 		return schemas;
 	}

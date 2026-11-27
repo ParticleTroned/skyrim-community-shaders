@@ -3,7 +3,9 @@
 #include "Menu/SettingsPage.h"
 #include "Menu/SettingsSearch.h"
 #include "Menu/VisualsProfiles.h"
+#include "Presets/LocationSkyLighting.h"
 #include "Presets/LookPack.h"
+#include "Presets/LookScenes.h"
 
 #include "Api/MainThreadDispatchPolicy.h"
 #include "CSEditor/EditorWindow.h"
@@ -120,7 +122,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	type,
 	cocCode,
 	profile,
-	layered)
+	layered,
+	skyLighting)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	AdaptiveBrightness::Settings,
@@ -1046,6 +1049,21 @@ namespace
 		}
 
 		ClampProfileSettings(a_locationOverride.profile);
+		std::string skyError;
+		if (!Presets::LocationSkyLighting::Validate(a_locationOverride.skyLighting, skyError)) {
+			logger::warn("[Visuals] Ignoring invalid sky lighting for '{}': {}", a_locationOverride.key, skyError);
+			a_locationOverride.skyLighting = json::object();
+			changedLookup = true;
+		}
+		if (!a_locationOverride.skyLighting.empty()) {
+			try {
+				Presets::SceneFormKey(a_locationOverride.key);
+			} catch (const std::exception& error) {
+				logger::warn("[Visuals] Ignoring sky lighting with invalid location key: {}", error.what());
+				a_locationOverride.skyLighting = json::object();
+				changedLookup = true;
+			}
+		}
 		return changedLookup;
 	}
 
@@ -1551,6 +1569,7 @@ void AdaptiveBrightness::SetPerformanceCostMeasurementEnabled(bool a_enabled)
 		return;
 	performanceCostMeasurementEnabled = a_enabled;
 	ResetWaterWindSmoothing();
+	SyncLocationSkyLighting();
 }
 
 void AdaptiveBrightness::LoadSettings(json& o_json)
@@ -1786,6 +1805,7 @@ void AdaptiveBrightness::DrawLocationOverrideProfileEditor(
 	bool a_closeWhenFinished)
 {
 	ImGui::PushID(a_locationOverride.key.c_str());
+	const SKSE::stl::scope_exit restoreId([] { ImGui::PopID(); });
 	ImGui::TextDisabled("%s", a_locationOverride.layered ? "Adjustment layer" : "Legacy profile");
 	Util::AddTooltip(
 		a_locationOverride.layered ?
@@ -1794,6 +1814,7 @@ void AdaptiveBrightness::DrawLocationOverrideProfileEditor(
 	if (a_allowEdits) {
 		if (auto* editProfile = GetLocationOverrideEditProfile(a_locationOverride)) {
 			DrawProfileSettings(*editProfile, a_sectionTitle, a_showAdvancedControls, true, true);
+			DrawLocationSkyLighting(locationOverrideEditSkyLighting, true);
 
 			const bool saveEdit = ImGui::Button(a_saveLabel);
 			if (auto _tt = Util::HoverTooltipWrapper())
@@ -1805,6 +1826,8 @@ void AdaptiveBrightness::DrawLocationOverrideProfileEditor(
 
 			if (saveEdit) {
 				a_locationOverride.profile = *editProfile;
+				a_locationOverride.skyLighting = locationOverrideEditSkyLighting;
+				SyncLocationSkyLighting();
 				NotifyGrassPlacementChanged();
 			}
 			if (saveEdit || cancelEdit) {
@@ -1817,10 +1840,11 @@ void AdaptiveBrightness::DrawLocationOverrideProfileEditor(
 	} else {
 		auto viewProfile = a_locationOverride.profile;
 		DrawProfileSettings(viewProfile, a_sectionTitle, a_showAdvancedControls, false, true);
+		auto skyLighting = a_locationOverride.skyLighting;
+		DrawLocationSkyLighting(skyLighting, false);
 		if (a_closeWhenFinished && ImGui::Button("Close"))
 			ClearLocationOverrideSelection();
 	}
-	ImGui::PopID();
 }
 
 void AdaptiveBrightness::DrawCurrentContextProfileControls(
@@ -2569,6 +2593,7 @@ void AdaptiveBrightness::SetEnabled(bool a_enabled)
 		return;
 	settings.enabled = a_enabled;
 	ResetWaterWindSmoothing();
+	SyncLocationSkyLighting();
 }
 
 bool AdaptiveBrightness::IsRuntimeEnabled() const
@@ -2844,6 +2869,7 @@ void AdaptiveBrightness::ResetLocationOverrideEdit()
 {
 	locationOverrideEditKey.clear();
 	locationOverrideEditProfile.reset();
+	locationOverrideEditSkyLighting = json::object();
 }
 
 AdaptiveBrightness::ProfileSettings* AdaptiveBrightness::GetLocationOverrideEditProfile(LocationOverride& a_locationOverride)
@@ -2851,6 +2877,7 @@ AdaptiveBrightness::ProfileSettings* AdaptiveBrightness::GetLocationOverrideEdit
 	if (locationOverrideEditKey != a_locationOverride.key || !locationOverrideEditProfile) {
 		locationOverrideEditKey = a_locationOverride.key;
 		locationOverrideEditProfile = a_locationOverride.profile;
+		locationOverrideEditSkyLighting = a_locationOverride.skyLighting;
 	}
 
 	return locationOverrideEditProfile ? &*locationOverrideEditProfile : nullptr;
@@ -2932,6 +2959,7 @@ void AdaptiveBrightness::NormalizeLocationOverrides()
 void AdaptiveBrightness::MarkLocationOverrideLookupDirty()
 {
 	NotifyGrassPlacementChanged();
+	SyncLocationSkyLighting();
 	locationOverrideLookupDirty = true;
 	locationLayerCache = {};
 }

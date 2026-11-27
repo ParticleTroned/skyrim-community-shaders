@@ -237,6 +237,8 @@ struct AdaptiveBrightness
 	VolumetricLightingTuning::Profile GetEffectiveGodrayProfile(bool) const;
 	float GetEffectiveMoonReflectionStrength() const;
 	void SetEnabled(bool enabled);
+	unsigned skyLightingSyncs = 0;
+	void SyncLocationSkyLighting() { ++skyLightingSyncs; }
 	PerFrameData GetCommonBufferData() const;
 	bool NeedsVanillaPointLightData() const;
 	EffectiveLinearLightingSettings GetEffectiveLinearLightingSettings(const LinearLighting::Settings&, bool) const;
@@ -570,9 +572,12 @@ void CheckPointLightCurve()
 	assert(balance.GetCommonBufferData().pointLightCurve == 1.0f);
 	balance.SetEnabled(true);
 	assert(Close(balance.GetCommonBufferData().pointLightCurve, 0.75f));
+	const auto skyLightingSyncs = balance.skyLightingSyncs;
 	balance.SetPerformanceCostMeasurementEnabled(false);
+	assert(balance.skyLightingSyncs == skyLightingSyncs + 1);
 	assert(balance.GetCommonBufferData().pointLightCurve == 1.0f);
 	balance.SetPerformanceCostMeasurementEnabled(true);
+	assert(balance.skyLightingSyncs == skyLightingSyncs + 2);
 	assert(Close(balance.GetCommonBufferData().pointLightCurve, 0.75f));
 	balance.testLocationLayers.clear();
 

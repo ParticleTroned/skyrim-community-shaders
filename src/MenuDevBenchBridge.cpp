@@ -922,6 +922,21 @@ namespace
 				return result;
 			});
 		}
+		if (action == "location_sky_lighting") {
+			return RunOnMainThread([request = a_args]() -> json {
+				const bool mutation = request.contains("skyLighting");
+				if (mutation && PerformanceTuningRenderer::HasActiveMeasurements())
+					return { { "error", "Finish or cancel the performance measurement before changing sky lighting" } };
+				auto& balance = globals::features::adaptiveBrightness;
+				if (!balance.loaded)
+					return { { "error", "Visuals is not loaded" } };
+				auto result = balance.LocationSkyLightingControls(request);
+				result["action"] = "location_sky_lighting";
+				if (mutation && !result.contains("error") && globals::menu)
+					globals::menu->RequestSettingsDirtyCheck();
+				return result;
+			});
+		}
 		if (action == "grass_placement") {
 			if (a_args.contains("locationKey") && !a_args["locationKey"].is_string())
 				return { { "error", "locationKey must be a string" } };
@@ -1276,7 +1291,7 @@ namespace
 			return {
 				{ "error", "unknown action" },
 				{ "action", action },
-				{ "supported", json::array({ "apply_visuals_weather", "feature_settings", "status", "search_settings", "reveal_setting", "search_status", "grass_placement", "reset_adaptive_balance_dof", "configure_grass_collision", "grass_telemetry", "set_grass_collision_strength", "open", "open_vr_fov", "set_fov_enabled", "set_fov_blend_curve", "close", "screenshot", "set_path", "set_layout_unlocked", "reset_menu_layout", "set_menu_placement", "set_wand_settings", "texture_stats", "set_depth_culling_settings", "set_depth_culling_legacy_mode", "set_depth_culling_telemetry_enabled", "reset_depth_culling_telemetry", "set_adaptive_balance_enabled", "set_adaptive_balance_visuals", "set_adaptive_balance_dof", "set_foliage_lighting_enabled", "set_terrain_variation_mesh_enabled", "set_pbr_grass_enabled", "set_pbr_grass_diagnostics_enabled", "set_truepbr_verbose_json_logging", "set_dynamic_cubemap_resolution", "request_dynamic_cubemap_refresh", "prepare_coc", "prepare_tuning", "set_motion_adaptive_sharpening", "set_parallax_strength", "set_sky_sync_sunlight", "set_sky_sync_disabled_worldspaces", "set_grass_optimizations_enabled", "set_grass_optimizations_settings", "set_grass_background_preparation_enabled", "set_grass_culling_controls", "set_grass_hiz_enabled", "set_grass_optimizations_diagnostics_enabled", "ui_status", "open_feature", "select_tab", "set_sidebar_visible", "scroll", "restore_defaults", "set_visuals_profile_ui", "set_hide_overview_tabs" }) },
+				{ "supported", json::array({ "location_sky_lighting", "apply_visuals_weather", "feature_settings", "status", "search_settings", "reveal_setting", "search_status", "grass_placement", "reset_adaptive_balance_dof", "configure_grass_collision", "grass_telemetry", "set_grass_collision_strength", "open", "open_vr_fov", "set_fov_enabled", "set_fov_blend_curve", "close", "screenshot", "set_path", "set_layout_unlocked", "reset_menu_layout", "set_menu_placement", "set_wand_settings", "texture_stats", "set_depth_culling_settings", "set_depth_culling_legacy_mode", "set_depth_culling_telemetry_enabled", "reset_depth_culling_telemetry", "set_adaptive_balance_enabled", "set_adaptive_balance_visuals", "set_adaptive_balance_dof", "set_foliage_lighting_enabled", "set_terrain_variation_mesh_enabled", "set_pbr_grass_enabled", "set_pbr_grass_diagnostics_enabled", "set_truepbr_verbose_json_logging", "set_dynamic_cubemap_resolution", "request_dynamic_cubemap_refresh", "prepare_coc", "prepare_tuning", "set_motion_adaptive_sharpening", "set_parallax_strength", "set_sky_sync_sunlight", "set_sky_sync_disabled_worldspaces", "set_grass_optimizations_enabled", "set_grass_optimizations_settings", "set_grass_background_preparation_enabled", "set_grass_culling_controls", "set_grass_hiz_enabled", "set_grass_optimizations_diagnostics_enabled", "ui_status", "open_feature", "select_tab", "set_sidebar_visible", "scroll", "restore_defaults", "set_visuals_profile_ui", "set_hide_overview_tabs" }) },
 			};
 		}
 		const std::string path = a_args.value("path", std::string());
@@ -1696,6 +1711,21 @@ namespace MenuDevBenchBridge
 			                          "Overview routes resolve to the first available detail unless cards are the only route to content; continuous single-page views keep their overview ID. "
 			                          "Explanation-only pages show How it works directly, retaining feature tools. Explicit detail links remain authoritative.";
 			document["inputSchema"]["properties"]["action"]["enum"].push_back("grass_placement");
+			document["inputSchema"]["properties"]["action"]["enum"].push_back("location_sky_lighting");
+			document["inputSchema"]["properties"]["skyLighting"] = {
+				{ "type", "object" }, { "additionalProperties", false },
+				{ "properties", { { "MinShadowElevation", { { "type", "number" }, { "minimum", 0 }, { "maximum", SkySync::MaxShadowElevation } } },
+									{ "HorizonFadeHours", { { "type", "number" }, { "minimum", 0 }, { "maximum", SkySync::MaxHorizonFadeHours } } } } }
+			};
+			document["inputSchema"]["allOf"].push_back({ { "if", { { "properties", { { "action", { { "const", "location_sky_lighting" } } } } }, { "required", { "action" } } } },
+				{ "then", { { "required", { "locationKey" } } } } });
+			document["description"] = document["description"].get<std::string>() +
+			                          " location_sky_lighting inspects an existing saved locationKey from adaptive_balance_locations. "
+			                          "Optional skyLighting replaces its complete sky override object: MinShadowElevation (0..45 degrees) and HorizonFadeHours (0..1.5 hours). "
+			                          "Omitted fields inherit; an empty object resets both. Applies through the Visuals location rules without enabling Visuals or Sky Sync. "
+			                          "HorizonFadeHours requires Sky Sync horizon dimming. Changes apply on the next scene update and remain unsaved until Save Settings. "
+			                          "Active measurements and profile mutation guards block changes; invalid requests retain existing values.";
+			document["outputSchema"]["properties"]["skyLighting"] = { { "type", "object" } };
 			const json offsetSchema{ { "type", "number" }, { "minimum", -GrassPlacement::kMaximumOffset }, { "maximum", GrassPlacement::kMaximumOffset } };
 			document["inputSchema"]["properties"]["grassPlacement"] = {
 				{ "type", "object" }, { "additionalProperties", false }, { "minProperties", 1 },

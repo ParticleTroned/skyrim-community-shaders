@@ -543,8 +543,8 @@ void State::Draw(bool isCompute)
 			CS_DRAW_ZONE(weatherZone, "WeatherManager::UpdateFeatures", emitTracyDrawZones);
 			ScopedStateDrawPhaseTimer phaseDiag(StateDrawPhase::WeatherUpdateFeatures, stateDrawDiagFrame, stateDrawDiagActive);
 			WeatherManager::GetSingleton()->UpdateFeatures();
-			Presets::LookSceneRuntime::Update();
 		}
+		Presets::LookSceneRuntime::Update();
 
 		if (terrainBlending.loaded && terrainBlending.settings.Enabled) {
 			CS_DRAW_ZONE(terrainBlendingZone, "TerrainBlending::TerrainShaderHacks", emitTracyDrawZones);

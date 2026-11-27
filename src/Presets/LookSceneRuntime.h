@@ -2,10 +2,15 @@
 
 #include "LookPack.h"
 
+#include <map>
+#include <string>
+
 namespace Presets::LookSceneRuntime
 {
 	/** Replaces native scene rules; callers suspend base settings while switching profiles. */
 	void Use(const LookPack* pack);
+	/** Stages validated appearance layers with canonical form keys on the main thread, independent of pack selection. */
+	void SetLocationOverrides(std::map<std::string, Json> overrides);
 	/** Restores authored values for nested settings transactions. */
 	void Suspend();
 	void Resume();

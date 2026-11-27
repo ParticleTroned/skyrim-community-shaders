@@ -23,7 +23,7 @@ namespace Presets
 	/** Overlays covered leaf fields without replacing neighbouring array elements. */
 	void OverlayScene(Json& destination, const Json& patch);
 	/** Resolves just location ownership above a supplied time/weather baseline. */
-	Json ResolveLookLocations(const std::map<std::string, Json>& layers, const LookSceneContext& context, const Json& base, const std::map<std::string, bool>& periodicContexts = {});
+	Json ResolveLookLocations(const std::map<std::string, Json>& layers, const LookSceneContext& context, const Json& base, const std::map<std::string, bool>& periodicContexts = {}, const std::map<std::string, Json>& locationOverrides = {});
 	/** Climate-based period weights using the native scene-pack boundary convention. */
 	std::array<float, 6> ScenePeriodWeights(std::array<float, 6> starts, float hour, float blendHours, float ease);
 	/** Blends only covered fields, restoring absent endpoints from the authored base. */

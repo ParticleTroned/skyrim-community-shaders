@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <limits>
+#include <random>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -24,13 +26,13 @@ namespace
 	constexpr float MainAO = 0.7f;
 	constexpr float AlternateAO = 0.4f;
 
-	ComPtr<ID3DBlob> CompilePixel(std::vector<D3D_SHADER_MACRO> defines, const char* entry, const wchar_t* file = L"tests/snow_cover_color.hlsl", const char* extraRoot = "features/Grass Lighting/Shaders")
+	ComPtr<ID3DBlob> CompilePixel(std::vector<D3D_SHADER_MACRO> defines, const char* entry, const wchar_t* file = L"tests/snow_cover_color.hlsl", const char* extraRoot = "features/Grass Lighting/Shaders", UINT flags = 0)
 	{
 		PackageIncludes includes("package/Shaders", "features/Snow Cover/Shaders", extraRoot);
 		defines.push_back({ nullptr, nullptr });
 		ComPtr<ID3DBlob> bytecode, errors;
 		const auto compiled = D3DCompileFromFile(file, defines.data(), &includes,
-			entry, "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+			entry, "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3 | flags,
 			0, bytecode.GetAddressOf(), errors.GetAddressOf());
 		if (errors)
 			std::cerr << static_cast<const char*>(errors->GetBufferPointer());
@@ -320,6 +322,63 @@ namespace
 		return count;
 	}
 
+	void CheckMaterialSelection(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11VertexShader* vertex, bool vr, bool pbr, UINT flags)
+	{
+		std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "SNOW_COVER", "1" } };
+		if (vr)
+			defines.push_back({ "VR", "1" });
+		if (pbr)
+			defines.push_back({ "TRUE_PBR", "1" });
+		auto code = CompilePixel(std::move(defines), "MaterialSelection", L"tests/snow_cover_color.hlsl", "features/Grass Lighting/Shaders", flags);
+		ComPtr<ID3D11PixelShader> shader;
+		Check(device->CreatePixelShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &shader));
+		Util::SetResourceName(shader.Get(), "SnowColorTest::Selection PS");
+		ComPtr<ID3D11ShaderReflection> reflection;
+		Check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(&reflection)));
+		ConstantBuffer features(device, reflection.Get(), "SharedData::FeatureData");
+		ConstantBuffer samples(device, reflection.Get(), "Samples");
+		features.SetMember("SharedData::snowCoverSettings", "BlendSmoothness", 1.0f);
+		features.SetMember("SharedData::snowCoverSettings", "SnowingDensity", 1000.0f);
+		Target actual(device), expected(device);
+		std::mt19937 random(73119);
+		std::uniform_real_distribution<float> unit(0, 1);
+		for (unsigned i = 0; i < 640; ++i) {
+			const bool boundary = i >= 512;
+			const float mainPeak = boundary || i % 4 == 0 ? .3f : unit(random);
+			const float altPeak = boundary || i % 4 == 0 ? .6f : unit(random);
+			float normal = i % 4 == 0 ? .5f * (mainPeak + altPeak + (i & 4u ? .05f : -.05f)) : 2 * unit(random) - 1;
+			float accumulation = i % 4 == 0 ? 0.0f : float(int(i % 5) - 2);
+			float minAngle = unit(random);
+			std::array position{ 200000 * unit(random) - 100000, 200000 * unit(random) - 100000, 20000 * unit(random) - 10000 };
+			if (boundary) {
+				// Probe both padded branch edges with extremal noise and negative weather.
+				const float bound = .05f + 4 * std::numeric_limits<float>::epsilon();
+				accumulation = i & 16u ? -2.0f : 0.0f;
+				minAngle = .2f;
+				normal = .5f * (mainPeak + altPeak + (accumulation < 0 ? -minAngle : 0) + (i & 8u ? bound : -bound));
+				const int offset = int(i % 8) - 4;
+				for (int step = 0; step < std::abs(offset); ++step)
+					normal = std::nextafter(normal, offset < 0 ? -1.0f : 1.0f);
+				position = { 0, 0, ((i & 32u ? 1.5707963268f : -1.5707963268f) - .025f) / .01f };
+			}
+			samples.SetVariable("SelectionNormals", std::array{ std::nextafter(normal, -std::numeric_limits<float>::infinity()), normal, std::nextafter(normal, std::numeric_limits<float>::infinity()) });
+			samples.SetVariable("SelectionPosition", position);
+			features.SetMember("SharedData::snowCoverSettings", "peakMainAngle", mainPeak);
+			features.SetMember("SharedData::snowCoverSettings", "peakAltAngle", altPeak);
+			features.SetMember("SharedData::snowCoverSettings", "minAngle", minAngle);
+			features.SetMember("SharedData::snowCoverSettings", "TimeSnowing", accumulation);
+			actual.Bind(context, vertex, shader.Get());
+			std::array targets{ actual.view.Get(), expected.view.Get() };
+			context->OMSetRenderTargets(UINT(targets.size()), targets.data(), nullptr);
+			features.Bind(context, D3D11ShaderTest::Stage::Pixel);
+			samples.Bind(context, D3D11ShaderTest::Stage::Pixel);
+			context->Draw(3, 0);
+			context->ClearState();
+			if (actual.Read(context) != expected.Read(context))
+				throw std::runtime_error("Snow material bounds changed the original strict selection");
+		}
+	}
+
 	void CheckWeatherRange(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11VertexShader* vertex, bool vr, bool reference)
 	{
 		std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "SNOW_COVER", "1" } };
@@ -334,24 +393,26 @@ namespace
 		ComPtr<ID3D11ShaderReflection> reflection;
 		Check(D3DReflect(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
 		ConstantBuffer features(device, reflection.Get(), "SharedData::FeatureData");
-		features.SetMember("SharedData::snowCoverSettings", "WeatherFadeStart", 200.0f);
 		features.SetMember("SharedData::snowCoverSettings", "WeatherFadeEnd", 1000.0f);
 		Target target(device);
 		target.Bind(context, vertex, shader.Get());
 		Results weather{};
-		for (float accumulation : { 1.0f, 0.0f, -1.0f }) {
-			features.SetMember("SharedData::snowCoverSettings", "TimeSnowing", accumulation);
-			features.Bind(context, D3D11ShaderTest::Stage::Pixel);
-			context->Draw(3, 0);
-			const auto values = target.Read(context);
-			if (accumulation > 0)
-				weather = values;
-			for (size_t i = 0; i < values.size(); ++i) {
-				if (!(weather[i][0] > 0 && weather[i][0] < 1) || values[i][3] != 1)
-					throw std::runtime_error("Snow weather-distance test missed the rendered fade");
-				const float expected = accumulation == 0 && !reference ? 0.0f : weather[i][0];
-				if (!std::isfinite(values[i][0]) || std::abs(values[i][0] - expected) > 1e-6f)
-					throw std::runtime_error("Snow weather-distance optimization changed zero or negative accumulation behavior");
+		for (float fadeStart : { 200.0f, std::nextafter(1000.0f, 0.0f), 1000.0f, std::nextafter(1000.0f, 2000.0f), 60000.0f }) {
+			features.SetMember("SharedData::snowCoverSettings", "WeatherFadeStart", fadeStart);
+			for (float accumulation : { 1.0f, 0.0f, -1.0f }) {
+				features.SetMember("SharedData::snowCoverSettings", "TimeSnowing", accumulation);
+				features.Bind(context, D3D11ShaderTest::Stage::Pixel);
+				context->Draw(3, 0);
+				const auto values = target.Read(context);
+				if (accumulation > 0)
+					weather = values;
+				for (size_t i = 0; i < values.size(); ++i) {
+					if ((fadeStart == 200 && !(weather[i][0] > 0 && weather[i][0] < 1)) || values[i][3] != 1)
+						throw std::runtime_error("Snow weather-distance test missed the rendered fade");
+					const float expected = accumulation == 0 && !reference ? 0.0f : weather[i][0];
+					if (!std::isfinite(values[i][0]) || values[i][0] != values[i][1] || std::abs(values[i][0] - expected) > 1e-6f)
+						throw std::runtime_error("Snow weather-distance optimization changed zero or negative accumulation behavior");
+				}
 			}
 		}
 		context->ClearState();
@@ -376,6 +437,11 @@ int main()
 		ComPtr<ID3D11VertexShader> vertex;
 		Check(device->CreateVertexShader(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), nullptr, vertex.GetAddressOf()));
 		Util::SetResourceName(vertex.Get(), "SnowColorTest::VS");
+		for (bool vr : { false, true })
+			for (bool pbr : { false, true })
+				for (UINT flags : { 0u, UINT(D3DCOMPILE_PARTIAL_PRECISION), UINT(D3DCOMPILE_AVOID_FLOW_CONTROL), UINT(D3DCOMPILE_PARTIAL_PRECISION | D3DCOMPILE_AVOID_FLOW_CONTROL) })
+					CheckMaterialSelection(device.Get(), context.Get(), vertex.Get(), vr, pbr, flags);
+		std::cout << "Snow material selection: 30,720 random and padded-boundary cases passed on WARP\n";
 		size_t projectedCount = 0;
 		for (bool vr : { false, true })
 			for (bool pbr : { false, true })

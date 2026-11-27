@@ -32,6 +32,8 @@ namespace SnowCover
 	static const float MaterialNoiseScale = 0.01;
 	static const float MaterialNoisePhase = 0.025;
 	static const float MaterialNoiseStrength = 0.05;
+	// Four float epsilons cover reassociation near the bounded [-1, 1] score.
+	static const float MaterialSelectionMargin = 4.768371582e-7;
 	static const float MinFoliageCoverage = 0.01;
 	static const float LegacySpecularScale = 12500.0;
 	static const float DisabledGlintDensity = 1.0;
@@ -74,9 +76,18 @@ namespace SnowCover
 #	endif
 		{
 			float fadeStart = SharedData::snowCoverSettings.WeatherFadeStart;
-			float fadeEnd = max(fadeStart + 1, SharedData::snowCoverSettings.WeatherFadeEnd);
-			float wobble = WeatherFadeWobble * sin(p.z * WeatherNoiseScale + cos(p.x * p.y * WeatherNoiseScale));
-			range = 1 - smoothstep(fadeStart, max(fadeStart + 1, fadeEnd + wobble), viewDist);
+#	if !(CSX_PERF_REFERENCE_FLAGS & CSX_PERF_SNOW_WEATHER_RANGE)
+			[branch] if (viewDist <= fadeStart)
+			{
+				range = 1;
+			}
+			else
+#	endif
+			{
+				float fadeEnd = max(fadeStart + 1, SharedData::snowCoverSettings.WeatherFadeEnd);
+				float wobble = WeatherFadeWobble * sin(p.z * WeatherNoiseScale + cos(p.x * p.y * WeatherNoiseScale));
+				range = 1 - smoothstep(fadeStart, max(fadeStart + 1, fadeEnd + wobble), viewDist);
+			}
 		}
 		return range;
 	}
@@ -357,8 +368,17 @@ namespace SnowCover
 			return 0;
 		}
 		float main_mult = (1 - abs(worldNormal.z - SharedData::snowCoverSettings.peakMainAngle)) + min(0, weatherMult) * SharedData::snowCoverSettings.minAngle;
-		float alt_mult = (1 - abs(worldNormal.z - SharedData::snowCoverSettings.peakAltAngle)) + sin(p.z * MaterialNoiseScale + cos(p.x * p.y * MaterialNoiseScale) * MaterialNoisePhase) * MaterialNoiseStrength;
-		alt = alt_mult > main_mult;
+		float altBase = 1 - abs(worldNormal.z - SharedData::snowCoverSettings.peakAltAngle);
+		const float bound = MaterialNoiseStrength + MaterialSelectionMargin;
+		bool mainWins = altBase + bound <= main_mult;
+		bool altWins = altBase - bound > main_mult;
+		[branch] if (mainWins || altWins)
+			alt = altWins;
+		else
+		{
+			float alt_mult = (1 - abs(worldNormal.z - SharedData::snowCoverSettings.peakAltAngle)) + sin(p.z * MaterialNoiseScale + cos(p.x * p.y * MaterialNoiseScale) * MaterialNoisePhase) * MaterialNoiseStrength;
+			alt = alt_mult > main_mult;
+		}
 		uv = frac(SharedData::snowCoverSettings.UVScale * (p.xy / TextureWorldScale + worldNormal.xy * disp));
 		return min(1, mult);
 	}

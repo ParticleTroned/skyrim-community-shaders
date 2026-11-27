@@ -3688,6 +3688,7 @@ if(BUILD_CONTROLLER_TESTS)
     add_d3d_shader_test(
         snow_cover_color_test SnowCoverColor tests/snow_cover_color_test.cpp
     )
+    set_tests_properties(SnowCoverColor PROPERTIES TIMEOUT 300)
     add_d3d_shader_test(lazy_shader_test LazyShader tests/lazy_shader_test.cpp)
     target_link_libraries(
         lazy_shader_test

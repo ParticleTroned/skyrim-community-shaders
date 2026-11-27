@@ -13,6 +13,8 @@ cbuffer Samples : register(b0)
 	float ProjectedCoverage;
 	uint PlantSurface;
 	uint ProjectedTexel;
+	float3 SelectionNormals;
+	float3 SelectionPosition;
 };
 
 struct ColorOutput
@@ -98,8 +100,40 @@ float4 ProjectedColor(float4 position : SV_Position) : SV_Target0
 
 float4 WeatherRange(float4 position : SV_Position) : SV_Target0
 {
-	float range = SnowCover::GetWeatherRange(float3(position.x * 100, 0, position.x * 50), 1000);
-	return float4(range, 0, 0, 1);
+	float3 p = float3(position.x * 100, 0, position.x * 50);
+	float range = SnowCover::GetWeatherRange(p, 1000);
+	float fadeStart = SharedData::snowCoverSettings.WeatherFadeStart;
+	float fadeEnd = max(fadeStart + 1, SharedData::snowCoverSettings.WeatherFadeEnd);
+	float wobble = 1000 * sin(p.z * 0.001 + cos(p.x * p.y * 0.001));
+	float expected = 1 - smoothstep(fadeStart, max(fadeStart + 1, fadeEnd + wobble), 1000);
+#if !(CSX_PERF_REFERENCE_FLAGS & CSX_PERF_SNOW_WEATHER_RANGE)
+	if (SharedData::snowCoverSettings.TimeSnowing == 0)
+		expected = 0;
+#endif
+	return float4(range, expected, 0, 1);
+}
+
+ColorOutput MaterialSelection(float4 position : SV_Position)
+{
+	float3 normal = float3(0, 0, SelectionNormals[(uint)position.x]);
+	SnowCover::CoverageInputs footprint = (SnowCover::CoverageInputs)0;
+	footprint.position = SelectionPosition + float3(position.x * 997, 0, 0);
+	footprint.scale = footprint.environment = footprint.weatherRange = 1;
+	footprint.weatherUpness = max(SharedData::snowCoverSettings.minAngle, normal.z);
+	SnowCover::FireMeltSample fire = (SnowCover::FireMeltSample)0;
+	float2 uv = 0;
+	bool alternate;
+	float coverage = SnowCover::ApplySnowBase(normal, uv, alternate, 0, footprint, 0, fire);
+	float accumulation = SharedData::snowCoverSettings.TimeSnowing;
+	float weather = accumulation * accumulation * accumulation * max(500, SharedData::snowCoverSettings.SnowingDensity) / 500;
+	weather = clamp(weather * max(SharedData::snowCoverSettings.minAngle, normal.z), -1, 1);
+	float mainScore = (1 - abs(normal.z - SharedData::snowCoverSettings.peakMainAngle)) + min(0, weather) * SharedData::snowCoverSettings.minAngle;
+	float3 p = footprint.position;
+	float alternateScore = (1 - abs(normal.z - SharedData::snowCoverSettings.peakAltAngle)) + sin(p.z * 0.01 + cos(p.x * p.y * 0.01) * 0.025) * 0.05;
+	ColorOutput result;
+	result.actual = float4(alternate, coverage, 0, 1);
+	result.expected = float4(alternateScore > mainScore, 1, 0, 1);
+	return result;
 }
 
 float4 ObjectFadeCoverage(float4 position : SV_Position) : SV_Target0

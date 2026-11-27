@@ -26,6 +26,21 @@ extract_between("${_water}" "void UnifiedWater::DataLoaded()" "RE::BSEventNotify
 extract_between("${_water}" "void UnifiedWater::SetFlowmapTex() const" "void UnifiedWater::PostPostLoad()" "unified_water_flowmap_under_test.h")
 extract_between("${_water}" "bool UnifiedWater::IsWaterDataReady() const" "bool UnifiedWater::IsExteriorWorldspaceActive() const" "unified_water_flowmap_under_test.h")
 
+string(FIND "${_flowmap}" "bool Flowmap::GenerateFlowmap(" _generation_start)
+if(_generation_start LESS 0)
+    message(FATAL_ERROR "Cannot find flowmap generation")
+endif()
+string(SUBSTRING "${_flowmap}" ${_generation_start} -1 _generation)
+file(WRITE "${OUTPUT_DIRECTORY}/flowmap_context_setup_under_test.h" "")
+extract_between("${_generation}" "if (!dvc || !ctx)" "const auto tamriel" "flowmap_context_setup_under_test.h")
+file(READ "${OUTPUT_DIRECTORY}/flowmap_context_setup_under_test.h" _context_setup)
+string(REPLACE "globals::game::renderer" "renderer" _context_setup "${_context_setup}")
+string(REPLACE "winrt::com_ptr" "Microsoft::WRL::ComPtr" _context_setup "${_context_setup}")
+string(REPLACE "deferredCtx.put()" "deferredCtx.GetAddressOf()" _context_setup "${_context_setup}")
+# Assert ownership at the validation call before forwarding to real D3D11.
+string(REPLACE "Util::ValidateImmediateContext(ctx)" "ValidateOwnedFlowmapContext(ctx, renderer)" _context_setup "${_context_setup}")
+file(WRITE "${OUTPUT_DIRECTORY}/flowmap_context_setup_under_test.h" "${_context_setup}")
+
 # Keep the fallback at binding sites so startup cache warming still runs.
 string(
     REGEX MATCHALL "!UseNativeWaterShaders\\(\\*currentShader\\)"

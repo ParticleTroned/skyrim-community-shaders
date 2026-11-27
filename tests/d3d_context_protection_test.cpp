@@ -78,6 +78,79 @@ namespace
 		~NativeRenderer() { DeleteCriticalSection(&lock); }
 	};
 
+	namespace logger
+	{
+		void error(const char*) {}
+	}
+
+	bool RendererAvailableOnWorker(NativeRenderer& renderer)
+	{
+		return std::async(std::launch::async, [&] {
+			if (!TryEnterCriticalSection(&renderer.lock))
+				return false;
+			LeaveCriticalSection(&renderer.lock);
+			return true;
+		}).get();
+	}
+
+	HRESULT ValidateOwnedFlowmapContext(ID3D11DeviceContext* context, NativeRenderer* renderer)
+	{
+		Require(renderer != nullptr);
+		Require(!RendererAvailableOnWorker(*renderer));
+		const Util::RendererOwnership currentThreadOwnership(&renderer->lock);
+		Require(static_cast<bool>(currentThreadOwnership));
+		return Util::ValidateImmediateContext(context);
+	}
+
+	bool BeginFlowmapGeneration(ID3D11Device* dvc, ID3D11DeviceContext* ctx, NativeRenderer* renderer)
+	{
+#include "flowmap_context_setup_under_test.h"
+		Require(RendererAvailableOnWorker(*renderer));
+		return true;
+	}
+
+	void TestFlowmapContextValidationOwnership()
+	{
+		Device fixture;
+		NativeRenderer renderer;
+		renderer.data.context = fixture.context.Get();
+		std::promise<void> started;
+		auto ready = started.get_future();
+		std::future<bool> generated;
+		bool waitedForRenderer = false;
+		{
+			const Util::RendererOwnership renderFrame(&renderer.lock, true);
+			generated = std::async(std::launch::async, [&] {
+				started.set_value();
+				return BeginFlowmapGeneration(fixture.device.Get(), fixture.context.Get(), &renderer);
+			});
+			ready.wait();
+			waitedForRenderer = generated.wait_for(std::chrono::milliseconds(100)) == std::future_status::timeout;
+		}
+		Require(generated.get());
+		Require(waitedForRenderer);
+		Require(!Util::InspectImmediateContextProtection(fixture.context.Get()).multithreadProtected);
+		Require(!BeginFlowmapGeneration(nullptr, fixture.context.Get(), &renderer));
+		Require(!BeginFlowmapGeneration(fixture.device.Get(), nullptr, &renderer));
+		Require(!BeginFlowmapGeneration(fixture.device.Get(), fixture.context.Get(), nullptr));
+		Device other;
+		renderer.data.context = other.context.Get();
+		Require(!BeginFlowmapGeneration(fixture.device.Get(), fixture.context.Get(), &renderer));
+		renderer.data.context = nullptr;
+		Require(!BeginFlowmapGeneration(fixture.device.Get(), fixture.context.Get(), &renderer));
+		ComPtr<ID3D11DeviceContext> deferred;
+		Check(fixture.device->CreateDeferredContext(0, deferred.GetAddressOf()));
+		renderer.data.context = deferred.Get();
+		Require(!BeginFlowmapGeneration(fixture.device.Get(), deferred.Get(), &renderer));
+		Require(RendererAvailableOnWorker(renderer));
+		renderer.data.context = fixture.context.Get();
+		ComPtr<ID3D11Multithread> externalOwner;
+		Check(fixture.context.As(&externalOwner));
+		externalOwner->SetMultithreadProtected(TRUE);
+		Require(BeginFlowmapGeneration(fixture.device.Get(), fixture.context.Get(), &renderer));
+		Require(Util::InspectImmediateContextProtection(fixture.context.Get()).multithreadProtected);
+	}
+
 	void TestPublishedContextOwnership()
 	{
 		Device current;
@@ -446,6 +519,7 @@ int main()
 	try {
 		TestCreationDoesNotEnablePerCallLocking();
 		TestPublishedContextOwnership();
+		TestFlowmapContextValidationOwnership();
 		TestValidationPreservesProtectionState();
 		TestRejectedContexts();
 		TestCreationOutputs();
@@ -455,7 +529,7 @@ int main()
 		TestAutomaticCallProtectionAndContextIsolation();
 		TestReadbackOwnershipAndRelease();
 		std::cout << "WARP D3D11 ownership: unchanged API flags, creation outputs, rejected contexts, "
-					 "concurrent renderer transactions, state restoration, readback contention and exception release passed\n";
+					 "flowmap validation, concurrent renderer transactions, state restoration, readback contention and exception release passed\n";
 		return 0;
 	} catch (const std::exception& exception) {
 		std::cerr << exception.what() << '\n';

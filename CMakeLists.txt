@@ -5600,8 +5600,11 @@ if(BUILD_CONTROLLER_TESTS)
     set(_flowmap_test_header
         "${_flowmap_test_dir}/unified_water_flowmap_under_test.h"
     )
+    set(_flowmap_context_header
+        "${_flowmap_test_dir}/flowmap_context_setup_under_test.h"
+    )
     add_custom_command(
-        OUTPUT "${_flowmap_test_header}"
+        OUTPUT "${_flowmap_test_header}" "${_flowmap_context_header}"
         COMMAND
             "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
             "-DOUTPUT_DIRECTORY=${_flowmap_test_dir}" -P
@@ -5614,9 +5617,24 @@ if(BUILD_CONTROLLER_TESTS)
         VERBATIM
     )
     add_controller_test(unified_water_flowmap_test UnifiedWaterFlowmap tests/unified_water_flowmap_test.cpp)
-    target_sources(unified_water_flowmap_test PRIVATE "${_flowmap_test_header}")
+    add_custom_target(
+        unified_water_flowmap_test_sources
+        DEPENDS "${_flowmap_test_header}" "${_flowmap_context_header}"
+    )
+    add_dependencies(
+        unified_water_flowmap_test
+        unified_water_flowmap_test_sources
+    )
+    add_dependencies(
+        d3d_context_protection_test
+        unified_water_flowmap_test_sources
+    )
     target_include_directories(
         unified_water_flowmap_test
+        PRIVATE "${_flowmap_test_dir}"
+    )
+    target_include_directories(
+        d3d_context_protection_test
         PRIVATE "${_flowmap_test_dir}"
     )
     set(_reflection_test_dir

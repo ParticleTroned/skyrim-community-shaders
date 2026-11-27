@@ -219,9 +219,17 @@ bool Flowmap::GenerateFlowmap(bool useMips, std::filesystem::path& generatedPath
 		return false;
 	}
 
-	if (FAILED(Util::ValidateImmediateContext(ctx))) {
-		logger::error("[Unified Water] [Flowmap] Immediate context is not eligible for shared access");
-		return false;
+	{
+		// Context getters require the same ownership as rendering.
+		const Util::RendererOwnership ownership(Util::GetRendererContextLock(globals::game::renderer, ctx), true);
+		if (!ownership) {
+			logger::error("[Unified Water] [Flowmap] Renderer ownership is unavailable");
+			return false;
+		}
+		if (FAILED(Util::ValidateImmediateContext(ctx))) {
+			logger::error("[Unified Water] [Flowmap] Immediate context is not eligible for shared access");
+			return false;
+		}
 	}
 
 	const auto tamriel = RE::TESForm::LookupByEditorID<RE::TESWorldSpace>("Tamriel");

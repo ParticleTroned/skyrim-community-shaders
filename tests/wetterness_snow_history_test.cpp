@@ -22,7 +22,7 @@ namespace
 	void Observe(WetternessSnowMelt::History& history, WetternessSnowMelt::Sample sample, double hours, float snowRate,
 		const std::array<float, 4>& light = { 3, 3, 3, 6 }, const std::array<float, 4>& heavy = { 12, 12, 12, 15 })
 	{
-		history.Observe(sample, hours, snowRate, light, heavy);
+		history.Observe(sample, hours, { snowRate, snowRate }, light, heavy);
 	}
 }
 
@@ -58,6 +58,26 @@ int main()
 		"Shader coverage bound lost historical weather or seasonal snow");
 	Observe(history, Snow(0), 126, -1);
 	Require(!history.HasMelt(), "Wait retained expired meltwater");
+
+	{
+		History blended;
+		const auto weather = SnowCoverMath::BlendWeather({}, { false, true, 2000 }, 0.5f, 1, 1);
+		Observe(blended, Snow(1), 100, 0);
+		auto afterWait = Snow(SnowCoverMath::Accumulate(1, 10, weather.rates), 100);
+		afterWait.state[1] = weather.density;
+		blended.Observe(afterWait, 110, weather.rates, { 3, 3, 3, 6 }, { 12, 12, 12, 15 });
+		const auto timeline = blended.GetData();
+		Require(timeline.count == 4 && timeline.samples[1].state[0] == 0 && timeline.samples[2].state[0] == -2,
+			"Blended weather lost the zero crossing or saturation point");
+		Require(std::abs(timeline.samples[1].state[3] - 28.0f / 3.0f) < 0.00001f &&
+					std::abs(timeline.samples[2].state[3] - 16.0f / 3.0f) < 0.00001f,
+			"Wait moved a blended-weather breakpoint to wake-up");
+		Require(std::abs(timeline.samples[1].state[1] - 1600.0f / 3.0f) < 0.001f &&
+					std::abs(timeline.samples[1].state[2] - 20.0f / 3.0f) < 0.00001f,
+			"Weather density or seasonal altitude jumped at the zero crossing");
+		Require(std::abs(timeline.samples[2].heavyDryingAge[3] - (16.0f / 3.0f) / 15.0f) < 0.00001f,
+			"Drying did not start at the blended-weather saturation time");
+	}
 
 	history.Clear();
 	Observe(history, Snow(2), 100, 0);

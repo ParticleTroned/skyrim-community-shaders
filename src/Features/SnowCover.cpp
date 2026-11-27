@@ -88,26 +88,31 @@ void SnowCover::UpdateFrame()
 #endif
 	CS_PROFILE_CPU_SCOPE("SnowCover::UpdateFrameCPU");
 	Reload();
-	bool snowing = false;
-	bool raining = false;
-	snowingDensity = 0.0f;
+	SnowCoverMath::Weather previousWeather{}, currentWeather{};
+	float weatherTransition = 1.0f;
 	if (wsettings.EnableSnowCover && texturesLoaded && !Util::IsInterior()) {
 		if (auto* sky = globals::game::sky) {
 			if (auto* weather = sky->currentWeather) {
-				snowing = weather->data.flags.any(RE::TESWeather::WeatherDataFlag::kSnow);
-				raining = !snowing && weather->data.flags.any(RE::TESWeather::WeatherDataFlag::kRainy);
-				snowingDensity = SnowEnvironment::GetPrecipitationIntensity(weather);
+				const auto readWeather = [](const RE::TESWeather* value) {
+					const bool snowing = value->data.flags.any(RE::TESWeather::WeatherDataFlag::kSnow);
+					return SnowCoverMath::Weather{ snowing, !snowing && value->data.flags.any(RE::TESWeather::WeatherDataFlag::kRainy),
+						SnowEnvironment::GetPrecipitationIntensity(value) };
+				};
+				currentWeather = readWeather(weather);
+				previousWeather = sky->lastWeather ? readWeather(sky->lastWeather) : currentWeather;
+				weatherTransition = sky->currentWeatherPct;
 			}
 		}
 	}
-	const float snowRate = SnowCoverMath::AccumulationRate(timeSnowing, snowing, raining, snowingSpeed, meltingSpeed);
+	const auto weather = SnowCoverMath::BlendWeather(previousWeather, currentWeather, weatherTransition, snowingSpeed, meltingSpeed);
+	snowingDensity = weather.density;
 	if (auto* calendar = globals::game::calendar) {
 		const double hours = static_cast<double>(calendar->GetCurrentGameTime()) * 24.0;
 		const float elapsed = std::isfinite(hours) && lastGameHours >= 0.0 ? static_cast<float>(std::max(0.0, hours - lastGameHours)) : 0.0f;
 		if (std::isfinite(hours) && hours < lastGameHours)
 			timeSnowing = 0.0f;
 		lastGameHours = std::isfinite(hours) ? hours : -1.0;
-		timeSnowing = SnowCoverMath::Accumulate(timeSnowing, elapsed, snowing, raining, snowingSpeed, meltingSpeed);
+		timeSnowing = SnowCoverMath::Accumulate(timeSnowing, elapsed, weather.rates);
 		perFrame.Month = SnowEnvironment::GetFractionalGameMonth(*calendar);
 	}
 	perFrame.SeasonalAltitude = SnowCoverMath::SeasonalAltitude(perFrame.Month, MaxSummerMonth, MaxWinterMonth, SummerHeightOffset, WinterHeightOffset);
@@ -123,7 +128,7 @@ void SnowCover::UpdateFrame()
 	}
 	perFrame.wsettings.EnableSnowCover = wsettings.EnableSnowCover && texturesLoaded;
 	UpdateFireMelt();
-	WetternessSnowMelt::Update(*this, snowRate);
+	WetternessSnowMelt::Update(*this, weather.rates);
 	UpdateSurvival();
 }
 

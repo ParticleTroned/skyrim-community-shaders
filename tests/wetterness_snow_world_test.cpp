@@ -89,7 +89,7 @@ int main()
 	auto observe = [&](double hours, float amount) {
 		globals::game::clock.hours = hours;
 		snow.perFrame.TimeSnowing = amount;
-		Update(snow, -1);
+		Update(snow, { -1, -1 });
 	};
 	ResumeWorld(snow);
 	observe(100, 1);

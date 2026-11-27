@@ -117,7 +117,7 @@ namespace WetternessSnowMelt
 		}
 	}
 
-	void Update(const SnowCover& snow, float snowRate)
+	void Update(const SnowCover& snow, SnowCoverMath::AccumulationRates snowRates)
 	{
 		const auto* calendar = globals::game::calendar;
 		if (!snow.meltWetnessEnabled || !globals::features::wetterness.IsRuntimeActive() || !calendar) {
@@ -167,7 +167,7 @@ namespace WetternessSnowMelt
 		const auto light = globals::features::wetterness.GetDryingHours(0.0f);
 		const auto heavy = globals::features::wetterness.GetDryingHours(1.0f);
 		++revision;
-		history.Observe(sample, hours, snowRate,
+		history.Observe(sample, hours, snowRates,
 			{ light.x, light.y, light.z, light.w }, { heavy.x, heavy.y, heavy.z, heavy.w });
 		const auto bounds = history.SnowBounds();
 		maximumWeatherSnow.store(bounds[0], std::memory_order_relaxed);

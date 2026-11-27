@@ -7,7 +7,7 @@ struct SnowCover;
 namespace WetternessSnowMelt
 {
 	/** Records Snow Cover's current world state without activating rain simulation or effects. */
-	void Update(const SnowCover& snow, float snowRate);
+	void Update(const SnowCover& snow, SnowCoverMath::AccumulationRates snowRates);
 	/** Retains the departing world's history through interior and worldspace transitions. */
 	void SuspendWorld();
 	/** Restores this world's snow clock so time spent travelling also advances melting. */

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Features/SnowCoverMath.h"
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -126,10 +128,10 @@ namespace WetternessSnowMelt
 			return bounds;
 		}
 
-		void Observe(Sample sample, double hours, float snowRate,
+		void Observe(Sample sample, double hours, SnowCoverMath::AccumulationRates snowRates,
 			const std::array<float, 4>& lightHours, const std::array<float, 4>& heavyHours)
 		{
-			if (!Valid(sample) || !std::isfinite(hours) || hours < 0.0 || !std::isfinite(snowRate)) {
+			if (!Valid(sample) || !std::isfinite(hours) || hours < 0.0 || !snowRates.IsFinite()) {
 				Clear();
 				return;
 			}
@@ -153,14 +155,34 @@ namespace WetternessSnowMelt
 				weatherSample.fireRadiusScale = previous.fireRadiusScale;
 				weatherSample.fires = previous.fires;
 			}
-			if (count && snowRate != 0.0f) {
+			if (count) {
+				const auto& previous = nodes[count - 1];
+				const float before = previous.sample.state[0];
+				const float after = sample.state[0];
+				const float rate = snowRates.At(before);
+				if (snowRates.belowZero != snowRates.aboveZero && rate != 0.0f &&
+					((before > 0.0f && after < 0.0f) || (before < 0.0f && after > 0.0f))) {
+					const double crossingHours = -static_cast<double>(before) / rate;
+					const double elapsed = hours - now;
+					if (crossingHours > 0.0 && crossingHours < elapsed) {
+						auto crossing = weatherSample;
+						crossing.state[0] = 0.0f;
+						for (uint32_t i = 1; i < 3; ++i)
+							crossing.state[i] = std::lerp(previous.sample.state[i], sample.state[i], static_cast<float>(crossingHours / elapsed));
+						// The calm-weather contribution reverses at zero, changing the remaining melt rate.
+						Append(crossing, now + crossingHours);
+					}
+				}
+			}
+			if (count && snowRates.At(nodes[count - 1].sample.state[0]) != 0.0f) {
 				const auto previous = nodes[count - 1];
-				const double movingHours = (sample.state[0] - previous.sample.state[0]) / snowRate;
+				const double movingHours = (sample.state[0] - previous.sample.state[0]) / snowRates.At(previous.sample.state[0]);
 				const double elapsed = hours - now;
 				// Wait/sleep must preserve when snow finished melting, rather than move it to wake-up.
 				if (movingHours > 0.0 && movingHours < elapsed) {
 					auto stopped = weatherSample;
-					stopped.state[2] = std::lerp(previous.sample.state[2], sample.state[2], static_cast<float>(movingHours / elapsed));
+					for (uint32_t i = 1; i < 3; ++i)
+						stopped.state[i] = std::lerp(previous.sample.state[i], sample.state[i], static_cast<float>(movingHours / elapsed));
 					Append(stopped, now + movingHours);
 				}
 			}

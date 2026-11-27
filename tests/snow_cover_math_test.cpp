@@ -49,6 +49,41 @@ int main()
 	Require(Accumulate(1, -1, true, false, 1, 1) == 1);
 	Require(Accumulate(1, std::numeric_limits<float>::infinity(), true, false, 1, 1) == 1);
 	Require(Accumulate(std::numeric_limits<float>::quiet_NaN(), 0, false, false, 1, 1) == 0);
+	const Weather calm{}, snow{ true, false, 1000 }, rain{ false, true, 2000 };
+	for (const auto endpoint : { calm, snow, rain }) {
+		const auto blended = BlendWeather(endpoint, endpoint, 0.5f, 1, 1);
+		Require(blended.density == endpoint.density);
+		for (float amount : { -1.0f, 0.0f, 1.0f })
+			Require(blended.rates.At(amount) == AccumulationRate(amount, endpoint.snowing, endpoint.raining, 1, 1));
+	}
+	const auto risingSnow = BlendWeather(calm, snow, 0.75f, 1, 1);
+	const auto fallingSnow = BlendWeather(snow, calm, 0.25f, 1, 1);
+	Require(risingSnow.density == 750 && risingSnow.density == fallingSnow.density);
+	Require(risingSnow.rates.belowZero == 1 && risingSnow.rates.aboveZero == 0.5f);
+	Require(fallingSnow.rates.belowZero == risingSnow.rates.belowZero && fallingSnow.rates.aboveZero == risingSnow.rates.aboveZero);
+	Require(BlendWeather(calm, snow, -1, 1, 1).density == 0);
+	Require(BlendWeather(calm, snow, 2, 1, 1).density == 1000);
+	Require(BlendWeather(calm, snow, std::numeric_limits<float>::quiet_NaN(), 1, 1).density == 1000);
+	Require(BlendWeather(snow, snow, 0, 1, 1).rates.At(0) == 1);
+	Require(BlendWeather(calm, { false, true, std::numeric_limits<float>::infinity() }, 1, 1, 1).density == 0);
+	const auto mixedRain = BlendWeather(calm, rain, 0.5f, 1, 1);
+	Require(mixedRain.rates.belowZero == -0.5f && mixedRain.rates.aboveZero == -1.5f);
+	Require(std::abs(Accumulate(1, 2, mixedRain.rates) + 2.0f / 3.0f) < 0.00001f);
+	Require(Accumulate(-1, 3, risingSnow.rates) == 1);
+	const auto mostlyCalm = BlendWeather(calm, snow, 0.25f, 1, 1);
+	Require(Accumulate(1, 10, mostlyCalm.rates) == 0 && Accumulate(-1, 10, mostlyCalm.rates) == 0);
+	for (const auto rates : { risingSnow.rates, mixedRain.rates, mostlyCalm.rates }) {
+		for (const float initial : { -1.0f, 0.0f, 1.0f }) {
+			float stepped = initial;
+			for (unsigned i = 0; i < 32; ++i)
+				stepped = Accumulate(stepped, 0.25f, rates);
+			Require(std::abs(stepped - Accumulate(initial, 8, rates)) < 0.00001f);
+			Require(Accumulate(initial, 0, rates) == initial);
+		}
+	}
+	Require(Accumulate(1, 100, mixedRain.rates) == -MaxWeatherAccumulation);
+	Require(Accumulate(-1, 100, risingSnow.rates) == MaxWeatherAccumulation);
+	Require(Accumulate(1, 1, { std::numeric_limits<float>::quiet_NaN(), 1 }) == 1);
 	Require(SeasonalAltitude(-12, 6, 0, 20000, -20000) == 20000);
 	Require(std::isfinite(SeasonalAltitude(std::numeric_limits<float>::quiet_NaN(), 6, 0, 20000, -20000)));
 

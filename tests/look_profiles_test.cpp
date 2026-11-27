@@ -35,6 +35,79 @@ void Save(const std::filesystem::path& path, const Json& value)
 	std::string error;
 	Require(SettingsSerialization::WriteFileAtomic(path, value, error), "fixture write");
 }
+
+void CheckBaselineCompatibility(const std::filesystem::path& root)
+{
+	const Json foreign{ { "EnableLocalShadows", true }, { "LocalShadowFilterScale", 1.0 },
+		{ "LocalShadowResolution", 0 }, { "LocalShadowSamples", 8 }, { "LocalShadowSlots", 16 } };
+	const Json supported{ { "ParticleBrightness", 1.5 }, { "EnableContactShadows", true } };
+	const Json schemas{ { "LightLimitFix", { { "ParticleBrightness", 1.0 }, { "EnableContactShadows", false },
+											   { "EnableParticleLights", true }, { "Nested", Json::object() } } },
+		{ "Skylighting", { { "MinDiffuseVisibility", 1.0 } } } };
+	const auto load = [&](const char* id, const Json& values, const char* feature = "LightLimitFix", const char* layer = "Baseline") {
+		Save(root / id / layer / (std::string(feature) + ".json"), values);
+		return ReadLookPack(root, id, schemas);
+	};
+
+	auto mixed = foreign;
+	mixed.update(supported);
+	mixed["EnableParticleLights"] = false;
+	mixed["_metadata"] = { { "label", "Shared lighting" } };
+	auto pack = load("Shadow-compat", mixed);
+	Require(pack.IsCompatible() && pack.baseline["LightLimitFix"] == supported,
+		"Foreign shadow fields must not reject supported appearance or apply local settings");
+	Require(pack.documents.at("Baseline/LightLimitFix.json") == mixed,
+		"Compatibility filtering must preserve the original document");
+	pack.id = "Shadow-compat-export";
+	std::string error;
+	Require(WriteLookPack(root, pack, schemas, error), "Compatible lighting baseline exports");
+	const auto restored = ReadLookPack(root, pack.id, schemas);
+	Require(restored.IsCompatible() && restored.baseline == pack.baseline,
+		"Compatible lighting appearance must survive export and import");
+	Require(ReadProfileDocument(root / "Shadow-compat" / "Baseline" / "LightLimitFix.json") == mixed,
+		"Import and export must leave the source preset unchanged");
+
+	auto ignoredOnly = load("Shadow-only", foreign);
+	Require(!ignoredOnly.IsCompatible() && ignoredOnly.baseline.empty() && ignoredOnly.errors.size() == 1 &&
+				ignoredOnly.errors.front().find("no supported Visuals settings") != std::string::npos,
+		"A pack with no supported appearance must retain the empty-pack rejection");
+	const Json otherAppearance{ { "MinDiffuseVisibility", .8 } };
+	Save(root / "Shadow-only" / "Baseline" / "Skylighting.json", otherAppearance);
+	ignoredOnly = ReadLookPack(root, "Shadow-only", schemas);
+	Require(ignoredOnly.IsCompatible() && ignoredOnly.baseline == Json{ { "Skylighting", otherAppearance } },
+		"An ignored-only lighting document must not add an override to a supported pack");
+	ignoredOnly.id = "Shadow-only-export";
+	Require(WriteLookPack(root, ignoredOnly, schemas, error), "Ignored-only baseline exports");
+	const auto ignoredRoundTrip = ReadLookPack(root, ignoredOnly.id, schemas);
+	Require(ignoredRoundTrip.IsCompatible() && ignoredRoundTrip.baseline == ignoredOnly.baseline &&
+				ReadProfileDocument(root / ignoredOnly.id / "Baseline" / "LightLimitFix.json") == foreign,
+		"Ignored-only documents must stay preserved and inactive after export");
+
+	auto typo = mixed;
+	typo["LocalShadowSlot"] = 16;
+	Require(!load("Shadow-typo", typo).IsCompatible(), "Unknown shadow spellings must still be rejected");
+	auto malformed = mixed;
+	malformed["ParticleBrightness"] = "invalid";
+	Require(!load("Shadow-malformed", malformed).IsCompatible(), "Supported values must still be validated");
+	Require(!load("Shadow-other-feature", foreign, "Skylighting").IsCompatible(),
+		"The compatibility exception must not apply to another feature");
+	Require(!load("Shadow-scene", foreign, "LightLimitFix", "InteriorOnly").IsCompatible(),
+		"The baseline compatibility exception must not apply to scene rules");
+	Require(!load("Shadow-nested", { { "Nested", foreign } }).IsCompatible(),
+		"Only exact top-level fields may be ignored");
+
+	auto futureSchemas = schemas;
+	futureSchemas["LightLimitFix"].update(foreign);
+	Require(ReadLookPack(root, "Shadow-compat", futureSchemas).IsCompatible(),
+		"Recognized shadow settings must remain valid");
+	for (const auto& [key, value] : foreign.items()) {
+		auto invalid = mixed;
+		invalid[key] = "invalid";
+		Save(root / "Shadow-future" / "Baseline" / "LightLimitFix.json", invalid);
+		Require(!ReadLookPack(root, "Shadow-future", futureSchemas).IsCompatible(),
+			"A shadow field recognized by the active schema must not bypass validation");
+	}
+}
 #include "look_profile_persistence_test.h"
 
 int main()
@@ -53,6 +126,7 @@ try {
 		}
 	} cleanup{ root };
 	std::filesystem::create_directories(root);
+	CheckBaselineCompatibility(root);
 	{
 		const Json settings{ { "imageSpaceTint", { { "enabled", true }, { "amount", 0.5 }, { "color", { 0.5, 0.6, 0.4 } } } } };
 		const Json tintSchemas{ { "AdaptiveBrightness", settings } };

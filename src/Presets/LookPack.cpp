@@ -1,6 +1,7 @@
 #include "LookPack.h"
 #include "LookScenes.h"
 
+#include "BaselineCompatibility.h"
 #include "SettingsSerialization.h"
 #include "Utils/PathValidation.h"
 #include "Utils/StringUtils.h"
@@ -148,6 +149,10 @@ namespace Presets
 					pack.notices.push_back(feature + ": local settings are kept from your configuration.");
 					continue;
 				}
+				const auto relativeFolder = folder.lexically_relative(pack.sourceRoot);
+				const auto context = DocumentKey(relativeFolder);
+				if (context == "Baseline")
+					BaselineCompatibility::EraseUnsupportedSettings(feature, schemas.at(feature), values);
 				std::string error;
 				if (!ValidatePatch(values, schemas.at(feature), error, "/" + feature)) {
 					pack.errors.push_back(feature + ": " + error);
@@ -164,8 +169,6 @@ namespace Presets
 				normalize(normalize, values, schemas.at(feature));
 
 				auto appearance = SelectDomain(feature, values, SettingsDomain::Appearance);
-				const auto relativeFolder = folder.lexically_relative(pack.sourceRoot);
-				const auto context = DocumentKey(relativeFolder);
 				const bool scene = context != "Baseline";
 				const bool floatsOnly = context.starts_with("TimeOfDay/") || context.starts_with("Weather/") ||
 				                        (context.starts_with("Locations/") && std::distance(relativeFolder.begin(), relativeFolder.end()) == 3);

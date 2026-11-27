@@ -160,6 +160,8 @@ public:
 
 	void SaveUserSettings(SceneType type);
 	void LoadUserSettings(SceneType type);
+	/// Load up to 4096 JSON files in case-sensitive filename order; the first valid duplicate wins.
+	/// Missing directories are optional; enumeration failures or excess files abort discovery before loading.
 	void DiscoverOverwrites(SceneType type);
 
 	/// Convenience: load all scene types
@@ -216,6 +218,7 @@ private:
 	std::map<std::string, bool> featurePauseStates;
 
 	static constexpr size_t MAX_OVERWRITE_FILE_SIZE = 1024 * 1024;
+	static constexpr size_t MaxOverwriteFiles = 4096;
 
 	// --- Helpers ---
 	std::vector<SettingEntry>& GetEntriesMut(SceneType type);

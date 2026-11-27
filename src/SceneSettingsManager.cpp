@@ -8,13 +8,16 @@
 #include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Game.h"
+#include "Utils/StringUtils.h"
 
 #include <algorithm>
 #include <array>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <system_error>
 #include <unordered_set>
+#include <vector>
 
 namespace
 {
@@ -786,26 +789,54 @@ void SceneSettingsManager::DiscoverOverwrites(SceneType type)
 	auto overwritesPath = GetOverwritesPath(type);
 	auto typeName = GetSceneTypeName(type);
 
-	logger::info("[SceneSettings] Discovering {} overwrites in: {}", typeName, overwritesPath.string());
+	const auto directoryName = Util::PathToUtf8(overwritesPath);
+	logger::info("[SceneSettings] Discovering {} overwrites in: {}", typeName, directoryName);
 
 	std::error_code ec;
-	if (!std::filesystem::exists(overwritesPath, ec)) {
-		logger::info("[SceneSettings] Overwrites directory does not exist: {}", overwritesPath.string());
+	std::filesystem::directory_iterator iterator(overwritesPath, ec);
+	if (ec) {
+		if (ec == std::errc::no_such_file_or_directory)
+			logger::info("[SceneSettings] Overwrites directory does not exist: {}", directoryName);
+		else
+			logger::error("[SceneSettings] Failed to enumerate {} overwrites in '{}': {}", typeName, directoryName, ec.message());
 		return;
 	}
+
+	std::vector<std::filesystem::directory_entry> files;
+	const std::filesystem::directory_iterator end;
+	while (iterator != end) {
+		const auto& entry = *iterator;
+		if (entry.path().extension() == ".json") {
+			std::error_code statusError;
+			const bool regularFile = entry.is_regular_file(statusError);
+			if (statusError) {
+				logger::warn("[SceneSettings] Could not inspect overwrite '{}': {}", Util::PathToUtf8(entry.path()), statusError.message());
+			} else if (regularFile) {
+				if (files.size() >= MaxOverwriteFiles) {
+					logger::error("[SceneSettings] Skipping {} overwrite discovery: more than {} JSON files in '{}'", typeName, MaxOverwriteFiles, directoryName);
+					return;
+				}
+				files.push_back(entry);
+			}
+		}
+
+		iterator.increment(ec);
+		if (ec) {
+			logger::error("[SceneSettings] Failed while enumerating {} overwrites in '{}': {}", typeName, directoryName, ec.message());
+			return;
+		}
+	}
+
+	// The first valid definition wins, so filesystem enumeration order must not set precedence.
+	std::sort(files.begin(), files.end(), [](const auto& lhs, const auto& rhs) {
+		return lhs.path().native() < rhs.path().native();
+	});
 
 	auto& vec = GetEntriesMut(type);
 	int filesFound = 0;
 	int overwritesLoaded = 0;
-	for (const auto& dirEntry : std::filesystem::directory_iterator(overwritesPath, ec)) {
-		if (ec) {
-			logger::error("[SceneSettings] Error iterating {} overwrites directory: {}", typeName, ec.message());
-			break;
-		}
-		if (!dirEntry.is_regular_file() || dirEntry.path().extension() != ".json")
-			continue;
-
-		auto filename = dirEntry.path().filename().string();
+	for (const auto& dirEntry : files) {
+		auto filename = Util::PathToUtf8(dirEntry.path().filename());
 		filesFound++;
 
 		try {
@@ -825,7 +856,7 @@ void SceneSettingsManager::DiscoverOverwrites(SceneType type)
 			// Resolve feature name: explicit _feature field, or infer from filename (ModName_FeatureName.json)
 			std::string featureShortName = data.value("_feature", "");
 			if (featureShortName.empty()) {
-				auto stem = dirEntry.path().stem().string();
+				auto stem = Util::PathToUtf8(dirEntry.path().stem());
 				auto lastUnderscore = stem.rfind('_');
 				if (lastUnderscore != std::string::npos) {
 					auto candidate = stem.substr(lastUnderscore + 1);

@@ -1,7 +1,9 @@
 #include "Presets/LookSceneRuntime.h"
 #include "Presets/LookScenes.h"
 #include <algorithm>
+#include <bit>
 #include <chrono>
+#include <cstdint>
 #include <iostream>
 #include <map>
 #include <optional>
@@ -112,7 +114,9 @@ struct Feature
 	static std::vector<std::string> GetLoadedFeatureNames() { return { "Skin", "SubsurfaceScattering", "GrassLighting", "TerrainHelper" }; }
 	Json settings = { { "MinDiffuseVisibility", 1.f } };
 	std::string name;
-	unsigned loads = 0;
+	unsigned loads = 0, saves = 0;
+	std::set<unsigned> failLoads;
+	bool normalizeOnSave = false;
 	bool loaded = true, throwNext = false;
 	static Feature* FindFeatureByShortName(const std::string& name)
 	{
@@ -121,7 +125,13 @@ struct Feature
 		feature.name = name;
 		return &feature;
 	}
-	void SaveSettings(Json& value) { value = settings; }
+	void SaveSettings(Json& value)
+	{
+		++saves;
+		if (normalizeOnSave)
+			settings["value"] = std::max(0, settings.at("value").get<int>());
+		value = settings;
+	}
 	void SaveBaseSettings(Json& value)
 	{
 		value = settings;
@@ -133,7 +143,7 @@ struct Feature
 	{
 		++loads;
 		settings = value;
-		if (throwNext) {
+		if (throwNext || failLoads.contains(loads)) {
 			throwNext = false;
 			throw std::runtime_error("Simulated partial feature failure");
 		}
@@ -151,6 +161,8 @@ void Require(bool value, const char* message)
 	if (!value)
 		throw std::runtime_error(message);
 }
+
+#include "look_scene_apply_test.h"
 
 void CheckPreparationGates()
 {
@@ -334,6 +346,7 @@ try {
 	Require(feature->settings["MinDiffuseVisibility"] == 2.f, "clearing place restores interior layer");
 	CheckPreparedFields();
 	CheckPreparationGates();
+	LookSceneApplyTests::Run();
 	std::cout << "Visuals scene transaction and restoration tests passed\n";
 	return 0;
 } catch (const std::exception& error) {

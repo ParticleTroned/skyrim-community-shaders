@@ -3,6 +3,7 @@
 #include "Presets/LookProfileState.h"
 #include "Presets/LookScenes.h"
 #include "SettingsSerialization.h"
+#include "look_scene_json_test.h"
 #include <chrono>
 #include <crtdbg.h>
 #include <fstream>
@@ -256,6 +257,7 @@ try {
 	document["profile"]["choices"] = { { "appearance", { { "brightness", 2 } } } };
 	Require(!ReadExport(document, imported) && imported.Save() == previous, "performance exchange rejects visual settings atomically");
 	TestProfilePersistence(root);
+	LookSceneJsonTests::Run();
 	std::cout << "Visuals pack, ownership, scene and exchange tests passed\n";
 	return 0;
 } catch (const std::exception& error) {

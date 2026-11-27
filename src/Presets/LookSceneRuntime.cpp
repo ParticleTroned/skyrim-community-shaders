@@ -10,8 +10,11 @@
 #include "Utils/LocationLayers.h"
 #include "WeatherManager.h"
 #include "WeatherVariableRegistry.h"
+#include <bit>
 #include <chrono>
+#include <cstdint>
 #include <map>
+#include <optional>
 #include <set>
 #include <utility>
 
@@ -115,11 +118,28 @@ namespace Presets::LookSceneRuntime
 			return context;
 		}
 
+		// Ownership restores authored types and floating representations exactly.
+		bool SameSavedValue(const Json& first, const Json& second)
+		{
+			if (first.type() != second.type() || first.size() != second.size())
+				return false;
+			if (first.is_number_float())
+				return std::bit_cast<std::uint64_t>(first.get<double>()) == std::bit_cast<std::uint64_t>(second.get<double>());
+			if (first.is_structured()) {
+				auto right = second.begin();
+				for (auto left = first.begin(); left != first.end(); ++left, ++right)
+					if ((first.is_object() && left.key() != right.key()) || !SameSavedValue(*left, *right))
+						return false;
+				return true;
+			}
+			return first == second;
+		}
+
 		void Apply(const Json& base, PreparedFields& fields, bool weatherOnly = false)
 		{
 			if (weatherOnly && std::ranges::none_of(features, [](const auto& name) { return WeatherManager::GetSingleton()->HasActiveVariablesForFeature(name); }))
 				return;
-			const auto beforeSaved = saved;
+			std::optional<Json> beforeSaved;
 			std::map<std::string, Json> snapshots;
 			try {
 				for (const auto& name : features) {
@@ -128,34 +148,95 @@ namespace Presets::LookSceneRuntime
 					auto* feature = Feature::FindFeatureByShortName(name);
 					if (!feature || !feature->loaded || !base.contains(name))
 						continue;
+					const auto owned = saved.find(name);
+					const auto found = fields.find(name);
+					const bool applyFields = found != fields.end() && !SceneSettingsManager::GetSingleton()->IsFeaturePaused(name);
 					Json current;
+					// Serializers may normalize live settings even when no scene fields are owned.
 					feature->SaveSettings(current);
-					auto candidate = current;
-					if (saved.contains(name))
-						for (const auto& [path, value] : saved[name].items()) {
+					const auto& featureBase = base.at(name);
+					Json candidate;
+					bool candidatePrepared = false;
+					const auto restoreCandidate = [&] {
+						candidate = current;
+						if (owned != saved.end())
+							for (const auto& [path, value] : owned->items()) {
+								const auto& address = fieldAddresses.at(path);
+								candidate[address] = featureBase.contains(address) ? featureBase[address] : value;
+							}
+						candidatePrepared = true;
+					};
+					std::map<std::string, const Json*, std::less<>> patch;
+					if (owned != saved.end())
+						for (const auto& [path, value] : owned->items()) {
 							const auto& address = fieldAddresses.at(path);
-							candidate[address] = base[name].contains(address) ? base[name][address] : value;
+							patch[path] = featureBase.contains(address) ? &featureBase[address] : &value;
+							if (!current.contains(address)) {
+								// Structural restoration failures must precede preparation of new fields.
+								restoreCandidate();
+								break;
+							}
 						}
 					Json nextSaved = Json::object();
-					if (const auto found = fields.find(name); found != fields.end() && !SceneSettingsManager::GetSingleton()->IsFeaturePaused(name)) {
+					if (applyFields) {
 						for (const auto& [path, value] : found->second.Fields().items()) {
 							if (path.empty() || value.is_null())
 								continue;
 							const auto& address = FieldAddress(path);
-							if (!base[name].contains(address))
+							if (!featureBase.contains(address))
 								continue;
 							nextSaved[path] = authoredBase[name][address];
-							candidate[address] = value;
+							if (candidatePrepared)
+								candidate[address] = value;
+							else
+								patch[path] = &value;
 						}
 					}
-					if (candidate != current) {
-						snapshots[name] = current;
+					if (!candidatePrepared)
+						for (const auto& [path, value] : patch) {
+							const auto prefix = path + '/';
+							const auto descendant = patch.lower_bound(prefix);
+							if (!current.contains(fieldAddresses.at(path)) || (descendant != patch.end() && descendant->first.starts_with(prefix))) {
+								// Overlaps and missing ancestors can make assignment order affect shape.
+								restoreCandidate();
+								if (applyFields)
+									for (const auto& [field, overlay] : found->second.Fields().items())
+										if (!field.empty() && !overlay.is_null() && featureBase.contains(FieldAddress(field)))
+											candidate[FieldAddress(field)] = overlay;
+								break;
+							}
+						}
+					bool changed = false;
+					if (candidatePrepared) {
+						changed = candidate != current;
+					} else {
+						for (const auto& [path, value] : patch)
+							if (!(current[fieldAddresses.at(path)] == *value)) {
+								changed = true;
+								break;
+							}
+						// Enclosing JSON containers compare unequal when an untouched leaf is NaN.
+						if (!changed)
+							changed = current != current;
+						if (changed) {
+							candidate = current;
+							for (const auto& [path, value] : patch)
+								candidate[fieldAddresses.at(path)] = *value;
+						}
+					}
+					if (changed) {
+						snapshots.emplace(name, std::move(current));
 						feature->LoadSettings(candidate);
 					}
-					if (nextSaved.empty())
-						saved.erase(name);
-					else
-						saved[name] = std::move(nextSaved);
+					const bool ownershipChanged = nextSaved.empty() ? owned != saved.end() : owned == saved.end() || !SameSavedValue(*owned, nextSaved);
+					if (ownershipChanged) {
+						if (!beforeSaved)
+							beforeSaved.emplace(saved);
+						if (nextSaved.empty())
+							saved.erase(name);
+						else
+							saved[name] = std::move(nextSaved);
+					}
 				}
 			} catch (const std::exception& failure) {
 				std::string message = failure.what();
@@ -166,7 +247,8 @@ namespace Presets::LookSceneRuntime
 						message += std::string("; rollback failed: ") + rollback.what();
 					}
 				}
-				saved = beforeSaved;
+				if (beforeSaved)
+					saved = std::move(*beforeSaved);
 				throw std::runtime_error(message);
 			}
 		}

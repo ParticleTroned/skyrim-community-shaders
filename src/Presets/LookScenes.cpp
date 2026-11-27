@@ -1,4 +1,5 @@
 #include "LookScenes.h"
+#include "Utils/JsonCleanup.h"
 #include "Utils/StringUtils.h"
 #include <charconv>
 #include <cstdint>
@@ -7,6 +8,8 @@
 #include <algorithm>
 #include <cmath>
 #include <set>
+#include <utility>
+#include <vector>
 
 namespace Presets
 {
@@ -28,15 +31,70 @@ namespace Presets
 		       (separator == key.npos ? std::string{} : "~" + Util::ToLowerAscii(key.substr(separator + 1)));
 	}
 
+	namespace
+	{
+		void OverlaySceneFlattened(Json& destination, const Json& patch)
+		{
+			auto flat = destination.flatten();
+			flat.erase("");
+			const auto updates = patch.flatten();
+			for (const auto& [path, value] : updates.items())
+				if (!path.empty() && !value.is_null())
+					flat[path] = value;
+			destination = flat.unflatten();
+		}
+
+		/** Collect empty leaves while rejecting shapes that unflatten can reinterpret. */
+		bool PreflightSceneShape(Json& value, std::vector<Json*>& emptyContainers)
+		{
+			if (value.is_object() && value.contains("0"))
+				return false;
+			if (!value.is_structured())
+				return value.is_primitive();
+			if (value.empty())
+				emptyContainers.push_back(&value);
+			for (auto& child : value)
+				if (!PreflightSceneShape(child, emptyContainers))
+					return false;
+			return true;
+		}
+	}
+
 	void OverlayScene(Json& destination, const Json& patch)
 	{
-		auto flat = destination.flatten();
-		flat.erase("");
-		const auto updates = patch.flatten();
-		for (const auto& [path, value] : updates.items())
-			if (!path.empty() && !value.is_null())
-				flat[path] = value;
-		destination = flat.unflatten();
+		std::vector<Json*> emptyContainers;
+		if (!PreflightSceneShape(destination, emptyContainers)) {
+			OverlaySceneFlattened(destination, patch);
+			return;
+		}
+		auto updates = patch.flatten();
+		const Util::JsonCleanupGuard cleanup(updates);
+		std::vector<std::pair<Json*, Json*>> assignments;
+		assignments.reserve(updates.size());
+		for (auto& [path, value] : updates.items()) {
+			if (path.empty() || value.is_null())
+				continue;
+			Json* target = nullptr;
+			try {
+				const Json::json_pointer pointer(path);
+				if (destination.contains(pointer))
+					target = &destination.at(pointer);
+			} catch (const Json::exception&) {
+				// Preserve the flat-map fallback for object keys invalid as array indices.
+			}
+			if (!value.is_primitive() || !target || (target->is_structured() && !target->empty())) {
+				OverlaySceneFlattened(destination, patch);
+				return;
+			}
+			assignments.emplace_back(target, &value);
+		}
+		// All allocation precedes mutation; empty-leaf normalization preserves target addresses.
+		if (destination.is_primitive())
+			destination = nullptr;
+		for (auto* container : emptyContainers)
+			*container = nullptr;
+		for (const auto& [target, value] : assignments)
+			target->swap(*value);
 	}
 
 	std::array<float, 6> ScenePeriodWeights(std::array<float, 6> starts, float hour, float blendHours, float ease)
@@ -75,9 +133,34 @@ namespace Presets
 		return { 0, 0, 1, 0, 0, 0 };
 	}
 
+	namespace
+	{
+		/** Matches a non-root flatten leaf without materializing unrelated base fields. */
+		const Json* FindSceneFlatLeaf(const Json& base, const std::string& path)
+		{
+			if (path.empty())
+				return nullptr;
+			try {
+				const Json::json_pointer pointer(path);
+				if (!base.contains(pointer))
+					return nullptr;
+				const auto& value = base.at(pointer);
+				if (!value.is_structured())
+					return &value;
+				if (value.is_structured() && value.empty()) {
+					static const Json emptyLeaf;
+					return &emptyLeaf;
+				}
+			} catch (const Json::exception&) {
+				// A patch's object key need not be a valid index in the base's array.
+			}
+			return nullptr;
+		}
+	}
+
 	Json BlendSceneLayers(const Json& base, const Json& first, const Json& second, float weight)
 	{
-		const auto one = first.flatten(), two = second.flatten(), fallback = base.flatten();
+		const auto one = first.flatten(), two = second.flatten();
 		std::set<std::string> paths;
 		for (const auto* values : { &one, &two })
 			for (const auto& [path, value] : values->items())
@@ -86,10 +169,11 @@ namespace Presets
 		Json result = Json::object();
 		weight = std::clamp(weight, 0.f, 1.f);
 		for (const auto& path : paths) {
-			if (!fallback.contains(path))
+			const auto* fallback = FindSceneFlatLeaf(base, path);
+			if (!fallback)
 				continue;
-			const auto& a = one.contains(path) ? one[path] : fallback[path];
-			const auto& b = two.contains(path) ? two[path] : fallback[path];
+			const auto& a = one.contains(path) ? one[path] : *fallback;
+			const auto& b = two.contains(path) ? two[path] : *fallback;
 			if (a.is_number() && b.is_number() && (a.is_number_float() || b.is_number_float()))
 				result[path] = std::lerp(a.get<double>(), b.get<double>(), static_cast<double>(weight));
 			else
@@ -109,12 +193,13 @@ namespace Presets
 
 			Json blended = Json::object();
 			float accumulated = 0;
+			const Json emptyPeriod = Json::object();
 			for (size_t i = 0; i < ScenePeriods.size(); ++i) {
 				const auto weight = context.periods[i];
 				if (weight <= 0)
 					continue;
 				const auto period = layers.find(root + "/" + ScenePeriods[i]);
-				const auto values = period == layers.end() ? Json::object() : period->second;
+				const Json& values = period == layers.end() ? emptyPeriod : period->second;
 				blended = BlendSceneLayers(base, blended, values, weight / (accumulated + weight));
 				accumulated += weight;
 			}

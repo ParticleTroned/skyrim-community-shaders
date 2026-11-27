@@ -11,15 +11,16 @@ cbuffer GrassPlacement : register(b10)
 
 float2 GetGrassPlacementOffsets(uint instanceID)
 {
-#ifdef GRASS_OPTIMIZATIONS
-	if (GrassBatchEnabled)
-		// The current translation is already part of the batch origin.
-		return float2(0, GrassInstanceExtras[GrassBatchBase + instanceID].previousPlacementDelta);
-#endif
 #ifdef ADAPTIVE_BALANCE
-	return GrassPlacementOffsets;
+	float2 offsets = GrassPlacementOffsets;
 #else
-	return 0;
+	float2 offsets = 0;
 #endif
+#ifdef GRASS_OPTIMIZATIONS
+	[branch] if (GrassBatchEnabled)
+		// The current translation is already part of the batch origin.
+		offsets = float2(0, GrassInstanceExtras[GrassBatchBase + instanceID].previousPlacementDelta);
+#endif
+	return offsets;
 }
 #endif

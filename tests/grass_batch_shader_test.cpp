@@ -18,6 +18,8 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <sstream>
+#include <string_view>
 
 namespace
 {
@@ -50,13 +52,14 @@ namespace
 			throw std::runtime_error(message);
 	}
 
-	ComPtr<ID3DBlob> Compile(const wchar_t* path, const char* target, std::vector<D3D_SHADER_MACRO> defines = {})
+	ComPtr<ID3DBlob> Compile(const wchar_t* path, const char* target, std::vector<D3D_SHADER_MACRO> defines = {},
+		UINT flags = D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3)
 	{
 		Includes includes;
 		defines.push_back({ nullptr, nullptr });
 		ComPtr<ID3DBlob> bytecode, errors;
 		const auto result = D3DCompileFromFile(path, defines.data(), &includes, "main", target,
-			D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+			flags | D3DCOMPILE_WARNINGS_ARE_ERRORS,
 			0, bytecode.GetAddressOf(), errors.GetAddressOf());
 		if (errors)
 			std::cerr << static_cast<const char*>(errors->GetBufferPointer());
@@ -75,6 +78,53 @@ namespace
 			Require(variable.StartOffset == offset && variable.Size == (offset == wind ? 3u : 1u) * sizeof(float),
 				"Native wind layout differs from the CPU constants");
 		}
+	}
+
+	void ValidateNativeResourceGuards(ID3DBlob* bytecode)
+	{
+		ComPtr<ID3DBlob> assembly;
+		Check(D3DDisassemble(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), 0, nullptr, assembly.GetAddressOf()));
+		std::istringstream instructions(std::string(static_cast<const char*>(assembly->GetBufferPointer()), assembly->GetBufferSize()));
+		// Native draws may bind textures in these slots; a discarded load still uses the incompatible view.
+		enum class Branch
+		{
+			Other,
+			BatchEnabled,
+			BatchDisabled
+		};
+		std::vector<Branch> branches;
+		unsigned reads = 0;
+		for (std::string line; std::getline(instructions, line);) {
+			const auto first = line.find_first_not_of(" \t\r");
+			if (first == std::string::npos)
+				continue;
+			const std::string_view instruction(line.data() + first, line.find_last_not_of(" \t\r") - first + 1);
+			if (instruction.starts_with("if_")) {
+				auto branch = Branch::Other;
+				if (instruction == "if_nz cb9[0].x")
+					branch = Branch::BatchEnabled;
+				else if (instruction == "if_z cb9[0].x")
+					branch = Branch::BatchDisabled;
+				branches.push_back(branch);
+			} else if (instruction.starts_with("else")) {
+				Require(!branches.empty(), "Unmatched shader branch else");
+				auto& branch = branches.back();
+				if (branch != Branch::Other)
+					branch = branch == Branch::BatchEnabled ? Branch::BatchDisabled : Branch::BatchEnabled;
+			} else if (instruction.starts_with("endif")) {
+				Require(!branches.empty(), "Unmatched shader branch end");
+				branches.pop_back();
+			} else if (instruction.starts_with("ld_") &&
+					   (instruction.find(", t2.") != std::string_view::npos ||
+						   instruction.find(", t3.") != std::string_view::npos ||
+						   instruction.find(", t4.") != std::string_view::npos)) {
+				++reads;
+				Require(std::find(branches.begin(), branches.end(), Branch::BatchEnabled) != branches.end(),
+					"Batch resource read can execute during native grass rendering");
+			}
+		}
+		Require(branches.empty(), "Unclosed shader branch");
+		Require(reads != 0, "Batch resource guard check did not inspect any loads");
 	}
 
 	void ValidateGrassVariants()
@@ -99,6 +149,7 @@ namespace
 							if (mode == 1)
 								defines.push_back({ "GRASS_COLLISION_BASIC", "1" });
 							auto bytecode = Compile(L"package/Shaders/RunGrass.hlsl", "vs_5_0", defines);
+							ValidateNativeResourceGuards(bytecode.Get());
 							ComPtr<ID3D11ShaderReflection> reflection;
 							Check(D3DReflect(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), IID_PPV_ARGS(reflection.GetAddressOf())));
 							D3D11_SHADER_INPUT_BIND_DESC binding{};
@@ -138,6 +189,29 @@ namespace
 						}
 	}
 
+	void ValidateNativeResourceCompilerPolicies()
+	{
+		for (bool vr : { false, true })
+			for (bool depth : { false, true })
+				for (bool developer : { false, true })
+					for (UINT policy : std::array<UINT, 4>{ 0, D3DCOMPILE_PARTIAL_PRECISION, D3DCOMPILE_AVOID_FLOW_CONTROL,
+							 D3DCOMPILE_PARTIAL_PRECISION | D3DCOMPILE_AVOID_FLOW_CONTROL }) {
+						std::vector<D3D_SHADER_MACRO> defines{ { "VSHADER", "1" }, { "GRASS_OPTIMIZATIONS", "1" },
+							{ "GRASS_LIGHTING", "1" }, { "GRASS_COLLISION", "1" }, { "GRASS_COLLISION_BASIC", "1" }, { "ADAPTIVE_BALANCE", "1" } };
+						if (vr)
+							defines.push_back({ "VR", "1" });
+						if (depth)
+							defines.push_back({ "RENDER_DEPTH", "1" });
+						if (developer) {
+							defines.push_back({ "D3DCOMPILE_DEBUG", "1" });
+							defines.push_back({ "D3DCOMPILE_SKIP_OPTIMIZATION", "1" });
+						}
+						const UINT flags = developer ? D3DCOMPILE_DEBUG : D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3;
+						auto bytecode = Compile(L"package/Shaders/RunGrass.hlsl", "vs_5_0", defines, flags | policy | D3DCOMPILE_SKIP_VALIDATION);
+						ValidateNativeResourceGuards(bytecode.Get());
+					}
+	}
+
 #include "grass_active_depth_gpu.h"
 #include "grass_bounds_gpu.h"
 #include "grass_collision_field_gpu.h"
@@ -160,6 +234,7 @@ int main()
 			}
 		};
 		run("Grass vertex variants", [] { ValidateGrassVariants(); });
+		run("Grass native resource compiler policies", [] { ValidateNativeResourceCompilerPolicies(); });
 		run("Grass exact source indices", [] { RunGrassSourceIndices(); });
 		run("Grass compact source indices", [] { RunGrassSourceIndices(true); });
 		for (bool vr : { false, true })

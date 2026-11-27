@@ -46,7 +46,10 @@ float GetGrassBatchShading(uint instanceId)
 
 float3 GetGrassBatchOffset(uint instanceId)
 {
-	return GrassBatchEnabled ? GrassInstanceExtras[GrassBatchBase + instanceId].originFade.xyz - GrassBatchOrigin.xyz : 0;
+	// Native draws may bind a texture at t2, so the buffer load must remain inside the branch.
+	float3 offset = 0;
+	[branch] if (GrassBatchEnabled) offset = GrassInstanceExtras[GrassBatchBase + instanceId].originFade.xyz - GrassBatchOrigin.xyz;
+	return offset;
 }
 
 #endif

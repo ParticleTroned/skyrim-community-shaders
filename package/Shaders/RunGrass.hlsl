@@ -167,11 +167,14 @@ cbuffer cb8 : register(b8)
 
 float GetPerInstanceFade(VS_INPUT input)
 {
+	float fade = 0;
 #	ifdef GRASS_OPTIMIZATIONS
-	if (GrassBatchEnabled != 0)
-		return GetGrassBatchFade(input.InstanceID);
+	[branch] if (GrassBatchEnabled != 0)
+		fade = GetGrassBatchFade(input.InstanceID);
+	else
 #	endif
-	return dot(cb8[(asuint(cb7[0].x) >> 2)].xyzw, Math::IdentityMatrix[(asint(cb7[0].x) & 3)].xyzw);
+		fade = dot(cb8[(asuint(cb7[0].x) >> 2)].xyzw, Math::IdentityMatrix[(asint(cb7[0].x) & 3)].xyzw);
+	return fade;
 }
 
 // Calculate wind displacement for a grass vertex
@@ -321,7 +324,8 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.VertexMult = input.InstanceData1.w;
 #		ifdef GRASS_OPTIMIZATIONS
 	vsout.TextureNormalLength = GetGrassBatchTextureNormalLength();
-	if (GrassBatchEnabled) {
+	[branch] if (GrassBatchEnabled)
+	{
 		vsout.Color.w = perInstanceFade;
 		vsout.VertexMult = GetGrassBatchShading(input.InstanceID);
 	}
@@ -437,7 +441,8 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.VertexMult = input.InstanceData1.w;
 #		ifdef GRASS_OPTIMIZATIONS
 	vsout.TextureNormalLength = GetGrassBatchTextureNormalLength();
-	if (GrassBatchEnabled) {
+	[branch] if (GrassBatchEnabled)
+	{
 		vsout.Color.w = perInstanceFade;
 		vsout.VertexMult = GetGrassBatchShading(input.InstanceID);
 	}

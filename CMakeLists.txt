@@ -3504,6 +3504,7 @@ if(BUILD_CONTROLLER_TESTS)
     add_controller_test(skin_wetness_test SkinWetness tests/skin_wetness_test.cpp)
     add_d3d_shader_test(skin_shader_test SkinShader tests/skin_shader_test.cpp)
     set_tests_properties(SkinShader PROPERTIES TIMEOUT 0)
+    add_d3d_shader_test(perlin_noise_test PerlinNoise tests/perlin_noise_test.cpp)
 
     add_d3d_shader_test(skin_transmission_test SkinTransmission tests/skin_transmission_test.cpp)
     set(_skin_transmission_dir

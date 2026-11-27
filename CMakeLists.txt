@@ -3505,6 +3505,41 @@ if(BUILD_CONTROLLER_TESTS)
     add_d3d_shader_test(skin_shader_test SkinShader tests/skin_shader_test.cpp)
     set_tests_properties(SkinShader PROPERTIES TIMEOUT 0)
 
+    add_d3d_shader_test(skin_transmission_test SkinTransmission tests/skin_transmission_test.cpp)
+    set(_skin_transmission_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/skin-transmission"
+    )
+    add_custom_command(
+        OUTPUT
+            "${_skin_transmission_dir}/skin_transmission_data.h"
+            "${_skin_transmission_dir}/skin_transmission_packing.h"
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_skin_transmission_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_skin_transmission.cmake"
+        DEPENDS
+            src/Features/Skin.h
+            src/Features/Skin.cpp
+            tests/extract_skin_transmission.cmake
+        VERBATIM
+    )
+    target_sources(
+        skin_transmission_test
+        PRIVATE
+            "${_skin_transmission_dir}/skin_transmission_data.h"
+            "${_skin_transmission_dir}/skin_transmission_packing.h"
+    )
+    target_include_directories(
+        skin_transmission_test
+        PRIVATE
+            "${_skin_transmission_dir}"
+            "${PROJECT_SOURCE_DIR}/package/Shaders"
+    )
+    target_compile_options(
+        skin_transmission_test
+        PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/fp:fast>"
+    )
+
     add_d3d_shader_test(commonlib_d3d_bridge_test CommonLibD3DBridge tests/commonlib_d3d_bridge_test.cpp)
     target_link_libraries(
         commonlib_d3d_bridge_test

@@ -9,6 +9,7 @@
 #include "Common/Random.hlsli"
 #include "Common/Shading.hlsli"
 #include "Common/SharedData.hlsli"
+#include "Common/SkinTransmission.hlsli"
 
 namespace Skin
 {
@@ -55,21 +56,36 @@ namespace Skin
 		return float3x3(tangent, cross(normal, tangent) * handedness, normal);
 	}
 
+	float3 TransmissionGaussian(float dd, uint index)
+	{
+		SkinTransmission::Gaussian term = SkinTransmission::Gaussians[index];
+		return float3(term.red, term.green, term.blue) * exp(dd / term.variance);
+	}
+
 	// [Jorge Jimenez, Diego Gutierrez 2015, "Separable Subsurface Scattering"]
 	// https://www.iryoku.com/separable-sss/
 	/// Evaluates the light-independent thickness profile for direct transmission.
 	float3 SSSSTransmittanceProfile(float translucency, float sssWidth, float d)
 	{
-		float scale = 8.25 * (1.0 - translucency) / max(sssWidth, 1e-4f);
+		float scale = SkinTransmission::DistanceScale * (1.0 - translucency) / max(sssWidth, SkinTransmission::MinimumWidth);
 		d = scale * abs(d);
 		float dd = -d * d;
-		float3 profile = float3(0.233, 0.455, 0.649) * exp(dd / 0.0064) +
-		                 float3(0.1, 0.336, 0.344) * exp(dd / 0.0484) +
-		                 float3(0.118, 0.198, 0.0) * exp(dd / 0.187) +
-		                 float3(0.113, 0.007, 0.007) * exp(dd / 0.567) +
-		                 float3(0.358, 0.004, 0.0) * exp(dd / 1.99) +
-		                 float3(0.078, 0.0, 0.0) * exp(dd / 7.41);
+		float3 profile = TransmissionGaussian(dd, 0) + TransmissionGaussian(dd, 1) +
+		                 TransmissionGaussian(dd, 2) + TransmissionGaussian(dd, 3) +
+		                 TransmissionGaussian(dd, 4) + TransmissionGaussian(dd, 5);
 
+		return profile;
+	}
+
+	/// Uses the settings-derived unit-thickness profile only when the thickness map is absent.
+	float3 GetTransmissionProfile(float thickness)
+	{
+		SharedData::SkinData skinData = GetSkinData();
+		float3 profile = skinData.noMapTransmissionProfile;
+		[branch] if (skinMaterialFlags.w > 0.5)
+		{
+			profile = SSSSTransmittanceProfile(0, skinData.sssParams.y, thickness);
+		}
 		return profile;
 	}
 

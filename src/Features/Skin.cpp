@@ -1,5 +1,7 @@
 #include "Skin.h"
 
+#include "Skin/TransmissionProfile.h"
+
 #include "Features/WetnessEffects.h"
 #include "Features/Wetterness.h"
 #include "Globals.h"
@@ -210,15 +212,22 @@ void Skin::DrawSettings()
 Skin::SkinData Skin::GetCommonBufferData() const
 {
 	SkinData data{};
-	const bool enabled = loaded && settings.EnableSkin && perGeometryCB && resourceError.empty();
-	data.skinParams = float4(settings.SkinMainRoughness, settings.SkinSecondRoughness, settings.SkinSpecularTexMultiplier, float(enabled));
-	data.skinParams2 = float4(settings.SecondarySpecularStrength, settings.ExtraSkinWetness, settings.F0, settings.BaseColorMultiplier);
-	data.skinDetailParams = float4(settings.SkinDetailTiling, settings.BodyTilingMultiplier, settings.SkinDetailStrength, float(enabled && settings.EnableSkinDetail && settings.SkinDetailStrength != 0 && detailTexture));
-	data.sssParams = float4(settings.Translucency, settings.sssWidth, settings.SSSAmount, float(settings.UseSSS));
-	data.fuzzParams = float4(settings.FuzzStrength, settings.FuzzRoughness, settings.FuzzF0, settings.ExtraEdgeRoughness);
-	data.physicalParams = float4(settings.PhysicalMainRoughnessMultiplier, settings.PhysicalSecondRoughnessMultiplier, settings.PhysicalSpecularStrength, float(IsWetnessEnabled()));
-	data.wetParams = settings.WetParams;
-	data.wetResponse = settings.WetResponse;
+	const auto effective = settings;
+	const bool enabled = loaded && effective.EnableSkin && perGeometryCB && resourceError.empty();
+	data.skinParams = float4(effective.SkinMainRoughness, effective.SkinSecondRoughness, effective.SkinSpecularTexMultiplier, float(enabled));
+	data.skinParams2 = float4(effective.SecondarySpecularStrength, effective.ExtraSkinWetness, effective.F0, effective.BaseColorMultiplier);
+	data.skinDetailParams = float4(effective.SkinDetailTiling, effective.BodyTilingMultiplier, effective.SkinDetailStrength, float(enabled && effective.EnableSkinDetail && effective.SkinDetailStrength != 0 && detailTexture));
+	data.sssParams = float4(effective.Translucency, effective.sssWidth, effective.SSSAmount, float(effective.UseSSS));
+	data.fuzzParams = float4(effective.FuzzStrength, effective.FuzzRoughness, effective.FuzzF0, effective.ExtraEdgeRoughness);
+	data.physicalParams = float4(effective.PhysicalMainRoughnessMultiplier, effective.PhysicalSecondRoughnessMultiplier, effective.PhysicalSpecularStrength, float(IsWetnessEnabled()));
+	data.wetParams = effective.WetParams;
+	data.wetResponse = effective.WetResponse;
+	if (enabled && effective.UseSSS && effective.Translucency > 0) {
+		// Thread-local packing state avoids shared cache writes across callers.
+		thread_local SkinTransmission::ProfileCache cache;
+		const auto& profile = cache.Get(effective.sssWidth);
+		data.noMapTransmissionProfile = float3(profile[0], profile[1], profile[2]);
+	}
 	return data;
 }
 

@@ -625,7 +625,7 @@ namespace SharedData
 		float4 physicalParams;
 		float4 wetParams;
 		float wetResponse;
-		float3 padding;
+		float3 noMapTransmissionProfile;
 	};
 
 	cbuffer FeatureData : register(b6)

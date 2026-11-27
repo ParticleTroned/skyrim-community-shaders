@@ -102,6 +102,10 @@ namespace Skin
 	{
 		lightingOutput = (DirectLightingOutput)0;
 		context.lightColor *= Color::PBRLightingCompensation * context.detailedShadow;
+		[branch] if (all(context.lightColor == 0.0))
+		{
+			return;
+		}
 
 		const float3 N = context.worldNormal;
 		const float3 V = context.viewDir;

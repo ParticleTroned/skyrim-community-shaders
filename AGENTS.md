@@ -20,7 +20,8 @@ contradict this policy.
 -   **DRY review:** Search the full codebase for an existing utility or pattern before adding another implementation.
 -   **Complete work:** Do not ship TODO, FIXME, placeholders, swallowed errors, or known partial implementations unless the user explicitly requests a plan or scaffold.
 -   **Runtime safety:** Evaluate SE, AE, and VR behavior. Keep runtime-specific divergence small, explicit, and localized.
--   **Graphics safety:** Name every new D3D11 resource with the existing `Util::SetResourceName` path and use RAII for graphics and ImGui state.
+-   **Graphics safety:** Name D3D11 resources through `Util::SetResourceName` and D3D12 objects through existing helpers or `SetName`; use RAII for graphics and ImGui state.
+-   **Threads and lifetime:** Synchronize shared settings, own worker shutdown, and retire GPU resources only after valid completion.
 -   **Validation:** Test in proportion to risk, record exact evidence, and never claim validation that did not run.
 -   **Git safety:** Create direct commits locally before pushing. Use the requested GitHub merge method for PRs, then synchronize the local destination branch. Never force-push or rebase shared branches. Preserve user changes, build outputs, and shader caches.
 -   **Linear main-VR history:** Never create or introduce merge commits on `main-VR`. Prepare linear history before integration so publishing does not require a later history rewrite.
@@ -146,6 +147,12 @@ to its attribution in commit messages, PR descriptions, and write-ups:
 ## Code quality and architecture
 
 -   Prefer complete, focused changes with explicit error handling and graceful degradation.
+-   In per-draw and per-light hooks, perform safe, cheap rejection checks
+    before locks, allocations or string formatting. Shared-state reads
+    still require their synchronization and lifetime guarantees.
+-   Validate and bound external data at its entry point, including settings,
+    process replies, archives and NIF data. Constrain supplied paths to the
+    intended location and reject traversal before filesystem access.
 -   For CommonLib upgrades, review every incoming change for its effect on
     CSX, including assumptions introduced for Open Shaders. Check runtime
     layouts, ABI and API contracts, resource ownership, initialization,
@@ -169,11 +176,43 @@ to its attribution in commit messages, PR descriptions, and write-ups:
 -   Use callbacks or narrow interfaces between UI components rather than widening private implementation APIs.
 -   Pair every successful `ImGui::BeginTable()` with `ImGui::EndTable()` and use RAII for ImGui style/state changes.
 
+## Concurrency and lifetime
+
+-   Protect settings read across threads with atomics, locks or published
+    immutable snapshots. Publish related fields together when consumers
+    require a consistent configuration.
+-   During DLL static initialization, constructors must not launch threads
+    or processes, perform file I/O, or call graphics or engine APIs. Defer
+    that work to the owning lifecycle stage after its dependencies are
+    ready; inactive features must not create unnecessary workers.
+-   Prefer owned `std::jthread` workers for long-lived C++ work and the
+    existing thread pool for short tasks. Use stop-aware waits, such as
+    `condition_variable_any::wait(lock, stopToken, predicate)`. Request
+    cancellation, wake blocked work and join before destroying its inputs
+    or callbacks. Do not detach workers or use sleep-polling loops.
+-   Handle exceptions at thread entry and task completion boundaries so
+    failures cannot terminate the game or disappear in an unread future.
+    Report the reason once per failure transition, invalidate stale output
+    and preserve a working fallback. Recovery must revalidate dependencies;
+    device loss must not be cleared by merely toggling a setting.
+-   Correlate asynchronous requests and replies with checked identifiers or
+    generations. Claim each request before processing it, reject stale or
+    duplicate replies, and validate their fields before publishing results.
+
 ## DirectX, shaders, and runtime compatibility
 
 -   Name every new D3D11 resource for RenderDoc using `Util::SetResourceName` after raw `device->Create*` calls. For `Texture2D`, `Buffer`, and `ConstantBuffer` wrappers, pass the name to the wrapper so view names remain centralized.
+-   Name new D3D12 resources, heaps, queues, fences, command objects and
+    pipeline states through existing naming helpers or
+    `ID3D12Object::SetName`, using the same `Feature::Resource` convention.
 -   Use `Feature::Resource` naming for resources and the existing SRV/UAV suffix conventions for views. Do not duplicate the resource-naming GUID or reimplement the helper inline.
 -   Manage graphics resources with RAII and restore modified DirectX state. Shader or DirectX failures must disable or fall back cleanly rather than crash or corrupt subsequent passes.
+-   Retain explicitly synchronized GPU resources, descriptors and command
+    allocators until every queue using them has retired its work. Check
+    D3D12 fence completion for `UINT64_MAX` before comparing values: it
+    indicates device removal, not successful retirement. Preserve existing
+    asynchronous retirement and device-loss handling without adding
+    per-frame CPU waits.
 -   Instrument render-pass entry points with `CS_GPU_PASS`, using the dynamic-name form only when the label is not static. Keep raw Tracy or annotation zones for sub-dispatch detail that does not belong in the profiler table.
 -   Validate user-controlled shader parameters, buffer sizes, texture sizes, counts, paths, and configuration ranges before allocating or dispatching.
 -   Check register/buffer conflicts when adding shader resources. Consider render resolution, VR frame budgets, thread affinity, and render-thread ownership.
@@ -303,6 +342,11 @@ to its attribution in commit messages, PR descriptions, and write-ups:
     do not wait indefinitely or replay measurements.
 
 ## Repository tooling
+
+-   In GitHub Actions, pass user-controlled inputs, branch names and PR text
+    into shell steps through `env:`. Validate their intended use and quote
+    shell expansions; never interpolate those values directly into `run:`
+    scripts with `${{ }}`.
 
 -   For production CSX profiling, performance tuning, save loading and
     screenshots, use the standalone DevBench **performance profile**.

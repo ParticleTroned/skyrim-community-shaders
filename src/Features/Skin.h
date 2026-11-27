@@ -21,7 +21,7 @@ struct Skin : Feature
 	std::string GetName() override { return "Advanced Skin"; }
 	std::string GetShortName() override { return "Skin"; }
 	std::string_view GetShaderDefineName() override { return "CS_SKIN"; }
-	std::string_view GetShaderCacheAbiVersion() override { return "3"; }
+	std::string_view GetShaderCacheAbiVersion() override { return "4"; }
 	std::string_view GetCategory() const override { return FeatureCategories::kCharacters; }
 	bool SupportsVR() override { return true; }
 	bool HasShaderDefine(RE::BSShader::Type a_type) override { return a_type == RE::BSShader::Type::Lighting; }
@@ -82,11 +82,12 @@ struct Skin : Feature
 		float4 skinParams, skinParams2, skinDetailParams, sssParams;
 		float4 fuzzParams, physicalParams, wetParams;
 		float wetResponse;
-		float3 padding;
+		float3 noMapTransmissionProfile;
 	};
 	static_assert(sizeof(SkinData) == 128);
 	static_assert(offsetof(SkinData, wetResponse) == 112);
-	/** Packs validated global settings without per-material profiles. */
+	static_assert(offsetof(SkinData, noMapTransmissionProfile) == 116);
+	/** Packs validated settings and the unit-thickness transmission profile. */
 	SkinData GetCommonBufferData() const;
 	/** Prepares actor and optional-map data after the native lighting setup. */
 	void BeginPass(RE::BSRenderPass* a_pass);

@@ -4196,7 +4196,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	[branch] if (skinEnabled && skinData.sssParams.w > 0 && skinData.sssParams.x > 0)
 	{
 		// Thickness and SSS width are shared by every direct light on this pixel.
-		material.TransmissionProfile = Skin::SSSSTransmittanceProfile(0, skinData.sssParams.y, material.Thickness);
+		material.TransmissionProfile = Skin::GetTransmissionProfile(material.Thickness);
 	}
 #	endif
 

@@ -320,8 +320,8 @@ namespace
 		float statusLeft = availableMin.x;
 		const bool constrained = OverlayRenderer::ExcludeTopStatusWindowsFromLayout(availableMin, availableMax, statusLeft);
 		const float top = std::max(center.y - size.y * .5f, availableMin.y);
-		size.y = std::max(1.0f, availableMax.y - top);
 		center.y = top + size.y * .5f;
+		MenuUI::Layout::FitHeightToBottom(center, size, std::max(top + 1.0f, availableMax.y));
 		return { center, size, constrained };
 	}
 }
@@ -1106,23 +1106,23 @@ void Menu::DrawSettings()
 	}
 	bool repairWindowBounds = !willBeDocked &&
 	                          ClampSettingsWindowToCanvas(windowPos, windowSizeForOverlap, defaultWindowLayout);
-	uint32_t canvasWidth = 0, canvasHeight = 0;
-	const bool desktopOnly = !REL::Module::IsVR() || !globals::features::vr.GetMenuCanvasSize(canvasWidth, canvasHeight);
-	static bool desktopHeightApplied = false;
+	static bool initialHeightApplied = false;
+	const bool applyInitialHeight = !initialHeightApplied || resetLayout;
 	const auto& nextWindow = ImGui::GetCurrentContext()->NextWindowData;
 	const bool pendingDock = (nextWindow.HasFlags & ImGuiNextWindowDataFlags_HasDock) && nextWindow.DockId != 0;
-	if (!willBeDocked && !pendingDock && desktopOnly && (!desktopHeightApplied || resetLayout)) {
-		const auto extendToBottom = [&](ImVec2& center, ImVec2& size) {
-			const float top = center.y - size.y * .5f;
-			size.y = std::max(1.0f, viewport->WorkPos.y + viewport->WorkSize.y - windowPadding - top);
-			center.y = top + size.y * .5f;
-		};
-		extendToBottom(windowPos, windowSizeForOverlap);
-		if (autoOffsetForTopStatusWindow)
-			extendToBottom(preTopStatusWindowPos, preTopStatusWindowSize);
+	if (!willBeDocked && !pendingDock && (applyInitialHeight || (REL::Module::IsVR() && autoOffsetForTopStatusWindow))) {
+		// Grow below the existing top edge so compilation status retains its space.
+		const float bottom = viewport->WorkPos.y + viewport->WorkSize.y - windowPadding;
+		MenuUI::Layout::FitHeightToBottom(windowPos, windowSizeForOverlap, bottom);
+		if (applyInitialHeight && autoOffsetForTopStatusWindow) {
+			auto restoreLayout = defaultWindowLayout;
+			restoreLayout.constrainedByTopStatusWindow = false;
+			ClampSettingsWindowToCanvas(preTopStatusWindowPos, preTopStatusWindowSize, restoreLayout);
+			MenuUI::Layout::FitHeightToBottom(preTopStatusWindowPos, preTopStatusWindowSize, bottom);
+		}
 		repairWindowBounds = true;
+		initialHeightApplied = true;
 	}
-	desktopHeightApplied = desktopOnly;
 	const bool headsetPointer = REL::Module::IsVR() && globals::features::vr.IsMenuPointerInHeadset();
 	if (headsetPointer) {
 		auto* context = ImGui::GetCurrentContext();

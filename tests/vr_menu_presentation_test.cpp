@@ -287,6 +287,9 @@ namespace
 			toGeometry(Vector3::Transform(Vector3(0.5f, 0.5f, 0.0f), scene) - topLeft),
 			toGeometry(Vector3::Transform(Vector3(-0.5f, -0.5f, 0.0f), scene) - topLeft) };
 		unsigned failures = 0;
+		const Vector3 bottomRight = Vector3::Transform(Vector3(0.5f, -0.5f, 0.0f), scene);
+		if (((topLeft + bottomRight) * 0.5f - placement.Translation()).Length() > 1e-5f)
+			++failures;
 		if (hmd) {
 			const float actualWidth = (Vector3::Transform(Vector3(0.5f, 0.5f, 0), scene) - topLeft).Length();
 			const float actualHeight = (Vector3::Transform(Vector3(-0.5f, -0.5f, 0), scene) - topLeft).Length();
@@ -297,8 +300,8 @@ namespace
 		}
 		Vector3 normal = placement.Backward();
 		normal.Normalize();
-		for (const float u : { 0.0f, 0.25f, 0.5f, 0.75f, 1.0f }) {
-			for (const float v : { 0.0f, 0.125f, 0.5f, 0.875f, 1.0f }) {
+		for (const float u : { 0.0f, 0.005f, 0.25f, 0.5f, 0.75f, 0.995f, 1.0f }) {
+			for (const float v : { 0.0f, 0.005f, 0.125f, 0.5f, 0.875f, 0.995f, 1.0f }) {
 				// IVROverlay applies width and texture aspect before the supplied transform.
 				const Vector3 expected = Vector3::Transform(Vector3((u - 0.5f) * scale, (0.5f - v) * scale * aspect, 0.0f), native);
 				const Vector3 actual = Vector3::Transform(Vector3(u - 0.5f, 0.5f - v, 0.0f), scene);

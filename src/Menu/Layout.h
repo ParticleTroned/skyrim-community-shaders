@@ -42,6 +42,20 @@ namespace MenuUI::Layout
 			std::min(std::max(fontSize * MinimumHeightInFonts, themeMinimum.y), available.y) };
 	}
 
+	/** Fit the height to a finite lower boundary without moving the top edge. */
+	inline bool FitHeightToBottom(ImVec2& center, ImVec2& size, float bottom)
+	{
+		const float top = center.y - size.y * .5f;
+		const float height = bottom - top;
+		if (!std::isfinite(top) || !std::isfinite(height) || height <= 0 ||
+			!std::isfinite(size.y) || size.y <= 0)
+			return false;
+		const bool changed = size.y != height;
+		size.y = height;
+		center.y = top + height * .5f;
+		return changed;
+	}
+
 	/** Repair saved geometry without discarding usable custom placement. */
 	inline bool FitWindow(ImVec2& center, ImVec2& size, ImVec2 origin, ImVec2 available,
 		ImVec2 fallbackCenter, ImVec2 fallbackSize, ImVec2 minimumSize)

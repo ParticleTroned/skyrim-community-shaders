@@ -38,10 +38,8 @@ namespace globals::features
 	struct VR
 	{
 		int resets = 0;
-		bool hasCanvas = true;
 		void ResetMenuLayout() { ++resets; }
 		bool IsMenuPointerInHeadset() const { return false; }
-		bool GetMenuCanvasSize(uint32_t&, uint32_t&) const { return REL::Module::IsVR() && hasCanvas; }
 	} vr;
 }
 struct FeatureListRenderer
@@ -67,6 +65,11 @@ struct SettingsWindowLayout
 	bool constrainedByTopStatusWindow = false;
 };
 #include "menu_canvas_bounds_under_test.h"
+
+struct OverlayRenderer
+{
+	static bool MoveWindowBelowShaderCompilationStatus(ImVec2&, const ImVec2&, const ImVec2&) { return false; }
+};
 
 constexpr uint32_t VK_CONTROL = 17, VK_SHIFT = 16, VK_END = 35;
 struct InputCombo
@@ -121,7 +124,6 @@ struct Menu
 	bool IsEnabled = true;
 	std::string featureSearch, pendingFeatureSelection;
 	int requests = 0, forwardedKeys = 0;
-	ImVec2 preTopStatusWindowPos, preTopStatusWindowSize;
 	std::unordered_set<uint32_t> _comboFiredKeys;
 	void EnsureSettingsDirtyBaseline() { baseline = true; }
 	void RequestSettingsDirtyCheck() { dirty = true; }
@@ -145,12 +147,11 @@ struct Menu
 		const std::string title = "Layout recovery###CommunityShaders";
 		const bool vrMenuLayoutUnlocked = false;
 		const bool useSteamVRWindowControls = false, useOpenCompositeStableHeader = false;
-		const bool autoOffsetForTopStatusWindow = defaultWindowLayout.constrainedByTopStatusWindow;
-		const bool restoreAfterTopStatusWindow = false;
 		const auto layoutCond = resetLayout ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
 		const auto defaultWindowPos = defaultWindowLayout.center;
 		const auto defaultWindowSize = defaultWindowLayout.size;
 		const ImVec2 centeredPivot(.5f, .5f);
+#include "menu_status_layout_under_test.h"
 #include "menu_window_geometry_under_test.h"
 		if (contentsVisible)
 			ImGui::TextUnformatted("Recovered settings");
@@ -280,7 +281,8 @@ bool CheckWindowGeometry()
 	ImGui::Render();
 	ImGui::NewFrame();
 	const auto constrained = menu.DrawGeometry({ 960, 900 }, { 1000, 200 }, { { 960, 900 }, { 1000, 200 }, true });
-	passed &= Check(constrained.GetHeight() == 200, "compilation status retains its reserved space in production window sizing");
+	passed &= Check(constrained.Min.y == 800 && constrained.Max.y == 1072,
+		"height extension retains the space above the menu reserved for compilation status");
 	ImGui::Render();
 	ImGui::NewFrame();
 	const auto statusBounded = menu.DrawGeometry({ 960, 540 }, { 1800, 1050 }, { { 960, 900 }, { 1000, 200 }, true });
@@ -291,37 +293,87 @@ bool CheckWindowGeometry()
 	return passed;
 }
 
-bool CheckDesktopHeight()
+bool CheckWindowHeight()
 {
 	bool passed = true;
 	Menu menu;
 	for (bool vr : { false, true }) {
 		REL::Module::vr = vr;
-		for (bool canvas : { false, true }) {
-			globals::features::vr.hasCanvas = canvas;
+		for (ImVec2 canvas : { ImVec2(1920, 1080), ImVec2(1920, 1620) }) {
+			ImGui::GetIO().DisplaySize = canvas;
 			menu.resetLayout = true;
-			ImGui::NewFrame();
-			const float font = ImGui::GetFontSize();
-			const auto bounds = menu.DrawGeometry({ 800, 400 }, { 1200, 600 }, { { 800, 400 }, { 1200, 600 } });
-			passed &= Check(bounds.Min.x == 200 && bounds.Min.y == 100 && bounds.GetWidth() == 1200,
-				"desktop height extension preserves the top edge and width");
-			passed &= Check(bounds.Max.y == (vr && canvas ? 700 : 1072),
-				"only desktop-only presentation extends to the bottom canvas margin");
-			passed &= Check(ImGui::GetFontSize() == font, "height extension does not scale typography");
-			ImGui::Render();
+			for (const float top : { 100.0f, 400.0f, 320.0f, 160.0f }) {
+				if (!vr && top != 100)
+					continue;
+				ImGui::NewFrame();
+				const float font = ImGui::GetFontSize();
+				const ImVec2 center{ 800, top + 300 };
+				const auto bounds = menu.DrawGeometry(center, { 1200, 600 }, { center, { 1200, 600 }, top != 100 });
+				passed &= Check(bounds.Min.x == 200 && bounds.Min.y == top && bounds.GetWidth() == 1200,
+					"desktop and headset height extension preserves the top edge and width");
+				passed &= Check(bounds.Max.y == canvas.y - MenuUI::Layout::CanvasPadding,
+					"desktop and headset retain the extra height as compilation status changes");
+				passed &= Check(ImGui::GetFontSize() == font, "height extension does not scale typography");
+				ImGui::Render();
+			}
 		}
 	}
 	REL::Module::vr = false;
-	globals::features::vr.hasCanvas = true;
-	menu.resetLayout = true;
-	menu.preTopStatusWindowPos = { 800, 400 };
-	menu.preTopStatusWindowSize = { 1200, 600 };
-	ImGui::NewFrame();
-	menu.DrawGeometry({ 800, 700 }, { 1200, 600 }, { { 800, 700 }, { 1200, 600 }, true });
-	passed &= Check(menu.preTopStatusWindowPos.y - menu.preTopStatusWindowSize.y * .5f == 100 &&
-						menu.preTopStatusWindowPos.y + menu.preTopStatusWindowSize.y * .5f == 1072,
-		"status dismissal restores the expanded desktop height without moving its original top");
-	ImGui::Render();
+	ImGui::GetIO().DisplaySize = { 1920, 1080 };
+	return passed;
+}
+
+bool CheckStatusHeightRestoration()
+{
+	bool passed = true;
+	REL::Module::vr = true;
+	ImGui::GetIO().DisplaySize = { 1920, 1620 };
+	Menu menu;
+	const SettingsWindowLayout defaults{ { 960, 810 }, { 1800, 1200 } };
+	const SettingsWindowLayout status{ { 960, 960 }, { 1500, 900 }, true };
+	for (const bool customSize : { false, true }) {
+		menu.resetLayout = true;
+		ImGui::NewFrame();
+		auto bounds = menu.DrawGeometry(defaults.center, defaults.size, defaults);
+		ImGui::Render();
+		if (customSize) {
+			auto* window = ImGui::FindWindowByName("###CommunityShaders");
+			ImGui::SetWindowPos(window, { 210, 250 });
+			ImGui::SetWindowSize(window, { 1500, 900 });
+			bounds = { { 210, 250 }, { 1710, 1150 } };
+		}
+		const auto saved = bounds;
+		for (int frame = 0; frame < 5; ++frame) {
+			ImGui::NewFrame();
+			const bool statusVisible = frame < 3;
+			bounds = menu.DrawGeometry(bounds.GetCenter(), bounds.GetSize(), statusVisible ? status : defaults);
+			if (statusVisible) {
+				passed &= Check(bounds.Min.y == status.center.y - status.size.y * .5f && bounds.Max.y == 1612,
+					"compilation status cannot reset the extended height on later frames");
+			} else {
+				passed &= Check(bounds.Min.x == saved.Min.x && bounds.Min.y == saved.Min.y &&
+									bounds.Max.x == saved.Max.x && bounds.Max.y == saved.Max.y,
+					"status dismissal restores the exact saved placement, including manual resize");
+			}
+			ImGui::Render();
+		}
+	}
+	for (const float invalidCoordinate : { -5000.0f, std::numeric_limits<float>::quiet_NaN() }) {
+		menu.resetLayout = true;
+		ImGui::NewFrame();
+		auto bounds = menu.DrawGeometry({ invalidCoordinate, invalidCoordinate }, { 1200, 600 }, status);
+		passed &= Check(bounds.Min.y == status.center.y - status.size.y * .5f && bounds.Max.y == 1612,
+			"opening with compilation status keeps the expanded menu inside the HMD canvas");
+		ImGui::Render();
+		ImGui::NewFrame();
+		bounds = menu.DrawGeometry(bounds.GetCenter(), bounds.GetSize(), defaults);
+		passed &= Check(std::isfinite(bounds.Min.x) && std::isfinite(bounds.Min.y) &&
+							bounds.Min.x >= 8 && bounds.Min.y >= 8 && bounds.Max.x <= 1912 && bounds.Max.y == 1612,
+			"status dismissal repairs corrupt saved geometry before extending its height");
+		ImGui::Render();
+	}
+	REL::Module::vr = false;
+	ImGui::GetIO().DisplaySize = { 1920, 1080 };
 	return passed;
 }
 
@@ -463,7 +515,8 @@ int main()
 
 	passed &= CheckWindowGeometry();
 	passed &= CheckEditorLayout();
-	passed &= CheckDesktopHeight();
+	passed &= CheckWindowHeight();
+	passed &= CheckStatusHeightRestoration();
 	passed &= CheckDockingRecovery();
 
 	Menu menu;

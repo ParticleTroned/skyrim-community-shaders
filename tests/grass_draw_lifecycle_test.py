@@ -1500,20 +1500,16 @@ METHODS
 int main() {
     prepareCompanions = true;
     RE::BSShader shader;
-    using Mode = ParaboloidShadow::Mode;
-    for (unsigned present = 0; present < 4; ++present) {
+    for (bool present : {false, true}) {
         {
             ShaderCache cache;
-            for (unsigned mode = 1; mode <= 2; ++mode) {
-                if (present & (1u << (mode - 1)))
-                    testDevice.CreateVertexShader(nullptr, 0, nullptr, &prepared[mode]);
-            }
+            if (present)
+                testDevice.CreateVertexShader(nullptr, 0, nullptr, &prepared);
             auto* resident = cache.MakeAndAddVertexShader(shader, 7);
-            assert(resident && !resident->shader->companions[1] && !resident->shader->companions[2]);
+            assert(resident && !resident->shader->companion);
             auto* augmented = cache.MakeAndAddVertexShader(shader, 7, {}, true);
             assert(resident == augmented);
-            for (unsigned mode = 1; mode <= 2; ++mode)
-                assert(resident->shader->companions[mode] == prepared[mode]);
+            assert(resident->shader->companion == prepared);
             const auto before = cache.compilationSet.LiveGeneration(RE::BSShader::Type::Water);
             onPrepare = [&] { cache.compilationSet.generation.fetch_add(1); };
             assert(!cache.MakeAndAddVertexShader(shader, 8, before, true));
@@ -1521,11 +1517,9 @@ int main() {
             assert(!cache.vertexShaders[0].contains(8));
             cache.ReleaseResources();
             auto* fresh = cache.MakeAndAddVertexShader(shader, 7);
-            assert(fresh && !fresh->shader->companions[1] && !fresh->shader->companions[2]);
-            for (unsigned mode = 1; mode <= 2; ++mode) {
-                if (prepared[mode]) prepared[mode]->Release();
-                prepared[mode] = nullptr;
-            }
+            assert(fresh && !fresh->shader->companion);
+            if (prepared) prepared->Release();
+            prepared = nullptr;
         }
         assert(resource.live == 0);
         testDevice.Reset();

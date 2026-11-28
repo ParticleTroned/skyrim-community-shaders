@@ -15,8 +15,8 @@ namespace PointShadowCorrection
 
 	inline void from_json(const nlohmann::json& value, Mode& mode)
 	{
-		if (!value.is_number_integer() || value < 0 || value > 2)
-			throw std::invalid_argument("PointShadowCorrection must be an integer in [0, 2]");
+		if (!value.is_number_integer() || value < 0 || value > 1)
+			throw std::invalid_argument("PointShadowCorrection must be 0 (Off) or 1 (Clip)");
 		mode = static_cast<Mode>(value.get<std::uint32_t>());
 	}
 
@@ -26,7 +26,6 @@ namespace PointShadowCorrection
 	public:
 		Mode Requested() const { return requested.load(std::memory_order_acquire); }
 		Mode Applied() const { return applied.load(std::memory_order_acquire); }
-		Mode Effective(bool available) const { return available ? Applied() : Mode::Off; }
 		bool Pending() const { return Requested() != Applied(); }
 		void Request(Mode mode)
 		{
@@ -56,7 +55,7 @@ namespace PointShadowCorrection
 		}
 
 	private:
-		std::atomic<Mode> requested{ Mode::Full }, applied{ Mode::Full };
+		std::atomic<Mode> requested{ Mode::Off }, applied{ Mode::Off };
 		std::optional<std::uint32_t> frame;
 	};
 }

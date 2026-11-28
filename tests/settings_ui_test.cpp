@@ -637,7 +637,7 @@ namespace LightLimitFixDetail::ShadowCulling
 struct LLFShadowsFixture
 {
 	using PointShadowMode = PointShadowCorrection::Mode;
-	PointShadowMode correction = PointShadowMode::Full;
+	PointShadowMode correction = PointShadowMode::Off;
 	PointShadowMode GetRequestedPointShadowCorrection() const { return correction; }
 	void SetPointShadowCorrection(PointShadowMode mode) { correction = mode; }
 	void DrawPointShadowCorrectionSettings();
@@ -2891,9 +2891,8 @@ int main()
 					frame(draw);
 					frame(draw);
 					for (const auto& [help, mode] : std::array{
-							 std::pair{ "Keep native point-light shadows without geometry correction.", PointShadowCorrection::Mode::Off },
-							 std::pair{ "Clip at the boundary only. Shadow shape and depth accuracy near lights can differ from Full.", PointShadowCorrection::Mode::ClipOnly },
-							 std::pair{ "Default: retain the full correction while Light Limit Fix is available.", PointShadowCorrection::Mode::Full } }) {
+							 std::pair{ "Default. Keeps point-light shadows on without extra seam correction.", PointShadowCorrection::Mode::Off },
+							 std::pair{ "Use if point-light shadows show seams or missing edges. Adds GPU work; shadows stay on in both modes.", PointShadowCorrection::Mode::ClipOnly } }) {
 						click(Util::controls.at(help).GetCenter(), draw);
 						require(shadows.correction == mode && shadows.contact == contact, "One correction choice stays editable independently of contact shadows and SPS");
 					}

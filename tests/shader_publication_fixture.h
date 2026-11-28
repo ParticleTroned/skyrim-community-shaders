@@ -1,7 +1,5 @@
 #pragma once
 
-#include "Utils/PointShadowCorrectionMode.h"
-
 #include <array>
 #include <atomic>
 #include <barrier>
@@ -31,7 +29,7 @@ struct Resource
 {
 	std::atomic_uint references{ 1 }, releases{ 0 };
 	std::string name;
-	std::array<Resource*, 3> companions{};
+	Resource* companion = nullptr;
 	void AddRef()
 	{
 		const auto previous = references.fetch_add(1);
@@ -46,9 +44,8 @@ struct Resource
 		++releases;
 		++resource.releases;
 		if (previous == 1) {
-			for (auto* companion : companions)
-				if (companion)
-					companion->Release();
+			if (companion)
+				companion->Release();
 			--resource.live;
 		}
 	}
@@ -139,10 +136,9 @@ namespace logger
 }
 namespace ParaboloidShadow
 {
-	using Mode = PointShadowCorrection::Mode;
-	int Attach(ID3D11VertexShader& vertex, ID3D11GeometryShader* geometry, Mode mode)
+	int Attach(ID3D11VertexShader& vertex, ID3D11GeometryShader* geometry)
 	{
-		auto& slot = vertex.companions[static_cast<std::size_t>(mode)];
+		auto& slot = vertex.companion;
 		if (geometry)
 			geometry->AddRef();
 		if (slot)
@@ -150,10 +146,10 @@ namespace ParaboloidShadow
 		slot = geometry;
 		return 0;
 	}
-	winrt::com_ptr<ID3D11GeometryShader> Retain(ID3D11VertexShader* vertex, Mode mode)
+	winrt::com_ptr<ID3D11GeometryShader> Retain(ID3D11VertexShader* vertex)
 	{
 		winrt::com_ptr<ID3D11GeometryShader> retained;
-		auto* slot = vertex->companions[static_cast<std::size_t>(mode)];
+		auto* slot = vertex->companion;
 		if (slot) {
 			slot->AddRef();
 			*retained.put() = slot;
@@ -162,13 +158,13 @@ namespace ParaboloidShadow
 	}
 }
 bool prepareCompanions = false;
-std::array<Resource*, 3> prepared{};
+Resource* prepared = nullptr;
 std::function<void()> onPrepare;
-winrt::com_ptr<ID3D11GeometryShader> PrepareParaboloidClip(const RE::BSShader&, uint32_t, ParaboloidShadow::Mode mode)
+winrt::com_ptr<ID3D11GeometryShader> PrepareParaboloidClip(const RE::BSShader&, uint32_t)
 {
 	assert(prepareCompanions && "Draw publication must not prepare auxiliary shaders");
 	winrt::com_ptr<ID3D11GeometryShader> result;
-	if (auto* shader = prepared[static_cast<std::size_t>(mode)]) {
+	if (auto* shader = prepared) {
 		shader->AddRef();
 		*result.put() = shader;
 	}

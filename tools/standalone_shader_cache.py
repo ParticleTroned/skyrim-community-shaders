@@ -207,7 +207,6 @@ def release_requests(runtime: str, features: dict[str, bool], *, reverse_z_enabl
         names = {name for name, _ in macros}
         if "RENDER_SHADOWMAP_PB" not in names or names & {"LOD_LANDSCAPE", "STENCIL_ABOVE_WATER"} or any(name.startswith("RENDER_SHADOWMASK") for name in names):
             continue
-        add(source, macros, profile="gs_5_0")
         add(source, [*macros, ("PARABOLOID_CLIP_ONLY", "1")], profile="gs_5_0")
     return requests
 

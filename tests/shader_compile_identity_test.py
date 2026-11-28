@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from skylighting_settings_test import block
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "tools"))
@@ -31,11 +32,12 @@ RUNTIME_TEST = Path(sys.argv.pop(1)).resolve() if len(sys.argv) > 1 and not sys.
 class ShaderCompileIdentityTests(unittest.TestCase):
     def test_paraboloid_geometry_inventory_uses_native_utility_inputs(self) -> None:
         native = (REPO / "src/ShaderCache.cpp").read_text(encoding="utf-8")
-        clipping = native.split("PrepareParaboloidClip(", 1)[1].split("SIE::SShaderCache::GetShaderPath", 1)[0]
+        clipping = block(native, "winrt::com_ptr<ID3D11GeometryShader> PrepareParaboloidClip(")
         self.assertIn('name == "LOD_LANDSCAPE"', clipping)
         self.assertIn('name == "STENCIL_ABOVE_WATER"', clipping)
         self.assertIn('name.starts_with("RENDER_SHADOWMASK")', clipping)
         self.assertIn('name == "RENDER_SHADOWMAP_PB"', clipping)
+        self.assertIn('defines.emplace_back("PARABOLOID_CLIP_ONLY", "1")', clipping)
         with tempfile.TemporaryDirectory() as temporary:
             for runtime in ("SE", "VR"):
                 for reversed_depth in (False, True):
@@ -49,12 +51,7 @@ class ShaderCompileIdentityTests(unittest.TestCase):
                         reverse_z_enabled=reversed_depth, engine_tasks=engine)
                     geometry = [request for request in requests if request["profile"] == "gs_5_0"]
                     self.assertTrue(geometry)
-                    full = [request for request in geometry if ("PARABOLOID_CLIP_ONLY", "1") not in request["defines"]]
-                    clip = [request for request in geometry if ("PARABOLOID_CLIP_ONLY", "1") in request["defines"]]
-                    self.assertEqual(len(full), len(clip))
-                    self.assertTrue(full)
-                    self.assertEqual({standalone.serialize_defines(request["defines"]) for request in full},
-                        {standalone.serialize_defines([(name, value) for name, value in request["defines"] if name != "PARABOLOID_CLIP_ONLY"]) for request in clip})
+                    self.assertTrue(all(("PARABOLOID_CLIP_ONLY", "1") in request["defines"] for request in geometry))
                     for request in geometry:
                         names = {name for name, _ in request["defines"]}
                         self.assertIn("RENDER_SHADOWMAP_PB", names)

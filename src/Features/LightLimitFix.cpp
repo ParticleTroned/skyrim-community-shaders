@@ -1406,9 +1406,8 @@ void LightLimitFix::DrawLightCountDiagnostics()
 void LightLimitFix::DrawPointShadowCorrectionSettings()
 {
 	static constexpr std::array choices{
-		MenuUI::Choice{ "off", "Off", "Keep point-light shadows; disable this geometry correction.", "Keep native point-light shadows without geometry correction." },
-		MenuUI::Choice{ "clip_only", "Clip only", "Correct geometry at the boundary between the two shadow halves.", "Clip at the boundary only. Shadow shape and depth accuracy near lights can differ from Full." },
-		MenuUI::Choice{ "full", "Full", "Also improve the shape and depth accuracy of shadows near lights.", "Default: retain the full correction while Light Limit Fix is available." }
+		MenuUI::Choice{ "off", "Off", "Use the game's normal point-light shadows.", "Default. Keeps point-light shadows on without extra seam correction." },
+		MenuUI::Choice{ "clip_only", "Clip", "Reduce shadow seams around point lights.", "Use if point-light shadows show seams or missing edges. Adds GPU work; shadows stay on in both modes." }
 	};
 	int selected = static_cast<int>(GetRequestedPointShadowCorrection());
 	if (MenuUI::ChoiceSetting("Point-light shadow correction", &selected, choices))

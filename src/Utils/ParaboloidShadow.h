@@ -11,22 +11,19 @@ namespace ParaboloidShadow
 {
 	using Mode = PointShadowCorrection::Mode;
 	inline constexpr GUID ClipOnlyShaderKey{ 0xf4134bb6, 0xc9e5, 0x4a08, { 0x90, 0xd3, 0x75, 0x93, 0x40, 0x5d, 0xce, 0xb6 } };
-	inline constexpr GUID ClipShaderKey{ 0x7591e63a, 0xa5ef, 0x48eb, { 0x86, 0x0d, 0x79, 0xb5, 0x94, 0xe4, 0xec, 0x64 } };
 
 	/** The matching vertex object owns the prepared clip stage through cache eviction. */
-	inline HRESULT Attach(ID3D11VertexShader& vertex, ID3D11GeometryShader* geometry, Mode mode = Mode::Full)
+	inline HRESULT Attach(ID3D11VertexShader& vertex, ID3D11GeometryShader* geometry)
 	{
-		if (mode != Mode::Full && mode != Mode::ClipOnly)
-			return E_INVALIDARG;
-		return vertex.SetPrivateDataInterface(mode == Mode::ClipOnly ? ClipOnlyShaderKey : ClipShaderKey, geometry);
+		return vertex.SetPrivateDataInterface(ClipOnlyShaderKey, geometry);
 	}
 
 	/** Exact resident pairing; never compiles, queues work or consults a mutable shader map. */
-	inline winrt::com_ptr<ID3D11GeometryShader> Retain(ID3D11VertexShader* vertex, Mode mode = Mode::Full)
+	inline winrt::com_ptr<ID3D11GeometryShader> Retain(ID3D11VertexShader* vertex)
 	{
 		winrt::com_ptr<ID3D11GeometryShader> geometry;
 		UINT size = sizeof(ID3D11GeometryShader*);
-		if ((mode == Mode::Full || mode == Mode::ClipOnly) && vertex && FAILED(vertex->GetPrivateData(mode == Mode::ClipOnly ? ClipOnlyShaderKey : ClipShaderKey, &size, geometry.put())))
+		if (vertex && FAILED(vertex->GetPrivateData(ClipOnlyShaderKey, &size, geometry.put())))
 			geometry = nullptr;
 		return geometry;
 	}
@@ -35,7 +32,7 @@ namespace ParaboloidShadow
 	class Scope
 	{
 	public:
-		explicit Scope(ID3D11DeviceContext* context, Mode mode) : ctx(context), previous(std::exchange(current, this)), mode(mode), enabled(mode != Mode::Off)
+		explicit Scope(ID3D11DeviceContext* context, Mode mode) : ctx(context), previous(std::exchange(current, this)), enabled(mode == Mode::ClipOnly)
 		{
 			if (previous && previous->bound) {
 				Capture();
@@ -65,7 +62,7 @@ namespace ParaboloidShadow
 			if (vertex == scope.lastVertex.get())
 				return;
 			scope.lastVertex.copy_from(vertex);
-			auto geometry = Retain(vertex, scope.mode);
+			auto geometry = Retain(vertex);
 			if (geometry) {
 				scope.Capture();
 				// A foreign geometry stage retains ownership of this pass.
@@ -146,7 +143,6 @@ namespace ParaboloidShadow
 		inline static constexpr std::array<UINT, 3> slots{ 0, 12, 13 };
 		ID3D11DeviceContext* ctx;
 		Scope* previous;
-		const Mode mode;
 		bool enabled, captured = false, changed = false, buffersSaved = false, copied = false;
 		winrt::com_ptr<ID3D11DeviceContext1> ctx1;
 		winrt::com_ptr<ID3D11GeometryShader> saved, bound;

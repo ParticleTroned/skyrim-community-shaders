@@ -60,7 +60,12 @@ public:
 	void SetPointShadowCorrection(PointShadowMode mode) { pointShadowCorrection.Request(mode); }
 	PointShadowMode GetRequestedPointShadowCorrection() const { return pointShadowCorrection.Requested(); }
 	PointShadowMode GetAppliedPointShadowCorrection() const { return pointShadowCorrection.Applied(); }
-	PointShadowMode GetEffectivePointShadowCorrection() const { return pointShadowCorrection.Effective(IsPointShadowCorrectionAvailable()); }
+	/** Keep disabled shadow passes out of the feature-availability lookup. */
+	PointShadowMode GetEffectivePointShadowCorrection() const
+	{
+		const auto mode = pointShadowCorrection.Applied();
+		return mode != PointShadowMode::Off && IsPointShadowCorrectionAvailable() ? mode : PointShadowMode::Off;
+	}
 	bool IsPointShadowCorrectionPending() const { return pointShadowCorrection.Pending(); }
 	bool IsPointShadowCorrectionAvailable() const;
 	/** Runs even when LLF is unavailable, so saved preferences can settle independently. */
@@ -504,7 +509,7 @@ public:
 		float JsonPlacedLightIntensity = 1.0f;
 		bool JsonPlacedLightsInteriorsOnly = false;
 		bool JsonPlacedLightsPortalStrictOnly = false;
-		PointShadowMode PointShadowCorrection = PointShadowMode::Full;
+		PointShadowMode PointShadowCorrection = PointShadowMode::Off;
 		bool EnableContactShadows = false;
 		bool ContactShadowsInteriorsOnly = false;
 		bool EnableParticleContactShadows = false;

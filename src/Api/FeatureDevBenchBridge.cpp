@@ -53,7 +53,7 @@ namespace
 {
 	using json = nlohmann::json;
 	using namespace CSX::FeatureAPI;
-	constexpr auto DevBenchSchemaRevision = 46;
+	constexpr auto DevBenchSchemaRevision = 47;
 	std::atomic_bool g_registered{ false };
 
 	CSX::Api::ServiceFoundation& Foundation()
@@ -288,7 +288,7 @@ namespace
 
 	void AddPointShadowCorrectionSchema(json& spec)
 	{
-		const json mode{ { "type", "string" }, { "enum", { "off", "clip_only", "full" } } };
+		const json mode{ { "type", "string" }, { "enum", { "off", "clip_only" } } };
 		spec["inputSchema"]["properties"]["action"]["enum"].push_back("point_shadow_correction");
 		spec["inputSchema"]["properties"]["pointShadowCorrection"] = {
 			{ "type", "object" }, { "additionalProperties", false }, { "required", { "mode" } },
@@ -301,7 +301,7 @@ namespace
 								{ "requested", mode }, { "applied", mode }, { "effective", mode }, { "pending", { { "type", "boolean" } } } } }
 		};
 		spec["description"] = spec["description"].get<std::string>() +
-		                      " point_shadow_correction queries LLF point-light shadow correction or stages pointShadowCorrection.mode (off, clip_only, full). Full is the compatibility default when LLF is available; unavailable LLF uses Off while retaining the preference. Clip only clips at the hemisphere boundary without subdivision and changes shadow coverage/depth accuracy. Off retains native shadows and receiver/filter/carried-light fixes. requested is the saved preference, applied is the render-applied preference, effective includes availability, and pending tracks preference application at a safe frame boundary. A settled Full request can have effective Off when unavailable. Status does not prove a companion drew or a shadow map was refreshed. Mutations require available LLF and no active performance measurement or profiler capture; queries remain available. Mutations do not enable other components, compile shaders, start captures or save files; Menu Save persists the request.";
+		                      " point_shadow_correction queries LLF point-light shadow correction or stages pointShadowCorrection.mode (off, clip_only). Off is the default and keeps native point-light shadows without seam correction. Clip reduces seams at the shadow hemisphere boundary, adding GPU work without subdivision. Unavailable LLF uses Off while retaining the preference. requested is the saved preference, applied is the render-applied preference, effective includes availability, and pending tracks preference application at a safe frame boundary. Status does not prove a companion drew or a shadow map was refreshed. Mutations require available LLF and no active performance measurement or profiler capture; queries remain available. Mutations do not enable other components, compile shaders, start captures or save files; Menu Save persists the request.";
 	}
 
 	json BuildResult(const json& args)

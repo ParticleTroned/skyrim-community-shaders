@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <bitset>
 #include <cstddef>
 #include <cstdint>
@@ -138,45 +139,54 @@ namespace FurRendering
 		const View* last = nullptr;
 	};
 
-	namespace detail
+	/** Retains immutable SRV/resource identities on the render thread for one frame. */
+	class DepthInputCache
 	{
-		// Captured SRVs retain immutable resources for this one binding transaction.
-		class DepthInputCache
+	public:
+		DepthInputCache() = default;
+		DepthInputCache(const DepthInputCache&) = delete;
+		DepthInputCache& operator=(const DepthInputCache&) = delete;
+		/** Compare a non-null input with the current depth target; failed queries remain retryable. */
+		std::optional<bool> Aliases(ID3D11ShaderResourceView* input, IUnknown* depth)
 		{
-		public:
-			explicit DepthInputCache(IUnknown* a_depth) : depth(a_depth) {}
-			std::optional<bool> Aliases(ID3D11ShaderResourceView* input)
-			{
-				const auto address = reinterpret_cast<std::uintptr_t>(input);
-				auto& entry = entries[((address >> 4) ^ (address >> 11)) % entries.size()];
-				if (entry.input == input)
-					return entry.aliases;
-				winrt::com_ptr<ID3D11Resource> resource;
-				input->GetResource(resource.put());
-				const auto identity = Util::GetComIdentity(resource.get());
-				if (!identity)
-					return std::nullopt;
-				entry = { input, identity.Get() == depth };
-				return entry.aliases;
-			}
+			const auto address = reinterpret_cast<std::uintptr_t>(input);
+			const auto slot = ((address >> 4) ^ (address >> 11)) % entries.size();
+			auto& entry = entries[slot];
+			if (entry.input.get() == input)
+				return entry.identity.Get() == depth;
+			winrt::com_ptr<ID3D11Resource> resource;
+			input->GetResource(resource.put());
+			auto identity = Util::GetComIdentity(resource.get());
+			if (!identity)
+				return std::nullopt;
+			entry.input.copy_from(input);
+			entry.identity = std::move(identity);
+			populated |= uint64_t{ 1 } << slot;
+			return entry.identity.Get() == depth;
+		}
+		/** Release frame identities after binding scopes have restored their state. */
+		void Reset()
+		{
+			for (auto pending = std::exchange(populated, uint64_t{ 0 }); pending; pending &= pending - 1)
+				entries[std::countr_zero(pending)] = {};
+		}
 
-		private:
-			struct Entry
-			{
-				ID3D11ShaderResourceView* input = nullptr;
-				bool aliases = false;
-			};
-			IUnknown* depth;
-			std::array<Entry, 64> entries{};
+	private:
+		struct Entry
+		{
+			winrt::com_ptr<ID3D11ShaderResourceView> input;
+			Microsoft::WRL::ComPtr<IUnknown> identity;
 		};
-	}
+		std::array<Entry, 64> entries{};
+		uint64_t populated = 0;
+	};
 
 	/** Owns native writable depth and aliased inputs for a prepass with stencil writes disabled. */
 	class ScopedDepthWrite
 	{
 	public:
 		template <class ResolveView>
-		ScopedDepthWrite(ID3D11DeviceContext* a_context, DepthViewCache& cache, ResolveView resolveView) : context(a_context)
+		ScopedDepthWrite(ID3D11DeviceContext* a_context, DepthViewCache& cache, DepthInputCache& inputs, ResolveView resolveView) : context(a_context)
 		{
 			context->OMGetRenderTargets(0, nullptr, previous.put());
 			const auto* view = cache.Resolve(previous.get(), resolveView);
@@ -189,7 +199,6 @@ namespace FurRendering
 			for (UINT i = 0; i < bindings->targets.values.size(); ++i)
 				if (bindings->targets.values[i])
 					bindings->targetCount = i + 1;
-			detail::DepthInputCache inputs(view->resource.Get());
 			for (size_t stage = 0; stage < accesses.size(); ++stage) {
 				auto& saved = bindings->stages[stage];
 				(context->*accesses[stage].get)(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, saved.resources.Put());
@@ -197,7 +206,7 @@ namespace FurRendering
 					auto* input = saved.resources.values[slot];
 					if (!input)
 						continue;
-					const auto aliases = inputs.Aliases(input);
+					const auto aliases = inputs.Aliases(input, view->resource.Get());
 					if (!aliases) {
 						status = E_NOINTERFACE;
 						bindings.reset();

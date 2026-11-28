@@ -31,10 +31,31 @@ namespace
 	{
 		ComPtr<ID3D11ShaderResourceView> view;
 		unsigned queries = 0;
+		ULONG references = 1;
 		bool fail = false;
-		HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** value) override { return view->QueryInterface(iid, value); }
-		ULONG STDMETHODCALLTYPE AddRef() override { return view->AddRef(); }
-		ULONG STDMETHODCALLTYPE Release() override { return view->Release(); }
+		bool* destroyed = nullptr;
+		~CountedInput()
+		{
+			if (destroyed)
+				*destroyed = true;
+		}
+		HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** value) override
+		{
+			*value = nullptr;
+			if (iid != __uuidof(IUnknown) && iid != __uuidof(ID3D11DeviceChild) && iid != __uuidof(ID3D11View) && iid != __uuidof(ID3D11ShaderResourceView))
+				return E_NOINTERFACE;
+			*value = static_cast<ID3D11ShaderResourceView*>(this);
+			AddRef();
+			return S_OK;
+		}
+		ULONG STDMETHODCALLTYPE AddRef() override { return ++references; }
+		ULONG STDMETHODCALLTYPE Release() override
+		{
+			const auto remaining = --references;
+			if (!remaining)
+				delete this;
+			return remaining;
+		}
 		void STDMETHODCALLTYPE GetDevice(ID3D11Device** value) override { view->GetDevice(value); }
 		HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID key, UINT* size, void* data) override { return view->GetPrivateData(key, size, data); }
 		HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID key, UINT size, const void* data) override { return view->SetPrivateData(key, size, data); }
@@ -65,6 +86,7 @@ namespace
 		ComPtr<ID3D11DepthStencilState> prepass, shade;
 		ComPtr<ID3D11BlendState> noColorWrite;
 		FurRendering::DepthViewCache cache;
+		FurRendering::DepthInputCache inputs;
 
 		Fixture(D3D_FEATURE_LEVEL level, bool reverse)
 		{
@@ -196,29 +218,108 @@ namespace
 		void CheckInputCache()
 		{
 			const auto identity = Util::GetComIdentity(depth.Get());
-			FurRendering::detail::DepthInputCache inputs(identity.Get());
-			CountedInput alias;
-			alias.view = depthInput;
+			const auto makeInput = [](ID3D11ShaderResourceView* view) {
+				ComPtr<CountedInput> input;
+				input.Attach(new CountedInput);
+				input->view = view;
+				return input;
+			};
+			auto alias = makeInput(depthInput.Get());
 			for (unsigned i = 0; i < 6 * 128; ++i)
-				Require(inputs.Aliases(&alias) == true, "Repeated inputs must retain their alias decision");
-			Require(alias.queries == 1, "Resolve an identical SRV once per binding transaction");
-			std::array<CountedInput, 129> crowded;
-			for (size_t i = 0; i < crowded.size(); ++i)
-				crowded[i].view = i % 2 ? depthInput : unrelatedInput;
-			for (unsigned repeat = 0; repeat < 2; ++repeat)
-				for (size_t i = 0; i < crowded.size(); ++i)
-					Require(inputs.Aliases(&crowded[i]) == bool(i % 2), "Collisions must reclassify the exact input");
-			CountedInput unavailable;
-			unavailable.view = depthInput;
-			unavailable.fail = true;
-			Require(!inputs.Aliases(&unavailable).has_value(), "Unknown resource identity must fail closed");
-			unavailable.fail = false;
-			Require(inputs.Aliases(&unavailable) == true, "Failed identity queries must remain retryable");
+				Require(inputs.Aliases(alias.Get(), identity.Get()) == true, "Repeated inputs must retain their resource identity");
+			Require(alias->queries == 1 && alias->references == 2, "Retain and resolve an identical SRV once per frame");
 			ComPtr<ID3D11Resource> other;
 			unrelatedInput->GetResource(&other);
 			const auto otherIdentity = Util::GetComIdentity(other.Get());
-			FurRendering::detail::DepthInputCache next(otherIdentity.Get());
-			Require(next.Aliases(&alias) == false && alias.queries == 2, "A new transaction must not reuse an old depth decision");
+			Require(inputs.Aliases(alias.Get(), otherIdentity.Get()) == false && alias->queries == 1, "Compare retained resource identity against the current target");
+			inputs.Reset();
+			inputs.Reset();
+			Require(alias->references == 1, "Frame retirement must release retained views");
+			Require(inputs.Aliases(alias.Get(), identity.Get()) == true && alias->queries == 2, "A new frame must resolve inputs again");
+			std::array<ComPtr<CountedInput>, 129> crowded;
+			for (size_t i = 0; i < crowded.size(); ++i)
+				crowded[i] = makeInput(i % 2 ? depthInput.Get() : unrelatedInput.Get());
+			for (unsigned repeat = 0; repeat < 2; ++repeat)
+				for (size_t i = 0; i < crowded.size(); ++i)
+					Require(inputs.Aliases(crowded[i].Get(), identity.Get()) == bool(i % 2), "Collisions must reclassify the exact input");
+			const auto retained = std::count_if(crowded.begin(), crowded.end(), [](const auto& input) { return input->references > 1; });
+			Require(retained > 0 && retained <= 64, "Streaming input retention must stay bounded");
+			auto unavailable = makeInput(depthInput.Get());
+			unavailable->fail = true;
+			Require(!inputs.Aliases(unavailable.Get(), identity.Get()).has_value() && unavailable->references == 1, "Unknown resource identity must fail closed without retention");
+			unavailable->fail = false;
+			Require(inputs.Aliases(unavailable.Get(), identity.Get()) == true && unavailable->queries == 2, "Failed identity queries must remain retryable");
+			inputs.Reset();
+			for (const auto& input : crowded)
+				Require(input->references == 1, "Retirement must release all streaming views");
+			bool destroyed = false;
+			FurRendering::DepthInputCache lifetime;
+			{
+				auto owned = makeInput(depthInput.Get());
+				owned->destroyed = &destroyed;
+				Require(lifetime.Aliases(owned.Get(), identity.Get()) == true, "Cache must accept the lifetime probe");
+			}
+			Require(!destroyed, "Frame cache must own its SRV after callers release it");
+			lifetime.Reset();
+			Require(destroyed, "Frame retirement must release the last SRV reference");
+			destroyed = false;
+			{
+				FurRendering::DepthInputCache teardown;
+				auto owned = makeInput(depthInput.Get());
+				owned->destroyed = &destroyed;
+				Require(teardown.Aliases(owned.Get(), identity.Get()) == true, "Cache must accept the teardown probe");
+				owned.Reset();
+				Require(!destroyed, "Teardown probe must remain owned until cache destruction");
+			}
+			Require(destroyed, "Cache destruction must release views even without an explicit frame reset");
+		}
+
+		void CheckChangingTarget()
+		{
+			ComPtr<ID3D11Texture2D> secondDepth;
+			D3D11_TEXTURE2D_DESC texture{};
+			depth->GetDesc(&texture);
+			Check(device->CreateTexture2D(&texture, nullptr, &secondDepth));
+			Util::SetResourceName(secondDepth.Get(), "FurDepthTest::SecondDepth");
+			ComPtr<ID3D11DepthStencilView> secondWritable, secondReadOnly;
+			D3D11_DEPTH_STENCIL_VIEW_DESC desc{};
+			writable->GetDesc(&desc);
+			Check(device->CreateDepthStencilView(secondDepth.Get(), &desc, &secondWritable));
+			Util::SetResourceName(secondWritable.Get(), "FurDepthTest::SecondWritable DSV");
+			readOnly->GetDesc(&desc);
+			Check(device->CreateDepthStencilView(secondDepth.Get(), &desc, &secondReadOnly));
+			Util::SetResourceName(secondReadOnly.Get(), "FurDepthTest::SecondReadOnly DSV");
+			for (unsigned pass = 0; pass < 8; ++pass) {
+				const bool originalTarget = pass % 2 == 0;
+				auto* liveInput = pass % 3 == 0 ? depthInput.Get() : unrelatedInput.Get();
+				context->ClearState();
+				context->OMSetRenderTargets(0, nullptr, originalTarget ? readOnly.Get() : secondReadOnly.Get());
+				for (const auto& [get, set] : stages) {
+					(context.Get()->*set)(127, 1, &liveInput);
+				}
+				{
+					FurRendering::ScopedDepthWrite binding(context.Get(), cache, inputs, [&](auto* source) {
+						return source == readOnly.Get() ? writable.Get() : secondWritable.Get();
+					});
+					Check(binding.Status());
+					for (const auto& [get, set] : stages) {
+						ComPtr<ID3D11ShaderResourceView> input;
+						(context.Get()->*get)(127, 1, &input);
+						const bool aliases = originalTarget && liveInput == depthInput.Get();
+						Require(input.Get() == (aliases ? nullptr : liveInput), "Each transaction must inspect live bindings and compare the current depth target");
+					}
+				}
+				for (const auto& [get, set] : stages) {
+					ComPtr<ID3D11ShaderResourceView> input;
+					(context.Get()->*get)(127, 1, &input);
+					Require(input.Get() == liveInput, "Changing the target must preserve every stage's original input");
+				}
+				if (pass == 3)
+					inputs.Reset();
+			}
+			context->ClearState();
+			inputs.Reset();
+			cache.Reset();
 		}
 
 		void CheckCache()
@@ -260,7 +361,7 @@ namespace
 			context->ClearState();
 			context->OMSetRenderTargets(0, nullptr, readOnly.Get());
 			{
-				FurRendering::ScopedDepthWrite rotated(context.Get(), cache, resolve);
+				FurRendering::ScopedDepthWrite rotated(context.Get(), cache, inputs, resolve);
 				Check(rotated.Status());
 				for (size_t i = 0; i <= FurRendering::DepthViewCache::MaximumViews; ++i) {
 					ComPtr<ID3D11DepthStencilView> source;
@@ -277,16 +378,16 @@ namespace
 			cache.Reset();
 			context->OMSetRenderTargets(0, nullptr, readOnly.Get());
 			{
-				FurRendering::ScopedDepthWrite wrongMip(context.Get(), cache, [&](auto*) { return mipWritable.Get(); });
+				FurRendering::ScopedDepthWrite wrongMip(context.Get(), cache, inputs, [&](auto*) { return mipWritable.Get(); });
 				Require(FAILED(wrongMip.Status()), "A mismatched writable subresource must be rejected");
 			}
 			cache.Reset();
 			{
-				FurRendering::ScopedDepthWrite unknown(context.Get(), cache, [](auto*) -> ID3D11DepthStencilView* { return nullptr; });
+				FurRendering::ScopedDepthWrite unknown(context.Get(), cache, inputs, [](auto*) -> ID3D11DepthStencilView* { return nullptr; });
 				Require(FAILED(unknown.Status()), "Unknown depth domains must fail closed");
 			}
 			{
-				FurRendering::ScopedDepthWrite recovered(context.Get(), cache, ResolveView());
+				FurRendering::ScopedDepthWrite recovered(context.Get(), cache, inputs, ResolveView());
 				Check(recovered.Status());
 			}
 			restored.Reset();
@@ -338,7 +439,7 @@ namespace
 			Require(cached && SUCCEEDED(cached->status), "Resolve writable depth view");
 			Require(cache.Resolve(readOnly.Get(), ResolveView())->writable == cached->writable, "Reuse the cached view");
 			try {
-				FurRendering::ScopedDepthWrite binding(context.Get(), cache, ResolveView());
+				FurRendering::ScopedDepthWrite binding(context.Get(), cache, inputs, ResolveView());
 				Check(binding.Status());
 				ComPtr<ID3D11DepthStencilView> bound;
 				context->OMGetRenderTargets(0, nullptr, &bound);
@@ -355,7 +456,7 @@ namespace
 					Require(!alias, "Unbind low and high aliases around unrelated inputs");
 				}
 				{
-					FurRendering::ScopedDepthWrite nested(context.Get(), cache, ResolveView());
+					FurRendering::ScopedDepthWrite nested(context.Get(), cache, inputs, ResolveView());
 					Check(nested.Status());
 				}
 				context->Draw(3, 0);
@@ -405,7 +506,7 @@ namespace
 			Require(Color() == ~0u, "EQUAL shading must see the shell depth written by the prepass");
 			context->ClearState();
 			{
-				FurRendering::ScopedDepthWrite absent(context.Get(), cache, ResolveView());
+				FurRendering::ScopedDepthWrite absent(context.Get(), cache, inputs, ResolveView());
 				Require(FAILED(absent.Status()), "Missing depth must fail closed");
 			}
 		}
@@ -419,6 +520,7 @@ int main()
 			for (bool reverse : { false, true }) {
 				Fixture fixture(level, reverse);
 				fixture.CheckInputCache();
+				fixture.CheckChangingTarget();
 				for (bool unwind : { false, true }) {
 					fixture.CheckBindings(3, 3, unwind, reverse);
 					if (level >= D3D_FEATURE_LEVEL_11_1)

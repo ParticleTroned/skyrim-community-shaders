@@ -15,7 +15,7 @@ namespace
 	using D3D11ShaderTest::Check;
 	template <class T>
 	using ComPtr = Microsoft::WRL::ComPtr<T>;
-	using Results = std::array<std::array<float, 4>, 8>;
+	using Results = std::array<std::array<float, 4>, 16>;
 
 	void Require(bool condition, const std::string& message)
 	{
@@ -61,7 +61,7 @@ namespace
 		}
 	}
 
-	void CheckMelt(ID3D11Device* device, ID3D11DeviceContext* context, bool vr, bool pbr, uint32_t referenceFlags, bool sharedFire)
+	void CheckMelt(ID3D11Device* device, ID3D11DeviceContext* context, bool vr, bool pbr, uint32_t referenceFlags, bool sharedFire, UINT compilerFlags = 0)
 	{
 		PackageIncludes includes("package/Shaders", "features/Wetterness/Shaders", "features/Snow Cover/Shaders", "tests");
 		std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "WETTERNESS", "1" }, { "SNOW_COVER", "1" } };
@@ -76,7 +76,7 @@ namespace
 		defines.push_back({ nullptr, nullptr });
 		ComPtr<ID3DBlob> bytecode, errors;
 		const auto result = D3DCompileFromFile(L"tests/wetterness_snow_melt.hlsl", defines.data(), &includes,
-			"main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+			"main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3 | compilerFlags,
 			0, bytecode.GetAddressOf(), errors.GetAddressOf());
 		if (errors)
 			std::cerr << static_cast<const char*>(errors->GetBufferPointer());
@@ -92,7 +92,7 @@ namespace
 		ComPtr<ID3DBlob> referenceBytecode;
 		errors.Reset();
 		const auto referenceResult = D3DCompileFromFile(L"tests/wetterness_snow_melt.hlsl", defines.data(), &includes,
-			"main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+			"main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3 | compilerFlags,
 			0, referenceBytecode.GetAddressOf(), errors.GetAddressOf());
 		if (errors)
 			std::cerr << static_cast<const char*>(errors->GetBufferPointer());
@@ -109,6 +109,7 @@ namespace
 		Check(referenceReflection->GetDesc(&referenceDesc));
 		std::cout << "Snowmelt VR=" << vr << " PBR=" << pbr << " flags=" << referenceFlags
 				  << " sharedFire=" << sharedFire
+				  << " compilerFlags=" << compilerFlags
 				  << ": instructions " << candidateDesc.InstructionCount << "/" << referenceDesc.InstructionCount
 				  << ", temps " << candidateDesc.TempRegisterCount << "/" << referenceDesc.TempRegisterCount
 				  << ", arrays " << candidateDesc.TempArrayCount << "/" << referenceDesc.TempArrayCount << std::endl;
@@ -312,6 +313,26 @@ namespace
 		constants.SetMember("SharedData::snowCoverSettings", "SeasonalAltitude", 0.0f);
 		constants.SetMember("SharedData::snowCoverSettings", "TimeSnowing", 0.0f);
 
+		data = {};
+		data.enabled = 1;
+		data.count = 2;
+		data.samples[0].state = { 0, 500, 1, 1 };
+		data.samples[1].state = { 0, 500, 0.35f, 0 };
+		const std::array boundaryAges{ std::nextafter(1.0f, 0.0f), 1.0f, std::nextafter(1.0f, 2.0f), 1.5f };
+		for (float surfaceBefore : boundaryAges)
+			for (float puddleBefore : boundaryAges)
+				for (const auto& after : { std::array{ 0.0f, 0.0f }, std::array{ 0.5f, 1.0f }, std::array{ 1.0f, 0.5f }, std::array{ 1.0f, 1.0f },
+						 std::array{ boundaryAges[0], boundaryAges[0] }, std::array{ boundaryAges[0], 1.0f },
+						 std::array{ 1.0f, boundaryAges[0] }, std::array{ boundaryAges[2], boundaryAges[2] } }) {
+					if (after[0] > surfaceBefore || after[1] > puddleBefore)
+						continue;
+					data.samples[0].lightDryingAge = data.samples[0].heavyDryingAge = { surfaceBefore, surfaceBefore, surfaceBefore, puddleBefore };
+					data.samples[1].lightDryingAge = data.samples[1].heavyDryingAge = { after[0], after[0], after[0], after[1] };
+					const auto boundary = run(data);
+					Require((boundary[2][0] > 0) == (after[0] < 1) && (boundary[2][1] > 0) == (after[1] < 1),
+						"Melt channel boundary did not exercise the active or retired interval");
+				}
+
 		std::mt19937 random(11921);
 		std::uniform_real_distribution<float> unit(0, 1);
 		for (uint32_t repeat = 0; repeat < 128; ++repeat) {
@@ -358,6 +379,8 @@ int main()
 				for (uint32_t referenceFlags : { 0u, weatherReference })
 					for (bool sharedFire : { false, true })
 						CheckMelt(device.Get(), context.Get(), vr, pbr, referenceFlags, sharedFire);
+		for (UINT flags : { UINT(D3DCOMPILE_PARTIAL_PRECISION), UINT(D3DCOMPILE_AVOID_FLOW_CONTROL), UINT(D3DCOMPILE_PARTIAL_PRECISION | D3DCOMPILE_AVOID_FLOW_CONTROL) })
+			CheckMelt(device.Get(), context.Get(), true, true, 0, true, flags);
 		std::cout << "PASS: local snowmelt, material drying, fire footprints and finite retirement\n";
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

@@ -1239,8 +1239,9 @@ namespace
 				UINT count = 1;
 				context->RSGetViewports(&count, &before);
 				FurRendering::DepthViewCache cache;
+				FurRendering::DepthInputCache inputs;
 				{
-					FurRendering::ScopedDepthWrite fur(context, cache, [&](auto* source) {
+					FurRendering::ScopedDepthWrite fur(context, cache, inputs, [&](auto* source) {
 						return FurRendering::FindWritableDepthView(source,
 							std::span{ &renderer.data.depthStencils[0], std::size(renderer.data.depthStencils) }, [](auto* view) { return view; });
 					});

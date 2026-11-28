@@ -623,6 +623,7 @@ void FurShells::UpdateOverrideFadeEnd()
 void FurShells::Reset()
 {
 	EndPass();
+	depthInputs.Reset();
 	++frameIndex;
 	lastMaxInertia = maxInertia;
 	lastWindSpeed = windSpeed;
@@ -1323,7 +1324,7 @@ bool FurShells::DrawShells(UINT a_indexCount, UINT a_engineInstances, UINT a_sta
 	const SKSE::stl::scope_exit restoreBlend([&] { context->OMSetBlendState(blendState.get(), blendFactor, sampleMask); });
 
 	{
-		FurRendering::ScopedDepthWrite depthWrite(context, depthViews, [](ID3D11DepthStencilView* source) -> ID3D11DepthStencilView* {
+		FurRendering::ScopedDepthWrite depthWrite(context, depthViews, depthInputs, [](ID3D11DepthStencilView* source) -> ID3D11DepthStencilView* {
 			auto* renderer = globals::game::renderer;
 			if (!renderer)
 				return nullptr;
@@ -1639,6 +1640,7 @@ json FurShells::Control(const json& a_args)
 void FurShells::SetupRenderTargetResources()
 {
 	EndPass();
+	depthInputs.Reset();
 	ClearDynamics();
 	deferredPasses.clear();
 	deferredOverlayPasses.clear();

@@ -311,6 +311,7 @@ private:
 	bool depthCopyFailed = false;
 	bool depthBindingFailureLogged = false;
 	FurRendering::DepthViewCache depthViews;
+	FurRendering::DepthInputCache depthInputs;
 	bool deferralClosed = false;
 	bool replaying = false;
 	bool rootTest = false;

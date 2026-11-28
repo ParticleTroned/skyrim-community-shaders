@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include "Features/Wetterness/SnowMeltHistory.h"
 #include "ShaderPackageIncludes.h"
 #include "d3d11_shader_test.h"
 
@@ -28,7 +29,7 @@ namespace
 
 	ComPtr<ID3DBlob> CompilePixel(std::vector<D3D_SHADER_MACRO> defines, const char* entry, const wchar_t* file = L"tests/snow_cover_color.hlsl", const char* extraRoot = "features/Grass Lighting/Shaders", UINT flags = 0)
 	{
-		PackageIncludes includes("package/Shaders", "features/Snow Cover/Shaders", extraRoot);
+		PackageIncludes includes("package/Shaders", "features/Snow Cover/Shaders", extraRoot, "features/Wetterness/Shaders");
 		defines.push_back({ nullptr, nullptr });
 		ComPtr<ID3DBlob> bytecode, errors;
 		const auto compiled = D3DCompileFromFile(file, defines.data(), &includes,
@@ -442,6 +443,10 @@ int main()
 		ComPtr<ID3D11VertexShader> vertex;
 		Check(device->CreateVertexShader(bytecode->GetBufferPointer(), bytecode->GetBufferSize(), nullptr, vertex.GetAddressOf()));
 		Util::SetResourceName(vertex.Get(), "SnowColorTest::VS");
+		for (bool vr : { false, true })
+			for (unsigned mode = 0; mode < 3; ++mode)
+				CheckGrassFireReuse(device.Get(), context.Get(), vertex.Get(), vr, mode);
+		std::cout << "Grass fire reuse: all three paths and lazy early exits passed on WARP\n";
 		for (bool vr : { false, true })
 			for (bool pbr : { false, true })
 				for (const auto* technique : { "", "MODELSPACENORMALS", "LANDSCAPE", "LODLANDSCAPE", "LODLANDNOISE", "WORLD_MAP" })

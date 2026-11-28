@@ -7,6 +7,7 @@ cbuffer Samples : register(b0)
 	float CoatingCoverage;
 	float ProjectedCoverage;
 	uint PlantSurface;
+	float FireFootprintScale;
 };
 
 struct ColorOutput
@@ -15,6 +16,7 @@ struct ColorOutput
 	float4 expected: SV_Target1;
 };
 
+#if defined(PBR_GRASS) && defined(GRASS_LIGHTING)
 ColorOutput FoliageMaterial(float4 position : SV_Position)
 {
 	float3 leafColor = float3(0.08, 0.3, 0.04);
@@ -71,3 +73,38 @@ ColorOutput FoliageMaterial(float4 position : SV_Position)
 	}
 	return result;
 }
+#endif
+
+#ifdef WETTERNESS
+ColorOutput FireReuse(float4 position : SV_Position)
+{
+	SnowCover::GrassSnowState state = (SnowCover::GrassSnowState)0;
+	state.normal = float3(0, 0, 1);
+	state.coverage = CoatingCoverage;
+	state.footprint.position = float3(4, 0, 0);
+	state.footprint.scale = FireFootprintScale;
+	state.footprint.weatherUpness = 1;
+	state.footprint.foliage = true;
+	if (!SnowCover::IsActive())
+		state = (SnowCover::GrassSnowState)0;
+	float3 actual = float3(0.08, 0.3, 0.04);
+	SnowCover::FireMeltSample sharedFire = (SnowCover::FireMeltSample)0;
+	actual = ApplyGrassSnowMeltDarkening(actual, state.footprint, sharedFire);
+	float3 darkened = actual;
+#	ifdef TRUE_PBR
+	const bool pbr = true;
+#	else
+	const bool pbr = false;
+#	endif
+	SnowCover::FoliageSnowResult coated = SnowCover::ApplyGrassSnow(actual, state, pbr, true, sharedFire);
+	float3 expected = float3(0.08, 0.3, 0.04);
+	SnowCover::FireMeltSample independent = (SnowCover::FireMeltSample)0;
+	expected = ApplyGrassSnowMeltDarkening(expected, state.footprint, independent);
+	float3 expectedDarkened = expected;
+	SnowCover::FoliageSnowResult reference = SnowCover::ApplyGrassSnow(expected, state, pbr, true);
+	ColorOutput result;
+	result.actual = float4(position.x < 1 ? actual : (position.x < 2 ? coated.SubstrateColor : darkened), coated.Coverage);
+	result.expected = float4(position.x < 1 ? expected : (position.x < 2 ? reference.SubstrateColor : expectedDarkened), reference.Coverage);
+	return result;
+}
+#endif

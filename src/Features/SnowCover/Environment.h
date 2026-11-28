@@ -15,6 +15,6 @@ namespace SnowEnvironment
 	bool IsArchitecturalModel(const RE::TESModel* model);
 	bool IsPlacedFireCandidate(RE::TESBoundObject* base);
 	bool IsFireGeometry(RE::BSGeometry* geometry);
-	/** Appends bounds of visible placed-fire geometry without retaining scene nodes. */
-	void CollectFireGeometry(RE::NiAVObject* object, bool hidden, bool& hasFire, std::vector<RE::NiBound>& samples);
+	/** Unknown bases require classification through hidden nodes; known bases need only visible bounds. */
+	void CollectFireGeometry(RE::NiAVObject* object, bool hidden, bool classificationRequired, bool& hasFire, std::vector<RE::NiBound>& samples);
 }

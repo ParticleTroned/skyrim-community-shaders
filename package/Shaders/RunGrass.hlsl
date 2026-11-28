@@ -602,14 +602,14 @@ float3 ApplyGrassWetDarkening(float3 baseColor)
 }
 
 #	if defined(SNOW_COVER)
-float3 ApplyGrassSnowMeltDarkening(float3 color, SnowCover::CoverageInputs footprint)
+float3 ApplyGrassSnowMeltDarkening(float3 color, SnowCover::CoverageInputs footprint, inout SnowCover::FireMeltSample fireMelt)
 {
 #		if defined(WETTERNESS)
 	float rainWetness = saturate(SharedData::wetternessSettings.GrassWetnessPhase);
 	float strength = saturate(SharedData::wetternessSettings.GrassWetDarkeningStrength);
 	[branch] if (strength > 0 && rainWetness < 1)
 	{
-		float localWetness = Wetterness::GetSnowMeltWetness(footprint, float3(0, 1, 0)).x;
+		float localWetness = Wetterness::GetSnowMeltWetness(footprint, float3(0, 1, 0), fireMelt).x;
 		// Rain darkening is already applied; only add the stronger local melt response.
 		if (localWetness > rainWetness)
 			color *= (1 - localWetness * strength) / (1 - rainWetness * strength);
@@ -823,8 +823,9 @@ PS_OUTPUT RenderBasicGrass(PS_INPUT input, bool frontFace)
 		float snowSkyVisibility = 1.0;
 #			endif
 		SnowCover::GrassSnowState snow = SnowCover::GetGrassSnowState(normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, complex, eyeIndex, TexBaseSampler, pbrTexture);
-		albedo = ApplyGrassSnowMeltDarkening(albedo, snow.footprint);
-		SnowCover::ApplyGrassSnow(albedo, snow, pbrTexture, billboard);
+		SnowCover::FireMeltSample fireMelt = (SnowCover::FireMeltSample)0;
+		albedo = ApplyGrassSnowMeltDarkening(albedo, snow.footprint, fireMelt);
+		SnowCover::ApplyGrassSnow(albedo, snow, pbrTexture, billboard, fireMelt);
 	}
 #		endif
 
@@ -1021,8 +1022,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float snowSkyVisibility = 1.0;
 #				endif
 		SnowCover::GrassSnowState snow = SnowCover::GetGrassSnowState(normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, complex, eyeIndex, TexBaseSampler);
-		albedo = ApplyGrassSnowMeltDarkening(albedo, snow.footprint);
-		SnowCover::ApplyGrassSnow(albedo, snow);
+		SnowCover::FireMeltSample fireMelt = (SnowCover::FireMeltSample)0;
+		albedo = ApplyGrassSnowMeltDarkening(albedo, snow.footprint, fireMelt);
+		SnowCover::ApplyGrassSnow(albedo, snow, false, true, fireMelt);
 	}
 #			endif
 

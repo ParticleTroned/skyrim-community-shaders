@@ -257,11 +257,11 @@ namespace SnowCover
 		float3 SubstrateColor;
 	};
 
-	FoliageSnowResult ApplySnowFoliageBase(inout float3 color, float3 worldNormal, float3 p, float env_mult, float mult, bool pbrMaterial, bool applyDiffuseControls = true)
+	FoliageSnowResult ApplySnowFoliageBase(inout float3 color, float3 worldNormal, float3 p, float env_mult, float mult, bool pbrMaterial, bool applyDiffuseControls, inout FireMeltSample fireMelt)
 	{
 		FoliageSnowResult result = (FoliageSnowResult)0;
 		[branch] if (mult > 0)
-			mult *= 1 - GetFireMelt(p);
+			mult *= 1 - GetFireMelt(p, fireMelt);
 #	if defined(GRASS)
 		if (SharedData::snowCoverSettings.AffectGrassTint) {
 #	else
@@ -280,6 +280,11 @@ namespace SnowCover
 
 		color = lerp(color, diffuse, result.Coverage);
 		return result;
+	}
+	FoliageSnowResult ApplySnowFoliageBase(inout float3 color, float3 worldNormal, float3 p, float env_mult, float mult, bool pbrMaterial, bool applyDiffuseControls = true)
+	{
+		FireMeltSample fireMelt = (FireMeltSample)0;
+		return ApplySnowFoliageBase(color, worldNormal, p, env_mult, mult, pbrMaterial, applyDiffuseControls, fireMelt);
 	}
 
 #	if defined(BASIC_SNOW_COVER)
@@ -350,14 +355,19 @@ namespace SnowCover
 		return state;
 	}
 
-	FoliageSnowResult ApplyGrassSnow(inout float3 color, GrassSnowState state, bool pbrMaterial = false, bool applyDiffuseControls = true)
+	FoliageSnowResult ApplyGrassSnow(inout float3 color, GrassSnowState state, bool pbrMaterial, bool applyDiffuseControls, inout FireMeltSample fireMelt)
 	{
 		if (!IsActive()) {
 			FoliageSnowResult result = (FoliageSnowResult)0;
 			result.SubstrateColor = color;
 			return result;
 		}
-		return ApplySnowFoliageBase(color, state.normal, state.footprint.position, state.environment, state.coverage, pbrMaterial, applyDiffuseControls);
+		return ApplySnowFoliageBase(color, state.normal, state.footprint.position, state.environment, state.coverage, pbrMaterial, applyDiffuseControls, fireMelt);
+	}
+	FoliageSnowResult ApplyGrassSnow(inout float3 color, GrassSnowState state, bool pbrMaterial = false, bool applyDiffuseControls = true)
+	{
+		FireMeltSample fireMelt = (FireMeltSample)0;
+		return ApplyGrassSnow(color, state, pbrMaterial, applyDiffuseControls, fireMelt);
 	}
 	FoliageSnowResult ApplyGrassSnow(inout float3 color, float3 normal, float3 relativeWorldPos, float2 uv, float3 viewPosition, float skyVisibility, bool complex, uint eyeIndex, Texture2D<float4> diffuseTexture, bool pbrMaterial = false, bool applyDiffuseControls = true)
 	{

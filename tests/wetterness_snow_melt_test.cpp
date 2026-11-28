@@ -23,10 +23,12 @@ namespace
 			throw std::runtime_error(message);
 	}
 
-	void CheckGrass(bool vr, bool pbr, bool alpha)
+	void CheckGrass(bool vr, bool pbr, bool alpha, bool grassLighting)
 	{
 		PackageIncludes includes("package/Shaders", "features/Wetterness/Shaders", "features/Snow Cover/Shaders", "features/Grass Lighting/Shaders");
-		std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "GRASS_LIGHTING", "1" }, { "SNOW_COVER", "1" } };
+		std::vector<D3D_SHADER_MACRO> defines{ { "PSHADER", "1" }, { "SNOW_COVER", "1" } };
+		if (grassLighting)
+			defines.push_back({ "GRASS_LIGHTING", "1" });
 		if (vr)
 			defines.push_back({ "VR", "1" });
 		if (pbr)
@@ -51,7 +53,7 @@ namespace
 			Check(reflection->GetDesc(&descriptor));
 			if (melt) {
 				Require(descriptor.TempArrayCount <= baseline.TempArrayCount, "Snowmelt introduced a grass temporary array");
-				std::cout << "Grass VR=" << vr << " PBR=" << pbr << " alpha=" << alpha
+				std::cout << "Grass VR=" << vr << " PBR=" << pbr << " alpha=" << alpha << " GrassLighting=" << grassLighting
 						  << ": arrays " << descriptor.TempArrayCount << "/" << baseline.TempArrayCount << std::endl;
 			} else
 				baseline = descriptor;
@@ -346,7 +348,9 @@ int main()
 		for (bool vr : { false, true })
 			for (bool pbr : { false, true })
 				for (bool alpha : { false, true })
-					CheckGrass(vr, pbr, alpha);
+					for (bool grassLighting : { false, true })
+						if (grassLighting || !pbr)
+							CheckGrass(vr, pbr, alpha, grassLighting);
 		using CSX::Diagnostics::PerformanceCosts::Point;
 		const auto weatherReference = static_cast<uint32_t>(Point::SnowWeatherRange);
 		for (bool vr : { false, true })

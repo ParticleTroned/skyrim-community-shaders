@@ -1296,6 +1296,7 @@ void LightLimitFix::DrawSettings()
 	auto shaderCache = globals::shaderCache;
 
 	if (page.Is("diagnostics")) {
+		DrawLightCountDiagnostics();
 		ImGui::Text(std::format("Clustered Light Count : {}", lightCount).c_str());
 		ImGui::Text(std::format(
 			"Particle Lights Count : {}",
@@ -1345,6 +1346,61 @@ void LightLimitFix::DrawSettings()
 		shaderCache->Clear();
 		previousEnableLightsVisualisation = currentEnableLightsVisualisation;
 	}
+}
+
+#ifdef DEVBENCH_BRIDGE_ENABLED
+std::uint64_t LightLimitFix::RequestLightCountDiagnostics()
+{
+	return globals::state ? lightCountDiagnostics.RequestCapture(globals::state->frameCountAtomic.load(std::memory_order_relaxed)) : 0;
+}
+
+json LightLimitFix::GetLightCountDiagnostics() const
+{
+	const auto frame = globals::state ? globals::state->frameCountAtomic.load(std::memory_order_relaxed) : 0;
+	const auto capture = lightCountDiagnostics.ReadCapture(frame);
+	const bool available = globals::state && loaded && !globals::state->IsFeatureDisabled("LightLimitFix");
+	using CaptureState = LightLimitFixDetail::LightCountDiagnostics::CaptureState;
+	const char* status = "idle";
+	switch (capture.state) {
+	case CaptureState::Pending:
+		status = "pending";
+		break;
+	case CaptureState::Complete:
+		status = "complete";
+		break;
+	case CaptureState::Expired:
+		status = "expired";
+		break;
+	case CaptureState::Failed:
+		status = "failed";
+		break;
+	default:
+		break;
+	}
+	const auto& sample = capture.sample;
+	return { { "available", available }, { "captureId", capture.id }, { "status", status },
+		{ "requestedFrame", capture.id ? json(capture.requestedFrame) : json(nullptr) },
+		{ "sample", sample.available ? json{ { "frame", sample.frame }, { "ageFrames", std::uint32_t(frame - sample.frame) },
+										   { "pointLights", sample.counts.pointLights }, { "shadowCastingPointLights", sample.counts.shadowCastingPointLights },
+										   { "colouredPointLights", sample.counts.colouredPointLights } } :
+									   json(nullptr) } };
+}
+#endif
+
+void LightLimitFix::DrawLightCountDiagnostics()
+{
+	const auto frame = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
+	lightCountDiagnostics.Request(frame);
+	const auto sample = lightCountDiagnostics.Read(frame);
+	if (sample.available) {
+		ImGui::Text("Point Lights : %u", sample.counts.pointLights);
+		ImGui::Text("Shadow-casting Point Lights : %u", sample.counts.shadowCastingPointLights);
+		ImGui::Text("Coloured Point Lights : %u", sample.counts.colouredPointLights);
+	} else {
+		ImGui::TextDisabled("Point-light counts: waiting for a lighting update.");
+	}
+	ImGui::TextWrapped("This view requests live counts; closing it stops automatic collection. Includes point lights used by LLF; excludes spotlights and particle lights. Coloured lights may also cast shadows.");
+	Util::AddTooltip("Coloured means RGB channels differ by more than 1% of the brightest channel, including warm candlelight. Shadow-casting counts do not measure shadow-map redraws or geometry cost.");
 }
 
 void LightLimitFix::DrawPointShadowCorrectionSettings()
@@ -1437,10 +1493,14 @@ void LightLimitFix::DrawOverlay()
 		return;
 	const float pos = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * Util::GetUIScale();
 	ImGui::SetNextWindowPos(ImVec2(pos, pos), ImGuiCond_Always);
-	ImGui::Begin("##LLFDebug", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+	const bool visible = ImGui::Begin("##LLFDebug", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+	const SKSE::stl::scope_exit endOverlay{ [] { ImGui::End(); } };
+	if (!visible)
+		return;
 	Util::Text::Error("DEBUG FEATURE - LIGHT LIMIT VISUALISATION ENABLED");
 
 	if (ImGui::TreeNodeEx("Statistics")) {
+		DrawLightCountDiagnostics();
 		ImGui::Text(std::format("Clustered Light Count : {}", lightCount).c_str());
 		ImGui::Text(std::format(
 			"Particle Lights Count : {}",
@@ -1449,8 +1509,6 @@ void LightLimitFix::DrawOverlay()
 				.c_str());
 		ImGui::TreePop();
 	}
-
-	ImGui::End();
 }
 
 LightLimitFix::PerFrame LightLimitFix::GetCommonBufferData()
@@ -3764,6 +3822,14 @@ void LightLimitFix::UpdateLights()
 	}
 
 	lightCount = std::min((uint)lightsData.size(), MAX_LIGHTS);
+	lightCountDiagnostics.Collect(globals::state->frameCount, [&] {
+		LightLimitFixDetail::LightCountDiagnostics::Counts counts;
+		for (const auto& light : lightsData) {
+			if (light.lightFlags.any(LightFlags::OmniDirectional) && light.lightFlags.none(LightFlags::Spot, LightFlags::Particle))
+				counts.RecordPoint(light.lightFlags.any(LightFlags::Shadow), light.color.x, light.color.y, light.color.z);
+		}
+		return counts;
+	});
 
 	{
 		CS_PROFILE_CPU_SCOPE("LightLimitFix::UploadLightsCPU");

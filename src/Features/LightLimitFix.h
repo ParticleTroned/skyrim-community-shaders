@@ -10,6 +10,7 @@
 
 #include "Features/LightLimitFix/EffectSpotlight.h"
 #include "Features/LightLimitFix/LightAttach.h"
+#include "Features/LightLimitFix/LightCountDiagnostics.h"
 #include "Features/LightLimitFix/ParticleLights.h"
 #include "Features/LightLimitFix/PreparedPointLightColours.h"
 #include "Features/LightLimitFix/SceneLightSnapshot.h"
@@ -30,6 +31,8 @@ private:
 	Util::RuntimeToggle runtimeToggle{ false };
 	PointShadowCorrection::RuntimeState pointShadowCorrection;
 	void DrawPointShadowCorrectionSettings();
+	void DrawLightCountDiagnostics();
+	LightLimitFixDetail::LightCountDiagnostics lightCountDiagnostics;
 	static constexpr std::string_view MOD_ID = "99548";
 	eastl::hash_map<RE::BSLight*, RE::NiLight*> effectLightValidationCache;
 	using SceneLightSnapshot = LightLimitFixDetail::SceneLightSnapshot<RE::NiPointer<RE::BSLight>>;
@@ -41,6 +44,13 @@ private:
 	static void RenderVRShadowLights(RE::ShadowSceneNode* a_node, std::uint32_t& a_index);
 
 public:
+#ifdef DEVBENCH_BRIDGE_ENABLED
+	/** Request one correlated CPU sample without enabling shader visualisation. */
+	std::uint64_t RequestLightCountDiagnostics();
+	/** Read the retained API result without starting or extending collection. */
+	json GetLightCountDiagnostics() const;
+#endif
+
 	/** @brief Read or stage the preference without touching render-owned settings. */
 	bool IsContactShadowsRequested() const { return runtimeToggle.Get(); }
 	void SetContactShadowsEnabled(bool enabled) { runtimeToggle.Set(enabled); }

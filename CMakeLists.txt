@@ -5592,6 +5592,50 @@ if(BUILD_CONTROLLER_TESTS)
         PRIVATE nlohmann_json::nlohmann_json
     )
 
+    set(_light_count_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/light_count_diagnostics_test"
+    )
+    set(_light_count_headers
+        "${_light_count_dir}/light_count_accessors.h"
+        "${_light_count_dir}/light_count_collection.h"
+        "${_light_count_dir}/light_count_api.h"
+        "${_light_count_dir}/light_count_dispatch_start.h"
+        "${_light_count_dir}/light_count_dispatch_action.h"
+    )
+    add_custom_command(
+        OUTPUT ${_light_count_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${CMAKE_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_light_count_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_light_count_diagnostics.cmake"
+        DEPENDS
+            tests/extract_light_count_diagnostics.cmake
+            tests/extract_source_region.cmake
+            src/Features/LightLimitFix.cpp
+            src/Api/FeatureDevBenchBridge.cpp
+        VERBATIM
+    )
+    add_controller_test(light_count_diagnostics_test LightCountDiagnostics
+        tests/light_count_diagnostics_test.cpp
+    )
+    target_sources(
+        light_count_diagnostics_test
+        PRIVATE ${_light_count_headers} src/Api/ServiceFoundation.cpp
+    )
+    target_include_directories(
+        light_count_diagnostics_test
+        PRIVATE "${_light_count_dir}"
+    )
+    target_link_libraries(
+        light_count_diagnostics_test
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    target_compile_definitions(
+        light_count_diagnostics_test
+        PRIVATE DEVBENCH_BRIDGE_ENABLED
+    )
+    add_controller_test(light_count_production_test LightCountProduction tests/light_count_diagnostics_test.cpp)
+
     include("${PROJECT_SOURCE_DIR}/tests/volumetric_lighting_composite.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/shader_include.cmake")
     include("${PROJECT_SOURCE_DIR}/tests/standalone_shader_cache.cmake")

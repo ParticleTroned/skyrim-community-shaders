@@ -1,0 +1,17 @@
+include("${PROJECT_ROOT}/tests/extract_source_region.cmake")
+file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
+file(READ "${PROJECT_ROOT}/src/Features/LightLimitFix.cpp" source)
+extract_between("${source}" "#ifdef DEVBENCH_BRIDGE_ENABLED\nstd::uint64_t LightLimitFix::RequestLightCountDiagnostics()" "\nvoid LightLimitFix::DrawLightCountDiagnostics()" "light_count_accessors.h")
+extract_between("${source}" "\tlightCountDiagnostics.Collect(" "\n\t{\n\t\tCS_PROFILE_CPU_SCOPE(\"LightLimitFix::UploadLightsCPU\")" "light_count_collection.h")
+file(READ "${PROJECT_ROOT}/src/Api/FeatureDevBenchBridge.cpp" bridge)
+extract_between("${bridge}" "\tjson ControlLightDiagnostics(" "\n\tjson ControlPointShadowCorrection(" "light_count_api.h")
+extract_between("${bridge}" "\tjson BuildResult(" "\n\t\tif (args.contains(\"alphaPassIntegrity\")" "light_count_dispatch_start.h")
+extract_between("${bridge}" "\t\tif (action == \"light_diagnostics\") {" "\n\t\tif (action == \"point_shadow_correction\")" "light_count_dispatch_action.h")
+foreach(required IN ITEMS
+    "AddLightDiagnosticsSchema(spec);"
+    "response[\"result\"][\"actions\"].push_back(\"light_diagnostics\");")
+    string(FIND "${bridge}" "${required}" found)
+    if(found LESS 0)
+        message(FATAL_ERROR "Missing light diagnostics registration: ${required}")
+    endif()
+endforeach()

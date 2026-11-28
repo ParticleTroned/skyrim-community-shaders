@@ -53,7 +53,7 @@ namespace
 {
 	using json = nlohmann::json;
 	using namespace CSX::FeatureAPI;
-	constexpr auto DevBenchSchemaRevision = 45;
+	constexpr auto DevBenchSchemaRevision = 46;
 	std::atomic_bool g_registered{ false };
 
 	CSX::Api::ServiceFoundation& Foundation()
@@ -211,6 +211,53 @@ namespace
 								   { "lastOperation", status.operation }, { "sessionOnly", true }, { "latencyMeasured", false }, { "fpsLimit", 0 } } } };
 	}
 
+	json ControlLightDiagnostics(const json& args)
+	{
+		for (const auto& [name, value] : args.items()) {
+			(void)value;
+			if (name != "action" && name != "contractMajor" && name != "clientId" && name != "commandId" &&
+				name != "expectedBuildId" && name != "lightDiagnostics")
+				throw std::invalid_argument("Unknown light_diagnostics argument");
+		}
+		auto& feature = globals::features::lightLimitFix;
+		const auto patch = args.find("lightDiagnostics");
+		if (patch != args.end() && (!patch->is_object() || patch->size() != 1 ||
+									   !patch->contains("capture") || !patch->at("capture").is_boolean()))
+			throw std::invalid_argument("lightDiagnostics requires exactly one boolean capture field");
+		if (patch != args.end() && patch->at("capture").get<bool>()) {
+			if (!feature.GetLightCountDiagnostics().at("available").get<bool>())
+				return { { "error", "Light diagnostics require available Light Limit Fix" }, { "errorCode", "feature_unavailable" } };
+			const auto requestedCaptureId = feature.RequestLightCountDiagnostics();
+			auto status = feature.GetLightCountDiagnostics();
+			status["requestedCaptureId"] = requestedCaptureId;
+			return { { "lightDiagnostics", std::move(status) } };
+		}
+		return { { "lightDiagnostics", feature.GetLightCountDiagnostics() } };
+	}
+
+	void AddLightDiagnosticsSchema(json& spec)
+	{
+		spec["inputSchema"]["properties"]["action"]["enum"].push_back("light_diagnostics");
+		spec["inputSchema"]["properties"]["lightDiagnostics"] = {
+			{ "type", "object" }, { "additionalProperties", false }, { "required", { "capture" } },
+			{ "properties", { { "capture", { { "type", "boolean" } } } } }
+		};
+		const json count{ { "type", "integer" }, { "minimum", 0 } };
+		spec["outputSchema"]["properties"]["result"]["properties"]["lightDiagnostics"] = {
+			{ "type", "object" }, { "additionalProperties", false }, { "required", { "available", "captureId", "status", "requestedFrame", "sample" } },
+			{ "properties", { { "available", { { "type", "boolean" } } },
+								{ "captureId", count }, { "requestedCaptureId", count },
+								{ "status", { { "type", "string" }, { "enum", { "idle", "pending", "complete", "expired", "failed" } } } },
+								{ "requestedFrame", { { "type", { "integer", "null" } }, { "minimum", 0 } } },
+								{ "sample", { { "type", { "object", "null" } }, { "additionalProperties", false },
+												{ "required", { "frame", "ageFrames", "pointLights", "shadowCastingPointLights", "colouredPointLights" } },
+												{ "properties", { { "frame", count }, { "ageFrames", count }, { "pointLights", count },
+																	{ "shadowCastingPointLights", count }, { "colouredPointLights", count } } } } } } }
+		};
+		spec["description"] = spec["description"].get<std::string>() +
+		                      " light_diagnostics reads the last explicitly requested CPU light-count capture. lightDiagnostics.capture=true requests one prepared light-list update in this or the next engine frame and returns requestedCaptureId; false or omission only reads. Poll captureId/status and require captureId=requestedCaptureId: a newer explicit capture supersedes an older request. Status is idle, pending, complete, expired or failed. Completed results remain available with sample.frame and ageFrames until the next explicit request; sample=null is not zero lights. Visible LLF Diagnostics and expanded visualisation Statistics request live UI counts independently and cannot overwrite the retained API capture. Collection is bounded and skips all light iteration when inactive. Counts cover prepared engine omnidirectional point-light entries, excluding spot and particle lights. Coloured means finite nonnegative CPU RGB with channel spread greater than 1% of the maximum, before per-pixel colour adjustments. Colour and shadow categories overlap. Shadow-casting counts describe admitted light flags, not shadow-map redraws, GPU visibility or caster geometry cost. No GPU readback, shader changes or persistent settings are involved.";
+	}
+
 	json ControlPointShadowCorrection(const json& args)
 	{
 		for (const auto& [name, value] : args.items()) {
@@ -262,6 +309,8 @@ namespace
 		const auto action = args.value("action", std::string{});
 		if (args.contains("pointShadowCorrection") && action != "point_shadow_correction")
 			return Foundation().MakeError(args, "invalid_settings", "pointShadowCorrection requires the point_shadow_correction action", "validation", false, "pointShadowCorrection");
+		if (args.contains("lightDiagnostics") && action != "light_diagnostics")
+			return Foundation().MakeError(args, "invalid_settings", "lightDiagnostics requires the light_diagnostics action", "validation", false, "lightDiagnostics");
 
 		if (args.contains("alphaPassIntegrity") && action != "vr_alpha_list")
 			return Foundation().MakeError(args, "invalid_settings", "alphaPassIntegrity requires the vr_alpha_list action", "validation", false, "alphaPassIntegrity");
@@ -333,6 +382,20 @@ namespace
 			});
 			if (result.contains("error"))
 				return Foundation().MakeError(args, result.value("errorCode", std::string("main_thread_dispatch_failed")), result.at("error"), "request", false);
+			auto response = Foundation().MakeEnvelope(args, true);
+			response["result"] = std::move(result);
+			return response;
+		}
+		if (action == "light_diagnostics") {
+			auto result = OnMain([args] {
+				try {
+					return ControlLightDiagnostics(args);
+				} catch (const std::invalid_argument& error) {
+					return json{ { "error", error.what() }, { "errorCode", "invalid_settings" } };
+				}
+			});
+			if (result.contains("error"))
+				return Foundation().MakeError(args, result.value("errorCode", std::string("main_thread_dispatch_failed")), result.at("error"), "request", false, "lightDiagnostics");
 			auto response = Foundation().MakeEnvelope(args, true);
 			response["result"] = std::move(result);
 			return response;
@@ -567,6 +630,7 @@ namespace
 			response["result"]["actions"].push_back("vr_alpha_sort");
 			response["result"]["actions"].push_back("light_attach");
 			response["result"]["actions"].push_back("point_shadow_correction");
+			response["result"]["actions"].push_back("light_diagnostics");
 			response["result"]["actions"].push_back("anti_lag2");
 			response["result"]["actions"].push_back("wetterness");
 			response["result"]["actions"].push_back("skin");
@@ -856,6 +920,7 @@ namespace CSX::Api::FeatureDevBenchBridge
 			spec["description"] = spec["description"].get<std::string>() +
 			                      " performance_costs inspects or stages independent DevBench-only optimization references. Optional performanceCosts is a partial object: true selects the optimized path, false its previous calculation. Settings are session-only and apply together at the next render-frame boundary; active measurements and shader compilation defer application without cancelling work. Feature enablement, visual parameters and temporal histories are preserved. GPU changes invalidate memory shader caches; default optimized permutations reuse production inputs, but first reference use may compile. Wait for pending=false and shaderCompiling=false, then settle before measuring total frame time. ready reports this control/compilation barrier only; requiredConditions explains scene applicability and is not proof of observed work. failedShaderTasks reports compiler failures separately. These controls do not start measurements, change weather, save settings, or clear disk caches.";
 			AddPointShadowCorrectionSchema(spec);
+			AddLightDiagnosticsSchema(spec);
 			spec["inputSchema"]["properties"]["action"]["enum"].push_back("light_attach");
 			spec["inputSchema"]["properties"]["lightAttach"] = lightAttachSchemas.at("settings");
 			spec["outputSchema"]["properties"]["result"]["properties"]["lightAttach"] = lightAttachSchemas.at("status");

@@ -3785,6 +3785,7 @@ if(BUILD_CONTROLLER_TESTS)
     )
     set(_fur_geometry_test_headers
         "${_fur_geometry_test_dir}/fur_geometry_under_test.h"
+        "${_fur_geometry_test_dir}/fur_projection_under_test.h"
         "${_fur_geometry_test_dir}/fur_body_under_test.h"
         "${_fur_geometry_test_dir}/fur_pass_under_test.h"
         "${_fur_geometry_test_dir}/fur_overlay_under_test.h"

@@ -24,6 +24,12 @@ namespace StreamingInventoryFixture
 	constexpr std::size_t maximumRecords = 16384, maximumConsumers = 256;
 	namespace RE
 	{
+		struct BSFixedString
+		{
+			const char* text = nullptr;
+			const char* c_str() const { return text; }
+			bool empty() const { return !text || !*text; }
+		};
 		template <class T>
 		struct NiPointer
 		{
@@ -45,11 +51,8 @@ namespace StreamingInventoryFixture
 		}
 		struct NiSourceTexture
 		{
-			struct Name
-			{
-				const char* text = nullptr;
-				const char* c_str() const { return text; }
-			} name;
+			using Name = BSFixedString;
+			Name name;
 			BSGraphics::Texture* rendererTexture = nullptr;
 		};
 		struct BSGeometry
@@ -73,6 +76,8 @@ namespace StreamingInventoryFixture
 				ID3D11Resource* current = nullptr;
 				ID3D11ShaderResourceView* currentView = nullptr;
 				std::string path;
+				RE::BSFixedString pathName;
+				std::uint32_t pathCategories = 0;
 				D3D11_TEXTURE2D_DESC full{};
 				D3D11_SHADER_RESOURCE_VIEW_DESC view{};
 				std::array<std::uint64_t, Policy::MaximumDrop + 1> bytes{};
@@ -121,6 +126,44 @@ void CheckStreamingInventory(ID3D11Device* device)
 	view.Format = full.Format;
 	view.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
 	view.Texture2D.MipLevels = full.MipLevels;
+	for (unsigned protection = 0; protection < 5; ++protection) {
+		Upload original;
+		Check(original.Begin(device, full, view, 0));
+		Check(WriteOrigin(original.texture.Get(), { 70, false, 0 }));
+		RE::BSGraphics::Texture engine{ original.texture.Get(), original.view.Get() };
+		RE::NiSourceTexture source{ { "textures/landscape/rock.dds" }, &engine };
+		RE::BSGeometry geometry;
+		StreamingInventoryFixture::TextureStreaming::State state;
+		state.ObserveTexture(&source, &geometry, true, Terrain);
+		for (unsigned i = 0; i < 10; ++i)
+			state.ObserveTexture(&source, &geometry, true, 0);
+		Origin observed;
+		Require(state.records.at(70).consumers.scanning.size() == 11 &&
+					ReadOrigin(original.texture.Get(), observed) && observed.requiredCategories == (Terrain | LandscapeStatics),
+			"Repeated metadata reuse lost a consumer or its material-specific categories");
+		RE::NiSourceTexture alias{ { "textures/armor/shared.dds" }, &engine };
+		switch (protection) {
+		case 0:
+			source.name.text = "textures/armor/renamed.dds";
+			break;
+		case 1:
+			source.name.text = nullptr;
+			break;
+		case 2:
+			state.ObserveTexture(&alias, &geometry, true, 0);
+			break;
+		case 3:
+			Check(WriteOrigin(original.texture.Get(), { 70, true, EmissiveStatics }));
+			break;
+		default:
+			break;
+		}
+		state.ObserveTexture(&source, &geometry, protection != 4, AlphaTestedStatics);
+		Require(state.records.at(70).protectedConsumer && ReadOrigin(original.texture.Get(), observed) && observed.protectedConsumer &&
+					(observed.requiredCategories & AlphaTestedStatics) &&
+					LoadHooks::forgottenPreview == "textures\\landscape\\rock.dds",
+			"Cached path metadata hid renaming, alias, provenance or material protection");
+	}
 	for (bool terrainFirst : { false, true }) {
 		Upload original;
 		Check(original.Begin(device, full, view, 0));

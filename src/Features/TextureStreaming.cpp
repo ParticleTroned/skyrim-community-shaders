@@ -111,12 +111,12 @@ namespace
 		return result;
 	}
 
-	std::optional<std::string> TexturePath(RE::NiSourceTexture* texture, std::uint32_t& categories, std::uint32_t materialCategories)
+	std::optional<std::string> TexturePath(RE::NiSourceTexture* texture, std::uint32_t& categories)
 	{
 		if (!texture || !texture->name.c_str() || !*texture->name.c_str())
 			return std::nullopt;
 		std::string path = StreamingTextures::NormalizeTexturePath(texture->name.c_str());
-		const auto required = StreamingTextures::PathCategories(path, materialCategories);
+		const auto required = StreamingTextures::PathCategories(path);
 		if (!required)
 			return std::nullopt;
 		categories = *required;
@@ -490,6 +490,8 @@ struct TextureStreaming::State
 		ID3D11Resource* current = nullptr;
 		ID3D11ShaderResourceView* currentView = nullptr;
 		std::string path;
+		RE::BSFixedString pathName;
+		std::uint32_t pathCategories = 0;
 		D3D11_TEXTURE2D_DESC full{};
 		D3D11_SHADER_RESOURCE_VIEW_DESC view{};
 		std::array<std::uint64_t, Policy::MaximumDrop + 1> bytes{};
@@ -709,10 +711,22 @@ void TextureStreaming::State::ObserveTexture(RE::NiSourceTexture* source, RE::BS
 		exclude(Exclusion::MissingProvenance);
 		return;
 	}
+	auto it = records.find(origin.serial);
 	std::uint32_t pathCategories = 0;
-	const auto path = TexturePath(source, pathCategories, requiredCategories);
-	eligible &= path.has_value();
-	requiredCategories |= pathCategories;
+	std::optional<std::string> normalizedPath;
+	const std::string* path = nullptr;
+	// Pin the immutable name; provenance and consumer requirements remain live reads.
+	if (it != records.end() && !it->second.pathName.empty() && it->second.source.get() == source && it->second.engine == engine &&
+		it->second.current == REX::W32::AsReal(engine->texture) && it->second.pathName.c_str() == source->name.c_str()) {
+		path = &it->second.path;
+		pathCategories = it->second.pathCategories;
+	} else {
+		normalizedPath = TexturePath(source, pathCategories);
+		if (normalizedPath)
+			path = &*normalizedPath;
+	}
+	eligible &= path != nullptr;
+	requiredCategories |= StreamingTextures::MaterialPathCategories(pathCategories, requiredCategories);
 	if (!eligible && path)
 		StreamingTextures::LoadHooks::Forget(*path);
 	if ((!eligible && !origin.protectedConsumer) || (requiredCategories & ~origin.requiredCategories)) {
@@ -725,7 +739,6 @@ void TextureStreaming::State::ObserveTexture(RE::NiSourceTexture* source, RE::BS
 			return;
 		}
 	}
-	auto it = records.find(origin.serial);
 	if (it == records.end()) {
 		if (origin.preloaded)
 			return;
@@ -807,6 +820,11 @@ void TextureStreaming::State::ObserveTexture(RE::NiSourceTexture* source, RE::BS
 		++diagnostics.candidateRegistrations;
 	}
 	auto& record = it->second;
+	if (normalizedPath && record.source.get() == source && record.engine == engine &&
+		record.current == REX::W32::AsReal(engine->texture) && record.path == *normalizedPath) {
+		record.pathName = source->name;
+		record.pathCategories = pathCategories;
+	}
 #ifdef DEVBENCH_BRIDGE_ENABLED
 	const bool terrainConsumer = (origin.requiredCategories & StreamingTextures::Terrain) != 0;
 	if (terrainConsumer && !record.terrainConsumer)
@@ -1567,20 +1585,36 @@ void TextureStreaming::State::Tick()
 		detail = "Disabled";
 		return;
 	}
-	Util::RendererOwnership owner(Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context));
-	if (!owner)
-		return;
-	AdoptLoads();
-	ScanPreviews();
 	memory = Memory::Get().SampleStreaming(globals::d3d::device);
 	const bool transition = globals::features::upscaling.IsTextureStreamingTransitionActive();
 	memory.priorityWork |= transition;
 	const auto start = globals::state->worldLoadTransitionStartFrame.load(std::memory_order_acquire);
 	const bool loading = globals::state->IsSaveLoadSafeModeActive();
 	const bool blocked = loading || transition;
+	const auto now = GetTickCount64();
+	const auto pressureChange = pressure.Update(now, memory.sampledAtMs, memory.Fresh(now), memory.local.Budget,
+		Memory::Add(memory.local.CurrentUsage, memory.pendingBytes), options.reserveMiB * Policy::MiB);
+	if (pressureChange != Policy::PressureChange::None) {
+		firstPressureReductionPending = pressure.conserving;
+		logger::info("[TextureStreaming] Memory pressure {}: usage {:.1f} MiB, budget {:.1f} MiB, pending {:.1f} MiB; enabled={}, paused={}",
+			pressure.conserving ? "entered" : "recovered; restoration remains subject to headroom and priority work",
+			static_cast<double>(memory.local.CurrentUsage) / Policy::MiB, static_cast<double>(memory.local.Budget) / Policy::MiB,
+			static_cast<double>(memory.pendingBytes) / Policy::MiB, enabled, blocked);
+	}
+	UpdatePressureDiagnostics(now);
+	const bool lifecycleChanged = start != worldStart || blocked != paused || deviceGeneration != memory.generation;
+	// Active work includes pending loads, reduced textures and GPU retirement.
+	if (enabled && !blocked && !lifecycleChanged && workSchedule.mode != StreamingTextures::InventoryWork::Active &&
+		frontier.empty() && !learningRemaining && !workSchedule.Due(now) && InventoryMode() == workSchedule.mode)
+		return;
+	Util::RendererOwnership owner(Util::GetRendererContextLock(globals::game::renderer, globals::d3d::context));
+	if (!owner)
+		return;
+	AdoptLoads();
+	ScanPreviews();
 	if (paused && !blocked)
 		detail = ReductionRequested() ? "Scanning textures for safe detail reductions" : "Monitoring GPU memory pressure";
-	if (start != worldStart || blocked != paused || deviceGeneration != memory.generation) {
+	if (lifecycleChanged) {
 		++epoch;
 		worldStart = start;
 		paused = blocked;
@@ -1593,17 +1627,6 @@ void TextureStreaming::State::Tick()
 		deviceGeneration = memory.generation;
 		InvalidateInventory(GetTickCount64());
 	}
-	const auto now = GetTickCount64();
-	const auto pressureChange = pressure.Update(now, memory.sampledAtMs, memory.Fresh(now), memory.local.Budget,
-		Memory::Add(memory.local.CurrentUsage, memory.pendingBytes), options.reserveMiB * Policy::MiB);
-	if (pressureChange != Policy::PressureChange::None) {
-		firstPressureReductionPending = pressure.conserving;
-		logger::info("[TextureStreaming] Memory pressure {}: usage {:.1f} MiB, budget {:.1f} MiB, pending {:.1f} MiB; enabled={}, paused={}",
-			pressure.conserving ? "entered" : "recovered; restoration remains subject to headroom and priority work",
-			static_cast<double>(memory.local.CurrentUsage) / Policy::MiB, static_cast<double>(memory.local.Budget) / Policy::MiB,
-			static_cast<double>(memory.pendingBytes) / Policy::MiB, enabled, blocked);
-	}
-	UpdatePressureDiagnostics(now);
 	if (blocked) {
 		diagnostics.Defer(loading ? Block::WorldLoading : Block::Transition);
 		const bool previewWork = transaction && records.contains(transaction->payload.request.serial) && records.at(transaction->payload.request.serial).previewProtected;

@@ -15,9 +15,14 @@ using StreamingTextures::InventoryWork;
 std::uint64_t clockMs = 1000;
 std::uint64_t GetTickCount64() { return clockMs; }
 bool pendingLoad = false;
+unsigned pendingChecks = 0;
 namespace StreamingTextures::LoadHooks
 {
-	bool HasPending() { return pendingLoad; }
+	bool HasPending()
+	{
+		++pendingChecks;
+		return pendingLoad;
+	}
 }
 namespace logger
 {
@@ -28,10 +33,11 @@ namespace logger
 namespace Util
 {
 	bool rendererOwned = true;
+	unsigned ownershipAttempts = 0;
 	int GetRendererContextLock(void*, void*) { return 0; }
 	struct RendererOwnership
 	{
-		explicit RendererOwnership(int) {}
+		explicit RendererOwnership(int) { ++ownershipAttempts; }
 		explicit operator bool() const { return rendererOwned; }
 	};
 }
@@ -219,7 +225,8 @@ int main()
 		Frame(state);
 		for (unsigned i = 0; i < 300; ++i) Frame(state);
 		Require(state.scans == 0 && state.fullSelections == 0 && state.reducedSelections == 0 && state.pruned == 0, "Idle pressure-only streaming scanned or swept records");
-		Require(state.adopted == 301 && state.serviced == 301, "Idle gate blocked lifecycle or completion service");
+		Require(state.adopted == 1 && state.serviced == 1 && state.previews == 1 && Util::ownershipAttempts == 1,
+			"Dormant learning acquired renderer ownership or serviced preview/completion work");
 		Frame(state, 1000);
 		Require(state.scans == 1 && state.fullSelections == 1, "Sparse remembered-size learning did not complete");
 		const auto full = state.fullSelections;
@@ -228,12 +235,33 @@ int main()
 		state.options.rememberedSizes = false;
 		Frame(state, 6000);
 		const auto scans = state.scans;
+		const auto idleOwnership = Util::ownershipAttempts;
 		for (unsigned i = 0; i < 100; ++i) Frame(state, 100);
 		Require(state.scans == scans, "Disabled learning still scanned an idle world");
+		Require(Util::ownershipAttempts == idleOwnership, "Idle monitoring still acquired renderer ownership");
+		globals::state->worldLoadTransitionStartFrame++;
+		Frame(state);
+		Require(state.worldStart == globals::state->worldLoadTransitionStartFrame && Util::ownershipAttempts == idleOwnership + 1,
+			"Idle monitoring suppressed world invalidation");
+		state.reading = true;
+		const auto readingService = state.serviced;
+		for (unsigned i = 0; i < 3; ++i) Frame(state);
+		Require(state.serviced == readingService + 3, "Idle monitoring stranded reader completion");
+		state.reading = false;
+		state.transaction.emplace();
+		const auto retirementService = state.serviced;
+		for (unsigned i = 0; i < 3; ++i) Frame(state);
+		Require(state.transaction && state.serviced == retirementService + 3, "Idle monitoring stranded upload or retirement work");
+		state.transaction.reset();
+		Frame(state);
+		const auto drainedOwnership = Util::ownershipAttempts;
+		Frame(state);
+		Require(Util::ownershipAttempts == drainedOwnership, "Drained work did not return to cheap monitoring");
 		const auto invalidated = state.invalidated;
+		const auto pressureScans = state.scans;
 		Memory::Get().sample.local.CurrentUsage = 8000 * Policy::MiB;
 		Frame(state);
-		Require(state.pressure.conserving && state.scans == scans + 1 && state.invalidated > invalidated, "Pressure did not wake a fresh inventory");
+		Require(state.pressure.conserving && state.scans == pressureScans + 1 && state.invalidated > invalidated, "Pressure did not wake a fresh inventory");
 		state.reducedRecords.push_back(1);
 		Memory::Get().sample.local.CurrentUsage = 1024 * Policy::MiB;
 		for (unsigned i = 0; i < 55; ++i) Frame(state, 100);
@@ -247,6 +275,9 @@ int main()
 		state.options.maximumSize = 1024;
 		Frame(state);
 		Require(state.workSchedule.mode == InventoryWork::Active, "A size cap was ignored without pressure");
+		const auto activePendingChecks = pendingChecks;
+		Frame(state);
+		Require(pendingChecks == activePendingChecks + 1, "Active work repeated the idle gate's pending-load check");
 		state.options.maximumSize = 0;
 		pendingLoad = true;
 		Frame(state);
@@ -280,6 +311,48 @@ int main()
 		const auto disabledAdopted = state.adopted;
 		Frame(state);
 		Require(state.adopted == disabledAdopted, "Fully disabled streaming failed to take the idle gate");
+		state.reading = true;
+		const auto disabledService = state.serviced;
+		Frame(state);
+		state.reading = false;
+		state.transaction.emplace();
+		Frame(state);
+		Require(state.serviced == disabledService + 2 && state.transaction,
+			"Disabling an empty inventory stranded reader, upload or retirement completion");
+		state.transaction.reset();
+		state.enabled = true;
+		state.options.rememberedSizes = false;
+		Frame(state);
+		const auto priorGeneration = state.deviceGeneration;
+		Memory::Get().sample.generation++;
+		Util::rendererOwned = false;
+		Frame(state);
+		Require(state.deviceGeneration == priorGeneration, "A device change released inventory without renderer ownership");
+		Util::rendererOwned = true;
+		Frame(state);
+		Require(state.deviceGeneration == Memory::Get().sample.generation, "Failed ownership permanently hid a device change");
+		for (bool enabled : { false, true }) {
+			State idle;
+			idle.enabled = enabled;
+			idle.options.rememberedSizes = false;
+			Frame(idle);
+			Frame(idle);
+			pendingLoad = true;
+			Frame(idle);
+			Require(!pendingLoad && !idle.reducedRecords.empty() && idle.reducedSelections,
+				"A load arriving in a fully idle or disabled state failed to wake restoration");
+		}
+		State pressureWake;
+		pressureWake.options.rememberedSizes = false;
+		Frame(pressureWake);
+		Memory::Get().sample.local.CurrentUsage = 8000 * Policy::MiB;
+		Util::rendererOwned = false;
+		Frame(pressureWake);
+		Util::rendererOwned = true;
+		Frame(pressureWake);
+		Require(pressureWake.pressure.conserving && pressureWake.workSchedule.mode == InventoryWork::Active && pressureWake.scans == 1,
+			"Pressure detection before failed ownership suppressed the next inventory wakeup");
+		Memory::Get().sample.local.CurrentUsage = 1024 * Policy::MiB;
 
 		StreamingTextures::WorkSchedule cadence;
 		Require(cadence.Update(InventoryWork::Active, 10) && cadence.Due(10), "Active work did not start immediately");

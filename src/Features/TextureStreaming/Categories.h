@@ -34,6 +34,12 @@ namespace StreamingTextures
 		}
 	};
 
+	/** Terrain uses its material category; shared static consumers still require landscape coverage. */
+	inline std::uint32_t MaterialPathCategories(std::uint32_t pathCategories, std::uint32_t materialCategories)
+	{
+		return materialCategories & Terrain ? pathCategories & ~LandscapeStatics : pathCategories;
+	}
+
 	/** Classify a normalized resource path; LOD atlases and special-purpose textures remain protected. */
 	inline std::optional<std::uint32_t> PathCategories(std::string_view path, std::uint32_t materialCategories = 0)
 	{
@@ -44,6 +50,6 @@ namespace StreamingTextures
 				 "water\\", "armor\\", "clothes\\", "clothing\\", "fonts\\", "book", "\\maps\\", "mapmarker", "\\lod\\", "\\dyndolod\\", "\\sky\\", "_lod", ".objects", ".treelod" })
 			if (path.find(excluded) != std::string_view::npos)
 				return std::nullopt;
-		return !(materialCategories & Terrain) && path.find("landscape\\") != std::string_view::npos ? LandscapeStatics : 0u;
+		return MaterialPathCategories(path.find("landscape\\") != std::string_view::npos ? LandscapeStatics : 0u, materialCategories);
 	}
 }

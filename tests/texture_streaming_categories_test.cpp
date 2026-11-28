@@ -613,8 +613,10 @@ void CheckStreamingConflict()
 	blocked.PostPostLoad();
 	Require(blocked.loaded && !blocked.state->enabled && blocked.state->externalStreamingConflict && !originHookReady && !hookInstalls,
 		"SPS detection installed a competing hook or left native streaming active");
-	Require(queriedModule == L"SPS.dll" && blocked.state->detail.find("Disable the SPS mod and restart") != std::string::npos,
-		"Conflict warning did not identify the loaded plugin or give recovery guidance");
+	Require(queriedModule == L"SPS.dll" && blocked.state->detail.find("SPS is active") != std::string::npos &&
+				blocked.state->detail.find("CSX texture streaming is inactive") != std::string::npos &&
+				blocked.state->detail.find("Disable SPS") != std::string::npos && blocked.state->detail.find("restart") != std::string::npos,
+		"Conflict warning did not distinguish active SPS from inactive CSX streaming or give recovery guidance");
 	blocked.Configure(true, 2, std::nullopt, StreamingTextures::Modes{ false, true });
 	Require(!blocked.state->enabled && blocked.state->modes.continuous && blocked.state->detail == streamingConflictWarning,
 		"Continuous mode bypassed the loaded-plugin conflict or erased its warning");

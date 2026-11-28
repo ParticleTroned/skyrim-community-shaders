@@ -424,7 +424,7 @@ namespace LightLimitFixDetail::ShadowCulling
 			MenuUI::SectionHeading("Shadow culling", "Native shadow maps; independent of contact shadows.");
 		}
 		if (conflict)
-			Util::Text::WrappedWarning("SPS owns shadow culling. Disable SPS and restart to use CSX native culling.");
+			Util::Text::WrappedWarning("SPS is active, so CSX native shadow culling is inactive. Disable SPS and restart the game to use CSX native shadow culling.");
 		else if (!failure.empty())
 			MenuUI::PageNotice("Native shadow culling is unavailable.", MenuUI::NoticeKind::Error, failure);
 		const auto disabled = Util::DisableGuard(unavailable);

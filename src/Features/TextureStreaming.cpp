@@ -49,7 +49,7 @@ namespace
 	using Diagnostics = StreamingTextures::Diagnostics;
 	using Block = Diagnostics::Block;
 	using Exclusion = Diagnostics::Exclusion;
-	constexpr auto streamingConflictWarning = "SPS detected. Disable the SPS mod and restart to use CSX texture streaming.";
+	constexpr auto streamingConflictWarning = "SPS is active, so CSX texture streaming is inactive. Disable SPS and restart the game to use CSX texture streaming.";
 	constexpr std::size_t maximumRecords = 16384, maximumConsumers = 256, maximumFrontier = 16384;
 	constexpr std::size_t maximumReducedTextures = 512;
 	constexpr std::uint64_t uploadBytesPerFrame = 4 * Policy::MiB;

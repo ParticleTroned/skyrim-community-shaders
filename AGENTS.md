@@ -343,6 +343,15 @@ to its attribution in commit messages, PR descriptions, and write-ups:
 
 ## Repository tooling
 
+-   For every configured MCP server, including DevBench VR, Ghidra, Tracy and
+    node_repl, treat an initial empty tool lookup as provisional. Complete
+    fresh discovery across the full callable catalog, including deferred
+    tools, and applicable documented read-only checks, with a bounded retry
+    during startup or registration, before reporting unavailability,
+    selecting a fallback or asking the user to repair the connection. Do this
+    without waiting for a user challenge, preserve each server's transport
+    rules, and distinguish configured state, tool visibility and connectivity.
+
 -   In GitHub Actions, pass user-controlled inputs, branch names and PR text
     into shell steps through `env:`. Validate their intended use and quote
     shell expansions; never interpolate those values directly into `run:`

@@ -866,8 +866,13 @@ void FurShells::BeginPass(RE::BSShader* a_shader, RE::BSRenderPass* a_pass)
 	const auto distanceShells = static_cast<uint32_t>(std::lround(static_cast<float>(std::min(values.ShellCount, MaxShells)) * fade));
 	if (fade <= 0.0f || (settings.DistanceShellBudget && distanceShells == 0))
 		return;
-	const float worldScale = skinInstance && skinInstance->rootParent ? skinInstance->rootParent->world.scale : geometry->world.scale;
-	const float pixels = GetFurPixels(FurInertia::GetWorldLength(values.Length, worldScale), distance);
+	const auto shellBudget = settings.DistanceShellBudget ? distanceShells : values.ShellCount;
+	float pixels = PixelsPerShell;
+	// A single layer needs projection only when projected size also thins density.
+	if (shellBudget != 1 || settings.MinFurPixels > 0.0f) {
+		const float worldScale = skinInstance && skinInstance->rootParent ? skinInstance->rootParent->world.scale : geometry->world.scale;
+		pixels = GetFurPixels(FurInertia::GetWorldLength(values.Length, worldScale), distance);
+	}
 	const float density = (settings.DistanceShellBudget ? 1.0f : fade) * (settings.MinFurPixels > 0.0f ? std::clamp(pixels / settings.MinFurPixels, 0.0f, 1.0f) : 1.0f);
 	if (density <= 0.0f)
 		return;
@@ -881,7 +886,7 @@ void FurShells::BeginPass(RE::BSShader* a_shader, RE::BSRenderPass* a_pass)
 	}
 
 	// The selected layer budget bounds fractional projected layers.
-	const float layers = std::clamp(pixels / PixelsPerShell, 1.0f, static_cast<float>(settings.DistanceShellBudget ? distanceShells : values.ShellCount));
+	const float layers = std::clamp(pixels / PixelsPerShell, 1.0f, static_cast<float>(shellBudget));
 	const auto shells = static_cast<uint32_t>(std::ceil(layers));
 	const float tipWeight = layers - static_cast<float>(shells - 1);
 

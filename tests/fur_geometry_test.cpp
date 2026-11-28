@@ -1,7 +1,9 @@
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -76,7 +78,8 @@ namespace RE
 		} data;
 		struct Point
 		{
-			float GetDistance(Point) const { return 10.0f; }
+			float distance = 10.0f;
+			float GetDistance(Point) const { return distance; }
 		};
 		struct Bound
 		{
@@ -113,7 +116,7 @@ namespace
 	bool IsFirstPersonPass() { return false; }
 	bool IsFurTechnique(uint32_t) { return true; }
 	bool IsSkinTechnique(uint32_t) { return false; }
-	float GetFurPixels(float, float) { return 8.0f; }
+	unsigned projectionCalls = 0;
 	unsigned checked = 0;
 	void Require(bool condition, const char* message)
 	{
@@ -135,11 +138,29 @@ namespace REX::W32
 }
 namespace FurInertia
 {
-	float GetWorldLength(float length, float scale) { return length * scale; }
+	float GetWorldLength(float length, float scale) { return length * (std::isfinite(scale) ? std::clamp(scale, 0.1f, 10.0f) : 1.0f); }
 }
 namespace Util
 {
 	RE::BSGeometry::Point GetEyePosition(int) { return {}; }
+	struct Camera
+	{
+		struct Matrix
+		{
+			float m[4][4]{};
+		} projMat;
+	} camera;
+	const Camera& GetCameraData(int)
+	{
+		++projectionCalls;
+		return camera;
+	}
+	struct Size
+	{
+		float x, y;
+	};
+	float dynamicScale = 1.0f;
+	Size ConvertToDynamic(Size size) { return { size.x * dynamicScale, size.y * dynamicScale }; }
 }
 namespace globals
 {
@@ -159,21 +180,26 @@ namespace globals
 		{
 			void* shader = nullptr;
 		} shader;
-		unsigned lookups = 0;
+		unsigned lookups = 0, failedLookup = 0;
 		bool IsEnabled() const { return true; }
 		Shader* GetVertexShader(RE::BSShader&, uint32_t)
 		{
 			++lookups;
-			return &shader;
+			return lookups == failedLookup ? nullptr : &shader;
 		}
 		Shader* GetPixelShader(RE::BSShader&, uint32_t)
 		{
 			++lookups;
-			return &shader;
+			return lookups == failedLookup ? nullptr : &shader;
 		}
 	}* shaderCache;
 	namespace game
 	{
+		struct GraphicsState
+		{
+			uint32_t screenHeight = 1440;
+		} graphics;
+		auto* graphicsState = &graphics;
 		struct ShadowState
 		{
 			RE::BSGraphics::DepthStencilDepthMode depthStencilDepthMode = RE::BSGraphics::DepthStencilDepthMode::kTestWrite;
@@ -182,6 +208,11 @@ namespace globals
 	}
 }
 #define GET_INSTANCE_MEMBER(member, object) const auto member = object->member;
+
+namespace
+{
+#include "fur_projection_under_test.h"
+}
 
 struct FurShells
 {
@@ -205,6 +236,7 @@ struct FurShells
 	{
 		float Length, ShellCount, Droop, RootThreshold, TipThreshold, RootDarkening, ShellColor, RootTest, Density, TipWeight;
 	};
+	PerPass boundPass{};
 	struct View
 	{
 		ID3D11ShaderResourceView* value = nullptr;
@@ -260,6 +292,7 @@ struct FurShells
 	void BindPass(const PerPass& pass, ID3D11ShaderResourceView*, ID3D11ShaderResourceView*)
 	{
 		++bindings;
+		boundPass = pass;
 		instanceCount = uint32_t(pass.ShellCount);
 	}
 	void RecordFrameBody(RE::NiSkinInstance* skin, RE::BSGeometry* geometry, const PerPass& pass, ID3D11ShaderResourceView* shellResource, ID3D11ShaderResourceView* normalResource, bool deferred)
@@ -290,6 +323,9 @@ namespace
 		RE::BSRenderPass pass{ &property, &geometry };
 		Fixture()
 		{
+			Util::camera.projMat.m[1][1] = 1.0f;
+			Util::dynamicScale = 1.0f;
+			projectionCalls = 0;
 			globals::state = &state;
 			globals::shaderCache = &cache;
 			globals::game::shadowState = &shadow;
@@ -415,6 +451,85 @@ namespace
 			}
 		}
 	}
+
+	void TestProjectedBudget()
+	{
+		for (bool distanceBudget : { false, true })
+			for (uint32_t budget : { 1u, 2u, 12u, 32u })
+				for (float distance : { 0.0f, 700.0f, std::nextafter(2275.0f, 0.0f), 2275.0f, std::nextafter(2275.0f, 2500.0f), 2400.0f, 2499.0f, 2500.0f })
+					for (float minimum : { 0.0f, 0.1f, 16.0f })
+						for (float projection : { 0.0f, 0.001f, 1.0f, std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN() })
+							for (bool skinned : { false, true }) {
+								Fixture test;
+								auto& settings = test.fur.settings;
+								settings.ShellCount = budget;
+								settings.DistanceShellBudget = distanceBudget;
+								settings.MinFurPixels = minimum;
+								test.geometry.worldBound.center.distance = distance + test.geometry.worldBound.radius;
+								RE::NiAVObject root;
+								if (skinned) {
+									test.geometry.data.skinInstance = std::make_shared<RE::NiSkinInstance>();
+									test.geometry.data.skinInstance->rootParent = &root;
+								}
+								root.world.scale = std::numeric_limits<float>::quiet_NaN();
+								test.geometry.world.scale = 0.25f;
+								Util::camera.projMat.m[1][1] = projection;
+								Util::dynamicScale = 0.5f;
+								const float fade = std::clamp((settings.FadeEnd - distance) / (settings.FadeEnd - settings.FadeStart), 0.0f, 1.0f);
+								const auto selected = distanceBudget ? uint32_t(std::lround(float(budget) * fade)) : budget;
+								const bool admitted = fade > 0.0f && (!distanceBudget || selected != 0);
+								const float pixels = GetFurPixels(FurInertia::GetWorldLength(settings.Length, skinned ? root.world.scale : test.geometry.world.scale), distance);
+								const float density = (distanceBudget ? 1.0f : fade) * (minimum > 0.0f ? std::clamp(pixels / minimum, 0.0f, 1.0f) : 1.0f);
+								projectionCalls = 0;
+								test.Begin();
+								Require(projectionCalls == unsigned(admitted && (selected != 1 || minimum > 0.0f)), "Projection must be skipped only for one layer without size thinning");
+								Require(test.fur.bindings == unsigned(admitted && density > 0.0f), "Projected density changed pass admission");
+								if (!test.fur.bindings)
+									continue;
+								const float layers = std::clamp(pixels / PixelsPerShell, 1.0f, float(selected));
+								const float shells = std::ceil(layers);
+								const FurShells::PerPass expected{ settings.Length, shells, settings.Droop, settings.RootThreshold, settings.TipThreshold,
+									settings.RootDarkening, settings.ShellColor, 0.0f, density, layers - (shells - 1.0f) };
+								auto actual = test.fur.boundPass;
+								const auto expectedDensity = std::bit_cast<uint32_t>(expected.Density), actualDensity = std::bit_cast<uint32_t>(actual.Density);
+								// Fast math can reassociate the independent density oracle by two ULPs.
+								Require(std::max(expectedDensity, actualDensity) - std::min(expectedDensity, actualDensity) <= 2, "Projection changed density beyond its rounding tolerance");
+								actual.Density = expected.Density;
+								Require(std::memcmp(&expected, &actual, sizeof(expected)) == 0, "Projection shortcut changed the shape payload");
+								Require(test.fur.dynamics == 1 && test.cache.lookups == 3, "Projection shortcut bypassed shader readiness or dynamics");
+							}
+	}
+
+	void TestOneLayerRouting()
+	{
+		for (bool deferred : { false, true })
+			for (bool replaying : { false, true })
+				for (unsigned failed = 0; failed <= 3; ++failed) {
+					Fixture test;
+					test.cache.failedLookup = failed;
+					test.fur.settings.ShellCount = 1;
+					test.fur.settings.DistanceShellBudget = false;
+					test.fur.settings.HideCoveredFur = deferred;
+					test.fur.replaying = replaying;
+					test.fur.rootTest = true;
+					test.geometry.worldBound.center.distance = 2401.0f;
+					test.geometry.data.skinInstance = std::make_shared<RE::NiSkinInstance>();
+					test.Begin();
+					Require(projectionCalls == 0 && test.cache.lookups == 3, "One layer must skip projection while retaining every shader readiness check");
+					if (failed) {
+						Require(test.fur.bindings == 0 && test.fur.dynamics == 0 && test.fur.frameBodies.empty() && test.fur.deferredPasses.empty(), "Unavailable one-layer shaders must retain native fallback without publishing overlay data");
+						continue;
+					}
+					const bool queued = deferred && !replaying;
+					Require(test.fur.bindings == unsigned(!queued) && test.fur.deferredPasses.size() == unsigned(queued), "One-layer fur must preserve immediate, deferred and replay routing");
+					Require(test.fur.dynamics == 1 && test.fur.frameBodies.size() == 1, "One-layer fur must prepare dynamics and the overlay body");
+					const auto& body = test.fur.frameBodies[0];
+					const float density = (2500.0f - 2400.0f) / (2500.0f - 700.0f);
+					Require(body.perPass.ShellCount == 1.0f && body.perPass.TipWeight == 1.0f && body.perPass.Density == density && body.deferred == (queued || replaying), "Overlay data must retain one-layer density and deferral");
+					if (!queued)
+						Require(test.fur.boundPass.RootTest == float(replaying), "One-layer replay must retain covered-root testing");
+				}
+	}
 }
 
 int main()
@@ -423,6 +538,8 @@ int main()
 		TestGeometryAdmission();
 		TestPassRouting();
 		TestOverlayRouting();
+		TestProjectedBudget();
+		TestOneLayerRouting();
 		std::cout << checked << " fur admission, native fallback and overlay routing checks passed\n";
 		return 0;
 	} catch (const std::exception& error) {

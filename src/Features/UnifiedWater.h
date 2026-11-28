@@ -3,6 +3,7 @@
 #include "UnifiedWater/Flowmap.h"
 #include "UnifiedWater/ReflectionCapture.h"
 #include "UnifiedWater/WaterCache.h"
+#include "UnifiedWater/WaterLOD.h"
 
 #include <atomic>
 
@@ -70,6 +71,8 @@ struct UnifiedWater : OverlayFeature
 	struct TESWaterSystem_AddWater
 	{
 		static void thunk(RE::TESWaterSystem* waterSystem, RE::NiAVObject* water, RE::TESWaterForm* waterType, float waterHeight, const RE::BSTArray<RE::NiPointer<RE::BSMultiBoundAABB>>* multiBounds, bool noDisplacement, bool isProcedural);
+		/// Initializes native materials, including replacements; caller holds the water-system lock.
+		static void InitializeLocked(RE::TESWaterSystem* waterSystem, RE::NiAVObject* water, RE::TESWaterForm* waterType, float waterHeight, const RE::BSTArray<RE::NiPointer<RE::BSMultiBoundAABB>>* multiBounds, bool noDisplacement, bool isProcedural);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
@@ -82,6 +85,13 @@ struct UnifiedWater : OverlayFeature
 	struct BGSTerrainBlock_Attach
 	{
 		static void thunk(RE::BGSTerrainBlock* block);
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	/** @brief Keeps native LOD registration and reattachment limited to unowned water. */
+	struct TESWaterSystem_AddLODWater
+	{
+		static void thunk(RE::TESWaterSystem* waterSystem, RE::NiAVObject* water, RE::TESWorldSpace* worldSpace, RE::NiNode* root, RE::BSMultiBoundNode* bound, bool enableLODWaterHeight);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
@@ -143,8 +153,10 @@ struct UnifiedWater : OverlayFeature
 	const char* GetOverlayWindowName() const override { return "UWCacheCreationInfo"; }
 
 	virtual void DataLoaded() override;
-	/// Native water remains active until all replacement resources are published.
+	/// Uses native shaders until replacement meshes and the flowmap are initialized.
 	bool RequiresVanillaWaterShaders() const;
+	/// Distinguishes generated tiles from native water during registration and visibility updates.
+	bool IsGeneratedWater(const RE::NiAVObject* water) const;
 	/// Keeps the native dynamic capture registered before the engine schedules water effects.
 	void MaintainReflectionCapture();
 
@@ -179,9 +191,11 @@ private:
 	std::atomic_bool waterDataReady{ false };
 	// These fields share the engine water-system lock with native array membership.
 	UnifiedWaterReflectionCapture reflectionCapture;
+	UnifiedWaterLOD waterLOD;
 	std::uint32_t reflectionRetryFrames = 0;
 
-	void InitializeWaterMaterial(RE::TESWaterSystem& waterSystem, RE::BSTriShape* shape, RE::TESWaterForm* form, float height);
+	/// Reports usable material initialization and removes temporary registration; requires the water-system lock.
+	bool InitializeWaterMaterial(RE::TESWaterSystem& waterSystem, RE::BSTriShape* shape, RE::TESWaterForm* form, float height);
 	void RetireReflectionCapture(bool clearSources);
 
 	void TryCompleteDeferredChildWorldspaceCull(RE::TES* tes = nullptr);
@@ -191,6 +205,6 @@ private:
 	// generated instruction snapshots independently when asynchronous work ends.
 	bool IsWaterDataReady() const;
 	bool IsExteriorWorldspaceActive() const;
-	void UpdateWaterLODCull() const;
+	void UpdateWaterLODCull();
 	static bool LoadOrderChanged(uint64_t& a_hash);
 };

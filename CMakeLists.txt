@@ -5729,6 +5729,36 @@ if(BUILD_CONTROLLER_TESTS)
         d3d_context_protection_test
         PRIVATE "${_flowmap_test_dir}"
     )
+    set(_water_lod_test_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/unified-water-lod"
+    )
+    set(_water_lod_test_headers
+        "${_water_lod_test_dir}/water_lod_ownership_under_test.h"
+        "${_water_lod_test_dir}/water_flowmap_patch_under_test.h"
+        "${_water_lod_test_dir}/water_node_cleanup_under_test.h"
+        "${_water_lod_test_dir}/water_lod_visibility_under_test.h"
+        "${_water_lod_test_dir}/water_lod_hooks_under_test.h"
+    )
+    add_custom_command(
+        OUTPUT ${_water_lod_test_headers}
+        COMMAND
+            "${CMAKE_COMMAND}" "-DPROJECT_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DOUTPUT_DIRECTORY=${_water_lod_test_dir}" -P
+            "${PROJECT_SOURCE_DIR}/tests/extract_unified_water_lod.cmake"
+        DEPENDS
+            src/Features/UnifiedWater/WaterLOD.h
+            src/Features/UnifiedWater.cpp
+            tests/extract_unified_water_lod.cmake
+            tests/extract_source_region.cmake
+        VERBATIM
+    )
+    add_controller_test(unified_water_lod_test UnifiedWaterLOD tests/unified_water_lod_test.cpp)
+    target_sources(unified_water_lod_test PRIVATE ${_water_lod_test_headers})
+    target_include_directories(
+        unified_water_lod_test
+        PRIVATE "${_water_lod_test_dir}"
+    )
+    add_test(NAME UnifiedWaterLODAE COMMAND unified_water_lod_test AE)
     set(_reflection_test_dir
         "${CMAKE_CURRENT_BINARY_DIR}/generated/unified-water-reflection"
     )

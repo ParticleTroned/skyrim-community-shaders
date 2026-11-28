@@ -324,6 +324,11 @@ namespace globals::features
 	static struct
 	{
 		UnifiedWaterReflectionCapture reflectionCapture;
+		struct
+		{
+			const RE::NiAVObject* generated = nullptr;
+			bool Contains(const RE::NiAVObject* water) const { return water && water == generated; }
+		} waterLOD;
 	} unifiedWater;
 }
 
@@ -332,6 +337,7 @@ struct UnifiedWater
 	struct TESWaterSystem_AddWater
 	{
 		static void thunk(RE::TESWaterSystem*, RE::NiAVObject*, RE::TESWaterForm*, float, const RE::BSTArray<RE::NiPointer<RE::BSMultiBoundAABB>>*, bool, bool);
+		static void InitializeLocked(RE::TESWaterSystem*, RE::NiAVObject*, RE::TESWaterForm*, float, const RE::BSTArray<RE::NiPointer<RE::BSMultiBoundAABB>>*, bool, bool);
 		static inline decltype(&thunk) func;
 	};
 	bool loaded = true;
@@ -343,7 +349,7 @@ struct UnifiedWater
 	std::uint32_t reflectionRetryFrames = 0;
 	bool IsWaterDataReady() const { return ready; }
 	bool IsExteriorWorldspaceActive() const { return exterior; }
-	void InitializeWaterMaterial(RE::TESWaterSystem&, RE::BSTriShape*, RE::TESWaterForm*, float);
+	bool InitializeWaterMaterial(RE::TESWaterSystem&, RE::BSTriShape*, RE::TESWaterForm*, float);
 	void RetireReflectionCapture(bool);
 	void MaintainReflectionCapture();
 };
@@ -576,14 +582,55 @@ static void TestSharedMaterialRepair()
 	}
 }
 
+static void TestGeneratedRegistrationGate()
+{
+	Scene scene;
+	const auto tile = scene.MakeTile();
+	const auto previous = std::exchange(UnifiedWater::TESWaterSystem_AddWater::func, CheckNativeAddWater);
+	expectedWaterCall.water = tile.get();
+	globals::features::unifiedWater.waterLOD.generated = tile.get();
+	const auto calls = checkedNativeCalls;
+	UnifiedWater::TESWaterSystem_AddWater::thunk(&scene.system, tile.get(), nullptr, 123.5f, nullptr, true, false);
+	assert(checkedNativeCalls == calls && scene.system.lock == 0);
+	{
+		RE::BSSpinLockGuard guard(scene.system.lock);
+		UnifiedWater::TESWaterSystem_AddWater::InitializeLocked(&scene.system, tile.get(), nullptr, 123.5f, nullptr, true, false);
+	}
+	assert(checkedNativeCalls == calls + 1 && scene.system.lock == 0);
+	globals::features::unifiedWater.waterLOD.generated = nullptr;
+	UnifiedWater::TESWaterSystem_AddWater::func = previous;
+}
+
+static void TestUnpublishedMaterialCleanup()
+{
+	Scene scene;
+	scene.uw.reflectionCapture.ClearSources();
+	const auto tile = scene.MakeTile();
+	{
+		RE::BSSpinLockGuard guard(scene.system.lock);
+		assert(scene.uw.InitializeWaterMaterial(scene.system, tile.get(), &scene.water, 100));
+		scene.system.addFails = true;
+		assert(!scene.uw.InitializeWaterMaterial(scene.system, tile.get(), &scene.water, 100));
+	}
+	assert(scene.system.waterObjects.empty() && scene.system.waterNormals.empty());
+	const auto previouslyDeferred = deferred.size();
+	scene.uw.MaintainReflectionCapture();
+	assert(scene.system.waterReflections.empty() && deferred.size() == previouslyDeferred + 1);
+}
+
 int main()
 {
+	TestGeneratedRegistrationGate();
 	UnifiedWater::TESWaterSystem_AddWater::func = NativeAddWater;
+	TestUnpublishedMaterialCleanup();
 	TestSharedMaterialRepair();
 	{
 		Scene scene;
 		auto tile = scene.MakeTile();
-		scene.uw.InitializeWaterMaterial(scene.system, tile.get(), &scene.water, 100);
+		{
+			RE::BSSpinLockGuard guard(scene.system.lock);
+			assert(scene.uw.InitializeWaterMaterial(scene.system, tile.get(), &scene.water, 100));
+		}
 		const auto reflection = scene.system.waterReflections.front().get();
 		reflection->requireLiveMaterialOnDestruction = true;
 		const auto material = reflection->waterMaterial;
@@ -613,7 +660,10 @@ int main()
 		RE::TESWaterReflections* retained = nullptr;
 		for (unsigned tileIndex = 0; tileIndex < 32; ++tileIndex) {
 			auto tile = scene.MakeTile();
-			scene.uw.InitializeWaterMaterial(scene.system, tile.get(), &scene.water, 100);
+			{
+				RE::BSSpinLockGuard guard(scene.system.lock);
+				assert(scene.uw.InitializeWaterMaterial(scene.system, tile.get(), &scene.water, 100));
+			}
 			assert(scene.system.waterReflections.size() == 1);
 			const auto reflection = scene.system.waterReflections.front().get();
 			if (!retained)
@@ -632,7 +682,10 @@ int main()
 		scene.system.AddWater(nativeShape.get(), &scene.water, 100, nullptr, true, false);
 		const auto reflection = scene.system.waterReflections.front().get();
 		auto tile = scene.MakeTile();
-		scene.uw.InitializeWaterMaterial(scene.system, tile.get(), &scene.water, 100);
+		{
+			RE::BSSpinLockGuard guard(scene.system.lock);
+			assert(scene.uw.InitializeWaterMaterial(scene.system, tile.get(), &scene.water, 100));
+		}
 		assert(!scene.uw.reflectionCapture.Contains(reflection));  // Reused entry belongs to nativeShape.
 		deferred.clear();
 		scene.uw.MaintainReflectionCapture();

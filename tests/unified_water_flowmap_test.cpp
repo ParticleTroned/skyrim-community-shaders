@@ -227,7 +227,7 @@ struct WaterCache
 	}
 	void LoadOrGenerateCaches() {}
 };
-bool DisableVanillaWaterLOD()
+bool DisableVanillaFlowmapUpdates()
 {
 	Fixture::active->patchesApplied = Fixture::active->patchSucceeds;
 	return Fixture::active->patchSucceeds;

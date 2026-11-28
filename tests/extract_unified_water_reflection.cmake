@@ -18,5 +18,5 @@ extract_between("${_water}"
     "water_entry_cleanup_under_test.h")
 extract_between("${_water}"
     "namespace\n{\n\tRE::BSWaterShaderProperty* GetWaterProperty"
-    "void UnifiedWater::UpdateWaterLODCull() const"
+    "bool UnifiedWater::IsGeneratedWater("
     "reflection_maintenance_under_test.h")

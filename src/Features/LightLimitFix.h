@@ -571,6 +571,8 @@ public:
 		static void InstallVRSceneGraphCullingObjectGuard();
 		static void InstallVRShadowMapCameraGuard();
 		static void InstallVRShadowLightLifetimeGuard();
+		/** Skips null VR light entries while preserving native geometry and array cleanup. */
+		static void InstallVRLightGeometryUnlinkGuard();
 		static void InstallVRRoomLightCullingProcessGuards();
 		static void InstallVRRoomLightEntryGuards();
 		static void InstallVREffectShaderLightGuards();
@@ -591,6 +593,7 @@ public:
 			InstallVRSceneGraphCullingObjectGuard();
 			InstallVRShadowMapCameraGuard();
 			InstallVRShadowLightLifetimeGuard();
+			InstallVRLightGeometryUnlinkGuard();
 			InstallVRRoomLightCullingProcessGuards();
 			InstallVRRoomLightEntryGuards();
 			InstallVREffectShaderLightGuards();

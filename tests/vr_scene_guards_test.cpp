@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <format>
@@ -136,9 +137,11 @@ struct LightLimitFix
 		static void InstallVRSceneGraphCullingObjectGuard();
 		static void InstallVRShadowMapCameraGuard();
 		static void InstallVRShadowLightLifetimeGuard();
+		static void InstallVRLightGeometryUnlinkGuard();
 	};
 };
 
+#include "fixtures/vr_light_unlink_sites.h"
 #include "fixtures/vr_scene_guard_sites.h"
 #include "vr_scene_guards_under_test.h"
 
@@ -147,11 +150,13 @@ namespace
 	void Reset()
 	{
 		std::fill(image.begin(), image.end(), 0);
-		for (const auto& site : capturedSites) {
+		auto restoreSite = [](const auto& site) {
 			for (std::size_t i = 0; i < site.hex.size(); i += 2) {
 				image[site.rva + i / 2] = static_cast<std::uint8_t>(std::stoul(std::string(site.hex.substr(i, 2)), nullptr, 16));
 			}
-		}
+		};
+		std::ranges::for_each(capturedSites, restoreSite);
+		std::ranges::for_each(capturedLightUnlinkSites, restoreSite);
 		const auto executable = reinterpret_cast<std::uintptr_t>(&Reset);
 		for (auto rva : kVRShadowCameraVtableRVAs) {
 			std::memcpy(image.data() + rva, &executable, sizeof(executable));
@@ -234,6 +239,7 @@ namespace
 			LightLimitFix::Hooks::InstallVRSceneGraphCullingObjectGuard();
 			LightLimitFix::Hooks::InstallVRShadowMapCameraGuard();
 			LightLimitFix::Hooks::InstallVRShadowLightLifetimeGuard();
+			LightLimitFix::Hooks::InstallVRLightGeometryUnlinkGuard();
 			Require(SKSE::trampoline.writes.empty() && SKSE::trampoline.allocations == 0);
 		}
 	}
@@ -349,6 +355,281 @@ namespace
 		Require(continued == 2);
 	}
 
+	class NativeCallProbe : public Xbyak::CodeGenerator
+	{
+	public:
+		using Vectors = std::array<std::array<std::uint64_t, 2>, 10>;
+		Vectors expectedVectors{}, observedVectors{};
+		std::array<std::uint64_t, 8> expectedGeneral{}, observedGeneral{};
+		std::array<std::uintptr_t, 2> stackPointers{};
+
+		explicit NativeCallProbe(const void* a_target)
+		{
+			for (std::size_t i = 0; i < expectedVectors.size(); ++i) {
+				expectedVectors[i] = { 0xAABBCCDD00000000ULL + i, 0x1122334400000000ULL + i };
+			}
+			for (std::size_t i = 0; i < expectedGeneral.size(); ++i) {
+				expectedGeneral[i] = 0x9988776600000000ULL + i;
+			}
+			const std::array<Xbyak::Reg64, 8> nonvolatile{ rbx, rbp, rsi, rdi, r12, r13, r14, r15 };
+			for (const auto& reg : nonvolatile) {
+				push(reg);
+			}
+			sub(rsp, 0xC8);
+			mov(rax, reinterpret_cast<std::uintptr_t>(expectedVectors.data()));
+			for (int i = 0; i < 10; ++i) {
+				movdqu(ptr[rsp + 0x20 + i * 16], Xbyak::Xmm(i + 6));
+				movdqu(Xbyak::Xmm(i + 6), ptr[rax + i * 16]);
+			}
+			for (std::size_t i = 0; i < nonvolatile.size(); ++i) {
+				mov(nonvolatile[i], expectedGeneral[i]);
+			}
+			mov(rax, reinterpret_cast<std::uintptr_t>(stackPointers.data()));
+			mov(qword[rax], rsp);
+			mov(rax, reinterpret_cast<std::uintptr_t>(a_target));
+			call(rax);
+			mov(rax, reinterpret_cast<std::uintptr_t>(stackPointers.data()));
+			mov(qword[rax + 8], rsp);
+			mov(rax, reinterpret_cast<std::uintptr_t>(observedGeneral.data()));
+			for (std::size_t i = 0; i < nonvolatile.size(); ++i) {
+				mov(qword[rax + i * 8], nonvolatile[i]);
+			}
+			mov(rax, reinterpret_cast<std::uintptr_t>(observedVectors.data()));
+			for (int i = 0; i < 10; ++i) {
+				movdqu(ptr[rax + i * 16], Xbyak::Xmm(i + 6));
+				movdqu(Xbyak::Xmm(i + 6), ptr[rsp + 0x20 + i * 16]);
+			}
+			add(rsp, 0xC8);
+			for (auto reg = nonvolatile.rbegin(); reg != nonvolatile.rend(); ++reg) {
+				pop(*reg);
+			}
+			ret();
+			ready();
+		}
+
+		void RequirePreserved() const
+		{
+			Require(stackPointers[0] == stackPointers[1]);
+			Require(observedGeneral == expectedGeneral);
+			Require(observedVectors == expectedVectors);
+		}
+	};
+
+	void TestLightUnlinkInstallation()
+	{
+		Reset();
+		LightLimitFix::Hooks::InstallVRLightGeometryUnlinkGuard();
+		Require(errors.empty() && SKSE::trampoline.allocations == 1);
+		const auto& writes = SKSE::trampoline.writes;
+		Require(writes.size() == 1 && writes[0].rva == 0x1354830);
+		Require(writes[0].size == 5 && writes[0].opcode == 0xE9);
+		Require(image[0x1354835] == REL::NOP && image[0x1354836] == REL::NOP);
+		Require(image[0x1354837] == 0xF0 && image[0x1354880] == 0x48);
+		VRLightGeometryUnlinkGuard expected{ REL::Module::get().base() + 0x1354837, REL::Module::get().base() + 0x1354880 };
+		expected.ready();
+		Require(SKSE::trampoline.lastCode.size() == expected.getSize() &&
+				std::equal(SKSE::trampoline.lastCode.begin(), SKSE::trampoline.lastCode.end(), expected.getCode()));
+
+		const auto& function = capturedLightUnlinkSites[0];
+		for (std::size_t byte = 0; byte < function.hex.size() / 2; ++byte) {
+			Reset();
+			image[function.rva + byte] ^= 0x80;
+			LightLimitFix::Hooks::InstallVRLightGeometryUnlinkGuard();
+			Require(SKSE::trampoline.writes.empty() && SKSE::trampoline.allocations == 0);
+			Require(errors.size() == 2);
+		}
+	}
+
+	struct UnlinkGeometry
+	{
+		std::uintptr_t vtable = 0;
+		std::uint32_t references = 1;
+	};
+	struct UnlinkListEntry
+	{
+		UnlinkListEntry* next = nullptr;
+		UnlinkListEntry* previous = nullptr;
+		UnlinkGeometry* geometry = nullptr;
+	};
+	struct UnlinkLight
+	{
+		std::array<std::byte, 0x18> prefix{};
+		UnlinkListEntry* head = nullptr;
+		UnlinkListEntry* tail = nullptr;
+		std::uint32_t count = 0;
+	};
+	struct UnlinkLightData
+	{
+		UnlinkLight** lights;
+		std::uint64_t capacity;
+		std::uint32_t count;
+		std::uint32_t padding = 0;
+		std::int32_t fence = 17;
+		std::uint32_t activeMask = 0x12345678;
+		bool changed = false;
+	};
+	static_assert(offsetof(UnlinkGeometry, references) == 8);
+	static_assert(sizeof(UnlinkListEntry) == 0x18);
+	static_assert(offsetof(UnlinkLight, head) == 0x18 && offsetof(UnlinkLight, count) == 0x28);
+	static_assert(offsetof(UnlinkLightData, count) == 0x10 && offsetof(UnlinkLightData, fence) == 0x18);
+
+	std::array<void*, 16> freedUnlinkEntries{};
+	std::size_t freedUnlinkCount = 0;
+	bool unlinkHelperError = false;
+
+	void RecordUnlinkFree(void* entry, std::size_t size)
+	{
+		if (!entry || size != sizeof(UnlinkListEntry) || freedUnlinkCount == freedUnlinkEntries.size() ||
+			std::find(freedUnlinkEntries.begin(), freedUnlinkEntries.end(), entry) != freedUnlinkEntries.end()) {
+			unlinkHelperError = true;
+			return;
+		}
+		freedUnlinkEntries[freedUnlinkCount++] = entry;
+	}
+
+	void MoveUnlinkArray(std::uint32_t* count, UnlinkLight** data, std::uint32_t destination,
+		std::uint32_t source, std::uint32_t length, std::uint32_t stride)
+	{
+		if (!count || !data || stride != sizeof(UnlinkLight*) || destination > *count || source > *count ||
+			length > *count - destination || length > *count - source) {
+			unlinkHelperError = true;
+			return;
+		}
+		std::memmove(data + destination, data + source, static_cast<std::size_t>(length) * stride);
+	}
+
+	class NativeLightUnlink : public Xbyak::CodeGenerator
+	{
+	public:
+		explicit NativeLightUnlink(bool a_guarded) : Xbyak::CodeGenerator(0x2000)
+		{
+			// Run captured cleanup and reference operations; replace only allocation release and byte movement.
+			constexpr std::uintptr_t baseRVA = 0x13547E0;
+			db(image.data() + baseRVA, 0x1355763 - baseRVA);
+			auto redirectCall = [&](std::uintptr_t rva, std::size_t target) {
+				Require(image[rva] == 0xE8);
+				rewrite(rva - baseRVA + 1, static_cast<std::uint32_t>(target - (rva - baseRVA + 5)), 4);
+			};
+			auto moveStub = getSize();
+			mov(rax, reinterpret_cast<std::uintptr_t>(&MoveUnlinkArray));
+			jmp(rax);
+			redirectCall(0x13553F3, moveStub);
+			auto freeStub = getSize();
+			mov(rax, reinterpret_cast<std::uintptr_t>(&RecordUnlinkFree));
+			jmp(rax);
+			for (auto rva : { 0x1355548, 0x135561E, 0x13556F9 })
+				redirectCall(rva, freeStub);
+
+			if (a_guarded) {
+				const auto base = reinterpret_cast<std::uintptr_t>(getCode());
+				VRLightGeometryUnlinkGuard guard{ base + 0x57, base + 0xA0 };
+				guard.ready();
+				rewrite(0x50, 0xE9, 1);
+				rewrite(0x51, static_cast<std::uint32_t>(getSize() - 0x55), 4);
+				rewrite(0x55, 0x9090, 2);
+				db(guard.getCode(), guard.getSize());
+			}
+			ready();
+		}
+	};
+
+	void RunLightUnlinkCase(NativeCallProbe& probe, const std::vector<std::size_t>& slots,
+		std::size_t listLength, int targetPosition, bool nullGeometry = false)
+	{
+		UnlinkGeometry geometry, other;
+		std::array<UnlinkLight, 3> lights{};
+		std::array<std::array<UnlinkListEntry, 3>, 3> nodes{};
+		std::array<UnlinkLight*, 8> entries{};
+		std::array<bool, 3> used{};
+		Require(slots.size() <= entries.size() && listLength <= nodes[0].size());
+		entries.fill(&lights.back());
+		for (std::size_t i = 0; i < slots.size(); ++i) {
+			entries[i] = nullptr;
+			if (slots[i]) {
+				Require(slots[i] <= lights.size());
+				entries[i] = &lights[slots[i] - 1];
+				used[slots[i] - 1] = true;
+			}
+		}
+		std::size_t expectedFreed = 0;
+		for (std::size_t light = 0; light < lights.size(); ++light) {
+			auto& owner = lights[light];
+			owner.count = static_cast<std::uint32_t>(listLength);
+			owner.head = listLength ? &nodes[light][0] : nullptr;
+			owner.tail = listLength ? &nodes[light][listLength - 1] : nullptr;
+			for (std::size_t node = 0; node < listLength; ++node) {
+				const bool target = static_cast<int>(node) == targetPosition;
+				nodes[light][node] = { node + 1 < listLength ? &nodes[light][node + 1] : nullptr,
+					node ? &nodes[light][node - 1] : nullptr, target ? &geometry : &other };
+				++nodes[light][node].geometry->references;
+				expectedFreed += used[light] && target && !nullGeometry ? 1 : 0;
+			}
+		}
+		const auto originalEntries = entries;
+		const auto originalReferences = geometry.references;
+		const auto otherReferences = other.references;
+		UnlinkLightData data{ entries.data(), entries.size(), static_cast<std::uint32_t>(slots.size()) };
+		freedUnlinkEntries.fill(nullptr);
+		freedUnlinkCount = 0;
+		unlinkHelperError = false;
+		probe.getCode<void (*)(UnlinkLightData*, UnlinkGeometry*)>()(&data, nullGeometry ? nullptr : &geometry);
+		probe.RequirePreserved();
+		Require(!unlinkHelperError && freedUnlinkCount == expectedFreed);
+		Require(geometry.references == originalReferences - expectedFreed && other.references == otherReferences);
+		Require(data.count == (nullGeometry ? slots.size() : 0));
+		Require(data.fence == (slots.empty() || nullGeometry ? 17 : -1));
+		Require(data.lights == entries.data() && data.capacity == entries.size() && data.activeMask == 0x12345678 && !data.changed);
+		Require(std::equal(entries.begin() + (nullGeometry ? 0 : slots.size()), entries.end(),
+			originalEntries.begin() + (nullGeometry ? 0 : slots.size())));
+		for (std::size_t light = 0; light < lights.size(); ++light) {
+			const auto& owner = lights[light];
+			std::uint32_t remaining = 0;
+			UnlinkListEntry* previous = nullptr;
+			auto* node = owner.head;
+			for (std::size_t index = 0; index < listLength; ++index) {
+				const bool target = static_cast<int>(index) == targetPosition;
+				if (used[light] && target && !nullGeometry) {
+					Require(std::find(freedUnlinkEntries.begin(), freedUnlinkEntries.end(), &nodes[light][index]) != freedUnlinkEntries.end());
+					continue;
+				}
+				Require(node == &nodes[light][index]);
+				Require(node->previous == previous && node->geometry == (target ? &geometry : &other));
+				++remaining;
+				previous = node;
+				node = node->next;
+			}
+			Require(node == nullptr && owner.count == remaining && owner.tail == previous);
+		}
+		for (std::size_t i = 0; i < freedUnlinkCount; ++i)
+			Require(static_cast<UnlinkListEntry*>(freedUnlinkEntries[i])->geometry == nullptr);
+	}
+
+	void TestLightUnlinkExecution()
+	{
+		Reset();
+		NativeLightUnlink original(false), guarded(true);
+		NativeCallProbe originalProbe(original.getCode()), guardedProbe(guarded.getCode());
+		for (auto* probe : { &originalProbe, &guardedProbe }) {
+			RunLightUnlinkCase(*probe, {}, 0, -1);
+			RunLightUnlinkCase(*probe, { 1 }, 1, 0);
+			RunLightUnlinkCase(*probe, { 1 }, 3, 1);
+			RunLightUnlinkCase(*probe, { 1, 2 }, 0, -1);
+			RunLightUnlinkCase(*probe, { 1, 2, 3 }, 3, -1);
+			RunLightUnlinkCase(*probe, { 1, 2 }, 3, 1, true);
+			for (int position = 0; position < 3; ++position)
+				RunLightUnlinkCase(*probe, { 1, 1, 2, 3 }, 3, position);
+		}
+		for (const std::vector<std::size_t>& slots : {
+				 std::vector<std::size_t>{ 0 }, { 0, 0, 0 }, { 0, 1, 2 }, { 1, 0, 2 },
+				 { 1, 2, 0 }, { 0, 1, 0, 2, 0, 3, 0 }, { 0, 1, 0, 1, 0 } }) {
+			RunLightUnlinkCase(guardedProbe, slots, 0, -1);
+			RunLightUnlinkCase(guardedProbe, slots, 3, -1);
+			RunLightUnlinkCase(guardedProbe, slots, 3, 1, true);
+			for (int position = 0; position < 3; ++position)
+				RunLightUnlinkCase(guardedProbe, slots, 3, position);
+		}
+	}
+
 	void TestNativeLateExit()
 	{
 		Reset();
@@ -384,59 +665,13 @@ namespace
 		nativeFrame.jmp(nativeFrame.rax);
 		nativeFrame.ready();
 
-		using Vectors = std::array<std::array<std::uint64_t, 2>, 10>;
-		Vectors expectedVectors{}, observedVectors{};
-		for (std::size_t i = 0; i < expectedVectors.size(); ++i) {
-			expectedVectors[i] = { 0xAABBCCDD00000000ULL + i, 0x1122334400000000ULL + i };
-		}
-		std::array<std::uint64_t, 8> expectedGeneral{}, observedGeneral{};
-		for (std::size_t i = 0; i < expectedGeneral.size(); ++i) {
-			expectedGeneral[i] = 0x9988776600000000ULL + i;
-		}
-		std::array<std::uintptr_t, 2> stackPointers{};
-		Xbyak::CodeGenerator probe;
-		const std::array<Xbyak::Reg64, 8> nonvolatile{ probe.rbx, probe.rbp, probe.rsi, probe.rdi, probe.r12, probe.r13, probe.r14, probe.r15 };
-		for (const auto& reg : nonvolatile) {
-			probe.push(reg);
-		}
-		probe.sub(probe.rsp, 0xC8);
-		probe.mov(probe.rax, reinterpret_cast<std::uintptr_t>(expectedVectors.data()));
-		for (int i = 0; i < 10; ++i) {
-			probe.movdqu(probe.ptr[probe.rsp + 0x20 + i * 16], Xbyak::Xmm(i + 6));
-			probe.movdqu(Xbyak::Xmm(i + 6), probe.ptr[probe.rax + i * 16]);
-		}
-		for (std::size_t i = 0; i < nonvolatile.size(); ++i) {
-			probe.mov(nonvolatile[i], expectedGeneral[i]);
-		}
-		probe.mov(probe.rax, reinterpret_cast<std::uintptr_t>(stackPointers.data()));
-		probe.mov(probe.qword[probe.rax], probe.rsp);
-		probe.mov(probe.rax, reinterpret_cast<std::uintptr_t>(nativeFrame.getCode()));
-		probe.call(probe.rax);
-		probe.mov(probe.rax, reinterpret_cast<std::uintptr_t>(stackPointers.data()));
-		probe.mov(probe.qword[probe.rax + 8], probe.rsp);
-		probe.mov(probe.rax, reinterpret_cast<std::uintptr_t>(observedGeneral.data()));
-		for (std::size_t i = 0; i < nonvolatile.size(); ++i) {
-			probe.mov(probe.qword[probe.rax + i * 8], nonvolatile[i]);
-		}
-		probe.mov(probe.rax, reinterpret_cast<std::uintptr_t>(observedVectors.data()));
-		for (int i = 0; i < 10; ++i) {
-			probe.movdqu(probe.ptr[probe.rax + i * 16], Xbyak::Xmm(i + 6));
-			probe.movdqu(Xbyak::Xmm(i + 6), probe.ptr[probe.rsp + 0x20 + i * 16]);
-		}
-		probe.add(probe.rsp, 0xC8);
-		for (auto reg = nonvolatile.rbegin(); reg != nonvolatile.rend(); ++reg) {
-			probe.pop(*reg);
-		}
-		probe.ret();
-		probe.ready();
+		NativeCallProbe probe(nativeFrame.getCode());
 		auto call = probe.getCode<void (*)(void*)>();
 		auto verify = [&](void* object, bool valid) {
 			const int before = continued;
 			call(object);
 			Require(continued == before + (valid ? 1 : 0));
-			Require(stackPointers[0] == stackPointers[1]);
-			Require(observedGeneral == expectedGeneral);
-			Require(observedVectors == expectedVectors);
+			probe.RequirePreserved();
 		};
 		verify(nullptr, false);
 		camera[0] = reinterpret_cast<std::uintptr_t>(image.data());
@@ -453,9 +688,9 @@ namespace
 		epilogue.rewrite(0x14, 0x45, 1);
 		epilogue.rewrite(0x19, 0x45, 1);
 		call(nullptr);
-		Require(stackPointers[0] == stackPointers[1] && observedGeneral == expectedGeneral);
-		Require(observedVectors[0] != expectedVectors[0] && observedVectors[1] != expectedVectors[1]);
-		Require(observedVectors[8] == expectedVectors[0] && observedVectors[9] == expectedVectors[1]);
+		Require(probe.stackPointers[0] == probe.stackPointers[1] && probe.observedGeneral == probe.expectedGeneral);
+		Require(probe.observedVectors[0] != probe.expectedVectors[0] && probe.observedVectors[1] != probe.expectedVectors[1]);
+		Require(probe.observedVectors[8] == probe.expectedVectors[0] && probe.observedVectors[9] == probe.expectedVectors[1]);
 	}
 }
 
@@ -468,6 +703,8 @@ int main()
 		TestNativeShadowLoopInstallation();
 		TestNativeShadowLoopExecution();
 		TestEntryGuardExecution();
+		TestLightUnlinkInstallation();
+		TestLightUnlinkExecution();
 		TestNativeLateExit();
 		std::cout << "VR scene guard installation: " << assertions << " assertions passed\n";
 	} catch (const std::exception& error) {

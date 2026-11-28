@@ -3353,6 +3353,7 @@ if(BUILD_CONTROLLER_TESTS)
         "${_snow_pass_test_dir}/snow_equals_under_test.h"
         "${_snow_pass_test_dir}/snow_lod_tree_under_test.h"
         "${_snow_pass_test_dir}/snow_foliage_under_test.h"
+        "${_snow_pass_test_dir}/snow_fire_geometry_under_test.h"
     )
     add_custom_command(
         OUTPUT ${_snow_pass_headers}
@@ -3372,6 +3373,12 @@ if(BUILD_CONTROLLER_TESTS)
     target_sources(snow_cover_pass_test PRIVATE ${_snow_pass_headers})
     target_include_directories(
         snow_cover_pass_test
+        PRIVATE "${_snow_pass_test_dir}"
+    )
+    add_controller_test(snow_cover_fire_test SnowCoverFire tests/snow_cover_fire_test.cpp)
+    target_sources(snow_cover_fire_test PRIVATE ${_snow_pass_headers})
+    target_include_directories(
+        snow_cover_fire_test
         PRIVATE "${_snow_pass_test_dir}"
     )
     add_controller_test(

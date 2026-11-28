@@ -691,7 +691,7 @@ bool SnowCover::ScanFireSources()
 
 		bool hasFire = false;
 		fireSamples.clear();
-		SnowEnvironment::CollectFireGeometry(root, false, hasFire, fireSamples);
+		SnowEnvironment::CollectFireGeometry(root, false, !known, hasFire, fireSamples);
 		if (!known) {
 			fireBaseCache.emplace(base->GetFormID(), hasFire);
 			++classified;

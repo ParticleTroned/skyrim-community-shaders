@@ -169,11 +169,13 @@ namespace SnowEnvironment
 		return particleData && particleData->GetParticlesRuntimeData().subTextureOffsetsCount != 0;
 	}
 
-	void CollectFireGeometry(RE::NiAVObject* a_object, bool a_hidden, bool& a_hasFire, std::vector<RE::NiBound>& a_samples)
+	void CollectFireGeometry(RE::NiAVObject* a_object, bool a_hidden, bool a_classificationRequired, bool& a_hasFire, std::vector<RE::NiBound>& a_samples)
 	{
 		if (!a_object)
 			return;
 		const bool hidden = a_hidden || a_object->GetAppCulled();
+		if (hidden && !a_classificationRequired)
+			return;
 		if (auto* geometry = a_object->AsGeometry()) {
 			if (!IsFireGeometry(geometry))
 				return;
@@ -186,7 +188,7 @@ namespace SnowEnvironment
 		}
 		if (auto* node = a_object->AsNode()) {
 			for (auto& child : node->GetChildren())
-				CollectFireGeometry(child.get(), hidden, a_hasFire, a_samples);
+				CollectFireGeometry(child.get(), hidden, a_classificationRequired, a_hasFire, a_samples);
 		}
 	}
 

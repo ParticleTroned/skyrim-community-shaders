@@ -203,8 +203,9 @@ PS_OUTPUT RenderPBRGrass(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float snowSkyVisibility = 1.0;
 #		endif
 		SnowCover::GrassSnowState snowState = SnowCover::GetGrassSnowState(normal, input.WorldPosition.xyz, input.TexCoord.xy, viewPosition.xyz, snowSkyVisibility, false, eyeIndex, TexBaseSampler, true);
-		material.BaseColor = ApplyGrassSnowMeltDarkening(material.BaseColor, snowState.footprint);
-		SnowCover::FoliageSnowResult snow = SnowCover::ApplyGrassSnow(material.BaseColor, snowState, true);
+		SnowCover::FireMeltSample fireMelt = (SnowCover::FireMeltSample)0;
+		material.BaseColor = ApplyGrassSnowMeltDarkening(material.BaseColor, snowState.footprint, fireMelt);
+		SnowCover::FoliageSnowResult snow = SnowCover::ApplyGrassSnow(material.BaseColor, snowState, true, true, fireMelt);
 		Foliage::ApplySnowCoating(material, snow.Coverage, snow.SubstrateColor);
 	}
 #	endif

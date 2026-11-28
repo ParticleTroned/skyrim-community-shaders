@@ -25,6 +25,27 @@ namespace StreamingTextures
 	}
 
 	using TexturePointer = decltype(RE::BSLightingShaderMaterialBase::diffuseTexture);
+	struct MaterialLayout
+	{
+		const BSLightingShaderMaterialPBR* pbr = nullptr;
+		const BSLightingShaderMaterialPBRLandscape* terrain = nullptr;
+	};
+
+	static MaterialLayout GetMaterialLayout(const RE::BSShaderMaterial* material)
+	{
+		if (!material)
+			return {};
+		const auto feature = material->GetFeature();
+		if (feature == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend)
+			return { nullptr, BSLightingShaderMaterialPBRLandscape::GetRegistered(material) };
+		if (feature == RE::BSShaderMaterial::Feature::kDefault || feature == BSLightingShaderMaterialPBR::FEATURE) {
+			// TruePBR reports the native default feature; only registry membership proves its layout.
+			auto* candidate = reinterpret_cast<BSLightingShaderMaterialPBR*>(const_cast<RE::BSShaderMaterial*>(material));
+			return { BSLightingShaderMaterialPBR::All.Contains(candidate) ? candidate : nullptr, nullptr };
+		}
+		return {};
+	}
+
 	struct TerrainLayers
 	{
 		const RE::NiSourceTexture* diffuse = nullptr;
@@ -32,9 +53,9 @@ namespace StreamingTextures
 		std::span<const TexturePointer> additionalDiffuse, additionalNormal;
 	};
 
-	static std::optional<TerrainLayers> GetTerrainLayers(const RE::BSLightingShaderMaterialBase* material)
+	static std::optional<TerrainLayers> GetTerrainLayers(const RE::BSLightingShaderMaterialBase* material, const MaterialLayout& layout)
 	{
-		if (const auto* pbr = BSLightingShaderMaterialPBRLandscape::GetRegistered(material)) {
+		if (const auto* pbr = layout.terrain) {
 			if (!pbr->numLandscapeTextures || pbr->numLandscapeTextures > BSLightingShaderMaterialPBRLandscape::NumTiles)
 				return std::nullopt;
 			return TerrainLayers{ pbr->landscapeBaseColorTextures[0].get(), pbr->landscapeNormalTextures[0].get(),
@@ -57,11 +78,11 @@ namespace StreamingTextures
 		return SharesTextureResource(texture, defaults.defaultTextureBlack.get()) || SharesTextureResource(texture, defaults.defaultTextureNormalMap.get());
 	}
 
-	static bool IsAuxiliarySlot(const RE::BSLightingShaderMaterialBase* material, const RE::NiSourceTexture* texture)
+	static bool IsProtectedSlot(const RE::BSLightingShaderMaterialBase* material, const RE::NiSourceTexture* texture, const MaterialLayout& layout)
 	{
 		const auto matches = [&](const auto& auxiliary) { return SharesTextureResource(texture, auxiliary.get()); };
-		if (matches(material->rimSoftLightingTexture) || matches(material->specularBackLightingTexture))
-			return true;
+		if (layout.pbr)
+			return matches(layout.pbr->emissiveTexture) || matches(layout.pbr->displacementTexture);
 		const auto feature = material->GetFeature();
 		if (feature == RE::BSShaderMaterial::Feature::kGlowMap)
 			return matches(static_cast<const RE::BSLightingShaderMaterialGlowmap*>(material)->glowTexture);
@@ -78,9 +99,9 @@ namespace StreamingTextures
 			return matches(layers->layerTexture) || matches(layers->envTexture) || matches(layers->envMaskTexture);
 		}
 		if (feature == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend) {
-			if (const auto* pbr = BSLightingShaderMaterialPBRLandscape::GetRegistered(material))
+			if (const auto* pbr = layout.terrain)
 				return matches(pbr->terrainOverlayTexture) || matches(pbr->terrainNoiseTexture) ||
-				       std::ranges::any_of(pbr->landscapeDisplacementTextures, matches) || std::ranges::any_of(pbr->landscapeRMAOSTextures, matches);
+				       std::ranges::any_of(pbr->landscapeDisplacementTextures, matches);
 			const auto* terrain = static_cast<const RE::BSLightingShaderMaterialLandscape*>(material);
 			if (matches(terrain->terrainOverlayTexture) || matches(terrain->terrainNoiseTexture))
 				return true;
@@ -89,15 +110,25 @@ namespace StreamingTextures
 			const auto slots = helper.extendedSlots.find(material->hashKey);
 			return slots != helper.extendedSlots.end() && std::ranges::any_of(slots->second.parallax, matches);
 		}
-		if (feature == BSLightingShaderMaterialPBR::FEATURE) {
-			const auto* pbr = static_cast<const BSLightingShaderMaterialPBR*>(material);
-			return matches(pbr->rmaosTexture) || matches(pbr->emissiveTexture) || matches(pbr->displacementTexture) ||
-			       matches(pbr->featuresTexture0) || matches(pbr->featuresTexture1);
+		return false;
+	}
+
+	static bool IsMaterialMapSlot(const RE::BSLightingShaderMaterialBase* material, const RE::NiSourceTexture* texture, const MaterialLayout& layout)
+	{
+		const auto matches = [&](const auto& map) { return SharesTextureResource(texture, map.get()); };
+		if (matches(material->rimSoftLightingTexture) || matches(material->specularBackLightingTexture))
+			return true;
+		if (const auto* pbr = layout.pbr)
+			return matches(pbr->rmaosTexture) || matches(pbr->featuresTexture0) || matches(pbr->featuresTexture1);
+		if (const auto* terrain = layout.terrain) {
+			if (!terrain->numLandscapeTextures || terrain->numLandscapeTextures > BSLightingShaderMaterialPBRLandscape::NumTiles)
+				return false;
+			return std::ranges::any_of(std::span<const TexturePointer>(terrain->landscapeRMAOSTextures).first(terrain->numLandscapeTextures), matches);
 		}
 		return false;
 	}
 
-	static bool UsesExtendedParallax(const RE::BSLightingShaderMaterialBase* material)
+	static bool UsesExtendedParallax(const RE::BSLightingShaderMaterialBase* material, const MaterialLayout& layout)
 	{
 		const auto& extended = globals::features::extendedMaterials;
 		if (!extended.loaded || extended.settings.ParallaxStrength <= 0)
@@ -105,8 +136,7 @@ namespace StreamingTextures
 		const auto feature = material->GetFeature();
 		if (feature == RE::BSShaderMaterial::Feature::kEnvironmentMap)
 			return extended.settings.EnableComplexMaterial && static_cast<const RE::BSLightingShaderMaterialEnvmap*>(material)->envMaskTexture;
-		if (feature == BSLightingShaderMaterialPBR::FEATURE) {
-			const auto* pbr = static_cast<const BSLightingShaderMaterialPBR*>(material);
+		if (const auto* pbr = layout.pbr) {
 			if (pbr->pbrFlags.any(PBRFlags::InterlayerParallax))
 				return true;
 			return extended.settings.EnableParallax && pbr->displacementTexture &&
@@ -114,7 +144,7 @@ namespace StreamingTextures
 		}
 		if (feature != RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend)
 			return false;
-		if (const auto* pbr = BSLightingShaderMaterialPBRLandscape::GetRegistered(material))
+		if (const auto* pbr = layout.terrain)
 			return extended.settings.EnableParallax && std::ranges::any_of(pbr->landscapeDisplacementTextures, [](const auto& texture) {
 				return texture && (!globals::game::graphicsState || !SharesTextureResource(texture.get(), globals::game::graphicsState->GetRuntimeData().defaultTextureBlack.get()));
 			});
@@ -130,14 +160,23 @@ namespace StreamingTextures
 		});
 	}
 
-	bool IsStreamingSlot(const RE::BSLightingShaderMaterialBase* material, const RE::NiSourceTexture* texture)
+	static bool ClassifySlot(const RE::BSLightingShaderMaterialBase* material, const RE::NiSourceTexture* texture, const MaterialLayout& layout, std::uint32_t* categories)
 	{
-		if (!material || !texture || IsAuxiliarySlot(material, texture))
+		if (categories)
+			*categories = 0;
+		if (!material || !texture)
 			return false;
+		if (IsProtectedSlot(material, texture, layout))
+			return false;
+		if (IsMaterialMapSlot(material, texture, layout)) {
+			if (categories)
+				*categories = MaterialMaps;
+			return true;
+		}
 		if (material->GetFeature() == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend) {
 			if (IsDefaultTerrainTexture(texture))
 				return false;
-			const auto layers = GetTerrainLayers(material);
+			const auto layers = GetTerrainLayers(material, layout);
 			if (!layers)
 				return false;
 			const auto matches = [&](const auto& layer) { return layer.get() == texture; };
@@ -145,6 +184,11 @@ namespace StreamingTextures
 			       std::ranges::any_of(layers->additionalDiffuse, matches) || std::ranges::any_of(layers->additionalNormal, matches);
 		}
 		return texture == material->diffuseTexture.get() || texture == material->normalTexture.get();
+	}
+
+	bool IsStreamingSlot(const RE::BSLightingShaderMaterialBase* material, const RE::NiSourceTexture* texture, std::uint32_t* categories)
+	{
+		return ClassifySlot(material, texture, texture ? GetMaterialLayout(material) : MaterialLayout{}, categories);
 	}
 
 	RE::BSLightingShaderMaterialBase* StaticMaterial(RE::BSGeometry* geometry, std::uint32_t* categories
@@ -210,12 +254,16 @@ namespace StreamingTextures
 		constexpr auto emissive = static_cast<std::uint64_t>(Flag::kOwnEmit) |
 		                          static_cast<std::uint64_t>(Flag::kExternalEmittance) | static_cast<std::uint64_t>(Flag::kGlowMap);
 		const auto feature = property->material->GetFeature();
+		const auto layout = GetMaterialLayout(property->material);
+		const auto* pbr = layout.pbr;
+		if (feature == BSLightingShaderMaterialPBR::FEATURE && !pbr)
+			return reject(MaterialRejection::MaterialFeature);
 		const bool terrain = feature == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend;
 		const bool nativeParallax = feature == RE::BSShaderMaterial::Feature::kParallax ||
 		                            feature == RE::BSShaderMaterial::Feature::kParallaxOcc || feature == RE::BSShaderMaterial::Feature::kMultilayerParallax;
 		constexpr auto parallaxFlags = static_cast<std::uint64_t>(Flag::kParallax) | static_cast<std::uint64_t>(Flag::kParallaxOcclusion) |
 		                               static_cast<std::uint64_t>(Flag::kMultiLayerParallax);
-		const bool knownParallaxLayout = nativeParallax || terrain || feature == RE::BSShaderMaterial::Feature::kEnvironmentMap || feature == BSLightingShaderMaterialPBR::FEATURE;
+		const bool knownParallaxLayout = nativeParallax || terrain || feature == RE::BSShaderMaterial::Feature::kEnvironmentMap || pbr;
 		const auto protectedFlags = knownParallaxLayout ? excluded & ~parallaxFlags : excluded;
 		if (terrain)
 			required |= Terrain;
@@ -240,7 +288,7 @@ namespace StreamingTextures
 		if (property->material->GetType() != RE::BSShaderMaterial::Type::kLighting)
 			return reject(MaterialRejection::MaterialType);
 		using Feature = RE::BSShaderMaterial::Feature;
-		if (feature != BSLightingShaderMaterialPBR::FEATURE) {
+		if (!pbr) {
 			switch (feature) {
 			case Feature::kDefault:
 			case Feature::kEnvironmentMap:
@@ -257,12 +305,11 @@ namespace StreamingTextures
 		}
 		auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(property->material);
 		// PBR landscape keeps the native feature ID, but its layer arrays have a different layout.
-		if (terrain && (property->flags.underlying() & static_cast<std::uint64_t>(Flag::kVertexLighting)) && !BSLightingShaderMaterialPBRLandscape::GetRegistered(material))
+		if (terrain && (property->flags.underlying() & static_cast<std::uint64_t>(Flag::kVertexLighting)) && !layout.terrain)
 			return reject(MaterialRejection::MaterialFeature);
-		if (nativeParallax || (property->flags.underlying() & parallaxFlags) || UsesExtendedParallax(material))
+		if (nativeParallax || (property->flags.underlying() & parallaxFlags) || UsesExtendedParallax(material, layout))
 			required |= Parallax;
-		if (feature == BSLightingShaderMaterialPBR::FEATURE) {
-			const auto* pbr = static_cast<const BSLightingShaderMaterialPBR*>(material);
+		if (pbr) {
 			if (pbr->emissiveTexture && (!globals::game::graphicsState || pbr->emissiveTexture != globals::game::graphicsState->GetRuntimeData().defaultTextureBlack))
 				required |= EmissiveStatics;
 		}
@@ -272,19 +319,21 @@ namespace StreamingTextures
 			return reject(MaterialRejection::MaterialAlpha);
 		if (material->refractionPower != 0)
 			return reject(MaterialRejection::Refraction);
+		const auto validSlot = [&](const RE::NiSourceTexture* texture) {
+			return !texture || ClassifySlot(material, texture, layout, nullptr);
+		};
 		if (terrain) {
-			const auto layers = GetTerrainLayers(material);
+			const auto layers = GetTerrainLayers(material, layout);
 			if (!layers)
 				return reject(MaterialRejection::MaterialFeature);
 			const auto valid = [&](const RE::NiSourceTexture* texture) {
-				return !texture || IsDefaultTerrainTexture(texture) || IsStreamingSlot(material, texture);
+				return !texture || IsDefaultTerrainTexture(texture) || validSlot(texture);
 			};
 			const auto validLayer = [&](const auto& texture) { return valid(texture.get()); };
 			if (!valid(layers->diffuse) || !valid(layers->normal) ||
 				!std::ranges::all_of(layers->additionalDiffuse, validLayer) || !std::ranges::all_of(layers->additionalNormal, validLayer))
 				return reject(MaterialRejection::AuxiliaryTextures);
-		} else if ((material->diffuseTexture && !IsStreamingSlot(material, material->diffuseTexture.get())) ||
-				   (material->normalTexture && !IsStreamingSlot(material, material->normalTexture.get()))) {
+		} else if (!validSlot(material->diffuseTexture.get()) || !validSlot(material->normalTexture.get())) {
 			return reject(MaterialRejection::AuxiliaryTextures);
 		}
 		if (categories)

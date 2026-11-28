@@ -1046,8 +1046,9 @@ void TextureStreaming::State::Scan(Deadline deadline)
 						state(s), geometry(g), material(m), eligible(e), requiredCategories(c) {}
 					std::uint32_t Accept(RE::NiSourceTexture* texture) override
 					{
-						const bool ordinarySlot = StreamingTextures::IsStreamingSlot(material, texture);
-						state.ObserveTexture(texture, geometry, eligible && ordinarySlot, requiredCategories);
+						std::uint32_t slotCategories = 0;
+						const bool streamingSlot = StreamingTextures::IsStreamingSlot(material, texture, &slotCategories);
+						state.ObserveTexture(texture, geometry, eligible && streamingSlot, requiredCategories | slotCategories);
 						return 1;
 					}
 				} visitor(*this, geometry, material, eligible, requiredCategories);
@@ -1122,8 +1123,10 @@ std::uint32_t TextureStreaming::State::Demand(Record& record)
 	for (auto& consumer : record.consumers.committed) {
 		std::uint32_t requiredCategories = 0;
 		const auto* material = StreamingTextures::StaticMaterial(consumer.geometry.get(), &requiredCategories);
+		std::uint32_t slotCategories = 0;
 		if (!material || !categories.Allows(requiredCategories) ||
-			!StreamingTextures::IsStreamingSlot(material, record.source.get())) {
+			!StreamingTextures::IsStreamingSlot(material, record.source.get(), &slotCategories) ||
+			!categories.Allows(requiredCategories | slotCategories)) {
 			Defer(Block::ConsumerContract, record);
 			return 0;
 		}
@@ -2084,6 +2087,7 @@ void TextureStreaming::DrawSettings()
 			MenuUI::ToggleChoice{ "Emissive", &categories.emissiveStatics, "Allows reduced surface detail on glowing static objects. Their glow textures stay full quality. Off protects all of their textures." },
 			MenuUI::ToggleChoice{ "Terrain", &categories.terrain, "Allows reduced detail on nearby terrain textures when eligible. The nearest use keeps needed detail. Terrain with surface depth also needs Parallax enabled." },
 			MenuUI::ToggleChoice{ "Parallax", &categories.parallax, "Allows reduced texture detail on surfaces with depth effects. Off keeps their full detail. Terrain also needs Terrain enabled. Experimental: the appearance may change." },
+			MenuUI::ToggleChoice{ "Material maps", &categories.materialMaps, "Allows reduced detail in PBR roughness, metallic, occlusion and feature maps, terrain RMAOS, and lighting masks. Height, displacement, glow and runtime-generated textures remain protected. Off by default." },
 		};
 		for (const auto& choice : choices) {
 			Util::Widgets::Checkbox(choice.label, choice.value);

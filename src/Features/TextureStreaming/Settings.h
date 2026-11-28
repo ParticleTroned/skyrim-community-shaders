@@ -122,6 +122,8 @@ namespace StreamingTextures
 				result.terrain = enabled.get<bool>();
 			else if (name == "parallax")
 				result.parallax = enabled.get<bool>();
+			else if (name == "materialMaps")
+				result.materialMaps = enabled.get<bool>();
 			else
 				throw std::invalid_argument("Unknown texture category: " + name);
 		}
@@ -130,6 +132,7 @@ namespace StreamingTextures
 	inline nlohmann::json SerializeCategories(const Categories& value)
 	{
 		return { { "landscapeStatics", value.landscapeStatics }, { "alphaTestedStatics", value.alphaTestedStatics },
-			{ "emissiveStatics", value.emissiveStatics }, { "terrain", value.terrain }, { "parallax", value.parallax } };
+			{ "emissiveStatics", value.emissiveStatics }, { "terrain", value.terrain }, { "parallax", value.parallax },
+			{ "materialMaps", value.materialMaps } };
 	}
 }

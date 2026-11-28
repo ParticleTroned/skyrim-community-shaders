@@ -215,6 +215,28 @@ void CheckStreamingInventory(ID3D11Device* device)
 		Require(state.records.at(71).protectedConsumer && ReadOrigin(original.texture.Get(), observed) && observed.protectedConsumer,
 			"A protected path alias did not invalidate an existing candidate");
 	}
+	for (const bool maskFirst : { false, true }) {
+		Upload shared;
+		Check(shared.Begin(device, full, view, 0));
+		Check(WriteOrigin(shared.texture.Get(), { 75, false, 0 }));
+		RE::BSGraphics::Texture engine{ shared.texture.Get(), shared.view.Get() };
+		RE::NiSourceTexture source{ { "textures/architecture/shared.dds" }, &engine };
+		RE::BSGeometry geometry;
+		StreamingInventoryFixture::TextureStreaming::State state;
+		state.ObserveTexture(&source, &geometry, true, maskFirst ? MaterialMaps : 0u);
+		Require(!maskFirst || state.records.empty(), "Disabled material-map coverage admitted a candidate");
+		state.ObserveTexture(&source, &geometry, true, maskFirst ? 0u : MaterialMaps);
+		Origin observed;
+		Require(ReadOrigin(shared.texture.Get(), observed) && observed.requiredCategories == MaterialMaps &&
+					!observed.protectedConsumer && !state.categories.Allows(observed.requiredCategories),
+			"Shared colour/mask consent depended on scan order or became permanent protection");
+		state.categories.materialMaps = true;
+		state.ObserveTexture(&source, &geometry, true, MaterialMaps);
+		Require(state.records.size() == 1 && !state.records.at(75).protectedConsumer, "Enabling material maps failed to admit a shared resource");
+		state.ObserveTexture(&source, &geometry, false, MaterialMaps);
+		Require(state.records.at(75).protectedConsumer && ReadOrigin(shared.texture.Get(), observed) && observed.protectedConsumer,
+			"Material-map opt-in overrode a protected consumer of shared pixels");
+	}
 	for (const char* name : { static_cast<const char*>(nullptr), "" }) {
 		Upload original;
 		Check(original.Begin(device, full, view, 0));

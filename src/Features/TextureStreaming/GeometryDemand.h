@@ -13,8 +13,8 @@ namespace RE
 }
 namespace StreamingTextures
 {
-	/** Ordinary diffuse/normal slots, including native and registered PBR terrain layers; auxiliary maps stay protected. */
-	bool IsStreamingSlot(const RE::BSLightingShaderMaterialBase* material, const RE::NiSourceTexture* texture);
+	/** Classify colour, normal and optional material-map slots; height and protected aliases stay full quality. */
+	bool IsStreamingSlot(const RE::BSLightingShaderMaterialBase* material, const RE::NiSourceTexture* texture, std::uint32_t* categories = nullptr);
 	/** Classify supported static materials and required consent bits; unknown and animated sampling stays protected. */
 	RE::BSLightingShaderMaterialBase* StaticMaterial(RE::BSGeometry* geometry, std::uint32_t* categories = nullptr
 #ifdef DEVBENCH_BRIDGE_ENABLED

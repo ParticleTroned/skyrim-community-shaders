@@ -148,6 +148,7 @@ enum class PBRFlags
 struct BSLightingShaderMaterialPBR : RE::BSLightingShaderMaterialBase
 {
 	static constexpr auto FEATURE = static_cast<RE::BSShaderMaterial::Feature>(32);
+	inline static PBRMaterialRegistry<BSLightingShaderMaterialPBR, bool> All;
 	struct Flags
 	{
 		bool interlayer = false;
@@ -515,7 +516,13 @@ void CheckSpecialSampling()
 	RE::BSLightingShaderMaterialBase ordinary;
 	geometry.data.shaderProperty->material = &ordinary;
 	ordinary.diffuseTexture = ordinary.rimSoftLightingTexture = std::make_shared<RE::NiSourceTexture>();
-	Require(!StaticMaterial(&geometry) && !IsStreamingSlot(&ordinary, ordinary.diffuseTexture.get()), "An auxiliary alias entered diffuse streaming");
+	ordinary.normalTexture = std::make_shared<RE::NiSourceTexture>();
+	Require(StaticMaterial(&geometry, &categories) && !categories &&
+				IsStreamingSlot(&ordinary, ordinary.normalTexture.get(), &categories) && !categories,
+		"A colour/mask alias made unrelated normal pixels require material-map consent");
+	Require(IsStreamingSlot(&ordinary, ordinary.diffuseTexture.get(), &categories) && categories == MaterialMaps &&
+				!Categories{}.Allows(categories),
+		"A shared lighting mask bypassed per-resource consent");
 	ordinary.rimSoftLightingTexture.reset();
 	Require(StaticMaterial(&geometry), "Unaliased ordinary diffuse was blocked");
 	ordinary.feature = static_cast<RE::BSShaderMaterial::Feature>(99);
@@ -528,10 +535,13 @@ void CheckSpecialSampling()
 	globals::features::extendedMaterials.settings.EnableComplexMaterial = false;
 	Require(StaticMaterial(&geometry), "An ordinary environment material was blocked with complex sampling off");
 	env.diffuseTexture = env.envMaskTexture;
-	Require(!StaticMaterial(&geometry), "An environment mask alias entered diffuse streaming");
+	Require(!StaticMaterial(&geometry) && !IsStreamingSlot(&env, env.envMaskTexture.get()),
+		"An environment mask with possible height data escaped protection while complex sampling was off");
 	globals::features::extendedMaterials.settings.EnableComplexMaterial = true;
+	Require(!StaticMaterial(&geometry) && !IsStreamingSlot(&env, env.envMaskTexture.get()), "An active complex-material height mask entered streaming");
 	BSLightingShaderMaterialPBR pbr;
-	pbr.feature = BSLightingShaderMaterialPBR::FEATURE;
+	pbr.feature = RE::BSShaderMaterial::Feature::kDefault;
+	BSLightingShaderMaterialPBR::All.Register(&pbr);
 	geometry.data.shaderProperty->material = &pbr;
 	pbr.displacementTexture = globals::game::graphics.defaultTextureBlack;
 	pbr.emissiveTexture = globals::game::graphics.defaultTextureBlack;
@@ -542,7 +552,10 @@ void CheckSpecialSampling()
 	Require(StaticMaterial(&geometry, &categories) && (categories & Parallax) && !Categories{ false, false, false, false, false }.Allows(categories), "PBR displacement bypassed disabled coverage");
 	pbr.displacementTexture = globals::game::graphics.defaultTextureBlack;
 	pbr.diffuseTexture = pbr.rmaosTexture = std::make_shared<RE::NiSourceTexture>();
-	Require(!StaticMaterial(&geometry), "A PBR auxiliary alias entered streaming");
+	Require(StaticMaterial(&geometry, &categories) && categories == EmissiveStatics &&
+				IsStreamingSlot(&pbr, pbr.diffuseTexture.get(), &categories) && categories == MaterialMaps,
+		"A PBR RMAOS alias changed material-wide consent or lost its per-resource requirement");
+	BSLightingShaderMaterialPBR::All.Unregister(&pbr);
 	RE::BSLightingShaderMaterialLandscape terrain;
 	terrain.feature = RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend;
 	geometry.data.shaderProperty->material = &terrain;
@@ -563,12 +576,67 @@ void CheckSpecialSampling()
 	Require(StaticMaterial(&geometry), "Disabled Terrain Helper continued to block terrain");
 }
 
+void CheckMaterialMaps()
+{
+	using namespace StreamingTextures;
+	Categories allowed;
+	Require(!allowed.Allows(MaterialMaps), "Material-map coverage enabled without consent");
+	allowed.materialMaps = true;
+	Require(allowed.Allows(MaterialMaps | Terrain | Parallax) && ParseCategories(SerializeCategories(allowed)) == allowed,
+		"Material-map consent did not round-trip independently");
+	Require(!ParseCategories({ { "terrain", true } }).materialMaps, "Older settings enabled material maps");
+	bool rejected = false;
+	try {
+		ParseCategories({ { "materialMaps", 1 } });
+	} catch (const std::exception&) {
+		rejected = true;
+	}
+	Require(rejected, "Non-boolean material-map input was accepted");
+	RE::BSGeometry geometry;
+	BSLightingShaderMaterialPBR pbr;
+	pbr.feature = RE::BSShaderMaterial::Feature::kDefault;
+	BSLightingShaderMaterialPBR::All.Register(&pbr);
+	geometry.data.shaderProperty->material = &pbr;
+	pbr.diffuseTexture = std::make_shared<RE::NiSourceTexture>();
+	pbr.normalTexture = std::make_shared<RE::NiSourceTexture>();
+	pbr.rmaosTexture = std::make_shared<RE::NiSourceTexture>();
+	pbr.featuresTexture0 = std::make_shared<RE::NiSourceTexture>();
+	pbr.featuresTexture1 = std::make_shared<RE::NiSourceTexture>();
+	pbr.emissiveTexture = std::make_shared<RE::NiSourceTexture>();
+	pbr.displacementTexture = std::make_shared<RE::NiSourceTexture>();
+	std::uint32_t required = 0;
+	Require(StaticMaterial(&geometry, &required) == &pbr && required == (EmissiveStatics | Parallax),
+		"Separate material maps changed base-colour/normal consent");
+	for (const auto& map : { pbr.rmaosTexture, pbr.featuresTexture0, pbr.featuresTexture1 }) {
+		Require(IsStreamingSlot(&pbr, map.get(), &required) && required == MaterialMaps,
+			"A registered native-default PBR material lost auxiliary coverage");
+	}
+	Require(IsStreamingSlot(&pbr, pbr.diffuseTexture.get(), &required) && !required &&
+				IsStreamingSlot(&pbr, pbr.normalTexture.get(), &required) && !required,
+		"Ordinary colour/normal slots required material-map consent");
+	RE::NiSourceTexture::Resource shared{ &pbr };
+	pbr.rmaosTexture->rendererTexture = pbr.displacementTexture->rendererTexture = &shared;
+	Require(!IsStreamingSlot(&pbr, pbr.rmaosTexture.get(), &required) && !required &&
+				!IsStreamingSlot(&pbr, pbr.displacementTexture.get()) && !IsStreamingSlot(&pbr, pbr.emissiveTexture.get()),
+		"Material-map consent overrode a protected height/emission resource alias");
+	pbr.rmaosTexture->rendererTexture = pbr.displacementTexture->rendererTexture = nullptr;
+	BSLightingShaderMaterialPBR::All.Unregister(&pbr);
+	pbr.feature = BSLightingShaderMaterialPBR::FEATURE;
+	Require(!StaticMaterial(&geometry), "Unregistered PBR layout was accepted");
+	RE::BSLightingShaderMaterialBase native;
+	for (auto* map : { &native.rimSoftLightingTexture, &native.specularBackLightingTexture }) {
+		*map = std::make_shared<RE::NiSourceTexture>();
+		Require(IsStreamingSlot(&native, map->get(), &required) && required == MaterialMaps, "A lighting mask was excluded");
+	}
+}
+
 void CheckParallaxCoverage()
 {
 	using namespace StreamingTextures;
 	Categories allowed;
 	Require(allowed.parallax && allowed.terrain && allowed.landscapeStatics && allowed.alphaTestedStatics && allowed.emissiveStatics,
-		"All optional texture coverage should default on");
+		"Existing texture coverage should default on");
+	Require(!allowed.materialMaps && !allowed.Allows(MaterialMaps), "New material-map coverage must require opt-in");
 	allowed = ParseCategories(nlohmann::json::object());
 	allowed.parallax = true;
 	Require(allowed.Allows(Parallax) && !allowed.Allows(Parallax | Terrain), "Parallax implicitly enabled terrain");
@@ -676,6 +744,7 @@ int main()
 	try {
 		CheckStreamingConflict();
 		CheckSpecialSampling();
+		CheckMaterialMaps();
 		CheckParallaxCoverage();
 		CheckCameraIndependentDemand();
 		using namespace StreamingTextures;
@@ -827,10 +896,15 @@ int main()
 						IsStreamingSlot(&pbrTerrain, pbrTerrain.landscapeBaseColorTextures[5].get()) &&
 						IsStreamingSlot(&pbrTerrain, pbrTerrain.landscapeNormalTextures[5].get()) &&
 						!IsStreamingSlot(&pbrTerrain, pbrTerrain.landscapeDisplacementTextures[0].get()) &&
-						!IsStreamingSlot(&pbrTerrain, pbrTerrain.landscapeRMAOSTextures[5].get()),
-				"PBR terrain lost its final layer, parallax consent or auxiliary protection");
+						IsStreamingSlot(&pbrTerrain, pbrTerrain.landscapeRMAOSTextures[5].get(), &categories) && categories == MaterialMaps,
+				"PBR terrain lost its final layer, material-map consent or height protection");
+			pbrTerrain.numLandscapeTextures = 5;
+			Require(!IsStreamingSlot(&pbrTerrain, pbrTerrain.landscapeRMAOSTextures[5].get()), "Inactive terrain RMAOS layer entered streaming");
+			pbrTerrain.numLandscapeTextures = 6;
 			pbrTerrain.landscapeRMAOSTextures[5] = pbrTerrain.landscapeBaseColorTextures[0];
-			Require(!StaticMaterial(&geometry), "PBR terrain streamed an auxiliary alias");
+			Require(StaticMaterial(&geometry, &categories) && categories == (Terrain | Parallax) &&
+						IsStreamingSlot(&pbrTerrain, pbrTerrain.landscapeBaseColorTextures[0].get(), &categories) && categories == MaterialMaps,
+				"A terrain RMAOS alias changed unrelated layer consent or lost its own requirement");
 			pbrTerrain.landscapeRMAOSTextures[5].reset();
 			RE::NiSourceTexture::Resource sharedTerrainResource;
 			int terrainResourceIdentity;
@@ -839,6 +913,10 @@ int main()
 			pbrTerrain.landscapeNormalTextures[5]->rendererTexture = &sharedTerrainResource;
 			Require(!StaticMaterial(&geometry), "PBR terrain streamed a height-map resource alias");
 			pbrTerrain.landscapeNormalTextures[5]->rendererTexture = nullptr;
+			pbrTerrain.landscapeRMAOSTextures[5] = std::make_shared<RE::NiSourceTexture>();
+			pbrTerrain.landscapeRMAOSTextures[5]->rendererTexture = &sharedTerrainResource;
+			Require(!IsStreamingSlot(&pbrTerrain, pbrTerrain.landscapeRMAOSTextures[5].get()), "Terrain RMAOS consent overrode a shared displacement resource");
+			pbrTerrain.landscapeRMAOSTextures[5].reset();
 			pbrTerrain.numLandscapeTextures = 7;
 			Require(!StaticMaterial(&geometry), "PBR terrain accepted an out-of-range layer count");
 			pbrTerrain.numLandscapeTextures = 6;
@@ -870,6 +948,19 @@ int main()
 		TextureStreaming parallaxLoaded;
 		parallaxLoaded.LoadSettings(parallaxSaved);
 		Require(!parallaxLoaded.state->categories.parallax && !parallaxLoaded.state->categories.terrain, "Saved disabled coverage was overwritten by defaults");
+		const auto mapEpoch = terrainControl.state->epoch;
+		Util::Widgets::clicks = { { "Material maps", true } };
+		terrainControl.DrawSettings();
+		Require(terrainControl.state->categories.materialMaps && !terrainControl.state->categories.terrain &&
+					!terrainControl.state->categories.parallax && terrainControl.state->epoch == mapEpoch + 1,
+			"Material-map UI changed unrelated coverage or retained stale work");
+		terrainControl.SaveSettings(parallaxSaved);
+		parallaxLoaded.LoadSettings(parallaxSaved);
+		Require(parallaxLoaded.state->categories == terrainControl.state->categories, "Material-map UI selection was not persisted");
+		Util::Widgets::clicks = { { "Material maps", false } };
+		terrainControl.DrawSettings();
+		Require(!terrainControl.state->categories.materialMaps && terrainControl.state->epoch == mapEpoch + 2,
+			"Disabling material maps retained pending reductions");
 		TextureStreaming feature;
 		feature.Configure(true, 2);
 		const auto featureEpoch = feature.state->epoch;

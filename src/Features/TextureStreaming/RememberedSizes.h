@@ -10,6 +10,9 @@ namespace StreamingTextures
 {
 	using Util::NormalizeTexturePath;
 
+	/** Persisted residency requires the current material-consumer contract. */
+	inline constexpr std::uint32_t RememberedSizesVersion = 2;
+
 	/** Persist only a previously validated source contract, never pointers or GPU resources. */
 	struct RememberedSize
 	{
@@ -30,7 +33,7 @@ namespace StreamingTextures
 			view.Format = full.Format;
 			view.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
 			view.Texture2D.MipLevels = full.MipLevels;
-			return required && !(categories & ~(LandscapeStatics | AlphaTestedStatics | EmissiveStatics | Terrain | Parallax)) &&
+			return required && !(categories & ~(LandscapeStatics | AlphaTestedStatics | EmissiveStatics | Terrain | Parallax | MaterialMaps)) &&
 			       ((*required & categories) == *required) && headerHash && fileBytes >= 128 && fileBytes <= TextureStreamingPolicy::MaximumPayloadBytes &&
 			       Suitable(full, view) && LogicalBytes(full, 0) && drop <= TextureStreamingPolicy::MaximumDrop &&
 			       drop < full.MipLevels && (std::min(full.Width, full.Height) >> drop) >= TextureStreamingPolicy::MinimumResidentEdge;

@@ -23,6 +23,9 @@ void Require(bool condition, const char* message)
 namespace logger
 {
 	template <class... T>
+	void info(const char*, T&&...)
+	{}
+	template <class... T>
 	void warn(const char*, T&&...)
 	{}
 	template <class... T>
@@ -245,6 +248,13 @@ int main()
 		Require(entry.LoadDrop(options, allowedParallax, 3, true) == 0, "Remembered load bypassed disabled parallax consent");
 		allowedParallax.parallax = true;
 		Require(entry.LoadDrop(options, allowedParallax, 3, true) > 0, "Consented terrain/parallax could not use remembered sizes");
+		entry.categories |= MaterialMaps;
+		Require(ParseRememberedSize(path, SerializeRememberedSize(entry)) == entry, "Remembered material-map requirements were not retained");
+		Require(entry.LoadDrop(options, allowedParallax, 3, true) == 0, "A saved material map bypassed disabled coverage and the cap");
+		allowedParallax.materialMaps = true;
+		Require(entry.LoadDrop(options, allowedParallax, 3, true) > 0, "Consented material maps could not use remembered sizes");
+		entry.categories |= 1u << 6;
+		Require(!ParseRememberedSize(path, SerializeRememberedSize(entry)), "Unknown remembered categories were admitted");
 		entry.categories = 0;
 		Util::PathHelpers::testPath = std::filesystem::temp_directory_path() / ("csx-streaming-test-" + std::to_string(GetCurrentProcessId()) + "-" + std::to_string(GetTickCount64()));
 		std::filesystem::create_directory(Util::PathHelpers::testPath);
@@ -254,7 +264,7 @@ int main()
 		Require(Hooks::NeedsLearningRefresh(), "Learning resumed before the persistent catalog was ready");
 		{
 			std::ofstream file(cachePath);
-			file << nlohmann::json{ { "version", 1 }, { "entries", { { path, SerializeRememberedSize(entry) }, { earlyPath, SerializeRememberedSize(entry) } } } }.dump();
+			file << nlohmann::json{ { "version", RememberedSizesVersion }, { "entries", { { path, SerializeRememberedSize(entry) }, { earlyPath, SerializeRememberedSize(entry) } } } }.dump();
 		}
 		Hooks::Install();
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
@@ -281,6 +291,20 @@ int main()
 		RE::BSGraphics::Texture engine;
 		source.rendererTexture = &engine;
 		createBody = [&](RE::NiSourceTexture*) {
+			auto mapEntry = entry;
+			mapEntry.categories = MaterialMaps;
+			Hooks::Remember(path, mapEntry);
+			Require(!Hooks::Prepare(device.Get(), 0), "Remembered material maps loaded with coverage disabled");
+			Categories mapCoverage;
+			mapCoverage.materialMaps = true;
+			Hooks::Configure(true, { false, true }, {}, mapCoverage, 2);
+			{
+				auto mapRequest = Hooks::Prepare(device.Get(), 0);
+				Require(mapRequest && mapRequest->size.categories == MaterialMaps, "An eligible material-map load lost its consent requirement");
+			}
+			Hooks::Configure(true, { false, true }, {}, {}, 2);
+			Require(!Hooks::Prepare(device.Get(), 0), "Disabling material maps retained a remembered reduction");
+			Hooks::Remember(path, entry);
 			auto request = Hooks::Prepare(device.Get(), 0);
 			Require(request && request->size.drop == 2, "Known texture did not load at remembered size");
 			auto desc = entry.full;
@@ -374,7 +398,7 @@ int main()
 			std::ifstream file(cachePath);
 			file >> saved;
 		}
-		Require(saved.at("entries").empty(), "Invalidation was not persisted on shutdown");
+		Require(saved.at("version") == RememberedSizesVersion && saved.at("entries").empty(), "Invalidation or the current residency contract was not persisted on shutdown");
 		std::stop_source stopped;
 		stopped.request_stop();
 		{
@@ -383,6 +407,28 @@ int main()
 			empty.Run(stopped.get_token());
 			Require(empty.ready && !empty.learningRefreshRequired.load() && !empty.rememberedReductions,
 				"An empty persisted catalog retained an unknown refresh requirement");
+		}
+		{
+			std::ofstream file(cachePath, std::ios::trunc);
+			file << nlohmann::json{ { "version", 1 }, { "entries", { { path, SerializeRememberedSize(entry) } } } }.dump();
+		}
+		{
+			Hooks::Catalog legacy;
+			legacy.path = cachePath;
+			legacy.Run(stopped.get_token());
+			Require(legacy.ready && !legacy.failures && legacy.entries.empty() && !legacy.rememberedReductions && !legacy.learningRefreshRequired.load(),
+				"A catalog without the current material-map contract reused stale residency");
+		}
+		for (const auto& invalidVersion : { nlohmann::json(2.5), nlohmann::json(0x100000002ull), nlohmann::json(-1), nlohmann::json("2"), nlohmann::json(nullptr) }) {
+			{
+				std::ofstream file(cachePath, std::ios::trunc);
+				file << nlohmann::json{ { "version", invalidVersion }, { "entries", { { path, SerializeRememberedSize(entry) } } } }.dump();
+			}
+			Hooks::Catalog invalidContract;
+			invalidContract.path = cachePath;
+			invalidContract.Run(stopped.get_token());
+			Require(invalidContract.ready && invalidContract.failures == 1 && invalidContract.entries.empty() && !invalidContract.rememberedReductions,
+				"An invalid contract version was converted into an accepted residency contract");
 		}
 		{
 			std::ofstream file(cachePath, std::ios::trunc);

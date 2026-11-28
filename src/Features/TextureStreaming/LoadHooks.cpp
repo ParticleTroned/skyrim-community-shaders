@@ -65,7 +65,7 @@ namespace StreamingTextures::LoadHooks
 					if (revision == savedRevision || !ready)
 						return;
 					version = revision;
-					document = { { "version", 1 }, { "entries", nlohmann::json::object() } };
+					document = { { "version", RememberedSizesVersion }, { "entries", nlohmann::json::object() } };
 					for (const auto& [name, value] : entries)
 						document["entries"][name] = SerializeRememberedSize(value);
 				}
@@ -96,15 +96,26 @@ namespace StreamingTextures::LoadHooks
 						if (!input.read(bytes.data(), static_cast<std::streamsize>(bytes.size())))
 							throw std::runtime_error("Remembered-size file read was incomplete");
 						const auto document = nlohmann::json::parse(bytes);
-						if (document.value("version", 0) != 1 || !document.contains("entries") ||
+						if (!document.contains("entries") ||
 							!document["entries"].is_object() || document["entries"].size() > maximumEntries)
 							throw std::runtime_error("Remembered-size file has an unsupported schema");
-						std::scoped_lock lock(mutex);
-						for (const auto& [name, value] : document["entries"].items())
-							if (const auto entry = ParseRememberedSize(name, value); entry && entries.size() < maximumEntries && !protectedPaths.contains(name)) {
-								const auto [position, inserted] = entries.try_emplace(name, *entry);
-								rememberedReductions += inserted && position->second.drop != 0;
-							}
+						const auto& contractVersion = document.at("version");
+						if (!contractVersion.is_number_integer())
+							throw std::runtime_error("Remembered-size file has an unsupported schema");
+						if (contractVersion == 1) {
+							logger::info("[TextureStreaming] Relearning remembered sizes for the current material-consumer contract");
+							std::scoped_lock lock(mutex);
+							++revision;
+						} else {
+							if (contractVersion != RememberedSizesVersion)
+								throw std::runtime_error("Remembered-size file has an unsupported schema");
+							std::scoped_lock lock(mutex);
+							for (const auto& [name, value] : document["entries"].items())
+								if (const auto entry = ParseRememberedSize(name, value); entry && entries.size() < maximumEntries && !protectedPaths.contains(name)) {
+									const auto [position, inserted] = entries.try_emplace(name, *entry);
+									rememberedReductions += inserted && position->second.drop != 0;
+								}
+						}
 					} else if (ec != std::errc::no_such_file_or_directory) {
 						throw std::runtime_error(ec.message());
 					}

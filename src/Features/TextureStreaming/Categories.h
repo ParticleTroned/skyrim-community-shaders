@@ -13,7 +13,8 @@ namespace StreamingTextures
 		AlphaTestedStatics = 1u << 1,
 		EmissiveStatics = 1u << 2,
 		Terrain = 1u << 3,
-		Parallax = 1u << 4
+		Parallax = 1u << 4,
+		MaterialMaps = 1u << 5
 	};
 
 	/** Optional coverage never overrides DDS, geometry or special-consumer protection. */
@@ -24,13 +25,14 @@ namespace StreamingTextures
 		bool emissiveStatics = true;
 		bool terrain = true;
 		bool parallax = true;
+		bool materialMaps = false;
 		bool operator==(const Categories&) const = default;
 
 		[[nodiscard]] bool Allows(std::uint32_t required) const noexcept
 		{
 			const std::uint32_t enabled = (landscapeStatics ? LandscapeStatics : 0u) |
 			                              (alphaTestedStatics ? AlphaTestedStatics : 0u) | (emissiveStatics ? EmissiveStatics : 0u) | (terrain ? Terrain : 0u) | (parallax ? Parallax : 0u);
-			return (required & ~enabled) == 0;
+			return (required & ~(enabled | (materialMaps ? MaterialMaps : 0u))) == 0;
 		}
 	};
 

@@ -65,13 +65,27 @@ if(NOT _seams_type STREQUAL "object" OR _seams_extra OR
     message(FATAL_ERROR "Terrain seam requests must require one boolean enabled field")
 endif()
 
-foreach(_coverage IN ITEMS terrain parallax)
+foreach(_coverage IN ITEMS landscapeStatics alphaTestedStatics emissiveStatics terrain parallax)
     string(JSON _coverage_default GET
         "${_descriptor}" inputSchema properties textureStreaming properties
         categories properties ${_coverage} default
     )
     if(NOT _coverage_default)
         message(FATAL_ERROR "Streaming schema must advertise default-on ${_coverage}")
+    endif()
+endforeach()
+
+foreach(_schema_path IN ITEMS inputSchema outputSchema)
+    if(_schema_path STREQUAL "inputSchema")
+        set(_coverage_path inputSchema properties textureStreaming properties categories)
+    else()
+        set(_coverage_path outputSchema properties result properties categories)
+    endif()
+    string(JSON _material_maps GET "${_descriptor}" ${_coverage_path} properties materialMaps)
+    string(JSON _material_maps_type GET "${_material_maps}" type)
+    string(JSON _material_maps_default GET "${_material_maps}" default)
+    if(NOT _material_maps_type STREQUAL "boolean" OR _material_maps_default)
+        message(FATAL_ERROR "Material maps must be an opt-in boolean in ${_schema_path}")
     endif()
 endforeach()
 

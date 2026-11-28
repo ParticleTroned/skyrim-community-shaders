@@ -40,6 +40,36 @@ namespace Wetterness
 		return wetness;
 	}
 
+#	if !defined(BASIC_SNOW_COVER)
+	/// Shares coverage samples only when both channels integrate the complete interval.
+	float2 IntegrateMeltChannels(SnowCover::CoverageInputs footprint, float3 before, float3 after,
+		float2 fire, float2 coverage, float2 beforeAge, float2 afterAge)
+	{
+		float2 wetness = 0;
+		[branch] if (all(beforeAge <= 1) && all(afterAge < 1) && coverage.x > coverage.y)
+		{
+			float previous = coverage.x;
+			float2 remaining = float2(RemainingDryingFraction(beforeAge.x, 1), RemainingDryingFraction(beforeAge.y, 1));
+			[unroll] for (uint step = 1; step <= 4; ++step)
+			{
+				float fraction = step * 0.25;
+				float snow = step == 4 ? coverage.y : SnowCover::GetCoverage(footprint, lerp(before, after, fraction), lerp(fire.x, fire.y, fraction));
+				float2 age = lerp(beforeAge, afterAge, fraction);
+				float2 nextRemaining = float2(RemainingDryingFraction(age.x, 1), RemainingDryingFraction(age.y, 1));
+				wetness += max(0, previous - snow) * 0.5 * (remaining + nextRemaining);
+				previous = snow;
+				remaining = nextRemaining;
+			}
+		}
+		else
+		{
+			wetness.x = IntegrateMeltInterval(footprint, before, after, fire, coverage, float2(beforeAge.x, afterAge.x));
+			wetness.y = IntegrateMeltInterval(footprint, before, after, fire, coverage, float2(beforeAge.y, afterAge.y));
+		}
+		return wetness;
+	}
+#	endif
+
 	/// Shares the current fire sample with snow rendering without changing history.
 	float2 GetSnowMeltWetness(SnowCover::CoverageInputs footprint, float3 materialWeights, inout SnowCover::FireMeltSample fireMelt)
 	{
@@ -79,10 +109,17 @@ namespace Wetterness
 							float retention = lerp(0.25, 1.0, saturate(peak));
 							float4 beforeAge = lerp(SharedData::snowMeltSettings.lightDryingAges[i - 1], SharedData::snowMeltSettings.heavyDryingAges[i - 1], saturate(peak)) / retention;
 							float4 afterAge = lerp(SharedData::snowMeltSettings.lightDryingAges[i], SharedData::snowMeltSettings.heavyDryingAges[i], saturate(peak)) / retention;
+#	if defined(BASIC_SNOW_COVER)
+							// Grass consumes one channel, so retain scalar dead-code elimination.
 							wetness.x += IntegrateMeltInterval(footprint, previousState, state,
 								float2(previousFire, fire), float2(previous, coverage), float2(dot(beforeAge.xyz, materialWeights), dot(afterAge.xyz, materialWeights)));
 							wetness.y += IntegrateMeltInterval(footprint, previousState, state,
 								float2(previousFire, fire), float2(previous, coverage), float2(beforeAge.w, afterAge.w));
+#	else
+							wetness += IntegrateMeltChannels(footprint, previousState, state,
+								float2(previousFire, fire), float2(previous, coverage),
+								float2(dot(beforeAge.xyz, materialWeights), beforeAge.w), float2(dot(afterAge.xyz, materialWeights), afterAge.w));
+#	endif
 						}
 						previous = coverage;
 						previousState = state;

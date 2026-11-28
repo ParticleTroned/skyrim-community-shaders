@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <memory>
 
 struct LinearLighting : Feature
 {
@@ -104,7 +105,7 @@ struct LinearLighting : Feature
 	};
 	static_assert(sizeof(PerGeometryData) == 16);
 
-	ConstantBuffer* PerGeometryCB = nullptr;
+	std::unique_ptr<ConstantBuffer> PerGeometryCB;
 
 	uint isDirLightLinear = false;
 	float dirLightMult = 1.0f;

@@ -2,7 +2,7 @@ include("${PROJECT_ROOT}/tests/extract_source_region.cmake")
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 file(READ "${PROJECT_ROOT}/src/Features/LinearLighting.h" _header)
 extract_between("${_header}" "struct alignas(16) PerGeometryData"
-    "\n\tConstantBuffer* PerGeometryCB" linear_geometry_payload.h)
+    "\n\tuint isDirLightLinear" linear_geometry_payload.h)
 file(READ "${PROJECT_ROOT}/src/Features/LinearLighting.cpp" _source)
 extract_between("${_source}" "void LinearLighting::SetupResources()"
     "\nvoid LinearLighting::" linear_geometry_resources.h)

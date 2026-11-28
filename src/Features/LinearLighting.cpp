@@ -178,7 +178,7 @@ void LinearLighting::RestoreDefaultSettings()
 void LinearLighting::SetupResources()
 {
 	perGeometryUploadValid = false;
-	PerGeometryCB = new ConstantBuffer(ConstantBufferDesc<PerGeometryData>(), "LinearLighting::PerGeometry");
+	PerGeometryCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<PerGeometryData>(), "LinearLighting::PerGeometry");
 }
 
 void LinearLighting::Prepass()
